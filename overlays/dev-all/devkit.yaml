@@ -1,0 +1,7 @@
+workspace: ../..
+env:
+  DEV_ROOT: /workspaces/dev
+hooks:
+  warm: echo "no-op"
+  maintain: echo "no-op"
+

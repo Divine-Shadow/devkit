@@ -1,0 +1,6 @@
+workspace: ../../pokeemerald-expansion
+env: {}
+hooks:
+  warm: echo "no-op"
+  maintain: echo "no-op"
+

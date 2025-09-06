@@ -31,3 +31,4 @@ docs.aws.amazon.com
 awscli.amazonaws.com
 
 example.com
+example.org

@@ -116,7 +116,7 @@ main() {
     case "$1" in
       -p|--project) PROJECT="$2"; shift 2; continue ;;
       --profile) PROFILE="$2"; shift 2; continue ;;
-      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net)
+      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-sts|tmux-shells|codex-auth|creds)
         cmd="$1"; shift; continue ;;
       *) args+=("$1"); shift; continue ;;
     esac
@@ -136,6 +136,120 @@ main() {
     warm) cmd_warm ;;
     maintain) cmd_maintain ;;
     check-net) cmd_check_net ;;
+    check-codex)
+      ensure_project
+      echo "== Proxy env in agent =="
+      docker compose $(compose_files) exec dev-agent bash -lc 'env | grep -E "^HTTPS?_PROXY=|^NO_PROXY=" || true'
+      echo
+      echo "== Curl checks (through proxy) =="
+      docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "chatgpt.com          : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://chatgpt.com || true'
+      docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "chatgpt.com/backend..: "; curl -sSvo /dev/null -w "%{http_code}\\n" https://chatgpt.com/backend-api/codex/responses || true'
+      echo
+      echo "== Codex exec (expect ok) =="
+      docker compose $(compose_files) exec dev-agent bash -lc "timeout 15s codex exec 'Reply with: ok' || true"
+      ;;
+    check-sts)
+      ensure_project
+      local which="${args[0]:-}"
+      local PX=""
+      case "$which" in
+        envoy) PX=http://envoy:3128 ;;
+        tinyproxy) PX=http://tinyproxy:8888 ;;
+        "") PX="" ;;
+        *) die "Usage: check-sts [envoy|tinyproxy]" ;;
+      esac
+      echo "== STS via ${which:-compose env} =="
+      if [[ -n "$PX" ]]; then
+        docker compose $(compose_files) exec dev-agent bash -lc "HTTPS_PROXY='$PX' HTTP_PROXY='$PX' curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true"
+        docker compose $(compose_files) exec dev-agent bash -lc "HTTPS_PROXY='$PX' HTTP_PROXY='$PX' aws sts get-caller-identity || true"
+      else
+        docker compose $(compose_files) exec dev-agent bash -lc "curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true"
+        docker compose $(compose_files) exec dev-agent bash -lc "aws sts get-caller-identity || true"
+      fi
+      ;;
+    tmux-shells)
+      ensure_project
+      local n="${args[0]:-2}"
+      command -v tmux >/dev/null 2>&1 || die "tmux not found on host"
+      docker compose $(compose_files) up -d --scale dev-agent="$n"
+      local sess="devkit-shells"
+      tmux new-session -d -s "$sess" "docker compose $(compose_files) exec --index 1 dev-agent bash -lc 'cd /workspace; exec bash'"
+      tmux rename-window -t "$sess":0 "agent-1" >/dev/null 2>&1 || true
+      local i=2
+      while [[ "$i" -le "$n" ]]; do
+        tmux new-window -t "$sess" -n "agent-$i" "docker compose $(compose_files) exec --index $i dev-agent bash -lc 'cd /workspace; exec bash'"
+        i=$((i+1))
+      done
+      tmux attach -t "$sess"
+      ;;
+    codex-auth)
+      ensure_project
+      local sub="${args[0]:-}"; shift || true
+      case "$sub" in
+        import)
+          local file="${args[1]:-}"; local idx="${args[2]:-1}"
+          [[ -f "$file" ]] || die "auth.json file not found: $file"
+          docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p ~/.codex && cat > ~/.codex/auth.json' < "$file"
+          echo "Imported auth.json into instance $idx"
+          ;;
+        show)
+          local idx="${args[1]:-1}"
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ls -l ~/.codex/auth.json || true; head -c 120 ~/.codex/auth.json 2>/dev/null || true; echo'
+          ;;
+        clear)
+          local idx="${args[1]:-1}"
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f ~/.codex/auth.json && echo "cleared ~/.codex/auth.json" || true'
+          ;;
+        *) die "Usage: codex-auth {import <auth.json> [N] | show [N] | clear [N]}" ;;
+      esac
+      ;;
+    exec-cd)
+      ensure_project
+      local idx="${args[0]:-1}"; local subpath="${args[1]:-}"; shift || true
+      [[ -n "$subpath" ]] || die "Usage: exec-cd <index> <subpath> [cmd...]"
+      shift || true
+      local dest="$subpath"
+      if [[ "${subpath:0:1}" != "/" ]]; then
+        dest="${DEV_ROOT:-/workspaces/dev}/$subpath"
+      fi
+      local cmdstr
+      if [[ $# -gt 0 ]]; then cmdstr="$*"; else cmdstr="bash"; fi
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc "cd \"$dest\" && exec $cmdstr"
+      ;;
+    attach-cd)
+      ensure_project
+      local idx="${args[0]:-1}"; local subpath="${args[1]:-}"; shift || true
+      [[ -n "$subpath" ]] || die "Usage: attach-cd <index> <subpath>"
+      local dest="$subpath"
+      if [[ "${subpath:0:1}" != "/" ]]; then
+        dest="${DEV_ROOT:-/workspaces/dev}/$subpath"
+      fi
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc "cd \"$dest\" && exec bash"
+      ;;
+    creds)
+      ensure_project
+      # creds [--env-file FILE]
+      local envfile=""
+      if [[ "${args[0]:-}" == "--env-file" ]]; then envfile="${args[1]:-}"; shift 2 || true; fi
+      if [[ -n "$envfile" ]]; then
+        [[ -f "$envfile" ]] || die "env file not found: $envfile"
+        set -a; source "$envfile"; set +a
+      fi
+      : "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID required (or provide --env-file)}"
+      : "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY required (or provide --env-file)}"
+      local prof="${AWS_PROFILE:-codex}"; local region="${AWS_DEFAULT_REGION:-us-east-2}"
+      docker compose $(compose_files) exec -T dev-agent bash -lc "mkdir -p /workspace/.aws && cat > /workspace/.aws/credentials <<EOF
+[$prof]
+aws_access_key_id=$AWS_ACCESS_KEY_ID
+aws_secret_access_key=$AWS_SECRET_ACCESS_KEY
+aws_session_token=${AWS_SESSION_TOKEN:-}
+EOF
+cat > /workspace/.aws/config <<EOF
+[profile $prof]
+region=$region
+EOF
+echo 'wrote /workspace/.aws/{credentials,config}'"
+      ;;
   esac
 }
 

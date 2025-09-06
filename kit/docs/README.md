@@ -14,7 +14,9 @@ Dev Kit — Base Kit Details
   - `envoy`: starts Envoy HTTP proxy and SNI TCP forward proxy.
 - Helper:
   - `scripts/devctl -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net`.
+  - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
+    - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
+    - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
 - Allowlist changes:
   - `devctl -p <proj> allow example.com` edits both proxy and DNS allowlists.
   - Restart services to apply: `devctl -p <proj> restart`.
-

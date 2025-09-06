@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  dev-agent:
+    image: local/dev-agent:codex
+    environment:
+      - DEV_ROOT=/workspaces/dev
+      - AWS_SHARED_CREDENTIALS_FILE=/workspaces/dev/.aws/credentials
+      - AWS_CONFIG_FILE=/workspaces/dev/.aws/config
+      - AWS_PROFILE=${AWS_PROFILE:-codex}
+      - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=tinyproxy -Dhttp.proxyPort=8888 -Dhttps.proxyHost=tinyproxy -Dhttps.proxyPort=8888 -Djava.net.useSystemProxies=true
+    working_dir: /workspaces/dev
+    volumes:
+      - ../../:/workspaces/dev:rw
+      - ivy2-cache:/home/dev/.ivy2
+      - sbt-cache:/home/dev/.sbt
+      - coursier-cache:/home/dev/.cache/coursier
+      - devkit-auth:/home/dev/.codex
+      - tmpfs:/tmp
+

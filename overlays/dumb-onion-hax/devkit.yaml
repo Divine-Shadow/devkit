@@ -1,0 +1,5 @@
+workspace: ../../dumb-onion-hax
+env: {}
+hooks:
+  warm: sbt -v update
+  maintain: sbt compile
