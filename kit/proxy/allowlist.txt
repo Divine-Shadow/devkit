@@ -3,6 +3,7 @@
 github.com
 api.github.com
 objects.githubusercontent.com
+ssh.github.com
 repo1.maven.org
 repo.scala-sbt.org
 oss.sonatype.org

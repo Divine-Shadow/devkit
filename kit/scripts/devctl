@@ -116,7 +116,7 @@ main() {
     case "$1" in
       -p|--project) PROJECT="$2"; shift 2; continue ;;
       --profile) PROFILE="$2"; shift 2; continue ;;
-      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-sts|tmux-shells|codex-auth|creds)
+      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-sts|tmux-shells|codex-auth|creds|ssh-setup|ssh-test|repo-push-ssh)
         cmd="$1"; shift; continue ;;
       *) args+=("$1"); shift; continue ;;
     esac
@@ -146,7 +146,7 @@ main() {
       docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "chatgpt.com/backend..: "; curl -sSvo /dev/null -w "%{http_code}\\n" https://chatgpt.com/backend-api/codex/responses || true'
       echo
       echo "== Codex exec (expect ok) =="
-      docker compose $(compose_files) exec dev-agent bash -lc "timeout 15s codex exec 'Reply with: ok' || true"
+      docker compose $(compose_files) exec dev-agent bash -lc "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome timeout 15s codex exec 'Reply with: ok' || true"
       ;;
     check-sts)
       ensure_project
@@ -171,17 +171,23 @@ main() {
       ensure_project
       local n="${args[0]:-2}"
       command -v tmux >/dev/null 2>&1 || die "tmux not found on host"
-      docker compose $(compose_files) up -d --scale dev-agent="$n"
+  docker compose $(compose_files) up -d --scale dev-agent="$n"
+  # Ensure SSH is configured in each instance (best-effort)
+  local j=1
+  while [[ "$j" -le "$n" ]]; do
+    "$0" -p "$PROJECT" ssh-setup --index "$j" >/dev/null 2>&1 || true
+    j=$((j+1))
+  done
       local sess="devkit-shells"
-      tmux new-session -d -s "$sess" "docker compose $(compose_files) exec --index 1 dev-agent bash -lc 'cd /workspace; exec bash'"
-      tmux rename-window -t "$sess":0 "agent-1" >/dev/null 2>&1 || true
-      local i=2
-      while [[ "$i" -le "$n" ]]; do
-        tmux new-window -t "$sess" -n "agent-$i" "docker compose $(compose_files) exec --index $i dev-agent bash -lc 'cd /workspace; exec bash'"
-        i=$((i+1))
-      done
-      tmux attach -t "$sess"
-      ;;
+  tmux new-session -d -s "$sess" "docker compose $(compose_files) exec --index 1 dev-agent bash -lc 'cd /workspace; exec bash'"
+  tmux rename-window -t "$sess":0 "agent-1" >/dev/null 2>&1 || true
+  local i=2
+  while [[ "$i" -le "$n" ]]; do
+    tmux new-window -t "$sess" -n "agent-$i" "docker compose $(compose_files) exec --index $i dev-agent bash -lc 'cd /workspace; exec bash'"
+    i=$((i+1))
+  done
+  tmux attach -t "$sess"
+  ;;
     codex-auth)
       ensure_project
       local sub="${args[0]:-}"; shift || true
@@ -189,16 +195,16 @@ main() {
         import)
           local file="${args[1]:-}"; local idx="${args[2]:-1}"
           [[ -f "$file" ]] || die "auth.json file not found: $file"
-          docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p ~/.codex && cat > ~/.codex/auth.json' < "$file"
+          docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p /workspace/.devhome/.codex && cat > /workspace/.devhome/.codex/auth.json' < "$file"
           echo "Imported auth.json into instance $idx"
           ;;
         show)
           local idx="${args[1]:-1}"
-          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ls -l ~/.codex/auth.json || true; head -c 120 ~/.codex/auth.json 2>/dev/null || true; echo'
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ls -l /workspace/.devhome/.codex/auth.json || true; head -c 120 /workspace/.devhome/.codex/auth.json 2>/dev/null || true; echo'
           ;;
         clear)
           local idx="${args[1]:-1}"
-          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f ~/.codex/auth.json && echo "cleared ~/.codex/auth.json" || true'
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f /workspace/.devhome/.codex/auth.json && echo "cleared /workspace/.devhome/.codex/auth.json" || true'
           ;;
         *) die "Usage: codex-auth {import <auth.json> [N] | show [N] | clear [N]}" ;;
       esac
@@ -249,6 +255,92 @@ cat > /workspace/.aws/config <<EOF
 region=$region
 EOF
 echo 'wrote /workspace/.aws/{credentials,config}'"
+      ;;
+    ssh-setup)
+      # ssh-setup [--key <path>] [--index N]
+      ensure_project
+      local idx=1
+      local keyfile=""
+      local a=("${args[@]}")
+      for ((i=0; i<${#a[@]}; i++)); do
+        case "${a[$i]}" in
+          --key)
+            keyfile="${a[$((i+1))]:-}"; i=$((i+1));;
+          --index)
+            idx="${a[$((i+1))]:-1}"; i=$((i+1));;
+          *)
+            if [[ -z "$keyfile" ]]; then keyfile="${a[$i]}"; fi;;
+        esac
+      done
+      local host_id_ed25519="${keyfile:-$HOME/.ssh/id_ed25519}"
+      if [[ ! -f "$host_id_ed25519" ]]; then host_id_ed25519="$HOME/.ssh/id_rsa"; fi
+      local host_pub_default="$host_id_ed25519.pub"
+      local host_pub="$host_pub_default"
+      local derived_pub=""
+      local host_known="$HOME/.ssh/known_hosts"
+      [[ -f "$host_id_ed25519" ]] || die "Host key not found: $host_id_ed25519"
+      if [[ ! -f "$host_pub" ]]; then
+        echo "Public key not found; deriving from private..."
+        derived_pub=$(mktemp)
+        ssh-keygen -y -f "$host_id_ed25519" > "$derived_pub"
+        host_pub="$derived_pub"
+      fi
+      echo "Allowlisting ssh.github.com in proxy + DNS and restarting proxy/DNS..."
+      cmd_allow ssh.github.com || true
+      docker compose $(compose_files) restart tinyproxy dns || true
+      echo "Configuring /workspace/.devhome/.ssh in container index $idx..."
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p /workspace/.devhome/.ssh && chmod 700 /workspace/.devhome/.ssh'
+      echo "Copying private/public keys..."
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/id_ed25519 && chmod 600 /workspace/.devhome/.ssh/id_ed25519' < "$host_id_ed25519"
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/id_ed25519.pub && chmod 644 /workspace/.devhome/.ssh/id_ed25519.pub' < "$host_pub"
+      if [[ -f "$host_known" ]]; then
+        echo "Copying known_hosts..."
+        docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/known_hosts && chmod 644 /workspace/.devhome/.ssh/known_hosts' < "$host_known"
+      fi
+      echo "Writing SSH config for GitHub via proxy at port 443..."
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/config <<EOF
+Host github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+  ProxyCommand nc -X connect -x tinyproxy:8888 %h %p
+  IdentityFile /workspace/.devhome/.ssh/id_ed25519
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+EOF
+chmod 600 /workspace/.devhome/.ssh/config'
+      echo "Configuring git to use container SSH config (core.sshCommand)..."
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc "git config --global core.sshCommand 'ssh -F /workspace/.devhome/.ssh/config'"
+      # cleanup derived pub
+      if [[ -n "$derived_pub" && -f "$derived_pub" ]]; then rm -f "$derived_pub"; fi
+      echo "SSH setup complete for container index $idx. Test with: scripts/devkit ssh-test $idx"
+      ;;
+    ssh-test)
+      ensure_project
+      local idx="${args[0]:-1}"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ssh -F /workspace/.devhome/.ssh/config -T github.com -p 443 -o BatchMode=yes || true'
+      ;;
+    repo-push-ssh)
+      # repo-push-ssh <repo-path> [--index N]
+      ensure_project
+      local idx=1
+      local repo_path=""
+      local a=("${args[@]}")
+      for ((i=0; i<${#a[@]}; i++)); do
+        case "${a[$i]}" in
+          --index)
+            idx="${a[$((i+1))]:-1}"; i=$((i+1));;
+          *)
+            if [[ -z "$repo_path" ]]; then repo_path="${a[$i]}"; fi;;
+        esac
+      done
+      [[ -n "$repo_path" ]] || die "Usage: repo-push-ssh <repo-path> [--index N]"
+      # Best-effort ensure SSH is configured
+      "$0" -p "$PROJECT" ssh-setup --index "$idx" || true
+      # Determine base path per overlay
+      local base="/workspace"; [[ "$PROJECT" == "dev-all" ]] && base="/workspaces/dev"
+      local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME=/workspace/.devhome; cd '"'$dest'"'; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; fi; echo Pushing branch "$cur" to origin...; GIT_SSH_COMMAND="ssh -F /workspace/.devhome/.ssh/config" git push -u origin HEAD'
       ;;
   esac
 }

@@ -17,6 +17,19 @@ Dev Kit — Base Kit Details
   - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
     - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
     - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
+
+## Git Over SSH (GitHub)
+
+- Allow + setup (per agent): `scripts/devkit ssh-setup [--index N] [--key ~/.ssh/id_ed25519]`
+  - Adds `ssh.github.com` to proxy/DNS allowlists (SSH over port 443).
+  - Copies your host SSH key and known_hosts into `/workspace/.devhome/.ssh`.
+  - Writes SSH config to tunnel via the proxy: `ProxyCommand nc -X connect -x tinyproxy:8888 %h %p`.
+  - Sets `git config --global core.sshCommand 'ssh -F /workspace/.devhome/.ssh/config'`.
+- Test: `scripts/devkit ssh-test N` (expects the GitHub banner).
+- Flip remote + push: `scripts/devkit repo-push-ssh <repo-path> [--index N]`.
+  - For the codex overlay (single repo at `/workspace`), use `.` as `<repo-path>`.
+  - For `dev-all`, pass relative path like `ouroboros-ide`.
+- tmux workflow: `scripts/devkit tmux-shells N` (auto-runs ssh-setup for each instance).
 - Allowlist changes:
   - `devctl -p <proj> allow example.com` edits both proxy and DNS allowlists.
   - Restart services to apply: `devctl -p <proj> restart`.

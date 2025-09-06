@@ -25,5 +25,4 @@ services:
       - ivy2-cache:/home/dev/.ivy2
       - sbt-cache:/home/dev/.sbt
       - coursier-cache:/home/dev/.cache/coursier
-      - devkit-auth:/home/dev/.codex
       - tmpfs:/tmp
