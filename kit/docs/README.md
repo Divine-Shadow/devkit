@@ -17,6 +17,7 @@ Dev Kit — Base Kit Details
   - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
     - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
     - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
+  - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
 
 ## Git Over SSH (GitHub)
 
