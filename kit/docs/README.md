@@ -18,6 +18,7 @@ Dev Kit — Base Kit Details
     - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
     - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
   - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
+  - Worktrees + SSH workflow: see `worktrees_ssh.md` for end‑to‑end flows (`bootstrap`, `worktrees-*`, `open`).
 
 ## Git Over SSH (GitHub)
 

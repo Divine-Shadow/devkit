@@ -116,7 +116,7 @@ main() {
     case "$1" in
       -p|--project) PROJECT="$2"; shift 2; continue ;;
       --profile) PROFILE="$2"; shift 2; continue ;;
-      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-sts|tmux-shells|codex-auth|creds|ssh-setup|ssh-test|repo-push-ssh|worktrees-init|worktrees-tmux)
+      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-sts|tmux-shells|codex-auth|creds|ssh-setup|ssh-test|repo-config-ssh|repo-push-ssh|repo-config-https|repo-push-https|worktrees-init|worktrees-branch|worktrees-status|worktrees-sync|worktrees-tmux|bootstrap|open)
         cmd="$1"; shift; continue ;;
       *) args+=("$1"); shift; continue ;;
     esac
@@ -179,11 +179,11 @@ main() {
     j=$((j+1))
   done
       local sess="devkit-shells"
-  tmux new-session -d -s "$sess" "docker compose $(compose_files) exec --index 1 dev-agent bash -lc 'cd /workspace; exec bash'"
+  tmux new-session -d -s "$sess" "docker compose $(compose_files) exec --index 1 dev-agent bash -lc 'mkdir -p /workspace/.devhome-agent1; export HOME=/workspace/.devhome-agent1; cd /workspace; exec bash'"
   tmux rename-window -t "$sess":0 "agent-1" >/dev/null 2>&1 || true
   local i=2
   while [[ "$i" -le "$n" ]]; do
-    tmux new-window -t "$sess" -n "agent-$i" "docker compose $(compose_files) exec --index $i dev-agent bash -lc 'cd /workspace; exec bash'"
+    tmux new-window -t "$sess" -n "agent-$i" "docker compose $(compose_files) exec --index $i dev-agent bash -lc 'mkdir -p /workspace/.devhome-agent$((i)); export HOME=/workspace/.devhome-agent$((i)); cd /workspace; exec bash'"
     i=$((i+1))
   done
   tmux attach -t "$sess"
@@ -342,6 +342,38 @@ chmod 600 /workspace/.devhome/.ssh/config'
       local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
       docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME=/workspace/.devhome; cd '"'$dest'"'; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; fi; echo Pushing branch "$cur" to origin...; GIT_SSH_COMMAND="ssh -F /workspace/.devhome/.ssh/config" git push -u origin HEAD'
       ;;
+    repo-config-ssh)
+      # repo-config-ssh <repo-path> [--index N]
+      ensure_project
+      local idx=1; local repo_path="${args[0]:-}"
+      [[ -n "$repo_path" ]] || die "Usage: repo-config-ssh <repo-path> [--index N]"
+      shift || true
+      if [[ "${args[0]:-}" == "--index" ]]; then idx="${args[1]:-1}"; fi
+      local base="/workspace"; [[ "$PROJECT" == "dev-all" ]] && base="/workspaces/dev"
+      local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
+      "$0" -p "$PROJECT" ssh-setup --index "$idx" >/dev/null 2>&1 || true
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME=/workspace/.devhome; cd '"'$dest'"'; url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; else echo "Origin already SSH: $url"; fi'
+      ;;
+    repo-config-https)
+      # repo-config-https <repo-path> [--index N]
+      ensure_project
+      local idx=1; local repo_path="${args[0]:-}"
+      [[ -n "$repo_path" ]] || die "Usage: repo-config-https <repo-path> [--index N]"
+      shift || true
+      if [[ "${args[0]:-}" == "--index" ]]; then idx="${args[1]:-1}"; fi
+      local base="/workspace"; [[ "$PROJECT" == "dev-all" ]] && base="/workspaces/dev"
+      local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; cd '"'$dest'"'; url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^git@github.com:([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=https://github.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting HTTPS origin to "$newurl"; git remote set-url origin "$newurl"; else echo "Origin already HTTPS: $url"; fi'
+      ;;
+    repo-push-https)
+      # repo-push-https <repo-path> [--index N]
+      ensure_project
+      local idx=1; local repo_path="${args[0]:-}"; [[ -n "$repo_path" ]] || die "Usage: repo-push-https <repo-path> [--index N]"; shift || true
+      if [[ "${args[0]:-}" == "--index" ]]; then idx="${args[1]:-1}"; fi
+      "$0" -p "$PROJECT" repo-config-https "$repo_path" --index "$idx"
+      local base="/workspace"; [[ "$PROJECT" == "dev-all" ]] && base="/workspaces/dev"; local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; cd '"'$dest'"'; echo Pushing branch $(git rev-parse --abbrev-ref HEAD) to origin (HTTPS)...; git push -u origin HEAD'
+      ;;
     worktrees-init)
       # worktrees-init <repo> <count> [--base agent] [--branch main]
       # Creates per-agent worktrees under <dev-root>/<base><i>/<repo>
@@ -376,6 +408,84 @@ chmod 600 /workspace/.devhome/.ssh/config'
         fi
         i=$((i+1))
       done
+      ;;
+    worktrees-branch)
+      # worktrees-branch <repo> <index> <branch>
+      ensure_project
+      [[ "$PROJECT" == "dev-all" ]] || die "Use -p dev-all for worktrees-branch"
+      local repo="${args[0]:-}"; local idx="${args[1]:-}"; local branch="${args[2]:-}"
+      [[ -n "$repo" && -n "$idx" && -n "$branch" ]] || die "Usage: -p dev-all worktrees-branch <repo> <index> <branch>"
+      local base="/workspaces/dev"
+      local path; if [[ "$idx" -eq 1 ]]; then path="$base/$repo"; else path="$base/agent${idx}/$repo"; fi
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; cd '"'$path'"'; git fetch origin || true; git checkout -B '"'$branch'"' '"'origin/$branch'"' || git checkout -B '"'$branch'"''
+      ;;
+    worktrees-status)
+      # worktrees-status <repo> [--all|--index N]
+      ensure_project
+      [[ "$PROJECT" == "dev-all" ]] || die "Use -p dev-all for worktrees-status"
+      local repo="${args[0]:-}"; shift || true
+      local idx=""; if [[ "${args[0]:-}" == "--index" ]]; then idx="${args[1]:-}"; fi
+      local base="/workspaces/dev"
+      if [[ -n "$idx" ]]; then
+        local p; if [[ "$idx" -eq 1 ]]; then p="$base/$repo"; else p="$base/agent${idx}/$repo"; fi
+        docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'cd '"'$p'"'; echo -n "[$idx] "; git rev-parse --abbrev-ref HEAD; git status -s'
+      else
+        local i=1
+        while [[ "$i" -le 6 ]]; do
+          local p; if [[ "$i" -eq 1 ]]; then p="$base/$repo"; else p="$base/agent${i}/$repo"; fi
+          docker compose $(compose_files) exec --index "$i" dev-agent bash -lc 'cd '"'$p'"' 2>/dev/null && docker compose $(compose_files) exec --index "$i" dev-agent bash -lc 'cd '"'$p'"'; echo -n "[$i] "; git rev-parse --abbrev-ref HEAD; git status -s' || true
+          i=$((i+1))
+        done
+      fi
+      ;;
+    worktrees-sync)
+      # worktrees-sync <repo> (--pull|--push) [--all|--index N]
+      ensure_project
+      [[ "$PROJECT" == "dev-all" ]] || die "Use -p dev-all for worktrees-sync"
+      local repo="${args[0]:-}"; shift || true
+      local op=""; if [[ "${args[0]:-}" == "--pull" || "${args[0]:-}" == "--push" ]]; then op="${args[0]}"; shift; else die "Specify --pull or --push"; fi
+      local idx=""; if [[ "${args[0]:-}" == "--index" ]]; then idx="${args[1]:-}"; fi
+      local base="/workspaces/dev"
+      if [[ -n "$idx" ]]; then
+        local p; if [[ "$idx" -eq 1 ]]; then p="$base/$repo"; else p="$base/agent${idx}/$repo"; fi
+        local cmd='git pull --ff-only'; [[ "$op" == "--push" ]] && cmd='git push'
+        docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -e; cd '"'$p'"'; '"'$cmd'"''
+      else
+        local i=1
+        while [[ "$i" -le 6 ]]; do
+          local p; if [[ "$i" -eq 1 ]]; then p="$base/$repo"; else p="$base/agent${i}/$repo"; fi
+          local cmd='git pull --ff-only'; [[ "$op" == "--push" ]] && cmd='git push'
+          docker compose $(compose_files) exec --index "$i" dev-agent bash -lc 'cd '"'$p'"' 2>/dev/null && docker compose $(compose_files) exec --index "$i" dev-agent bash -lc 'set -e; cd '"'$p'"'; '"'$cmd'"'' || true
+          i=$((i+1))
+        done
+      fi
+      ;;
+    bootstrap)
+      # bootstrap <repo> <count>  (dev-all only)
+      ensure_project
+      [[ "$PROJECT" == "dev-all" ]] || die "Use -p dev-all for bootstrap"
+      local repo="${args[0]:-}"; local n="${args[1]:-2}"; [[ -n "$repo" ]] || die "Usage: -p dev-all bootstrap <repo> <count>"
+      "$0" worktrees-init "$repo" "$n"
+      "$0" -p dev-all worktrees-tmux "$repo" "$n"
+      ;;
+    open)
+      # open <count> (codex overlay only) — shared mount but per-agent HOME + SSH
+      ensure_project
+      [[ "$PROJECT" != "dev-all" ]] || die "Use tmux-shells or worktrees-tmux under dev-all"
+      local n="${args[0]:-2}"
+      docker compose $(compose_files) up -d --scale dev-agent="$n"
+      local j=1; while [[ "$j" -le "$n" ]]; do "$0" -p "$PROJECT" ssh-setup --index "$j" >/dev/null 2>&1 || true; j=$((j+1)); done
+      local sess="devkit-open"
+      local home1="/workspace/.devhome-agent1"
+      tmux new-session -d -s "$sess" "docker compose $(compose_files) exec --index 1 dev-agent bash -lc 'mkdir -p \"$home1\"; export HOME=\"$home1\"; cd /workspace; exec bash'"
+      tmux rename-window -t "$sess":0 "agent-1" >/dev/null 2>&1 || true
+      local i=2
+      while [[ "$i" -le "$n" ]]; do
+        local homei="/workspace/.devhome-agent${i}"
+        tmux new-window -t "$sess" -n "agent-$i" "docker compose $(compose_files) exec --index $i dev-agent bash -lc 'mkdir -p \"$homei\"; export HOME=\"$homei\"; cd /workspace; exec bash'"
+        i=$((i+1))
+      done
+      tmux attach -t "$sess"
       ;;
     worktrees-tmux)
       # worktrees-tmux <repo> <count>
