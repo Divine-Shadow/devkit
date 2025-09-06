@@ -1,0 +1,33 @@
+# Domain allowlist (one per line). Default deny is enabled.
+# Core dev + build infra
+github.com
+api.github.com
+objects.githubusercontent.com
+repo1.maven.org
+repo.scala-sbt.org
+oss.sonatype.org
+jitpack.io
+archive.ubuntu.com
+security.ubuntu.com
+keyserver.ubuntu.com
+
+# OpenAI
+api.openai.com
+platform.openai.com
+chatgpt.com
+
+# AWS (us-east-2 primary)
+sts.amazonaws.com
+sts.us-east-2.amazonaws.com
+s3.amazonaws.com
+s3.us-east-2.amazonaws.com
+textract.us-east-2.amazonaws.com
+comprehend.us-east-2.amazonaws.com
+rekognition.us-east-2.amazonaws.com
+rekognition-fips.us-east-2.amazonaws.com
+secretsmanager.us-east-1.amazonaws.com
+secretsmanager.us-east-2.amazonaws.com
+docs.aws.amazon.com
+awscli.amazonaws.com
+
+example.com

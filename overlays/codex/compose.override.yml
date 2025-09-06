@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  dev-agent:
+    build:
+      context: ../../ouroboros-ide
+      dockerfile: docker/dev/codex-agent.Dockerfile
+      args:
+        INSTALL_CODEX: "${INSTALL_CODEX:-true}"
+        JDK_VERSION: "${JDK_VERSION:-17}"
+        INSTALL_SBT: "${INSTALL_SBT:-true}"
+        CODEX_VERSION: "${CODEX_VERSION:-rust-v0.29.0}"
+        CODEX_ASSET: "${CODEX_ASSET:-codex-x86_64-unknown-linux-musl.tar.gz}"
+        CODEX_SHA256: "${CODEX_SHA256:-}"
+        AWSCLI_URL: "${AWSCLI_URL:-https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip}"
+        AWSCLI_SHA256: "${AWSCLI_SHA256:-}"
+    image: local/dev-agent:codex
+    environment:
+      - AWS_SHARED_CREDENTIALS_FILE=/workspace/.aws/credentials
+      - AWS_CONFIG_FILE=/workspace/.aws/config
+      - AWS_PROFILE=${AWS_PROFILE:-codex}
+      - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=tinyproxy -Dhttp.proxyPort=8888 -Dhttps.proxyHost=tinyproxy -Dhttps.proxyPort=8888 -Djava.net.useSystemProxies=true
+    volumes:
+      - ../../ouroboros-ide:/workspace:rw
+      - ivy2-cache:/home/dev/.ivy2
+      - sbt-cache:/home/dev/.sbt
+      - coursier-cache:/home/dev/.cache/coursier
+      - devkit-auth:/home/dev/.codex
+      - tmpfs:/tmp

@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.31.3
+    container_name: devkit_envoy
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    networks:
+      - dev-egress
+      - dev-internal
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/3128' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  envoy-sni:
+    image: envoyproxy/envoy:v1.31.3
+    container_name: devkit_envoy_sni
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "info"]
+    volumes:
+      - ./envoy/envoy_sni.yaml:/etc/envoy/envoy.yaml:ro
+    networks:
+      - dev-egress
+      - dev-internal
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/3130' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+

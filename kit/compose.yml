@@ -1,0 +1,59 @@
+version: "3.9"
+
+name: devkit
+
+services:
+  tinyproxy:
+    build:
+      context: ..
+      dockerfile: kit/proxy/tinyproxy.Dockerfile
+    image: devkit/tinyproxy:dev
+    container_name: devkit_tinyproxy
+    networks:
+      - dev-internal
+      - dev-egress
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8888 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  dev-agent:
+    image: devkit/dev-agent:base
+    # Overlays are expected to provide build context or image override and workspace mount
+    networks:
+      - dev-internal
+    environment:
+      - HTTP_PROXY=http://tinyproxy:8888
+      - HTTPS_PROXY=http://tinyproxy:8888
+      - NO_PROXY=localhost,127.0.0.1,tinyproxy
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    volumes:
+      - ${WORKSPACE_DIR:-.}:/workspace:rw
+      - ivy2-cache:/home/dev/.ivy2
+      - sbt-cache:/home/dev/.sbt
+      - coursier-cache:/home/dev/.cache/coursier
+      - devkit-auth:/home/dev/.devkit
+      - tmpfs:/tmp
+    depends_on:
+      tinyproxy:
+        condition: service_healthy
+
+networks:
+  dev-internal:
+    internal: true
+    driver: bridge
+  dev-egress:
+    driver: bridge
+
+volumes:
+  ivy2-cache:
+  sbt-cache:
+  coursier-cache:
+  devkit-auth:
+  tmpfs:

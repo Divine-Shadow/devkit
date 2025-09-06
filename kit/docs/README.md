@@ -1,0 +1,20 @@
+Dev Kit — Base Kit Details
+
+- Networks:
+  - `dev-internal` (internal: true; 172.30.10.0/24) for agents and optional DNS.
+  - `dev-egress` (bridge) for proxies and internet access.
+- Services:
+  - `tinyproxy` (default): allowlist‑enforced HTTP(S) egress.
+  - `dev-agent`: your project’s container (overlay overrides build/image and mount).
+  - Optional `envoy` and `envoy-sni` (enable with `--profile envoy`).
+  - Optional `dns` (dnsmasq allowlist; enable with `--profile dns`).
+- Profiles:
+  - `hardened`: read‑only root, limits; combine with others.
+  - `dns`: forces agent DNS via `172.30.10.3` dnsmasq allowlist.
+  - `envoy`: starts Envoy HTTP proxy and SNI TCP forward proxy.
+- Helper:
+  - `scripts/devctl -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net`.
+- Allowlist changes:
+  - `devctl -p <proj> allow example.com` edits both proxy and DNS allowlists.
+  - Restart services to apply: `devctl -p <proj> restart`.
+

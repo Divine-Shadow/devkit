@@ -1,0 +1,7 @@
+workspace: ../../ouroboros-ide
+env:
+  AWS_PROFILE: codex
+hooks:
+  warm: sbt -v update
+  maintain: sbt compile
+

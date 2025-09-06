@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# devctl - helper for devkit operations
+# Usage: devctl -p <project> <cmd> [args...]
+# Commands: up, down, restart, scale N, exec <n> <cmd>, attach <n>, logs <n>, status,
+#           allow <domain>, proxy {tinyproxy|envoy}, warm, maintain, check-net
+
+ROOT_DIR="$(readlink -f "$(dirname "${BASH_SOURCE[0]}")"/../..)"
+KIT_DIR="$ROOT_DIR/kit"
+OVERLAYS_DIR="$ROOT_DIR/overlays"
+
+PROJECT=""
+PROFILE=""
+
+die() { echo "devctl: $*" >&2; exit 1; }
+
+compose_files() {
+  local files="-f $KIT_DIR/compose.yml"
+  # Default to dns profile unless explicitly overridden
+  local effective_profile="$PROFILE"
+  if [[ -z "$effective_profile" ]]; then
+    effective_profile="dns"
+  fi
+  if [[ -n "$effective_profile" ]]; then
+    IFS=',' read -ra profs <<< "$effective_profile"
+    for p in "${profs[@]}"; do
+      case "$p" in
+        hardened) files+=" -f $KIT_DIR/compose.hardened.yml" ;;
+        dns) files+=" -f $KIT_DIR/compose.dns.yml" ;;
+        envoy) files+=" -f $KIT_DIR/compose.envoy.yml" ;;
+        *) die "unknown profile: $p" ;;
+      esac
+    done
+  fi
+  if [[ -f "$OVERLAYS_DIR/$PROJECT/compose.override.yml" ]]; then
+    files+=" -f $OVERLAYS_DIR/$PROJECT/compose.override.yml"
+  fi
+  echo "$files"
+}
+
+ensure_project() {
+  [[ -n "$PROJECT" ]] || die "-p <project> is required"
+  [[ -d "$OVERLAYS_DIR/$PROJECT" ]] || die "overlay not found: $PROJECT"
+}
+
+cmd_up() { ensure_project; docker compose $(compose_files) up -d; }
+cmd_down() { ensure_project; docker compose $(compose_files) down; }
+cmd_restart() { ensure_project; docker compose $(compose_files) restart; }
+cmd_scale() { ensure_project; local n=${1:-1}; docker compose $(compose_files) up -d --scale dev-agent=$n; }
+cmd_exec() { ensure_project; local n=${1:-1}; shift || true; docker compose $(compose_files) exec --index "$n" dev-agent "$@"; }
+cmd_attach() { ensure_project; local n=${1:-1}; docker compose $(compose_files) attach --index "$n" dev-agent; }
+cmd_logs() { ensure_project; local n=${1:-1}; docker compose $(compose_files) logs -f dev-agent; }
+cmd_status() { ensure_project; docker compose $(compose_files) ps; }
+
+cmd_proxy() {
+  ensure_project; local which=${1:-tinyproxy}
+  case "$which" in
+    tinyproxy)
+      echo "Switching agent env to tinyproxy... (ensure overlay uses HTTP(S)_PROXY=http://tinyproxy:8888)" ;;
+    envoy)
+      echo "Enable envoy profile: add --profile envoy to up/restart commands" ;;
+    *) die "unknown proxy: $which" ;;
+  esac
+}
+
+cmd_allow() {
+  ensure_project; local domain=${1:-}
+  [[ -n "$domain" ]] || die "allow <domain> is required"
+  local allowlist="$KIT_DIR/proxy/allowlist.txt"
+  local dnsconf="$KIT_DIR/dns/dnsmasq.conf"
+  if ! grep -qE "^${domain//./\\.}$" "$allowlist"; then
+    echo "$domain" >> "$allowlist"
+    echo "Added to proxy allowlist: $domain"
+  else
+    echo "Already in proxy allowlist: $domain"
+  fi
+  local dnspat="server=/${domain}/1.1.1.1"
+  if ! grep -qF "$dnspat" "$dnsconf"; then
+    echo "$dnspat" >> "$dnsconf"
+    echo "Added to DNS allowlist: $domain"
+  else
+    echo "Already in DNS allowlist: $domain"
+  fi
+  echo "Note: restart dns and proxy to apply (devctl -p $PROJECT restart)"
+}
+
+cmd_warm() {
+  ensure_project
+  local hook=$(grep -E '^\s*warm:' "$OVERLAYS_DIR/$PROJECT/devkit.yaml" | sed 's/.*warm:\s*//')
+  if [[ -n "$hook" ]]; then
+    docker compose $(compose_files) exec dev-agent bash -lc "$hook"
+  else
+    echo "No warm hook defined"
+  fi
+}
+
+cmd_maintain() {
+  ensure_project
+  local hook=$(grep -E '^\s*maintain:' "$OVERLAYS_DIR/$PROJECT/devkit.yaml" | sed 's/.*maintain:\s*//')
+  if [[ -n "$hook" ]]; then
+    docker compose $(compose_files) exec dev-agent bash -lc "$hook"
+  else
+    echo "No maintain hook defined"
+  fi
+}
+
+cmd_check_net() {
+  ensure_project
+  docker compose $(compose_files) exec dev-agent bash -lc 'set -x; env | grep -E "HTTP(S)?_PROXY|NO_PROXY"; curl -Is https://github.com | head -n1; (curl -Is https://example.com | head -n1 || true)'
+}
+
+main() {
+  local cmd=""; local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--project) PROJECT="$2"; shift 2; continue ;;
+      --profile) PROFILE="$2"; shift 2; continue ;;
+      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net)
+        cmd="$1"; shift; continue ;;
+      *) args+=("$1"); shift; continue ;;
+    esac
+  done
+  [[ -n "$cmd" ]] || die "command required"
+  case "$cmd" in
+    up) cmd_up ;;
+    down) cmd_down ;;
+    restart) cmd_restart ;;
+    scale) cmd_scale "${args[0]:-1}" ;;
+    exec) cmd_exec "${args[@]}" ;;
+    attach) cmd_attach "${args[@]}" ;;
+    logs) cmd_logs "${args[@]}" ;;
+    status) cmd_status ;;
+    allow) cmd_allow "${args[0]:-}" ;;
+    proxy) cmd_proxy "${args[0]:-tinyproxy}" ;;
+    warm) cmd_warm ;;
+    maintain) cmd_maintain ;;
+    check-net) cmd_check_net ;;
+  esac
+}
+
+main "$@"

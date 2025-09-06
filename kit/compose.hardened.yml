@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  dev-agent:
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 4g
+    cpus: 2
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+
