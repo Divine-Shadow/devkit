@@ -23,3 +23,7 @@ Key design:
 - Optional DNS allowlist (dnsmasq) and hardened profile (read‑only root, resource limits).
 
 See `kit/docs/README.md` for more details.
+
+Proposal: Bash → Go CLI Migration
+- Rationale, scope, and plan to migrate `kit/scripts/devctl` to a typed CLI while keeping shell shims.
+- See: `kit/docs/proposals/devkit-cli-migration.md`.
