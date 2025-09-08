@@ -56,12 +56,16 @@ func TestFreshOpen_Integration(t *testing.T) {
         t.Fatalf("devctl fresh-open failed: %v\n%s\n%s", err, out, stderr.String())
     }
 
-    // Exec in container: verify git, codex, claude are callable non-interactively
+    // Exec in container: verify hardened (read-only root), and that git, codex, claude are callable non-interactively
     comp := func(args ...string) *exec.Cmd {
         a := append([]string{"compose", "-f", filepath.Join(root, "kit/compose.yml"), "-f", filepath.Join(root, "kit/compose.hardened.yml"), "-f", filepath.Join(root, "kit/compose.dns.yml"), "-f", filepath.Join(root, "kit/compose.envoy.yml")}, args...)
         return exec.Command("docker", a...)
     }
 
+    // Hardened profile should deny writes to /
+    if out, err := comp("exec", "dev-agent", "bash", "-lc", "touch /should_fail && echo wrote || echo denied").CombinedOutput(); err == nil && strings.Contains(string(out), "wrote") {
+        t.Fatalf("expected read-only rootfs, got writable: %s", out)
+    }
     // git --version
     if out, err := comp("exec", "dev-agent", "git", "--version").CombinedOutput(); err != nil {
         t.Fatalf("git --version failed: %v\n%s", err, out)
@@ -80,4 +84,3 @@ func TestFreshOpen_Integration(t *testing.T) {
     _ = exec.Command("docker", "rm", "-f", "devkit_envoy", "devkit_envoy_sni", "devkit_dns", "devkit_tinyproxy").Run()
     _ = exec.Command("docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress").Run()
 }
-

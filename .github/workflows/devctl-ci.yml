@@ -28,3 +28,25 @@ jobs:
       - name: Test
         run: make test
 
+  integration:
+    if: ${{ vars.DEVKIT_IT_IMAGE != '' }}
+    runs-on: ubuntu-latest
+    env:
+      DEVKIT_INTEGRATION: '1'
+      DEVKIT_IT_IMAGE: ${{ vars.DEVKIT_IT_IMAGE }}
+      DEVKIT_NO_TMUX: '1'
+    defaults:
+      run:
+        working-directory: cli/devctl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Build
+        run: make build
+      - name: Run integration test
+        run: go test -tags=integration -run FreshOpen_Integration -v

@@ -3,11 +3,12 @@ Dev Kit — Reusable Containerized Dev Environment
 This dev kit extracts the dual‑network, allowlisted egress development setup into a reusable package you can apply to any project in your `dev/` or `projects/` folder via small per‑project overlays.
 
 Quick start (with the built‑in `codex` overlay):
-- Bring up: `devkit/kit/scripts/devctl -p codex up`
-- Exec shell: `devkit/kit/scripts/devctl -p codex exec 0 bash`
-- Add allowlist domain: `devkit/kit/scripts/devctl -p codex allow example.com`
-- Hardened + DNS profiles: `devkit/kit/scripts/devctl -p codex up --profile hardened,dns`
-- Tear down: `devkit/kit/scripts/devctl -p codex down`
+- Build once: `cd devkit/cli/devctl && make build` (outputs `devkit/kit/bin/devctl`).
+- Bring up: `devkit/kit/bin/devctl -p codex up`
+- Exec shell: `devkit/kit/bin/devctl -p codex exec 0 bash`
+- Add allowlist domain: `devkit/kit/bin/devctl -p codex allow example.com`
+- Hardened + DNS profiles: `devkit/kit/bin/devctl -p codex up --profile hardened,dns`
+- Tear down: `devkit/kit/bin/devctl -p codex down`
 
 SSH (GitHub) quickstart:
 - One-time per agent: `scripts/devkit ssh-setup --index 1` then `scripts/devkit ssh-test 1`
