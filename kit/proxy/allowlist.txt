@@ -33,3 +33,5 @@ awscli.amazonaws.com
 
 example.com
 example.org
+claude.ai
+anthropic.com

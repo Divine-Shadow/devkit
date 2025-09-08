@@ -117,7 +117,7 @@ main() {
     case "$1" in
       -p|--project) PROJECT="$2"; shift 2; continue ;;
       --profile) PROFILE="$2"; shift 2; continue ;;
-      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-sts|tmux-shells|codex-auth|creds|ssh-setup|ssh-test|repo-config-ssh|repo-push-ssh|repo-config-https|repo-push-https|worktrees-init|worktrees-branch|worktrees-status|worktrees-sync|worktrees-tmux|bootstrap|open|fresh-open)
+      up|down|restart|scale|exec|attach|logs|status|allow|proxy|warm|maintain|check-net|check-codex|check-claude|check-sts|tmux-shells|codex-auth|claude-auth|creds|ssh-setup|ssh-test|repo-config-ssh|repo-push-ssh|repo-config-https|repo-push-https|worktrees-init|worktrees-branch|worktrees-status|worktrees-sync|worktrees-tmux|bootstrap|open|fresh-open)
         cmd="$1"; shift; continue ;;
       *) args+=("$1"); shift; continue ;;
     esac
@@ -148,6 +148,18 @@ main() {
       echo
       echo "== Codex exec (expect ok) =="
       docker compose $(compose_files) exec dev-agent bash -lc "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome timeout 15s codex exec 'Reply with: ok' || true"
+      ;;
+    check-claude)
+      ensure_project
+      echo "== Proxy env in agent =="
+      docker compose $(compose_files) exec dev-agent bash -lc 'env | grep -E "^HTTPS?_PROXY=|^NO_PROXY=" || true'
+      echo
+      echo "== Curl checks (through proxy) =="
+      docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "claude.ai            : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://claude.ai || true'
+      docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "anthropic.com        : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://www.anthropic.com || true'
+      echo
+      echo "== Claude exec (expect version or help) =="
+      docker compose $(compose_files) exec dev-agent bash -lc "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome timeout 15s claude --version || claude --help || true"
       ;;
     check-sts)
       ensure_project
@@ -208,6 +220,27 @@ main() {
           docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f /workspace/.devhome/.codex/auth.json && echo "cleared /workspace/.devhome/.codex/auth.json" || true'
           ;;
         *) die "Usage: codex-auth {import <auth.json> [N] | show [N] | clear [N]}" ;;
+      esac
+      ;;
+    claude-auth)
+      ensure_project
+      local sub="${args[0]:-}"; shift || true
+      case "$sub" in
+        import)
+          local file="${args[1]:-}"; local idx="${args[2]:-1}"
+          [[ -f "$file" ]] || die "Claude config file not found: $file"
+          docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p /workspace/.devhome/.claude && cat > /workspace/.devhome/.claude/config' < "$file"
+          echo "Imported Claude config into instance $idx"
+          ;;
+        show)
+          local idx="${args[1]:-1}"
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ls -l /workspace/.devhome/.claude/config || true; head -c 120 /workspace/.devhome/.claude/config 2>/dev/null || true; echo'
+          ;;
+        clear)
+          local idx="${args[1]:-1}"
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f /workspace/.devhome/.claude/config && echo "cleared /workspace/.devhome/.claude/config" || true'
+          ;;
+        *) die "Usage: claude-auth {import <config> [N] | show [N] | clear [N]}" ;;
       esac
       ;;
     exec-cd)
