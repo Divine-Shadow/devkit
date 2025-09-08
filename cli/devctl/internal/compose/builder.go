@@ -65,3 +65,15 @@ func fileExists(path string) bool {
     return err == nil && !st.IsDir()
 }
 
+// AllProfilesFiles returns -f args including all profiles (hardened,dns,envoy) and overlay override if present.
+func AllProfilesFiles(p Paths, project string) []string {
+    args := []string{"-f", filepath.Join(p.Kit, "compose.yml")}
+    args = append(args, "-f", filepath.Join(p.Kit, "compose.hardened.yml"))
+    args = append(args, "-f", filepath.Join(p.Kit, "compose.dns.yml"))
+    args = append(args, "-f", filepath.Join(p.Kit, "compose.envoy.yml"))
+    if project != "" {
+        overlay := filepath.Join(p.Overlays, project, "compose.override.yml")
+        if fileExists(overlay) { args = append(args, "-f", overlay) }
+    }
+    return args
+}

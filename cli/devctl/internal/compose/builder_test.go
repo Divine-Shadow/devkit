@@ -46,3 +46,18 @@ func TestFiles_UnknownProfile(t *testing.T) {
         t.Fatal("expected error for unknown profile")
     }
 }
+
+func TestAllProfilesFiles(t *testing.T) {
+    dir := t.TempDir()
+    kit := filepath.Join(dir, "kit")
+    overlays := filepath.Join(dir, "overlays", "proj")
+    os.MkdirAll(kit, 0o755)
+    os.MkdirAll(overlays, 0o755)
+    for _, f := range []string{"compose.yml", "compose.hardened.yml", "compose.dns.yml", "compose.envoy.yml"} {
+        if err := os.WriteFile(filepath.Join(kit, f), []byte(""), 0o644); err != nil { t.Fatal(err) }
+    }
+    if err := os.WriteFile(filepath.Join(overlays, "compose.override.yml"), []byte(""), 0o644); err != nil { t.Fatal(err) }
+    p := Paths{Root: dir, Kit: kit, Overlays: filepath.Join(dir, "overlays")}
+    got := AllProfilesFiles(p, "proj")
+    if len(got) != 10 { t.Fatalf("want 10 args, got %d: %v", len(got), got) }
+}

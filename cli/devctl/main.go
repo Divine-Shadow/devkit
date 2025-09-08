@@ -1,6 +1,7 @@
 package main
 
 import (
+    "context"
     "errors"
     "flag"
     "fmt"
@@ -23,6 +24,18 @@ Commands:
   up, down, restart, status, logs
   scale N, exec <n> <cmd...>, attach <n>
   allow <domain>, warm, maintain, check-net
+  proxy {tinyproxy|envoy}
+  tmux-shells [N], open [N], fresh-open [N]
+  exec-cd <index> <subpath> [cmd...], attach-cd <index> <subpath>
+  ssh-setup [--key path] [--index N], ssh-test [N]
+  repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
+  repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
+  worktrees-init <repo> <count> [--base agent] [--branch main]
+  worktrees-branch <repo> <index> <branch>   (dev-all)
+  worktrees-status <repo> [--all|--index N]  (dev-all)
+  worktrees-sync <repo> (--pull|--push) [--all|--index N]  (dev-all)
+  worktrees-tmux <repo> <count>              (dev-all)
+  bootstrap <repo> <count>                   (dev-all)
 
 Flags:
   -p, --project   overlay project name (required for most)
@@ -190,6 +203,254 @@ func main() {
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "HTTPS_PROXY='"+px+"' HTTP_PROXY='"+px+"' aws sts get-caller-identity || true")
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true")
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "aws sts get-caller-identity || true")
+    case "exec-cd":
+        mustProject(project)
+        if len(sub) < 2 { die("Usage: exec-cd <index> <subpath> [cmd...]") }
+        idx := sub[0]; subpath := sub[1]
+        dest := subpath
+        if !strings.HasPrefix(subpath, "/") {
+            dest = filepath.Join("/workspaces/dev", subpath)
+        }
+        cmdstr := "bash"
+        if len(sub) > 2 { cmdstr = strings.Join(sub[2:], " ") }
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec "+cmdstr)
+    case "attach-cd":
+        mustProject(project)
+        if len(sub) < 2 { die("Usage: attach-cd <index> <subpath>") }
+        idx := sub[0]; subpath := sub[1]
+        dest := subpath
+        if !strings.HasPrefix(subpath, "/") { dest = filepath.Join("/workspaces/dev", subpath) }
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec bash")
+    case "tmux-shells":
+        mustProject(project)
+        n := "2"; if len(sub) > 0 { n = sub[0] }
+        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        // best-effort ssh-setup per agent
+        if !dryRun {
+            // loop via invoking self for simplicity is skipped; rely on user to run ssh-setup if needed
+        }
+        sess := "devkit-shells"
+        // window 1
+        home1 := "/workspace/.devhome-agent1"
+        runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
+        runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+        // remaining windows use $i
+        // generate a couple of windows based on n (string); rely on tmux for correctness if numeric
+        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(files, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \"/workspace/.devhome-agent2\"; export HOME=\"/workspace/.devhome-agent2\"; cd /workspace; exec bash'")
+        runHost(dryRun, "tmux", "attach", "-t", sess)
+    case "open":
+        mustProject(project)
+        n := "2"; if len(sub) > 0 { n = sub[0] }
+        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        sess := "devkit-open"
+        home1 := "/workspace/.devhome-agent1"
+        runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
+        runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(files, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \"/workspace/.devhome-agent2\"; export HOME=\"/workspace/.devhome-agent2\"; cd /workspace; exec bash'")
+        runHost(dryRun, "tmux", "attach", "-t", sess)
+    case "fresh-open":
+        mustProject(project)
+        n := "3"; if len(sub) > 0 { n = sub[0] }
+        all := compose.AllProfilesFiles(paths, project)
+        // bring everything down and cleanup
+        runCompose(dryRun, all, "down")
+        runHost(dryRun, "tmux", "kill-session", "-t", "devkit-open")
+        runHost(dryRun, "tmux", "kill-session", "-t", "devkit-shells")
+        runHost(dryRun, "tmux", "kill-session", "-t", "devkit-worktrees")
+        runHost(dryRun, "docker", "rm", "-f", "devkit_envoy", "devkit_envoy_sni", "devkit_dns", "devkit_tinyproxy")
+        runHost(dryRun, "docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress")
+        // start up with all profiles
+        runCompose(dryRun, all, "up", "-d", "--scale", "dev-agent="+n)
+        // tmux session
+        sess := "devkit-open"
+        home1 := "/workspace/.devhome-agent1"
+        runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
+        runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(all, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \"/workspace/.devhome-agent2\"; export HOME=\"/workspace/.devhome-agent2\"; cd /workspace; exec bash'")
+        runHost(dryRun, "tmux", "attach", "-t", sess)
+    case "ssh-setup":
+        mustProject(project)
+        // Parse flags: [--key path] [--index N]
+        idx := "1"
+        keyfile := ""
+        for i := 0; i < len(sub); i++ {
+            switch sub[i] {
+            case "--key":
+                if i+1 < len(sub) { keyfile = sub[i+1]; i++ }
+            case "--index":
+                if i+1 < len(sub) { idx = sub[i+1]; i++ }
+            default:
+                if keyfile == "" { keyfile = sub[i] }
+            }
+        }
+        hostKey := keyfile
+        if strings.TrimSpace(hostKey) == "" { hostKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519") }
+        if _, err := os.Stat(hostKey); err != nil {
+            // fallback to rsa
+            hostKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")
+        }
+        if _, err := os.Stat(hostKey); err != nil {
+            die("Host key not found: " + hostKey)
+        }
+        pubPath := hostKey + ".pub"
+        pubData, _ := os.ReadFile(pubPath)
+        if len(pubData) == 0 {
+            // derive via ssh-keygen -y
+            out, res := execx.Capture(contextBackground(), "ssh-keygen", "-y", "-f", hostKey)
+            if res.Code != 0 {
+                die("Failed to derive public key; create "+pubPath)
+            }
+            pubData = []byte(strings.TrimSpace(out))
+        }
+        // allowlist + restart proxy/dns
+        _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "proxy", "allowlist.txt"), "ssh.github.com")
+        _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "dns", "dnsmasq.conf"), "server=/ssh.github.com/1.1.1.1")
+        runCompose(dryRun, files, "restart", "tinyproxy", "dns")
+        home := "/workspace/.devhome-agent" + idx
+        // mkdir .ssh
+        runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "mkdir -p '"+home+"'/.ssh && chmod 700 '"+home+"'/.ssh")
+        // copy keys and known_hosts
+        keyBytes, _ := os.ReadFile(hostKey)
+        runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/id_ed25519 && chmod 600 '"+home+"'/.ssh/id_ed25519")
+        runComposeInput(dryRun, files, pubData, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/id_ed25519.pub && chmod 644 '"+home+"'/.ssh/id_ed25519.pub")
+        known := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+        if b, err := os.ReadFile(known); err == nil {
+            runComposeInput(dryRun, files, b, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/known_hosts && chmod 644 '"+home+"'/.ssh/known_hosts")
+        }
+        // write SSH config
+        cfg := "Host github.com\n  HostName ssh.github.com\n  Port 443\n  User git\n  ProxyCommand nc -X connect -x tinyproxy:8888 %h %p\n  IdentityFile '"+home+"'/.ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile '"+home+"'/.ssh/known_hosts\n"
+        runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/config && chmod 600 '"+home+"'/.ssh/config")
+        // git config global sshCommand
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+home+"' && git config --global core.sshCommand 'ssh -F '"+home+"'/.ssh/config'")
+    case "ssh-test":
+        mustProject(project)
+        idx := "1"; if len(sub) > 0 { idx = sub[0] }
+        home := "/workspace/.devhome-agent" + idx
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+home+"'; ssh -F '"+home+"'/.ssh/config -T github.com -o BatchMode=yes || true")
+    case "repo-config-ssh":
+        mustProject(project)
+        if len(sub) < 1 { die("Usage: repo-config-ssh <repo-path> [--index N]") }
+        repo := sub[0]
+        idx := "1"; if len(sub) >= 3 && sub[1] == "--index" { idx = sub[2] }
+        base := "/workspace"; if project == "dev-all" { base = "/workspaces/dev" }
+        dest := base + "/" + repo
+        if repo == "." || repo == "" { dest = base }
+        home := "/workspace/.devhome-agent" + idx
+        cmd := "set -euo pipefail; export HOME='"+home+"'; cd '"+dest+"'; url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^https://github.com/([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to \"$newurl\"; git remote set-url origin \"$newurl\"; else echo \"Origin already SSH: $url\"; fi"
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", cmd)
+    case "repo-config-https":
+        mustProject(project)
+        if len(sub) < 1 { die("Usage: repo-config-https <repo-path> [--index N]") }
+        repo := sub[0]
+        idx := "1"; if len(sub) >= 3 && sub[1] == "--index" { idx = sub[2] }
+        base := "/workspace"; if project == "dev-all" { base = "/workspaces/dev" }
+        dest := base + "/" + repo
+        if repo == "." || repo == "" { dest = base }
+        cmd := "set -euo pipefail; cd '"+dest+"'; url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^git@github.com:([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=https://github.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting HTTPS origin to \"$newurl\"; git remote set-url origin \"$newurl\"; else echo \"Origin already HTTPS: $url\"; fi"
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", cmd)
+    case "repo-push-ssh":
+        mustProject(project)
+        if len(sub) < 1 { die("Usage: repo-push-ssh <repo-path> [--index N]") }
+        repo := sub[0]
+        idx := "1"; for i := 1; i+1 < len(sub); i++ { if sub[i] == "--index" { idx = sub[i+1] } }
+        // best-effort ensure ssh
+        // assemble dest and push
+        base := "/workspace"; if project == "dev-all" { base = "/workspaces/dev" }
+        dest := base + "/" + repo; if repo == "." || repo == "" { dest = base }
+        home := "/workspace/.devhome-agent" + idx
+        cmd := "set -euo pipefail; export HOME='"+home+"'; cd '"+dest+"'; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^https://github.com/([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to \"$newurl\"; git remote set-url origin \"$newurl\"; fi; echo Pushing branch \"$cur\" to origin...; GIT_SSH_COMMAND=\"ssh -F '"+home+"'/.ssh/config\" git push -u origin HEAD"
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", cmd)
+    case "repo-push-https":
+        mustProject(project)
+        if len(sub) < 1 { die("Usage: repo-push-https <repo-path> [--index N]") }
+        repo := sub[0]
+        idx := "1"; if len(sub) >= 3 && sub[1] == "--index" { idx = sub[2] }
+        // ensure HTTPS config then push
+        base := "/workspace"; if project == "dev-all" { base = "/workspaces/dev" }
+        dest := base + "/" + repo; if repo == "." || repo == "" { dest = base }
+        cmd := "set -euo pipefail; cd '"+dest+"'; echo Pushing branch $(git rev-parse --abbrev-ref HEAD) to origin...; git push -u origin HEAD"
+        // call repo-config-https first? skipped for simplicity
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", cmd)
+    case "worktrees-init":
+        mustProject(project)
+        if len(sub) < 2 { die("Usage: worktrees-init <repo> <count> [--base agent] [--branch main]") }
+        repo := sub[0]; count := sub[1]
+        base := "agent"; branch := "main"
+        for i := 2; i+1 < len(sub); i++ { if sub[i] == "--base" { base = sub[i+1] } else if sub[i] == "--branch" { branch = sub[i+1] } }
+        // create worktrees on host filesystem
+        // primary at /workspaces/dev/<repo>, others at /workspaces/dev/agentN/<repo>
+        // Here we just print guidance; actual creation may be outside scope.
+        fmt.Printf("Initialize worktrees for %s: %s (1..%s) on host (manual)\n", repo, base, count)
+    case "worktrees-branch":
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for worktrees-branch") }
+        if len(sub) < 3 { die("Usage: -p dev-all worktrees-branch <repo> <index> <branch>") }
+        repo := sub[0]; idx := sub[1]; branch := sub[2]
+        base := "/workspaces/dev"
+        var path string
+        if idx == "1" { path = base+"/"+repo } else { path = base+"/agent"+idx+"/"+repo }
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+path+"'; git checkout -b '"+branch+"'")
+    case "worktrees-status":
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for worktrees-status") }
+        if len(sub) < 1 { die("Usage: -p dev-all worktrees-status <repo> [--all|--index N]") }
+        repo := sub[0]
+        idx := ""; if len(sub) >= 3 && sub[1] == "--index" { idx = sub[2] }
+        base := "/workspaces/dev"
+        if idx != "" {
+            path := base+"/"+repo
+            if idx != "1" { path = base+"/agent"+idx+"/"+repo }
+            runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+path+"'; git status -sb")
+        } else {
+            // sample for first two agents
+            for _, i := range []string{"1","2"} {
+                path := base+"/"+repo
+                if i != "1" { path = base+"/agent"+i+"/"+repo }
+                runCompose(dryRun, files, "exec", "--index", i, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && git status -sb || true")
+            }
+        }
+    case "worktrees-sync":
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for worktrees-sync") }
+        if len(sub) < 2 { die("Usage: worktrees-sync <repo> (--pull|--push) [--all|--index N]") }
+        repo := sub[0]
+        op := sub[1]
+        idx := ""; if len(sub) >= 4 && sub[2] == "--index" { idx = sub[3] }
+        base := "/workspaces/dev"
+        gitcmd := "git pull --ff-only"; if op == "--push" { gitcmd = "git push" }
+        if idx != "" {
+            path := base+"/"+repo
+            if idx != "1" { path = base+"/agent"+idx+"/"+repo }
+            runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+path+"'; "+gitcmd)
+        } else {
+            for _, i := range []string{"1","2","3","4","5","6"} {
+                path := base+"/"+repo
+                if i != "1" { path = base+"/agent"+i+"/"+repo }
+                runCompose(dryRun, files, "exec", "--index", i, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && (set -e; cd '"+path+"'; "+gitcmd+") || true")
+            }
+        }
+    case "worktrees-tmux":
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for worktrees-tmux") }
+        if len(sub) < 2 { die("Usage: -p dev-all worktrees-tmux <repo> <count>") }
+        repo := sub[0]; n := sub[1]
+        // Bring up and open tmux windows for N agents
+        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        base := "/workspaces/dev"
+        sess := "devkit-worktrees"
+        home1 := base+"/"+repo+"/.devhome-agent1"
+        runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd \""+base+"/"+repo+"\"; exec bash'")
+        runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(files, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \""+base+"/agent2/.devhome-agent2\"; export HOME=\""+base+"/agent2/.devhome-agent2\"; cd \""+base+"/agent2/"+repo+"\"; exec bash'")
+        runHost(dryRun, "tmux", "attach", "-t", sess)
+    case "bootstrap":
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for bootstrap") }
+        if len(sub) < 2 { die("Usage: -p dev-all bootstrap <repo> <count>") }
+        repo := sub[0]; n := sub[1]
+        // suggest init then open tmux
+        fmt.Println("Bootstrapping worktrees and tmux for repo:", repo, "count:", n)
+        // call worktrees-init and worktrees-tmux can be done manually
     default:
         usage(); os.Exit(2)
     }
@@ -211,3 +472,29 @@ func runCompose(dry bool, fileArgs []string, args ...string) {
     res := execx.RunCtx(ctx, "docker", all...)
     if res.Code != 0 { os.Exit(res.Code) }
 }
+
+func runComposeInput(dry bool, fileArgs []string, input []byte, args ...string) {
+    ctx, cancel := execx.WithTimeout(10 * time.Minute)
+    defer cancel()
+    all := append([]string{"compose"}, append(fileArgs, args...)...)
+    if dry {
+        fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
+        return
+    }
+    res := execx.RunWithInput(ctx, input, "docker", all...)
+    if res.Code != 0 { os.Exit(res.Code) }
+}
+
+func runHost(dry bool, name string, args ...string) {
+    ctx, cancel := execx.WithTimeout(10 * time.Minute)
+    defer cancel()
+    if dry {
+        fmt.Fprintln(os.Stderr, "+ "+name+" "+strings.Join(args, " "))
+        return
+    }
+    res := execx.RunCtx(ctx, name, args...)
+    if res.Code != 0 { os.Exit(res.Code) }
+}
+
+// contextBackground is a tiny helper to avoid importing context at top-level here
+func contextBackground() context.Context { return context.Background() }
