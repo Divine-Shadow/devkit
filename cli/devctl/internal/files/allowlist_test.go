@@ -17,3 +17,12 @@ func TestAppendLineIfMissing(t *testing.T) {
     if string(data) != "example.com" { t.Fatalf("content=%q", string(data)) }
 }
 
+func TestAppendLineIfMissing_MultiLine(t *testing.T) {
+    dir := t.TempDir()
+    p := filepath.Join(dir, "list.txt")
+    if err := os.WriteFile(p, []byte("foo\nbar"), 0o644); err != nil { t.Fatal(err) }
+    added, err := AppendLineIfMissing(p, "baz")
+    if err != nil || !added { t.Fatalf("add baz failed: added=%v err=%v", added, err) }
+    data, _ := os.ReadFile(p)
+    if string(data) != "foo\nbar\nbaz" { t.Fatalf("content=%q", string(data)) }
+}

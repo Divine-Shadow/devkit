@@ -36,6 +36,7 @@ Environment:
 func main() {
     var project string
     var profile string
+    var dryRun bool
 
     // rudimentary -p/--project and --profile parsing before subcmd
     args := os.Args[1:]
@@ -51,6 +52,8 @@ func main() {
             if i+1 >= len(args) { fmt.Fprintln(os.Stderr, "--profile requires value"); os.Exit(2) }
             profile = args[i+1]
             i++
+        case "--dry-run":
+            dryRun = true
         case "-h", "--help", "help":
             usage(); return
         default:
@@ -72,36 +75,36 @@ func main() {
     switch cmd {
     case "up":
         mustProject(project)
-        runCompose(files, "up", "-d")
+        runCompose(dryRun, files, "up", "-d")
     case "down":
         mustProject(project)
-        runCompose(files, "down")
+        runCompose(dryRun, files, "down")
     case "restart":
         mustProject(project)
-        runCompose(files, "restart")
+        runCompose(dryRun, files, "restart")
     case "status":
         mustProject(project)
-        runCompose(files, "ps")
+        runCompose(dryRun, files, "ps")
     case "logs":
         mustProject(project)
-        runCompose(files, append([]string{"logs"}, sub...)...)
+        runCompose(dryRun, files, append([]string{"logs"}, sub...)...)
     case "scale":
         mustProject(project)
         n := "1"
         if len(sub) > 0 { n = sub[0] }
-        runCompose(files, "up", "-d", "--scale", "dev-agent="+n)
+        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
     case "exec":
         mustProject(project)
         if len(sub) == 0 { die("exec requires <index> and <cmd>") }
         idx := sub[0]
         rest := []string{}
         if len(sub) > 1 { rest = sub[1:] }
-        runCompose(files, append([]string{"exec", "--index", idx, "dev-agent"}, rest...)...)
+        runCompose(dryRun, files, append([]string{"exec", "--index", idx, "dev-agent"}, rest...)...)
     case "attach":
         mustProject(project)
         idx := "1"
         if len(sub) > 0 { idx = sub[0] }
-        runCompose(files, "attach", "--index", idx, "dev-agent")
+        runCompose(dryRun, files, "attach", "--index", idx, "dev-agent")
     case "allow":
         mustProject(project)
         if len(sub) == 0 { die("allow requires <domain>") }
@@ -119,6 +122,20 @@ func main() {
         if added1 { fmt.Println("Added to proxy allowlist:", domain) } else { fmt.Println("Already in proxy allowlist:", domain) }
         if added2 { fmt.Println("Added to DNS allowlist:", domain) } else { fmt.Println("Already in DNS allowlist:", domain) }
         fmt.Printf("Note: restart dns and proxy to apply (devctl -p %s restart)\n", project)
+    case "proxy":
+        mustProject(project)
+        which := "tinyproxy"
+        if len(sub) > 0 && strings.TrimSpace(sub[0]) != "" {
+            which = sub[0]
+        }
+        switch which {
+        case "tinyproxy":
+            fmt.Println("Switching agent env to tinyproxy... (ensure overlay uses HTTP(S)_PROXY=http://tinyproxy:8888)")
+        case "envoy":
+            fmt.Println("Enable envoy profile: add --profile envoy to up/restart commands")
+        default:
+            die("unknown proxy: " + which)
+        }
     case "warm":
         mustProject(project)
         hooks, _ := config.ReadHooks(paths.Root, project)
@@ -126,7 +143,7 @@ func main() {
             fmt.Println("No warm hook defined")
             return
         }
-        runCompose(files, "exec", "dev-agent", "bash", "-lc", hooks.Warm)
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", hooks.Warm)
     case "maintain":
         mustProject(project)
         hooks, _ := config.ReadHooks(paths.Root, project)
@@ -134,11 +151,45 @@ func main() {
             fmt.Println("No maintain hook defined")
             return
         }
-        runCompose(files, "exec", "dev-agent", "bash", "-lc", hooks.Maintain)
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", hooks.Maintain)
     case "check-net":
         mustProject(project)
         script := "set -x; env | grep -E 'HTTP(S)?_PROXY|NO_PROXY'; curl -Is https://github.com | head -n1; (curl -Is https://example.com | head -n1 || true)"
-        runCompose(files, "exec", "dev-agent", "bash", "-lc", script)
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", script)
+    case "check-codex":
+        mustProject(project)
+        fmt.Println("== Env vars ==")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true")
+        fmt.Println("== Curl checks (through proxy) ==")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "set -e; echo -n 'chatgpt.com          : '; curl -sSvo /dev/null -w '%{http_code}\\n' https://chatgpt.com || true")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "set -e; echo -n 'chatgpt.com/backend..: '; curl -sSvo /dev/null -w '%{http_code}\\n' https://chatgpt.com/backend-api/codex/responses || true")
+        // attempt to run codex binary if present
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome timeout 15s codex exec 'Reply with: ok' || true")
+    case "check-claude":
+        mustProject(project)
+        idx := "1"
+        if len(sub) > 0 { idx = sub[0] }
+        fmt.Println("== Env vars ==")
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true")
+        fmt.Println("== Curl checks (through proxy) ==")
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; echo -n 'claude.ai            : '; curl -sSvo /dev/null -w '%{http_code}\\n' https://claude.ai || true")
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; echo -n 'anthropic.com        : '; curl -sSvo /dev/null -w '%{http_code}\\n' https://www.anthropic.com || true")
+        home := fmt.Sprintf("/workspace/.devhome-agent%s", idx)
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "mkdir -p '"+home+"'; HOME='"+home+"' timeout 15s claude --version || claude --help || true")
+    case "check-sts":
+        mustProject(project)
+        which := "envoy"
+        if len(sub) > 0 { which = strings.TrimSpace(sub[0]) }
+        var px string
+        switch which {
+        case "envoy": px = "http://envoy:3128"
+        case "tinyproxy": px = "http://tinyproxy:8888"
+        default: die("Usage: check-sts [envoy|tinyproxy]")
+        }
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "HTTPS_PROXY='"+px+"' HTTP_PROXY='"+px+"' curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "HTTPS_PROXY='"+px+"' HTTP_PROXY='"+px+"' aws sts get-caller-identity || true")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "aws sts get-caller-identity || true")
     default:
         usage(); os.Exit(2)
     }
@@ -147,12 +198,16 @@ func main() {
 func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(2) }
 func mustProject(p string) { if strings.TrimSpace(p) == "" { die("-p <project> is required") } }
 
-func runCompose(fileArgs []string, args ...string) {
+func runCompose(dry bool, fileArgs []string, args ...string) {
     // add a default timeout for safety
     ctx, cancel := execx.WithTimeout(10 * time.Minute)
     defer cancel()
     all := append([]string{"compose"}, append(fileArgs, args...)...)
+    if dry {
+        // echo the command and return success
+        fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
+        return
+    }
     res := execx.RunCtx(ctx, "docker", all...)
     if res.Code != 0 { os.Exit(res.Code) }
 }
-
