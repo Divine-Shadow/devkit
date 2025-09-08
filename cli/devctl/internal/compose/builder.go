@@ -14,6 +14,10 @@ type Paths struct {
 }
 
 func DetectPathsFromExe(exePath string) (Paths, error) {
+    // Allow override for tests via DEVKIT_ROOT
+    if root := os.Getenv("DEVKIT_ROOT"); root != "" {
+        return Paths{Root: root, Kit: filepath.Join(root, "kit"), Overlays: filepath.Join(root, "overlays")}, nil
+    }
     // Binary is expected under devkit/kit/bin/devctl
     binDir := filepath.Dir(exePath)
     root := filepath.Clean(filepath.Join(binDir, "..", ".."))
