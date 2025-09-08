@@ -20,6 +20,30 @@ Dev Kit — Base Kit Details
   - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
   - Worktrees + SSH workflow: see `worktrees_ssh.md` for end‑to‑end flows (`bootstrap`, `worktrees-*`, `open`).
 
+## CLI Builds and Tests
+
+- Build Go CLI: `cd devkit/cli/devctl && make build` (outputs `devkit/kit/bin/devctl`).
+- Unit tests: `cd devkit/cli/devctl && go test ./...`.
+- Dry‑run preview: append `--dry-run` to print `docker`/`tmux` commands without executing.
+- Useful env vars:
+  - `DEVKIT_ROOT`: override devkit root (used by tests).
+  - `DEVKIT_NO_TMUX=1`: skip tmux integration (non‑interactive environments).
+  - `DEVKIT_DEBUG=1`: echo executed commands to stderr.
+
+### Fresh‑Open Integration Test (Optional)
+
+This verifies hardened profiles and core tools are callable inside the agent.
+
+- Requirements: Docker, and a container image that has `git`, `codex`, and `claude` installed and callable non‑interactively.
+- Run:
+  - `cd devkit/cli/devctl`
+  - `DEVKIT_INTEGRATION=1 DEVKIT_IT_IMAGE=<image> go test -tags=integration -run FreshOpen_Integration`
+- What it does:
+  - Stitches compose with all profiles (hardened,dns,envoy) and overlay.
+  - Brings up the stack via `fresh-open 1`.
+  - Checks: `git --version`, `timeout 10s codex --version | codex exec 'ok'`, and `timeout 10s claude --version | --help`.
+  - Tears down containers and networks.
+
 ## Git Over SSH (GitHub)
 
 - Allow + setup (per agent): `scripts/devkit ssh-setup [--index N] [--key ~/.ssh/id_ed25519]`
