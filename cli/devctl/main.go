@@ -1,12 +1,12 @@
 package main
 
 import (
-    "context"
     "errors"
     "flag"
     "fmt"
     "os"
     "path/filepath"
+    "strconv"
     "strings"
     "time"
 
@@ -223,8 +223,8 @@ func main() {
         runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec bash")
     case "tmux-shells":
         mustProject(project)
-        n := "2"; if len(sub) > 0 { n = sub[0] }
-        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        n := 2; if len(sub) > 0 { n = mustAtoi(sub[0]) }
+        runCompose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
         // best-effort ssh-setup per agent
         if !dryRun {
             // loop via invoking self for simplicity is skipped; rely on user to run ssh-setup if needed
@@ -234,23 +234,27 @@ func main() {
         home1 := "/workspace/.devhome-agent1"
         runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
         runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
-        // remaining windows use $i
-        // generate a couple of windows based on n (string); rely on tmux for correctness if numeric
-        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(files, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \"/workspace/.devhome-agent2\"; export HOME=\"/workspace/.devhome-agent2\"; cd /workspace; exec bash'")
+        for i := 2; i <= n; i++ {
+            homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
+            runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd /workspace; exec bash'", i, homei, homei))
+        }
         runHost(dryRun, "tmux", "attach", "-t", sess)
     case "open":
         mustProject(project)
-        n := "2"; if len(sub) > 0 { n = sub[0] }
-        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        n := 2; if len(sub) > 0 { n = mustAtoi(sub[0]) }
+        runCompose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
         sess := "devkit-open"
         home1 := "/workspace/.devhome-agent1"
         runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
         runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
-        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(files, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \"/workspace/.devhome-agent2\"; export HOME=\"/workspace/.devhome-agent2\"; cd /workspace; exec bash'")
+        for i := 2; i <= n; i++ {
+            homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
+            runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd /workspace; exec bash'", i, homei, homei))
+        }
         runHost(dryRun, "tmux", "attach", "-t", sess)
     case "fresh-open":
         mustProject(project)
-        n := "3"; if len(sub) > 0 { n = sub[0] }
+        n := 3; if len(sub) > 0 { n = mustAtoi(sub[0]) }
         all := compose.AllProfilesFiles(paths, project)
         // bring everything down and cleanup
         runCompose(dryRun, all, "down")
@@ -260,13 +264,16 @@ func main() {
         runHost(dryRun, "docker", "rm", "-f", "devkit_envoy", "devkit_envoy_sni", "devkit_dns", "devkit_tinyproxy")
         runHost(dryRun, "docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress")
         // start up with all profiles
-        runCompose(dryRun, all, "up", "-d", "--scale", "dev-agent="+n)
+        runCompose(dryRun, all, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
         // tmux session
         sess := "devkit-open"
         home1 := "/workspace/.devhome-agent1"
         runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
         runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
-        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(all, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \"/workspace/.devhome-agent2\"; export HOME=\"/workspace/.devhome-agent2\"; cd /workspace; exec bash'")
+        for i := 2; i <= n; i++ {
+            homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
+            runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(all, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd /workspace; exec bash'", i, homei, homei))
+        }
         runHost(dryRun, "tmux", "attach", "-t", sess)
     case "ssh-setup":
         mustProject(project)
@@ -293,14 +300,9 @@ func main() {
             die("Host key not found: " + hostKey)
         }
         pubPath := hostKey + ".pub"
-        pubData, _ := os.ReadFile(pubPath)
-        if len(pubData) == 0 {
-            // derive via ssh-keygen -y
-            out, res := execx.Capture(contextBackground(), "ssh-keygen", "-y", "-f", hostKey)
-            if res.Code != 0 {
-                die("Failed to derive public key; create "+pubPath)
-            }
-            pubData = []byte(strings.TrimSpace(out))
+        pubData, err := os.ReadFile(pubPath)
+        if err != nil || len(pubData) == 0 {
+            die("Public key not found: " + pubPath)
         }
         // allowlist + restart proxy/dns
         _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "proxy", "allowlist.txt"), "ssh.github.com")
@@ -433,15 +435,19 @@ func main() {
         mustProject(project)
         if project != "dev-all" { die("Use -p dev-all for worktrees-tmux") }
         if len(sub) < 2 { die("Usage: -p dev-all worktrees-tmux <repo> <count>") }
-        repo := sub[0]; n := sub[1]
+        repo := sub[0]; n := mustAtoi(sub[1])
         // Bring up and open tmux windows for N agents
-        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        runCompose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
         base := "/workspaces/dev"
         sess := "devkit-worktrees"
         home1 := base+"/"+repo+"/.devhome-agent1"
         runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd \""+base+"/"+repo+"\"; exec bash'")
         runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
-        runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", "agent-2", "docker compose "+strings.Join(files, " ")+" exec --index 2 dev-agent bash -lc 'mkdir -p \""+base+"/agent2/.devhome-agent2\"; export HOME=\""+base+"/agent2/.devhome-agent2\"; cd \""+base+"/agent2/"+repo+"\"; exec bash'")
+        for i := 2; i <= n; i++ {
+            whome := fmt.Sprintf("%s/agent%d/.devhome-agent%d", base, i, i)
+            wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
+            runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd \"%s\"; exec bash'", i, whome, whome, wpath))
+        }
         runHost(dryRun, "tmux", "attach", "-t", sess)
     case "bootstrap":
         mustProject(project)
@@ -495,6 +501,8 @@ func runHost(dry bool, name string, args ...string) {
     res := execx.RunCtx(ctx, name, args...)
     if res.Code != 0 { os.Exit(res.Code) }
 }
-
-// contextBackground is a tiny helper to avoid importing context at top-level here
-func contextBackground() context.Context { return context.Background() }
+func mustAtoi(s string) int {
+    n, err := strconv.Atoi(s)
+    if err != nil || n < 1 { die("count must be a positive integer") }
+    return n
+}
