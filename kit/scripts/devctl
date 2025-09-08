@@ -151,15 +151,17 @@ main() {
       ;;
     check-claude)
       ensure_project
-      echo "== Proxy env in agent =="
-      docker compose $(compose_files) exec dev-agent bash -lc 'env | grep -E "^HTTPS?_PROXY=|^NO_PROXY=" || true'
+      local idx="${args[0]:-1}"
+      local home="/workspace/.devhome-agent${idx}"
+      echo "== Proxy env in agent $idx =="
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'env | grep -E "^HTTPS?_PROXY=|^NO_PROXY=" || true'
       echo
       echo "== Curl checks (through proxy) =="
-      docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "claude.ai            : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://claude.ai || true'
-      docker compose $(compose_files) exec dev-agent bash -lc 'set -e; echo -n "anthropic.com        : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://www.anthropic.com || true'
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -e; echo -n "claude.ai            : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://claude.ai || true'
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -e; echo -n "anthropic.com        : "; curl -sSvo /dev/null -w "%{http_code}\\n" https://www.anthropic.com || true'
       echo
-      echo "== Claude exec (expect version or help) =="
-      docker compose $(compose_files) exec dev-agent bash -lc "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome timeout 15s claude --version || claude --help || true"
+      echo "== Claude exec (expect version or help) [agent $idx] =="
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc "mkdir -p '$home'; HOME='$home' timeout 15s claude --version || claude --help || true"
       ;;
     check-sts)
       ensure_project
@@ -208,16 +210,19 @@ main() {
         import)
           local file="${args[1]:-}"; local idx="${args[2]:-1}"
           [[ -f "$file" ]] || die "auth.json file not found: $file"
-          docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p /workspace/.devhome/.codex && cat > /workspace/.devhome/.codex/auth.json' < "$file"
-          echo "Imported auth.json into instance $idx"
+          local home="/workspace/.devhome-agent${idx}"
+          docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p '"$home"'/.codex && cat > '"$home"'/.codex/auth.json' < "$file"
+          echo "Imported auth.json into instance $idx (home: $home)"
           ;;
         show)
           local idx="${args[1]:-1}"
-          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ls -l /workspace/.devhome/.codex/auth.json || true; head -c 120 /workspace/.devhome/.codex/auth.json 2>/dev/null || true; echo'
+          local home="/workspace/.devhome-agent${idx}"
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ls -l '"$home"'/.codex/auth.json || true; head -c 120 '"$home"'/.codex/auth.json 2>/dev/null || true; echo'
           ;;
         clear)
           local idx="${args[1]:-1}"
-          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f /workspace/.devhome/.codex/auth.json && echo "cleared /workspace/.devhome/.codex/auth.json" || true'
+          local home="/workspace/.devhome-agent${idx}"
+          docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'rm -f '"$home"'/.codex/auth.json && echo "cleared '"$home"'/.codex/auth.json" || true'
           ;;
         *) die "Usage: codex-auth {import <auth.json> [N] | show [N] | clear [N]}" ;;
       esac
@@ -322,29 +327,31 @@ echo 'wrote /workspace/.aws/{credentials,config}'"
       echo "Allowlisting ssh.github.com in proxy + DNS and restarting proxy/DNS..."
       cmd_allow ssh.github.com || true
       docker compose $(compose_files) restart tinyproxy dns || true
-      echo "Configuring /workspace/.devhome/.ssh in container index $idx..."
-      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p /workspace/.devhome/.ssh && chmod 700 /workspace/.devhome/.ssh'
+      local home="/workspace/.devhome-agent${idx}"
+      echo "Configuring ${home}/.ssh in container index $idx..."
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'mkdir -p '"$home"'/.ssh && chmod 700 '"$home"'/.ssh'
       echo "Copying private/public keys..."
-      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/id_ed25519 && chmod 600 /workspace/.devhome/.ssh/id_ed25519' < "$host_id_ed25519"
-      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/id_ed25519.pub && chmod 644 /workspace/.devhome/.ssh/id_ed25519.pub' < "$host_pub"
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > '"$home"'/.ssh/id_ed25519 && chmod 600 '"$home"'/.ssh/id_ed25519' < "$host_id_ed25519"
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > '"$home"'/.ssh/id_ed25519.pub && chmod 644 '"$home"'/.ssh/id_ed25519.pub' < "$host_pub"
       if [[ -f "$host_known" ]]; then
         echo "Copying known_hosts..."
-        docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/known_hosts && chmod 644 /workspace/.devhome/.ssh/known_hosts' < "$host_known"
+        docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > '"$home"'/.ssh/known_hosts && chmod 644 '"$home"'/.ssh/known_hosts' < "$host_known"
       fi
       echo "Writing SSH config for GitHub via proxy at port 443..."
-      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > /workspace/.devhome/.ssh/config <<EOF
+      docker compose $(compose_files) exec -T --index "$idx" dev-agent bash -lc 'cat > '"$home"'/.ssh/config <<EOF
 Host github.com
   HostName ssh.github.com
   Port 443
   User git
   ProxyCommand nc -X connect -x tinyproxy:8888 %h %p
-  IdentityFile /workspace/.devhome/.ssh/id_ed25519
+  IdentityFile '"$home"'/.ssh/id_ed25519
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
+  UserKnownHostsFile '"$home"'/.ssh/known_hosts
 EOF
-chmod 600 /workspace/.devhome/.ssh/config'
-      echo "Configuring git to use container SSH config (core.sshCommand)..."
-      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc "export HOME=/workspace/.devhome && git config --global core.sshCommand 'ssh -F /workspace/.devhome/.ssh/config'"
+chmod 600 '"$home"'/.ssh/config'
+      echo "Configuring git to use container SSH config (core.sshCommand) for agent $idx..."
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc "export HOME='"$home"' && git config --global core.sshCommand 'ssh -F '"$home"'/.ssh/config'"
       # cleanup derived pub
       if [[ -n "$derived_pub" && -f "$derived_pub" ]]; then rm -f "$derived_pub"; fi
       echo "SSH setup complete for container index $idx. Test with: scripts/devkit ssh-test $idx"
@@ -352,7 +359,8 @@ chmod 600 /workspace/.devhome/.ssh/config'
     ssh-test)
       ensure_project
       local idx="${args[0]:-1}"
-      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'ssh -F /workspace/.devhome/.ssh/config -T github.com -p 443 -o BatchMode=yes || true'
+      local home="/workspace/.devhome-agent${idx}"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'export HOME='"$home"'; ssh -F '"$home"'/.ssh/config -T github.com -o BatchMode=yes || true'
       ;;
     repo-push-ssh)
       # repo-push-ssh <repo-path> [--index N]
@@ -374,7 +382,8 @@ chmod 600 /workspace/.devhome/.ssh/config'
       # Determine base path per overlay
       local base="/workspace"; [[ "$PROJECT" == "dev-all" ]] && base="/workspaces/dev"
       local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
-      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME=/workspace/.devhome; cd '"'$dest'"'; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; fi; echo Pushing branch "$cur" to origin...; GIT_SSH_COMMAND="ssh -F /workspace/.devhome/.ssh/config" git push -u origin HEAD'
+      local home_push="/workspace/.devhome-agent${idx}"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME='"$home_push"'; cd '"'$dest'"'; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; fi; echo Pushing branch "$cur" to origin...; GIT_SSH_COMMAND="ssh -F '"$home_push"'/.ssh/config" git push -u origin HEAD'
       ;;
     repo-config-ssh)
       # repo-config-ssh <repo-path> [--index N]
@@ -386,7 +395,8 @@ chmod 600 /workspace/.devhome/.ssh/config'
       local base="/workspace"; [[ "$PROJECT" == "dev-all" ]] && base="/workspaces/dev"
       local dest="$base/$repo_path"; [[ -z "$repo_path" || "$repo_path" == "." ]] && dest="$base"
       "$0" -p "$PROJECT" ssh-setup --index "$idx" >/dev/null 2>&1 || true
-      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME=/workspace/.devhome; cd '"'$dest'"'; url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; else echo "Origin already SSH: $url"; fi'
+      local home_cfg="/workspace/.devhome-agent${idx}"
+      docker compose $(compose_files) exec --index "$idx" dev-agent bash -lc 'set -euo pipefail; export HOME='"$home_cfg"'; cd '"'$dest'"'; url=$(git remote get-url origin 2>/dev/null || true); if [[ -z "$url" ]]; then echo "No origin remote configured" >&2; exit 1; fi; if [[ "$url" =~ ^https://github.com/([^/]+)/([^/.]+)(\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to "$newurl"; git remote set-url origin "$newurl"; else echo "Origin already SSH: $url"; fi'
       ;;
     repo-config-https)
       # repo-config-https <repo-path> [--index N]

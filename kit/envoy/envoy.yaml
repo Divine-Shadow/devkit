@@ -23,12 +23,36 @@ static_resources:
             - name: forward_proxy
               domains: ["*"]
               routes:
-              # CONNECT allowlist: explicit authorities (examples; extend as needed)
+              # CONNECT allowlist: explicit authorities (GitHub endpoints over 443)
               - match:
                   connect_matcher: {}
                   headers:
                   - name: ":authority"
                     string_match: { exact: "github.com:443" }
+                route:
+                  cluster: dynamic_forward_proxy_cluster
+                  upgrade_configs: [ { upgrade_type: CONNECT } ]
+              - match:
+                  connect_matcher: {}
+                  headers:
+                  - name: ":authority"
+                    string_match: { exact: "ssh.github.com:443" }
+                route:
+                  cluster: dynamic_forward_proxy_cluster
+                  upgrade_configs: [ { upgrade_type: CONNECT } ]
+              - match:
+                  connect_matcher: {}
+                  headers:
+                  - name: ":authority"
+                    string_match: { exact: "objects.githubusercontent.com:443" }
+                route:
+                  cluster: dynamic_forward_proxy_cluster
+                  upgrade_configs: [ { upgrade_type: CONNECT } ]
+              - match:
+                  connect_matcher: {}
+                  headers:
+                  - name: ":authority"
+                    string_match: { exact: "api.github.com:443" }
                 route:
                   cluster: dynamic_forward_proxy_cluster
                   upgrade_configs: [ { upgrade_type: CONNECT } ]
@@ -38,6 +62,18 @@ static_resources:
                   headers:
                   - name: ":authority"
                     string_match: { exact: "github.com" }
+                route: { cluster: dynamic_forward_proxy_cluster }
+              - match:
+                  prefix: "/"
+                  headers:
+                  - name: ":authority"
+                    string_match: { exact: "objects.githubusercontent.com" }
+                route: { cluster: dynamic_forward_proxy_cluster }
+              - match:
+                  prefix: "/"
+                  headers:
+                  - name: ":authority"
+                    string_match: { exact: "api.github.com" }
                 route: { cluster: dynamic_forward_proxy_cluster }
               # Default deny
               - match: { prefix: "/" }
@@ -68,4 +104,3 @@ static_resources:
 admin:
   address:
     socket_address: { address: 0.0.0.0, port_value: 9901 }
-

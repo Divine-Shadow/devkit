@@ -1,0 +1,30 @@
+name: Devkit CLI
+
+on:
+  push:
+    paths:
+      - 'cli/devctl/**'
+      - '.github/workflows/devctl-ci.yml'
+  pull_request:
+    paths:
+      - 'cli/devctl/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli/devctl
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Build
+        run: make build
+      - name: Test
+        run: make test
+

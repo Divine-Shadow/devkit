@@ -4,6 +4,10 @@ github.com
 api.github.com
 objects.githubusercontent.com
 ssh.github.com
+deb.nodesource.com
+registry.npmjs.org
+registry.npmjs.com
+nodejs.org
 repo1.maven.org
 repo.scala-sbt.org
 oss.sonatype.org
