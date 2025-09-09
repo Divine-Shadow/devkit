@@ -312,6 +312,8 @@ exit 0`
                 "fi",
                 // Seed config.toml if present
                 fmt.Sprintf("if [ -r /var/host-codex/config.toml ] && [ ! -f '%s'/.codex/config.toml ]; then cp -f /var/host-codex/config.toml '%s'/.codex/config.toml; fi", homej, homej),
+                // If entire host codex dir exists and agent CODEX_HOME is effectively empty (no files), clone it wholesale
+                fmt.Sprintf("if [ -d /var/host-codex ] && [ -z \"$(find '%s'/.codex -type f -maxdepth 1 2>/dev/null)\" ]; then cp -a /var/host-codex/. '%s'/.codex/; fi", homej, homej),
             }, " && ")
             runCompose(dryRun, all, "exec", "-T", "--index", fmt.Sprintf("%d", j), "dev-agent", "bash", "-lc", seed)
         }
