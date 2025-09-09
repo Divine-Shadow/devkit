@@ -177,7 +177,17 @@ func main() {
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "set -e; echo -n 'chatgpt.com          : '; curl -sSvo /dev/null -w '%{http_code}\\n' https://chatgpt.com || true")
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "set -e; echo -n 'chatgpt.com/backend..: '; curl -sSvo /dev/null -w '%{http_code}\\n' https://chatgpt.com/backend-api/codex/responses || true")
         // attempt to run codex binary if present
-        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome timeout 15s codex exec 'Reply with: ok' || true")
+        runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome CODEX_HOME=/workspace/.devhome/.codex timeout 15s codex exec 'Reply with: ok' || true")
+    case "codex-debug":
+        mustProject(project)
+        idx := "1"; if len(sub) > 0 { idx = sub[0] }
+        script := `set -e
+echo "HOME=$HOME"; echo "CODEX_HOME=$CODEX_HOME"
+echo "-- locations --"
+for p in "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json" "/var/auth.json" "/var/host-codex/auth.json"; do
+  [ -n "$p" ] || continue; echo -n "$p : "; [ -f "$p" ] && { stat -c '%s bytes' "$p" 2>/dev/null || wc -c < "$p"; } || echo "(missing)"; done
+exit 0`
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
     case "check-claude":
         mustProject(project)
         idx := "1"
