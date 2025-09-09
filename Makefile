@@ -26,11 +26,11 @@ codex-fresh-open: build-cli
 # Verify core behavior inside the dev-agent: proxy env, git, codex/claude, hardened rootfs
 codex-verify:
 	@echo "== Verifying dev-agent behavior (proxy env, git, codex/claude, hardened) =="
-	@docker compose $(COMPOSE_ARGS) exec dev-agent bash -lc "env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true"
-	@docker compose $(COMPOSE_ARGS) exec dev-agent git --version
-	@docker compose $(COMPOSE_ARGS) exec dev-agent bash -lc "timeout 10s codex --version || timeout 10s codex exec 'ok' || true"
-	@docker compose $(COMPOSE_ARGS) exec dev-agent bash -lc "timeout 10s claude --version || timeout 10s claude --help || true"
-	@docker compose $(COMPOSE_ARGS) exec dev-agent bash -lc "touch /should_fail && echo wrote || echo denied"
+	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true"
+	@docker compose $(COMPOSE_ARGS) exec -T dev-agent git --version
+	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "timeout 10s codex --version || timeout 10s codex exec 'ok' || true"
+	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "timeout 10s claude --version || timeout 10s claude --help || true"
+	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "touch /should_fail && echo wrote || echo denied"
 
 # Bring down everything (all profiles)
 codex-down:
@@ -42,4 +42,3 @@ codex-down:
 # End-to-end: build, fresh-open, verify, and leave up
 codex-ci: build-cli codex-fresh-open codex-verify
 	@echo "== Codex E2E completed. Use 'make codex-down' to clean up. =="
-

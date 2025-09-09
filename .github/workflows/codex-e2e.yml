@@ -1,0 +1,42 @@
+name: Codex E2E
+
+on:
+  push:
+    paths:
+      - 'Makefile'
+      - 'kit/**'
+      - 'overlays/codex/**'
+      - '.github/workflows/codex-e2e.yml'
+      - 'cli/devctl/**'
+  pull_request:
+    paths:
+      - 'Makefile'
+      - 'kit/**'
+      - 'overlays/codex/**'
+      - 'cli/devctl/**'
+
+jobs:
+  e2e:
+    if: ${{ vars.DEVKIT_RUN_CODEX_E2E == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      DEVKIT_NO_TMUX: '1'
+      DOCKER_BUILDKIT: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Build CLI
+        run: make -C devkit build-cli
+      - name: Fresh open (codex)
+        run: make -C devkit codex-fresh-open N=1
+      - name: Verify dev-agent behavior
+        run: make -C devkit codex-verify
+      - name: Teardown
+        if: always()
+        run: make -C devkit codex-down
+
