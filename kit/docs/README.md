@@ -78,3 +78,13 @@ This verifies hardened profiles and core tools are callable inside the agent.
 - Allowlist changes:
   - `devctl -p <proj> allow example.com` edits both proxy and DNS allowlists.
   - Restart services to apply: `devctl -p <proj> restart`.
+
+
+## Implementation Style (Contrib Guidance)
+
+- Avoid heredocs and monolithic shell blocks for complex flows. Prefer small, composable Go helpers that build command strings or use `RunWithInput` for file content.
+- Keep steps atomic and testable: one responsibility per script/command.
+- Examples:
+  - Codex seeding under `internal/seed`: tiny scripts for wait, reset/mkdir, clone, fallback copy, chmod.
+  - SSH config under `internal/sshcfg`: config string builder instead of inline heredocs.
+- Rationale: reduces quoting/escaping bugs, simplifies auditing and testing, and makes error handling explicit.
