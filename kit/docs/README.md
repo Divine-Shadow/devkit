@@ -31,6 +31,21 @@ Dev Kit — Base Kit Details
   - `DEVKIT_NO_TMUX=1`: skip tmux integration (non‑interactive environments).
   - `DEVKIT_DEBUG=1`: echo executed commands to stderr.
 
+### Make Targets (Codex Overlay)
+
+Convenience targets to validate the codex overlay end‑to‑end:
+
+- Build CLI: `make -C devkit build-cli`
+- Fresh open with all profiles: `make -C devkit codex-fresh-open N=1`
+- Verify inside dev‑agent: `make -C devkit codex-verify`
+- End‑to‑end: `make -C devkit codex-ci`
+- Cleanup: `make -C devkit codex-down`
+
+Notes:
+- All targets use the Go CLI (`kit/bin/devctl`).
+- `codex-fresh-open` sets `DEVKIT_NO_TMUX=1` to avoid interactive tmux during automation.
+- You can disable heavyweight installs during image build by exporting: `INSTALL_CODEX=false INSTALL_CLAUDE=false INSTALL_SBT=false` before running `codex-fresh-open`.
+
 ### Fresh‑Open Integration Test (Optional)
 
 This verifies hardened profiles and core tools are callable inside the agent.
