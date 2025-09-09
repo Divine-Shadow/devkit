@@ -13,7 +13,7 @@ Dev Kit — Base Kit Details
   - `dns`: forces agent DNS via `172.30.10.3` dnsmasq allowlist.
   - `envoy`: starts Envoy HTTP proxy and SNI TCP forward proxy.
 - Helper:
-  - `scripts/devkit -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net` (wrapper prefers Go CLI).
+  - `devkit/kit/scripts/devkit -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net` (wrapper in-repo; defaults to `-p codex`).
   - Or call the binary directly after build: `devkit/kit/bin/devctl -p <project> ...`.
   - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
     - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Unified wrapper that lives inside the devkit repo.
+# Defaults to the codex overlay unless -p/--project is provided.
+
+ROOT_DIR="$(readlink -f "$(dirname "$0")"/..)"
+BIN="$ROOT_DIR/bin/devctl"
+
+PROJECT="codex"
+if [[ "${1:-}" == "-p" || "${1:-}" == "--project" ]]; then
+  PROJECT="$2"; shift 2
+fi
+
+if [[ ! -x "$BIN" ]]; then
+  echo "devctl binary not found at $BIN" >&2
+  echo "Build it with: cd devkit/cli/devctl && make build" >&2
+  exit 1
+fi
+
+exec "$BIN" -p "$PROJECT" "$@"
+

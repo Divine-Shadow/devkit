@@ -4,11 +4,11 @@ This dev kit extracts the dual‑network, allowlisted egress development setup i
 
 Quick start (with the built‑in `codex` overlay):
 - Build once: `cd devkit/cli/devctl && make build` (outputs `devkit/kit/bin/devctl`).
-- Bring up: `devkit/kit/bin/devctl -p codex up`
-- Exec shell: `devkit/kit/bin/devctl -p codex exec 0 bash`
-- Add allowlist domain: `devkit/kit/bin/devctl -p codex allow example.com`
-- Hardened + DNS profiles: `devkit/kit/bin/devctl -p codex up --profile hardened,dns`
-- Tear down: `devkit/kit/bin/devctl -p codex down`
+- Bring up: `devkit/kit/scripts/devkit up` (defaults to `-p codex`)
+- Exec shell: `devkit/kit/scripts/devkit exec 0 bash`
+- Add allowlist domain: `devkit/kit/scripts/devkit allow example.com`
+- Hardened + DNS profiles: `devkit/kit/scripts/devkit up --profile hardened,dns`
+- Tear down: `devkit/kit/scripts/devkit down`
 
 SSH (GitHub) quickstart:
 - One-time per agent: `scripts/devkit ssh-setup --index 1` then `scripts/devkit ssh-test 1`
