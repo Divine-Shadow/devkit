@@ -231,11 +231,11 @@ func main() {
         // window 1
         home1 := "/workspace/.devhome-agent1"
         if !skipTmux() {
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
+            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; cd /workspace; exec bash'")
             runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
             for i := 2; i <= n; i++ {
                 homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd /workspace; exec bash'", i, homei, homei))
+                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; cd /workspace; exec bash'", i, homei, homei, homei))
             }
             runHost(dryRun, "tmux", "attach", "-t", sess)
         }
@@ -246,11 +246,11 @@ func main() {
         sess := "devkit-open"
         home1 := "/workspace/.devhome-agent1"
         if !skipTmux() {
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
+            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; cd /workspace; exec bash'")
             runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
             for i := 2; i <= n; i++ {
                 homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd /workspace; exec bash'", i, homei, homei))
+                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; cd /workspace; exec bash'", i, homei, homei, homei))
             }
             runHost(dryRun, "tmux", "attach", "-t", sess)
         }
@@ -279,11 +279,11 @@ func main() {
         if !skipTmux() {
             sess := "devkit-open"
             home1 := "/workspace/.devhome-agent1"
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd /workspace; exec bash'")
+            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; cd /workspace; exec bash'")
             runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
             for i := 2; i <= n; i++ {
                 homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(all, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd /workspace; exec bash'", i, homei, homei))
+                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(all, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; cd /workspace; exec bash'", i, homei, homei, homei))
             }
             runHost(dryRun, "tmux", "attach", "-t", sess)
         }
@@ -454,12 +454,12 @@ func main() {
         sess := "devkit-worktrees"
         home1 := base+"/"+repo+"/.devhome-agent1"
         if !skipTmux() {
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; cd \""+base+"/"+repo+"\"; exec bash'")
+        runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; cd \""+base+"/"+repo+"\"; exec bash'")
             runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
             for i := 2; i <= n; i++ {
                 whome := fmt.Sprintf("%s/agent%d/.devhome-agent%d", base, i, i)
                 wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; cd \"%s\"; exec bash'", i, whome, whome, wpath))
+            runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; cd \"%s\"; exec bash'", i, whome, whome, whome, wpath))
             }
             runHost(dryRun, "tmux", "attach", "-t", sess)
         }
