@@ -299,9 +299,20 @@ exit 0`
         // best-effort: seed per-agent Codex auth from /var/auth.json or /var/host-codex/auth.json if present
         for j := 1; j <= n; j++ {
             homej := fmt.Sprintf("/workspace/.devhome-agent%d", j)
-            seed := "if [ -r /var/auth.json ]; then SRC=/var/auth.json; elif [ -r /var/host-codex/auth.json ]; then SRC=/var/host-codex/auth.json; else SRC=; fi; " +
-                "if [ -n \"$SRC\" ]; then mkdir -p '" + homej + "'/.codex; fi; " +
-                "if [ -n \"$SRC\" ] && [ ! -f '" + homej + "'/.codex/auth.json ]; then cp -f \"$SRC\" '" + homej + "'/.codex/auth.json; fi"
+            seed := strings.Join([]string{
+                // Ensure base dirs
+                fmt.Sprintf("mkdir -p '%s'/.codex '{0}/.codex/rollouts' '{0}/.cache' '{0}/.config' '{0}/.local'", homej),
+                // Seed auth.json from either /var/auth.json or /var/host-codex/auth.json
+                "SRC=; if [ -r /var/auth.json ]; then SRC=/var/auth.json; elif [ -r /var/host-codex/auth.json ]; then SRC=/var/host-codex/auth.json; fi",
+                fmt.Sprintf("if [ -n \"$SRC\" ] && [ ! -f '%s'/.codex/auth.json ]; then cp -f \"$SRC\" '%s'/.codex/auth.json; fi", homej, homej),
+                // Seed sessions directory if present on host and missing in agent
+                "if [ -d /var/host-codex/sessions ]; then ",
+                fmt.Sprintf("  mkdir -p '%s'/.codex/sessions; ", homej),
+                fmt.Sprintf("  if [ -z \"$(ls -A '%s'/.codex/sessions 2>/dev/null)\" ]; then cp -a /var/host-codex/sessions/. '%s'/.codex/sessions/; fi; ", homej, homej),
+                "fi",
+                // Seed config.toml if present
+                fmt.Sprintf("if [ -r /var/host-codex/config.toml ] && [ ! -f '%s'/.codex/config.toml ]; then cp -f /var/host-codex/config.toml '%s'/.codex/config.toml; fi", homej, homej),
+            }, " && ")
             runCompose(dryRun, all, "exec", "-T", "--index", fmt.Sprintf("%d", j), "dev-agent", "bash", "-lc", seed)
         }
         // tmux session
