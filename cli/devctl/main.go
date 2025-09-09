@@ -110,10 +110,9 @@ func main() {
         idx := sub[0]
         rest := []string{}
         if len(sub) > 1 { rest = sub[1:] }
-        // Provide per-agent CODEX_HOME so codex writes to a writable, isolated path
+        // Provide per-agent HOME and CODEX_HOME so codex reads/writes to a writable, isolated path
         home := "/workspace/.devhome-agent" + idx
-        // Insert env flag only when a command is provided; compose exec requires a service
-        runCompose(dryRun, files, append([]string{"exec", "--index", idx, "-e", "CODEX_HOME=" + home + "/.codex", "dev-agent"}, rest...)...)
+        runCompose(dryRun, files, append([]string{"exec", "--index", idx, "-e", "HOME=" + home, "-e", "CODEX_HOME=" + home + "/.codex", "dev-agent"}, rest...)...)
     case "attach":
         mustProject(project)
         idx := "1"
