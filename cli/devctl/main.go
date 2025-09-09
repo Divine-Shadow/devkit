@@ -1,8 +1,6 @@
 package main
 
 import (
-    "errors"
-    "flag"
     "fmt"
     "os"
     "path/filepath"
@@ -269,6 +267,14 @@ func main() {
         runHostBestEffort(dryRun, "docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress")
         // start up with all profiles
         runCompose(dryRun, all, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
+        // best-effort: seed per-agent Codex auth from /var/auth.json or /var/host-codex/auth.json if present
+        for j := 1; j <= n; j++ {
+            homej := fmt.Sprintf("/workspace/.devhome-agent%d", j)
+            seed := "if [ -r /var/auth.json ]; then SRC=/var/auth.json; elif [ -r /var/host-codex/auth.json ]; then SRC=/var/host-codex/auth.json; else SRC=; fi; " +
+                "if [ -n \"$SRC\" ]; then mkdir -p '" + homej + "'/.codex; fi; " +
+                "if [ -n \"$SRC\" ] && [ ! -f '" + homej + "'/.codex/auth.json ]; then cp -f \"$SRC\" '" + homej + "'/.codex/auth.json; fi"
+            runCompose(dryRun, all, "exec", "-T", "--index", fmt.Sprintf("%d", j), "dev-agent", "bash", "-lc", seed)
+        }
         // tmux session
         if !skipTmux() {
             sess := "devkit-open"
@@ -388,7 +394,7 @@ func main() {
         // create worktrees on host filesystem
         // primary at /workspaces/dev/<repo>, others at /workspaces/dev/agentN/<repo>
         // Here we just print guidance; actual creation may be outside scope.
-        fmt.Printf("Initialize worktrees for %s: %s (1..%s) on host (manual)\n", repo, base, count)
+        fmt.Printf("Initialize worktrees for %s: base=%s branch=%s (1..%s) on host (manual)\n", repo, base, branch, count)
     case "worktrees-branch":
         mustProject(project)
         if project != "dev-all" { die("Use -p dev-all for worktrees-branch") }

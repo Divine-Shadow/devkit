@@ -18,4 +18,5 @@ services:
       - devkit-auth:/home/dev/.codex
       # Optional: mount host Codex config dir for seeding auth.json
       - ${HOST_CODEX_DIR:-${HOME}/.codex}:/var/host-codex:ro
+      - ${HOST_CODEX_FILE:-${HOME}/.codex/auth.json}:/var/auth.json:ro
       - tmpfs:/tmp
