@@ -30,6 +30,9 @@ Dev Kit — Base Kit Details
   - `DEVKIT_ROOT`: override devkit root (used by tests).
   - `DEVKIT_NO_TMUX=1`: skip tmux integration (non‑interactive environments).
   - `DEVKIT_DEBUG=1`: echo executed commands to stderr.
+  - `DEVKIT_INTERNAL_SUBNET`: internal network CIDR (default `172.30.10.0/24`).
+  - `DEVKIT_DNS_IP`: DNS service IP on internal network (default `172.30.10.3`).
+    - If you see "Address already in use" on up, pick a different subnet/IP here.
 
 ### Make Targets (Codex Overlay)
 
