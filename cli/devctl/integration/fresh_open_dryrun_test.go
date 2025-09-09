@@ -33,7 +33,7 @@ services:
     // Build binary
     bin := filepath.Join(t.TempDir(), "devctl")
     cmdBuild := exec.Command("go", "build", "-trimpath", "-o", bin, "./")
-    cmdBuild.Dir = filepath.Join(".")
+    cmdBuild.Dir = filepath.Join("..")
     cmdBuild.Env = append(os.Environ(), "GO111MODULE=on")
     if out, err := cmdBuild.CombinedOutput(); err != nil {
         t.Skipf("go build not available or failed: %v\n%s", err, out)
@@ -65,4 +65,3 @@ services:
         }
     }
 }
-

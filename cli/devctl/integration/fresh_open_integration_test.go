@@ -32,7 +32,7 @@ func TestFreshOpen_Integration(t *testing.T) {
         if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { t.Fatal(err) }
         if err := os.WriteFile(p, []byte(s), 0o644); err != nil { t.Fatal(err) }
     }
-    base := "version: '3.8'\nservices:\n  dev-agent:\n    image: " + image + "\n    command: [\"sh\",\"-lc\",\"sleep infinity\"]\n    container_name: devkit-dev-agent-1\n"
+    base := "version: '3.8'\nservices:\n  dev-agent:\n    image: " + image + "\n    command: [\"sh\",\"-lc\",\"sleep infinity\"]\n"
     mustWrite(filepath.Join(root, "kit/compose.yml"), base)
     mustWrite(filepath.Join(root, "kit/compose.hardened.yml"), base+"    read_only: true\n")
     mustWrite(filepath.Join(root, "kit/compose.dns.yml"), base)
@@ -43,6 +43,7 @@ func TestFreshOpen_Integration(t *testing.T) {
     bin := filepath.Join(t.TempDir(), "devctl")
     cmdBuild := exec.Command("go", "build", "-trimpath", "-o", bin, "./")
     cmdBuild.Env = append(os.Environ(), "GO111MODULE=on")
+    cmdBuild.Dir = filepath.Join("..")
     if out, err := cmdBuild.CombinedOutput(); err != nil {
         t.Fatalf("go build failed: %v\n%s", err, out)
     }

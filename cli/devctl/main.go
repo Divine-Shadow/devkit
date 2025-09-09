@@ -10,6 +10,7 @@ import (
 
     "devkit/cli/devctl/internal/compose"
     "devkit/cli/devctl/internal/config"
+    "devkit/cli/devctl/internal/netutil"
     fz "devkit/cli/devctl/internal/files"
     "devkit/cli/devctl/internal/execx"
 )
@@ -80,6 +81,15 @@ func main() {
     paths, _ := compose.DetectPathsFromExe(exe)
     files, err := compose.Files(paths, project, profile)
     if err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(2) }
+
+    // Preflight: choose a non-overlapping internal subnet and DNS IP if not explicitly set
+    cidr, dns := netutil.PickInternalSubnet()
+    // Export so docker compose can substitute in compose.dns.yml
+    _ = os.Setenv("DEVKIT_INTERNAL_SUBNET", cidr)
+    _ = os.Setenv("DEVKIT_DNS_IP", dns)
+    if os.Getenv("DEVKIT_DEBUG") == "1" {
+        fmt.Fprintf(os.Stderr, "[devctl] internal subnet=%s dns_ip=%s\n", cidr, dns)
+    }
 
     cmd := args[0]
     sub := args[1:]
