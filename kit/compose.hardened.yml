@@ -1,4 +1,4 @@
-version: "3.9"
+
 
 services:
   dev-agent:
@@ -11,4 +11,3 @@ services:
       nofile:
         soft: 4096
         hard: 8192
-
