@@ -44,6 +44,8 @@ Commands:
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (dev-all)
   verify                                     (ssh + codex + worktrees)
+  verify-all                                 (run verify for codex and dev-all)
+  preflight                                  (host checks: docker, tmux, ssh keys, ~/.codex)
 
 Flags:
   -p, --project   overlay project name (required for most)
@@ -108,6 +110,63 @@ func main() {
     cmd := args[0]
     sub := args[1:]
     switch cmd {
+    case "verify-all":
+        // Run verify for codex overlay and for dev-all overlay
+        // Uses this binary to avoid diverging logic
+        // codex
+        runHost(dryRun, exe, "-p", "codex", "verify")
+        // dev-all
+        runHost(dryRun, exe, "-p", "dev-all", "verify")
+    case "preflight":
+        // Host diagnostics: docker, tmux, ~/.codex, SSH keys
+        // Non-zero exit when critical checks fail
+        ok := true
+        // docker
+        if _, err := execx.Capture(context.Background(), "docker", "version"); err.Code != 0 {
+            fmt.Fprintln(os.Stderr, "[preflight] docker not available or daemon unreachable")
+            ok = false
+        } else {
+            fmt.Println("[preflight] docker: OK")
+        }
+        // tmux
+        if _, err := execx.Capture(context.Background(), "tmux", "-V"); err.Code != 0 {
+            fmt.Fprintln(os.Stderr, "[preflight] tmux not found (only needed for tmux windows)")
+        } else {
+            fmt.Println("[preflight] tmux: OK")
+        }
+        // ~/.codex
+        if home, herr := os.UserHomeDir(); herr == nil {
+            codexDir := filepath.Join(home, ".codex")
+            if st, er := os.Stat(codexDir); er == nil && st.IsDir() {
+                // require at least auth.json
+                if _, er2 := os.Stat(filepath.Join(codexDir, "auth.json")); er2 == nil {
+                    fmt.Println("[preflight] ~/.codex: OK (auth.json present)")
+                } else {
+                    fmt.Fprintln(os.Stderr, "[preflight] ~/.codex present but auth.json missing")
+                    ok = false
+                }
+            } else {
+                fmt.Fprintln(os.Stderr, "[preflight] ~/.codex not found; codex may prompt for login in containers")
+            }
+            // SSH keys
+            k := filepath.Join(home, ".ssh", "id_ed25519")
+            if _, er := os.Stat(k); er != nil {
+                // fallback to rsa
+                k = filepath.Join(home, ".ssh", "id_rsa")
+            }
+            if b, er := os.Stat(k); er == nil && !b.IsDir() {
+                if _, er2 := os.Stat(k+".pub"); er2 == nil {
+                    fmt.Println("[preflight] SSH key: OK (", filepath.Base(k), ")")
+                } else {
+                    fmt.Fprintln(os.Stderr, "[preflight] SSH private key found but public key missing: ", k+".pub")
+                }
+            } else {
+                fmt.Fprintln(os.Stderr, "[preflight] No SSH private key found (~/.ssh/id_ed25519 or id_rsa)")
+            }
+        } else {
+            fmt.Fprintln(os.Stderr, "[preflight] cannot resolve HOME to check ~/.codex and SSH keys")
+        }
+        if !ok { os.Exit(1) }
     case "up":
         mustProject(project)
         runCompose(dryRun, files, "up", "-d")
