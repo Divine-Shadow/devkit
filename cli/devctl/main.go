@@ -62,6 +62,9 @@ func main() {
     var project string
     var profile string
     var dryRun bool
+    var noTmux bool
+    var noSeed bool
+    var reSeed bool
 
     // rudimentary -p/--project and --profile parsing before subcmd
     args := os.Args[1:]
@@ -79,6 +82,12 @@ func main() {
             i++
         case "--dry-run":
             dryRun = true
+        case "--no-tmux":
+            noTmux = true
+        case "--no-seed":
+            noSeed = true
+        case "--reseed":
+            reSeed = true
         case "-h", "--help", "help":
             usage(); return
         default:
@@ -108,6 +117,9 @@ func main() {
         devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
         _ = os.Setenv("WORKSPACE_DIR", filepath.Join(devRoot, "ouroboros-ide"))
     }
+
+    // honor --no-tmux by setting env used by skipTmux()
+    if noTmux { _ = os.Setenv("DEVKIT_NO_TMUX", "1") }
 
     cmd := args[0]
     sub := args[1:]
@@ -714,7 +726,7 @@ exit 0`, home, home, home, home, home)
         // Compose up with scale (remove orphans for idempotency)
         runCompose(dryRun, files, "up", "-d", "--remove-orphans", "--scale", fmt.Sprintf("dev-agent=%d", n))
         // Seed per-agent Codex HOME from host mounts so codex can run non-interactively
-        {
+        if !noSeed || reSeed {
             // agent 1 per-agent home (outside repo path for safety)
             home1 := pth.AgentHomePath(project, "1", repo)
             for _, script := range seed.BuildSeedScripts(home1) {
