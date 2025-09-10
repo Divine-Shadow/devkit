@@ -21,6 +21,7 @@ import (
     gitutil "devkit/cli/devctl/internal/gitutil"
     "devkit/cli/devctl/internal/execx"
     "devkit/cli/devctl/internal/config"
+    wtx "devkit/cli/devctl/internal/worktrees"
 )
 
 func usage() {
@@ -660,38 +661,11 @@ exit 0`, home, home, home, home, home)
         if project != "dev-all" { die("Use -p dev-all for worktrees-setup") }
         if len(sub) < 2 { die("Usage: worktrees-setup <repo> <count> [--base agent] [--branch main]") }
         repo := sub[0]; n := mustAtoi(sub[1])
-        base := "agent"; baseBranch := "main"
+        branchPrefix := "agent"; baseBranch := "main"
         for i := 2; i+1 < len(sub); i++ {
-            if sub[i] == "--base" { base = sub[i+1] } else if sub[i] == "--branch" { baseBranch = sub[i+1] }
+            if sub[i] == "--base" { branchPrefix = sub[i+1] } else if sub[i] == "--branch" { baseBranch = sub[i+1] }
         }
-        // dev root is one level up from devkit root (../) matching dev-all volume ../../ from overlay dir
-        devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
-        repoPath := filepath.Join(devRoot, repo)
-        // sanity: fetch on the primary repo
-        runHost(dryRun, "git", "-C", repoPath, "fetch", "--all", "--prune")
-        // ensure pushing from local agent branches updates the upstream branch (origin/<baseBranch>)
-        runHost(dryRun, "git", "-C", repoPath, "config", "push.default", "upstream")
-        // ensure relative paths for worktrees so mounts work inside containers
-        runHost(dryRun, "git", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
-        // agent 1: reuse primary repo path; create/switch to branch without resetting files (preserve local work)
-        branch1 := fmt.Sprintf("%s%d", base, 1)
-        runHost(dryRun, "git", "-C", repoPath, "checkout", "-B", branch1)
-        runHost(dryRun, "git", "-C", repoPath, "branch", "--set-upstream-to=origin/"+baseBranch, branch1)
-        for i := 2; i <= n; i++ {
-            // ensure parent directory like <devRoot>/agent2
-            parent := filepath.Join(devRoot, fmt.Sprintf("%s%d", base, i))
-            // create parent directory on host
-            if !dryRun { _ = os.MkdirAll(parent, 0o755) }
-            wt := filepath.Join(parent, repo)
-            br := fmt.Sprintf("%s%d", base, i)
-            // idempotency: prune dead worktrees and remove existing path if it is already a worktree
-            runHostBestEffort(dryRun, "git", "-C", repoPath, "worktree", "prune")
-            runHostBestEffort(dryRun, "git", "-C", repoPath, "worktree", "remove", "-f", wt)
-            runHost(dryRun, "git", "-C", repoPath, "worktree", "add", wt, "-B", br, "origin/"+baseBranch)
-            if !dryRun { rewriteWorktreeGitdir(wt) }
-            runHost(dryRun, "git", "-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, br)
-        }
-        fmt.Printf("Worktrees ready under %s (branches %s1..%s%d tracking origin/%s)\n", devRoot, base, base, n, baseBranch)
+        if err := wtx.Setup(paths.Root, repo, n, baseBranch, branchPrefix, dryRun); err != nil { die(err.Error()) }
     case "run":
         // Idempotent end-to-end launcher: ensures worktrees, scales up, and opens tmux across N agents
         mustProject(project)
@@ -699,29 +673,7 @@ exit 0`, home, home, home, home, home)
         if len(sub) < 2 { die("Usage: run <repo> <count>") }
         repo := sub[0]; n := mustAtoi(sub[1])
         // Ensure worktrees are present and configured (idempotent)
-        // Reuse handler behavior inline
-        {
-            // dev root and repo path
-            devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
-            repoPath := filepath.Join(devRoot, repo)
-            // Ensure host-side git does not inherit any container GIT_SSH_COMMAND
-            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "fetch", "--all", "--prune")
-            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "config", "push.default", "upstream")
-            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
-            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "checkout", "-B", "agent1")
-            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "branch", "--set-upstream-to=origin/main", "agent1")
-            for i := 2; i <= n; i++ {
-                parent := filepath.Join(devRoot, fmt.Sprintf("agent%d", i))
-                if !dryRun { _ = os.MkdirAll(parent, 0o755) }
-                wt := filepath.Join(parent, repo)
-                br := fmt.Sprintf("agent%d", i)
-                runHostBestEffort(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "worktree", "prune")
-                runHostBestEffort(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "worktree", "remove", "-f", wt)
-                runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "worktree", "add", wt, "-B", br, "origin/main")
-                if !dryRun { rewriteWorktreeGitdir(wt) }
-                runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", wt, "branch", "--set-upstream-to=origin/main", br)
-            }
-        }
+        if err := wtx.Setup(paths.Root, repo, n, "main", "agent", dryRun); err != nil { die(err.Error()) }
         // Bring up and open tmux windows for N agents
         // Compose up with scale (remove orphans for idempotency)
         runCompose(dryRun, files, "up", "-d", "--remove-orphans", "--scale", fmt.Sprintf("dev-agent=%d", n))
