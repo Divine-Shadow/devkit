@@ -19,6 +19,7 @@ import (
     pth "devkit/cli/devctl/internal/paths"
     sshsteps "devkit/cli/devctl/internal/sshsteps"
     gitutil "devkit/cli/devctl/internal/gitutil"
+    sshw "devkit/cli/devctl/internal/ssh"
     "devkit/cli/devctl/internal/execx"
     "devkit/cli/devctl/internal/config"
     wtx "devkit/cli/devctl/internal/worktrees"
@@ -574,20 +575,16 @@ exit 0`, home, home, home, home, home)
         }
         home := pth.AgentHomePath(project, idx, repoName)
         // mkdir .ssh
-        runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "mkdir -p '"+home+"'/.ssh && chmod 700 '"+home+"'/.ssh")
+        runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(home))
         // copy keys and known_hosts
         keyBytes, _ := os.ReadFile(hostKey)
-        runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/id_ed25519 && chmod 600 '"+home+"'/.ssh/id_ed25519")
-        runComposeInput(dryRun, files, pubData, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/id_ed25519.pub && chmod 644 '"+home+"'/.ssh/id_ed25519.pub")
         known := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
-        if b, err := os.ReadFile(known); err == nil {
-            runComposeInput(dryRun, files, b, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/known_hosts && chmod 644 '"+home+"'/.ssh/known_hosts")
-        }
-        // write SSH config
+        var knownBytes []byte
+        if b, err := os.ReadFile(known); err == nil { knownBytes = b }
         cfg := sshcfg.BuildGitHubConfig(home)
-        /* cfg template moved to sshcfg */
-        // old: cfg := "Host github.com\n  HostName ssh.github.com\n  Port 443\n  User git\n  ProxyCommand nc -X connect -x tinyproxy:8888 %h %p\n  IdentityFile '"+home+"'/.ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile '"+home+"'/.ssh/known_hosts\n"
-        runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/config && chmod 600 '"+home+"'/.ssh/config")
+        for _, step := range sshw.BuildWriteSteps(home, keyBytes, pubData, knownBytes, cfg) {
+            runComposeInput(dryRun, files, step.Content, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", step.Script)
+        }
         // git config global sshCommand
         runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+home+"' && git config --global core.sshCommand 'ssh -F '"+home+"'/.ssh/config'")
     case "ssh-test":
@@ -721,10 +718,9 @@ exit 0`, home, home, home, home, home)
             home1 := pth.AgentHomePath(project, "1", repo)
             cfg1 := sshcfg.BuildGitHubConfig(home1)
             runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(home1))
-            if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PrivateKeyPath(home1), "600")) }
-            if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PublicKeyPath(home1), "644")) }
-            if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.KnownHostsPath(home1), "644")) }
-            runComposeInput(dryRun, files, []byte(cfg1), "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.ConfigPath(home1), "600"))
+            for _, step := range sshw.BuildWriteSteps(home1, keyBytes, pubBytes, knownBytes, cfg1) {
+                runComposeInput(dryRun, files, step.Content, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", step.Script)
+            }
             // wait for config to be visible and non-empty before git commands
             runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(home1))
             runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(home1))
@@ -738,10 +734,9 @@ exit 0`, home, home, home, home, home)
                 wpath := pth.AgentRepoPath(project, idx, repo)
                 cfg := sshcfg.BuildGitHubConfig(whome)
                 runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(whome))
-                if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PrivateKeyPath(whome), "600")) }
-                if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PublicKeyPath(whome), "644")) }
-                if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.KnownHostsPath(whome), "644")) }
-                runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.ConfigPath(whome), "600"))
+                for _, step := range sshw.BuildWriteSteps(whome, keyBytes, pubBytes, knownBytes, cfg) {
+                    runComposeInput(dryRun, files, step.Content, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", step.Script)
+                }
                 // wait for config to be visible and non-empty before git commands
                 runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(whome))
                 runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(whome))
