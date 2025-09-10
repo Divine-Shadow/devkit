@@ -20,6 +20,7 @@ import (
     sshsteps "devkit/cli/devctl/internal/sshsteps"
     gitutil "devkit/cli/devctl/internal/gitutil"
     sshw "devkit/cli/devctl/internal/ssh"
+    allow "devkit/cli/devctl/internal/netallow"
     "devkit/cli/devctl/internal/execx"
     "devkit/cli/devctl/internal/config"
     wtx "devkit/cli/devctl/internal/worktrees"
@@ -563,8 +564,7 @@ exit 0`, home, home, home, home, home)
             die("Public key not found: " + pubPath)
         }
         // allowlist + restart proxy/dns
-        _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "proxy", "allowlist.txt"), "ssh.github.com")
-        _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "dns", "dnsmasq.conf"), "server=/ssh.github.com/1.1.1.1")
+        _, _, _ = allow.EnsureSSHGitHub(paths.Kit)
         runCompose(dryRun, files, "restart", "tinyproxy", "dns")
         // Compute per-agent HOME depending on overlay
         repoName := "ouroboros-ide"
@@ -705,8 +705,7 @@ exit 0`, home, home, home, home, home)
         // Ensure SSH config per agent with correct HOME under repo paths, then validate git pull
         {
             // Make sure ssh.github.com is allowlisted and proxies are active before any git/ssh calls
-            _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "proxy", "allowlist.txt"), "ssh.github.com")
-            _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "dns", "dnsmasq.conf"), "server=/ssh.github.com/1.1.1.1")
+            _, _, _ = allow.EnsureSSHGitHub(paths.Kit)
             runCompose(dryRun, files, "restart", "tinyproxy", "dns")
             hostKey := filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
             if _, err := os.Stat(hostKey); err != nil { hostKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa") }
