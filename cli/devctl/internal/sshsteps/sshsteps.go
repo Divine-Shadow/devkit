@@ -27,3 +27,13 @@ func GitPullWithSSH(repoPath, home string) string {
     return "set -e; cd '" + repoPath + "'; GIT_SSH_COMMAND=\"ssh -F '" + home + "'/.ssh/config\" git pull --ff-only || true"
 }
 
+// Paths to common SSH files under the agent home
+func PrivateKeyPath(home string) string { return home + "/.ssh/id_ed25519" }
+func PublicKeyPath(home string) string  { return home + "/.ssh/id_ed25519.pub" }
+func KnownHostsPath(home string) string { return home + "/.ssh/known_hosts" }
+func ConfigPath(home string) string     { return home + "/.ssh/config" }
+
+// WriteCmd returns a tiny shell snippet to write to 'path' via stdin then chmod to mode.
+func WriteCmd(path string, mode string) string {
+    return "cat > '" + path + "' && chmod " + mode + " '" + path + "'"
+}

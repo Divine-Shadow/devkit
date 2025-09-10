@@ -769,10 +769,10 @@ exit 0`, home, home, home, home, home)
             home1 := pth.AgentHomePath(project, "1", repo)
             cfg1 := sshcfg.BuildGitHubConfig(home1)
             runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(home1))
-            if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/id_ed25519 && chmod 600 '"+home1+"'/.ssh/id_ed25519") }
-            if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/id_ed25519.pub && chmod 644 '"+home1+"'/.ssh/id_ed25519.pub") }
-            if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/known_hosts && chmod 644 '"+home1+"'/.ssh/known_hosts") }
-            runComposeInput(dryRun, files, []byte(cfg1), "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/config && chmod 600 '"+home1+"'/.ssh/config")
+            if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PrivateKeyPath(home1), "600")) }
+            if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PublicKeyPath(home1), "644")) }
+            if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.KnownHostsPath(home1), "644")) }
+            runComposeInput(dryRun, files, []byte(cfg1), "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.ConfigPath(home1), "600"))
             // wait for config to be visible and non-empty before git commands
             runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(home1))
             runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(home1))
@@ -786,10 +786,10 @@ exit 0`, home, home, home, home, home)
                 wpath := pth.AgentRepoPath(project, idx, repo)
                 cfg := sshcfg.BuildGitHubConfig(whome)
                 runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(whome))
-                if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/id_ed25519 && chmod 600 '"+whome+"'/.ssh/id_ed25519") }
-                if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/id_ed25519.pub && chmod 644 '"+whome+"'/.ssh/id_ed25519.pub") }
-                if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/known_hosts && chmod 644 '"+whome+"'/.ssh/known_hosts") }
-                runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/config && chmod 600 '"+whome+"'/.ssh/config")
+                if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PrivateKeyPath(whome), "600")) }
+                if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.PublicKeyPath(whome), "644")) }
+                if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.KnownHostsPath(whome), "644")) }
+                runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WriteCmd(sshsteps.ConfigPath(whome), "600"))
                 // wait for config to be visible and non-empty before git commands
                 runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(whome))
                 runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(whome))
