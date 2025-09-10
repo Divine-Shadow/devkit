@@ -9,10 +9,13 @@ import (
     "time"
 
     "devkit/cli/devctl/internal/compose"
-    "devkit/cli/devctl/internal/config"
     "devkit/cli/devctl/internal/netutil"
     fz "devkit/cli/devctl/internal/files"
+    seed "devkit/cli/devctl/internal/seed"
+    "devkit/cli/devctl/internal/tmuxutil"
+    sshcfg "devkit/cli/devctl/internal/sshcfg"
     "devkit/cli/devctl/internal/execx"
+    "devkit/cli/devctl/internal/config"
 )
 
 func usage() {
@@ -30,11 +33,14 @@ Commands:
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
   worktrees-init <repo> <count> [--base agent] [--branch main]
+  worktrees-setup <repo> <count> [--base agent] [--branch main]  (dev-all)
   worktrees-branch <repo> <index> <branch>   (dev-all)
   worktrees-status <repo> [--all|--index N]  (dev-all)
   worktrees-sync <repo> (--pull|--push) [--all|--index N]  (dev-all)
   worktrees-tmux <repo> <count>              (dev-all)
+  reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (dev-all)
+  verify                                     (ssh + codex + worktrees)
 
 Flags:
   -p, --project   overlay project name (required for most)
@@ -90,6 +96,11 @@ func main() {
     if os.Getenv("DEVKIT_DEBUG") == "1" {
         fmt.Fprintf(os.Stderr, "[devctl] internal subnet=%s dns_ip=%s\n", cidr, dns)
     }
+    // Ensure codex overlay mounts the intended repo path via WORKSPACE_DIR
+    if project == "codex" {
+        devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
+        _ = os.Setenv("WORKSPACE_DIR", filepath.Join(devRoot, "ouroboros-ide"))
+    }
 
     cmd := args[0]
     sub := args[1:]
@@ -122,7 +133,8 @@ func main() {
         if len(sub) > 1 { rest = sub[1:] }
         // Provide per-agent HOME and CODEX_HOME so codex reads/writes to a writable, isolated path
         home := "/workspace/.devhome-agent" + idx
-        runCompose(dryRun, files, append([]string{
+        // Interactive exec: do not impose a timeout
+        runComposeInteractive(dryRun, files, append([]string{
             "exec", "--index", idx,
             "-e", "HOME=" + home,
             "-e", "CODEX_HOME=" + home + "/.codex",
@@ -134,7 +146,8 @@ func main() {
         mustProject(project)
         idx := "1"
         if len(sub) > 0 { idx = sub[0] }
-        runCompose(dryRun, files, "attach", "--index", idx, "dev-agent")
+        // Long-lived attach: no timeout
+        runComposeInteractive(dryRun, files, "attach", "--index", idx, "dev-agent")
     case "allow":
         mustProject(project)
         if len(sub) == 0 { die("allow requires <domain>") }
@@ -195,15 +208,88 @@ func main() {
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "set -e; echo -n 'chatgpt.com/backend..: '; curl -sSvo /dev/null -w '%{http_code}\\n' https://chatgpt.com/backend-api/codex/responses || true")
         // attempt to run codex binary if present
         runCompose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "mkdir -p /workspace/.devhome; HOME=/workspace/.devhome CODEX_HOME=/workspace/.devhome/.codex timeout 15s codex exec 'Reply with: ok' || true")
+    case "codex-test":
+        mustProject(project)
+        // Parse optional args: [index] [repo]
+        idx := "1"; var repo string
+        if len(sub) > 0 {
+            if _, err := strconv.Atoi(sub[0]); err == nil { idx = sub[0]; if len(sub) > 1 { repo = sub[1] } }
+            if _, err := strconv.Atoi(sub[0]); err != nil { repo = sub[0]; if len(sub) > 1 { idx = sub[1] } }
+        }
+        // Determine working directory inside container
+        var wd string
+        if project == "dev-all" {
+            if strings.TrimSpace(repo) == "" {
+                if cfg, err := config.ReadAll(paths.Root, project); err == nil { repo = cfg.Defaults.Repo }
+            }
+            base := "/workspaces/dev"; wd = filepath.Join(base, repo)
+            if idx != "1" { wd = filepath.Join(base, "agent"+idx, repo) }
+        } else {
+            wd = "/workspace"
+        }
+        home := "/workspace/.devhome-agent" + idx
+        if project == "dev-all" {
+            base := "/workspaces/dev"
+            if strings.TrimSpace(repo) == "" {
+                if cfg, err := config.ReadAll(paths.Root, project); err == nil { repo = cfg.Defaults.Repo }
+            }
+            // per-agent home inside the repo path for isolation
+            home = filepath.Join(base, repo, ".devhome-agent"+idx)
+            if idx != "1" { home = filepath.Join(base, "agent"+idx, repo, ".devhome-agent"+idx) }
+        }
+        // Build a script that ensures HOME dirs and runs codex inside a repo dir
+        script := fmt.Sprintf("set -euo pipefail; mkdir -p '%[1]s'/.codex/rollouts '%[1]s'/.cache '%[1]s'/.config '%[1]s'/.local; cd '%[2]s' 2>/dev/null || true; export HOME='%[1]s' CODEX_HOME='%[1]s'/.codex CODEX_ROLLOUT_DIR='%[1]s'/.codex/rollouts XDG_CACHE_HOME='%[1]s'/.cache XDG_CONFIG_HOME='%[1]s'/.config; if codex exec 'reply with: ok' 2>&1 | tr -d '\r' | grep -m1 -x ok >/dev/null; then echo ok; else echo 'codex-test failed'; exit 1; fi", home, wd)
+        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
+    case "verify":
+        // Verify SSH to GitHub, Codex basic exec, and worktrees status (when applicable)
+        mustProject(project)
+        // 1) SSH test on agent 1
+        {
+            home := "/workspace/.devhome-agent1"
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "export HOME='"+home+"'; ssh -F '"+home+"'/.ssh/config -T github.com -o BatchMode=yes || true")
+        }
+        // 2) Codex basic check in-place
+        {
+            if project == "dev-all" {
+                // Use defaults to pick a repo
+                cfg, _ := config.ReadAll(paths.Root, project)
+                repo := cfg.Defaults.Repo; if strings.TrimSpace(repo) == "" { repo = "ouroboros-ide" }
+                n := cfg.Defaults.Agents; if n < 1 { n = 2 }
+                // ensure desired scale is up
+                runCompose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
+                base := "/workspaces/dev"; wd := filepath.Join(base, repo)
+                home := filepath.Join(base, repo, ".devhome-agent1")
+                script := fmt.Sprintf("set -e; cd '%s' 2>/dev/null || true; HOME='%s' CODEX_HOME='%s/.codex' CODEX_ROLLOUT_DIR='%s/.codex/rollouts' XDG_CACHE_HOME='%s/.cache' XDG_CONFIG_HOME='%s/.config' codex exec 'reply with: ok' || true", wd, home, home, home, home, home)
+                runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", script)
+                // quick worktrees status across up to 3 agents
+                for i := 1; i <= n && i <= 3; i++ {
+                    is := fmt.Sprintf("%d", i)
+                    path := wd
+                    if i != 1 { path = filepath.Join(base, "agent"+is, repo) }
+                    runCompose(dryRun, files, "exec", "--index", is, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && git status -sb || true")
+                }
+            } else {
+                // codex overlay: run from /workspace
+                script := "set -e; cd /workspace 2>/dev/null || true; HOME=/workspace/.devhome-agent1 CODEX_HOME=/workspace/.devhome-agent1/.codex CODEX_ROLLOUT_DIR=/workspace/.devhome-agent1/.codex/rollouts XDG_CACHE_HOME=/workspace/.devhome-agent1/.cache XDG_CONFIG_HOME=/workspace/.devhome-agent1/.config codex exec 'reply with: ok' || true"
+                runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", script)
+            }
+        }
+        fmt.Println("verify completed")
     case "codex-debug":
         mustProject(project)
         idx := "1"; if len(sub) > 0 { idx = sub[0] }
-        script := `set -e
+        home := "/workspace/.devhome-agent" + idx
+        script := fmt.Sprintf(`set -e
+export HOME='%s'
+export CODEX_HOME='%s/.codex'
+export CODEX_ROLLOUT_DIR='%s/.codex/rollouts'
+export XDG_CACHE_HOME='%s/.cache'
+export XDG_CONFIG_HOME='%s/.config'
 echo "HOME=$HOME"; echo "CODEX_HOME=$CODEX_HOME"
 echo "-- locations --"
 for p in "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json" "/var/auth.json" "/var/host-codex/auth.json"; do
-  [ -n "$p" ] || continue; echo -n "$p : "; [ -f "$p" ] && { stat -c '%s bytes' "$p" 2>/dev/null || wc -c < "$p"; } || echo "(missing)"; done
-exit 0`
+  [ -n "$p" ] || continue; echo -n "$p : "; [ -f "$p" ] && wc -c < "$p" || echo "(missing)"; done
+exit 0`, home, home, home, home, home)
         runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
     case "check-claude":
         mustProject(project)
@@ -240,14 +326,16 @@ exit 0`
         }
         cmdstr := "bash"
         if len(sub) > 2 { cmdstr = strings.Join(sub[2:], " ") }
-        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec "+cmdstr)
+        // Interactive shell: no timeout
+        runComposeInteractive(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec "+cmdstr)
     case "attach-cd":
         mustProject(project)
         if len(sub) < 2 { die("Usage: attach-cd <index> <subpath>") }
         idx := sub[0]; subpath := sub[1]
         dest := subpath
         if !strings.HasPrefix(subpath, "/") { dest = filepath.Join("/workspaces/dev", subpath) }
-        runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec bash")
+        // Interactive shell: no timeout
+        runComposeInteractive(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec bash")
     case "tmux-shells":
         mustProject(project)
         n := 2; if len(sub) > 0 { n = mustAtoi(sub[0]) }
@@ -260,13 +348,16 @@ exit 0`
         // window 1
         home1 := "/workspace/.devhome-agent1"
         if !skipTmux() {
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'")
-            runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+            cmd := "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'"
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
             for i := 2; i <= n; i++ {
                 homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei))
+                wcmd := "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei)
+                runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
             }
-            runHost(dryRun, "tmux", "attach", "-t", sess)
+            // tmux attach is long-lived: no timeout
+            runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
         }
     case "open":
         mustProject(project)
@@ -275,13 +366,16 @@ exit 0`
         sess := "devkit-open"
         home1 := "/workspace/.devhome-agent1"
         if !skipTmux() {
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'")
-            runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+            cmd := "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'"
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
             for i := 2; i <= n; i++ {
                 homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei))
+                wcmd := "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei)
+                runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
             }
-            runHost(dryRun, "tmux", "attach", "-t", sess)
+            // tmux attach is long-lived: no timeout
+            runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
         }
     case "fresh-open":
         mustProject(project)
@@ -296,38 +390,59 @@ exit 0`
         runHostBestEffort(dryRun, "docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress")
         // start up with all profiles
         runCompose(dryRun, all, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
-        // best-effort: seed per-agent Codex auth from /var/auth.json or /var/host-codex/auth.json if present
+        // Seed per-agent Codex HOME from host mounts using small, robust scripts
         for j := 1; j <= n; j++ {
             homej := fmt.Sprintf("/workspace/.devhome-agent%d", j)
-            seed := strings.Join([]string{
-                // Ensure base dirs
-                fmt.Sprintf("mkdir -p '%s'/.codex '{0}/.codex/rollouts' '{0}/.cache' '{0}/.config' '{0}/.local'", homej),
-                // Seed auth.json from either /var/auth.json or /var/host-codex/auth.json
-                "SRC=; if [ -r /var/auth.json ]; then SRC=/var/auth.json; elif [ -r /var/host-codex/auth.json ]; then SRC=/var/host-codex/auth.json; fi",
-                fmt.Sprintf("if [ -n \"$SRC\" ] && [ ! -f '%s'/.codex/auth.json ]; then cp -f \"$SRC\" '%s'/.codex/auth.json; fi", homej, homej),
-                // Seed sessions directory if present on host and missing in agent
-                "if [ -d /var/host-codex/sessions ]; then ",
-                fmt.Sprintf("  mkdir -p '%s'/.codex/sessions; ", homej),
-                fmt.Sprintf("  if [ -z \"$(ls -A '%s'/.codex/sessions 2>/dev/null)\" ]; then cp -a /var/host-codex/sessions/. '%s'/.codex/sessions/; fi; ", homej, homej),
-                "fi",
-                // Seed config.toml if present
-                fmt.Sprintf("if [ -r /var/host-codex/config.toml ] && [ ! -f '%s'/.codex/config.toml ]; then cp -f /var/host-codex/config.toml '%s'/.codex/config.toml; fi", homej, homej),
-                // If entire host codex dir exists and agent CODEX_HOME is effectively empty (no files), clone it wholesale
-                fmt.Sprintf("if [ -d /var/host-codex ] && [ -z \"$(find '%s'/.codex -type f -maxdepth 1 2>/dev/null)\" ]; then cp -a /var/host-codex/. '%s'/.codex/; fi", homej, homej),
-            }, " && ")
-            runCompose(dryRun, all, "exec", "-T", "--index", fmt.Sprintf("%d", j), "dev-agent", "bash", "-lc", seed)
+            for _, script := range seed.BuildSeedScripts(homej) {
+                runCompose(dryRun, all, "exec", "-T", "--index", fmt.Sprintf("%d", j), "dev-agent", "bash", "-lc", script)
+            }
         }
+
         // tmux session
         if !skipTmux() {
             sess := "devkit-open"
             home1 := "/workspace/.devhome-agent1"
-            runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'")
-            runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+            cmd := "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'"
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
             for i := 2; i <= n; i++ {
                 homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
-                runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(all, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei))
+                wcmd := "docker compose "+strings.Join(all, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei)
+                runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
             }
-            runHost(dryRun, "tmux", "attach", "-t", sess)
+            // tmux attach is long-lived: no timeout
+            runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
+        }
+    case "reset":
+        // Alias to fresh-open with identical behavior
+        mustProject(project)
+        n := 3; if len(sub) > 0 { n = mustAtoi(sub[0]) }
+        all := compose.AllProfilesFiles(paths, project)
+        runCompose(dryRun, all, "down")
+        if !skipTmux() { runHostBestEffort(dryRun, "tmux", "kill-session", "-t", "devkit-open") }
+        if !skipTmux() { runHostBestEffort(dryRun, "tmux", "kill-session", "-t", "devkit-shells") }
+        if !skipTmux() { runHostBestEffort(dryRun, "tmux", "kill-session", "-t", "devkit-worktrees") }
+        runHostBestEffort(dryRun, "docker", "rm", "-f", "devkit_envoy", "devkit_envoy_sni", "devkit_dns", "devkit_tinyproxy")
+        runHostBestEffort(dryRun, "docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress")
+        runCompose(dryRun, all, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
+        for j := 1; j <= n; j++ {
+            homej := fmt.Sprintf("/workspace/.devhome-agent%d", j)
+            for _, script := range seed.BuildSeedScripts(homej) {
+                runCompose(dryRun, all, "exec", "-T", "--index", fmt.Sprintf("%d", j), "dev-agent", "bash", "-lc", script)
+            }
+        }
+        if !skipTmux() {
+            sess := "devkit-open"
+            home1 := "/workspace/.devhome-agent1"
+            cmd := "docker compose "+strings.Join(all, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd /workspace; exec bash'"
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
+            for i := 2; i <= n; i++ {
+                homei := fmt.Sprintf("/workspace/.devhome-agent%d", i)
+                wcmd := "docker compose "+strings.Join(all, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd /workspace; exec bash'", i, homei, homei, homei, homei, homei, homei, homei, homei, homei)
+                runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
+            }
+            runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
         }
     case "ssh-setup":
         mustProject(project)
@@ -374,7 +489,9 @@ exit 0`
             runComposeInput(dryRun, files, b, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/known_hosts && chmod 644 '"+home+"'/.ssh/known_hosts")
         }
         // write SSH config
-        cfg := "Host github.com\n  HostName ssh.github.com\n  Port 443\n  User git\n  ProxyCommand nc -X connect -x tinyproxy:8888 %h %p\n  IdentityFile '"+home+"'/.ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile '"+home+"'/.ssh/known_hosts\n"
+        cfg := sshcfg.BuildGitHubConfig(home)
+        /* cfg template moved to sshcfg */
+        // old: cfg := "Host github.com\n  HostName ssh.github.com\n  Port 443\n  User git\n  ProxyCommand nc -X connect -x tinyproxy:8888 %h %p\n  IdentityFile '"+home+"'/.ssh/id_ed25519\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n  UserKnownHostsFile '"+home+"'/.ssh/known_hosts\n"
         runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+home+"'/.ssh/config && chmod 600 '"+home+"'/.ssh/config")
         // git config global sshCommand
         runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+home+"' && git config --global core.sshCommand 'ssh -F '"+home+"'/.ssh/config'")
@@ -437,6 +554,38 @@ exit 0`
         // primary at /workspaces/dev/<repo>, others at /workspaces/dev/agentN/<repo>
         // Here we just print guidance; actual creation may be outside scope.
         fmt.Printf("Initialize worktrees for %s: base=%s branch=%s (1..%s) on host (manual)\n", repo, base, branch, count)
+    case "worktrees-setup":
+        // Create per-agent branches and worktrees rooted in the dev root (dev-all overlay pattern)
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for worktrees-setup") }
+        if len(sub) < 2 { die("Usage: worktrees-setup <repo> <count> [--base agent] [--branch main]") }
+        repo := sub[0]; n := mustAtoi(sub[1])
+        base := "agent"; baseBranch := "main"
+        for i := 2; i+1 < len(sub); i++ {
+            if sub[i] == "--base" { base = sub[i+1] } else if sub[i] == "--branch" { baseBranch = sub[i+1] }
+        }
+        // dev root is one level up from devkit root (../) matching dev-all volume ../../ from overlay dir
+        devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
+        repoPath := filepath.Join(devRoot, repo)
+        // sanity: fetch on the primary repo
+        runHost(dryRun, "git", "-C", repoPath, "fetch", "--all", "--prune")
+        // ensure relative paths for worktrees so mounts work inside containers
+        runHost(dryRun, "git", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
+        // agent 1: reuse primary repo path; create/switch to branch without resetting files (preserve local work)
+        branch1 := fmt.Sprintf("%s%d", base, 1)
+        runHost(dryRun, "git", "-C", repoPath, "checkout", "-B", branch1)
+        runHost(dryRun, "git", "-C", repoPath, "branch", "--set-upstream-to=origin/"+baseBranch, branch1)
+        for i := 2; i <= n; i++ {
+            // ensure parent directory like <devRoot>/agent2
+            parent := filepath.Join(devRoot, fmt.Sprintf("%s%d", base, i))
+            // create parent directory on host
+            if !dryRun { _ = os.MkdirAll(parent, 0o755) }
+            wt := filepath.Join(parent, repo)
+            br := fmt.Sprintf("%s%d", base, i)
+            runHost(dryRun, "git", "-C", repoPath, "worktree", "add", wt, "-B", br, "origin/"+baseBranch)
+            runHost(dryRun, "git", "-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, br)
+        }
+        fmt.Printf("Worktrees ready under %s (branches %s1..%s%d tracking origin/%s)\n", devRoot, base, base, n, baseBranch)
     case "worktrees-branch":
         mustProject(project)
         if project != "dev-all" { die("Use -p dev-all for worktrees-branch") }
@@ -496,23 +645,83 @@ exit 0`
         sess := "devkit-worktrees"
         home1 := base+"/"+repo+"/.devhome-agent1"
         if !skipTmux() {
-        runHost(dryRun, "tmux", "new-session", "-d", "-s", sess, "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd \""+base+"/"+repo+"\"; exec bash'")
-            runHost(dryRun, "tmux", "rename-window", "-t", sess+":0", "agent-1")
+        cmd := "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd \""+base+"/"+repo+"\"; exec bash'"
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
             for i := 2; i <= n; i++ {
                 whome := fmt.Sprintf("%s/agent%d/.devhome-agent%d", base, i, i)
                 wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
-            runHost(dryRun, "tmux", "new-window", "-t", sess, "-n", fmt.Sprintf("agent-%d", i), "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", i, whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath))
+            wcmd := "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", i, whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
+                runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
             }
-            runHost(dryRun, "tmux", "attach", "-t", sess)
+            // tmux attach is long-lived: no timeout
+            runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
         }
     case "bootstrap":
+        // Opinionated: set up worktrees and open tmux with defaults if args omitted
         mustProject(project)
         if project != "dev-all" { die("Use -p dev-all for bootstrap") }
-        if len(sub) < 2 { die("Usage: -p dev-all bootstrap <repo> <count>") }
-        repo := sub[0]; n := sub[1]
-        // suggest init then open tmux
-        fmt.Println("Bootstrapping worktrees and tmux for repo:", repo, "count:", n)
-        // call worktrees-init and worktrees-tmux can be done manually
+        var repo string
+        var n int
+        if len(sub) >= 2 {
+            repo = sub[0]
+            n = mustAtoi(sub[1])
+        } else {
+            // Try overlay defaults
+            cfg, _ := config.ReadAll(paths.Root, project)
+            if strings.TrimSpace(cfg.Defaults.Repo) == "" || cfg.Defaults.Agents < 1 {
+                die("Usage: -p dev-all bootstrap <repo> <count> (or set defaults in overlays/dev-all/devkit.yaml)")
+            }
+            repo = cfg.Defaults.Repo
+            n = cfg.Defaults.Agents
+        }
+        // Create worktrees and open tmux windows
+        // Reuse this process: invoke internal handlers directly
+        // Setup worktrees
+        {
+            // dev root path (parent of devkit)
+            devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
+            repoPath := filepath.Join(devRoot, repo)
+            runHost(dryRun, "git", "-C", repoPath, "fetch", "--all", "--prune")
+            runHost(dryRun, "git", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
+            base := "agent"; baseBranch := "main"
+            cfg, _ := config.ReadAll(paths.Root, project)
+            if strings.TrimSpace(cfg.Defaults.BranchPrefix) != "" { base = cfg.Defaults.BranchPrefix }
+            if strings.TrimSpace(cfg.Defaults.BaseBranch) != "" { baseBranch = cfg.Defaults.BaseBranch }
+            br1 := fmt.Sprintf("%s1", base)
+            // preserve local work for agent1 by not resetting to origin
+            runHost(dryRun, "git", "-C", repoPath, "checkout", "-B", br1)
+            runHost(dryRun, "git", "-C", repoPath, "branch", "--set-upstream-to=origin/"+baseBranch, br1)
+            for i := 2; i <= n; i++ {
+                parent := filepath.Join(devRoot, fmt.Sprintf("%s%d", base, i))
+                if !dryRun { _ = os.MkdirAll(parent, 0o755) }
+                wt := filepath.Join(parent, repo)
+                bri := fmt.Sprintf("%s%d", base, i)
+                runHost(dryRun, "git", "-C", repoPath, "worktree", "add", wt, "-B", bri, "origin/"+baseBranch)
+                runHost(dryRun, "git", "-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, bri)
+            }
+        }
+        // Bring up N agents and open tmux using existing worktrees-tmux behavior
+        runCompose(dryRun, compose.AllProfilesFiles(paths, project), "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
+        // finally open tmux
+        // call existing worktrees-tmux handler logic inline
+        {
+            base := "/workspaces/dev"
+            sess := "devkit-worktrees"
+            home1 := base+"/"+repo+"/.devhome-agent1"
+            if !skipTmux() {
+                cmd := "docker compose "+strings.Join(compose.AllProfilesFiles(paths, project), " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd \""+base+"/"+repo+"\"; exec bash'"
+                runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+                runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
+                for i := 2; i <= n; i++ {
+                    whome := fmt.Sprintf("%s/agent%d/.devhome-agent%d", base, i, i)
+                    wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
+                    wcmd := "docker compose "+strings.Join(compose.AllProfilesFiles(paths, project), " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", i, whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
+                    runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
+                }
+                runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
+            }
+        }
     default:
         usage(); os.Exit(2)
     }
@@ -532,6 +741,17 @@ func runCompose(dry bool, fileArgs []string, args ...string) {
         return
     }
     res := execx.RunCtx(ctx, "docker", all...)
+    if res.Code != 0 { os.Exit(res.Code) }
+}
+
+// runComposeInteractive executes docker compose without a timeout for long-lived, interactive sessions.
+func runComposeInteractive(dry bool, fileArgs []string, args ...string) {
+    all := append([]string{"compose"}, append(fileArgs, args...)...)
+    if dry {
+        fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
+        return
+    }
+    res := execx.Run("docker", all...)
     if res.Code != 0 { os.Exit(res.Code) }
 }
 
@@ -555,6 +775,16 @@ func runHost(dry bool, name string, args ...string) {
         return
     }
     res := execx.RunCtx(ctx, name, args...)
+    if res.Code != 0 { os.Exit(res.Code) }
+}
+
+// runHostInteractive runs host commands without a timeout for long-lived interactive attachments (e.g., tmux attach).
+func runHostInteractive(dry bool, name string, args ...string) {
+    if dry {
+        fmt.Fprintln(os.Stderr, "+ "+name+" "+strings.Join(args, " "))
+        return
+    }
+    res := execx.Run(name, args...)
     if res.Code != 0 { os.Exit(res.Code) }
 }
 

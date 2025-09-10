@@ -12,25 +12,40 @@ type Hooks struct {
     Maintain string
 }
 
-type overlayYAML struct {
-    Hooks struct {
-        Warm     string `yaml:"warm"`
-        Maintain string `yaml:"maintain"`
-    } `yaml:"hooks"`
+type Defaults struct {
+    // Default number of agents to start (for reset/bootstrap flows)
+    Agents int `yaml:"agents"`
+    // Default repo name under the dev root (e.g., ouroboros-ide)
+    Repo string `yaml:"repo"`
+    // Base branch to track from origin (e.g., main)
+    BaseBranch string `yaml:"base_branch"`
+    // Prefix for per-agent branch names (e.g., agent -> agent1, agent2, ...)
+    BranchPrefix string `yaml:"branch_prefix"`
+    // Default compose profiles to apply (comma-separated)
+    Profiles string `yaml:"profiles"`
 }
 
-// ReadHooks parses overlays/<project>/devkit.yaml using YAML and returns warm/maintain hooks.
+type OverlayConfig struct {
+    Hooks    Hooks    `yaml:"hooks"`
+    Defaults Defaults `yaml:"defaults"`
+}
+
+// ReadHooks parses overlays/<project>/devkit.yaml and returns warm/maintain hooks.
+// It ignores other fields for backwards compatibility with existing callers.
 func ReadHooks(root, project string) (Hooks, error) {
-    var h Hooks
-    if project == "" { return h, nil }
+    cfg, _ := ReadAll(root, project)
+    return cfg.Hooks, nil
+}
+
+// ReadAll parses overlays/<project>/devkit.yaml and returns the full overlay config.
+func ReadAll(root, project string) (OverlayConfig, error) {
+    var out OverlayConfig
+    if project == "" { return out, nil }
     path := filepath.Join(root, "overlays", project, "devkit.yaml")
     data, err := os.ReadFile(path)
-    if err != nil { return h, nil }
-    var oy overlayYAML
-    if err := yaml.Unmarshal(data, &oy); err != nil {
-        return h, nil
+    if err != nil { return out, nil }
+    if err := yaml.Unmarshal(data, &out); err != nil {
+        return out, nil
     }
-    h.Warm = oy.Hooks.Warm
-    h.Maintain = oy.Hooks.Maintain
-    return h, nil
+    return out, nil
 }

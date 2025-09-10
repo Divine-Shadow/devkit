@@ -13,8 +13,8 @@ Dev Kit — Base Kit Details
   - `dns`: forces agent DNS via `172.30.10.3` dnsmasq allowlist.
   - `envoy`: starts Envoy HTTP proxy and SNI TCP forward proxy.
 - Helper:
-  - `devkit/kit/scripts/devkit -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net` (wrapper in-repo; defaults to `-p codex`).
-  - Or call the binary directly after build: `devkit/kit/bin/devctl -p <project> ...`.
+- `devkit/kit/scripts/devkit -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net` (wrapper in-repo; defaults to `-p codex`).
+- Or call the binary directly after build: `devkit/kit/bin/devctl -p <project> ...`.
   - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
     - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
     - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
@@ -35,6 +35,15 @@ Dev Kit — Base Kit Details
     - If you see "Address already in use" on up, pick a different subnet/IP here.
 
 ### Make Targets (Codex Overlay)
+
+Convenience commands (essentials):
+- Reset and open N agents (alias of `fresh-open`): `devctl -p <proj> reset [N]`.
+- Scale agents without teardown: `devctl -p <proj> scale N`.
+
+Worktrees workflow (dev-all overlay):
+- Setup per-agent branches + worktrees that track `origin/<base>`: `devctl -p dev-all worktrees-setup <repo> <count> [--base agent] [--branch main]`.
+- Bootstrap using defaults from `overlays/dev-all/devkit.yaml`: `devctl -p dev-all bootstrap`.
+- Open tmux across worktrees: `devctl -p dev-all worktrees-tmux <repo> <count>`.
 
 Convenience targets to validate the codex overlay end‑to‑end:
 

@@ -1,7 +1,15 @@
-workspace: ../..
-env:
-  DEV_ROOT: /workspaces/dev
+defaults:
+  # How many agents to start for reset/bootstrap when count not provided
+  agents: 3
+  # Primary repo name under the dev root to set up with worktrees
+  repo: ouroboros-ide
+  # The base branch each per-agent branch should track from origin
+  base_branch: main
+  # Prefix for per-agent branch names (agent1, agent2, ...)
+  branch_prefix: agent
+
 hooks:
-  warm: echo "no-op"
-  maintain: echo "no-op"
+  # Optional custom warm/maintain hooks for the dev-all overlay (unused by default)
+  warm: ""
+  maintain: ""
 
