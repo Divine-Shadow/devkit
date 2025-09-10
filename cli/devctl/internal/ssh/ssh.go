@@ -26,3 +26,15 @@ func BuildWriteSteps(home string, key, pub, known []byte, cfg string) []WriteSte
     return steps
 }
 
+// BuildConfigureScripts returns small bash -lc scripts to configure git
+// for the given agent HOME and repository path inside the container.
+// Includes: wait for ~/.ssh/config to be non-empty, set global core.sshCommand,
+// set repo-level core.sshCommand, and git pull --ff-only using the config.
+func BuildConfigureScripts(home string, repoPath string) []string {
+    return []string{
+        "for i in $(seq 1 20); do [ -s '" + home + "'/.ssh/config ] && break || sleep 0.25; done",
+        "export HOME='" + home + "' && git config --global core.sshCommand 'ssh -F '" + home + "'/.ssh/config'",
+        "cd '" + repoPath + "' && git config core.sshCommand 'ssh -F '" + home + "'/.ssh/config'",
+        "set -e; cd '" + repoPath + "'; GIT_SSH_COMMAND=\\\"ssh -F '" + home + "'/.ssh/config\\\" git pull --ff-only || true",
+    }
+}

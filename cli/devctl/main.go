@@ -720,12 +720,9 @@ exit 0`, home, home, home, home, home)
             for _, step := range sshw.BuildWriteSteps(home1, keyBytes, pubBytes, knownBytes, cfg1) {
                 runComposeInput(dryRun, files, step.Content, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", step.Script)
             }
-            // wait for config to be visible and non-empty before git commands
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(home1))
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(home1))
-            // also persist in repo config to avoid relying on HOME
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitSetRepoSSH(pth.AgentRepoPath(project, "1", repo), home1))
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitPullWithSSH(pth.AgentRepoPath(project, "1", repo), home1))
+            for _, sc := range sshw.BuildConfigureScripts(home1, pth.AgentRepoPath(project, "1", repo)) {
+                runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sc)
+            }
             // agents 2..n
             for i := 2; i <= n; i++ {
                 idx := fmt.Sprintf("%d", i)
@@ -736,11 +733,9 @@ exit 0`, home, home, home, home, home)
                 for _, step := range sshw.BuildWriteSteps(whome, keyBytes, pubBytes, knownBytes, cfg) {
                     runComposeInput(dryRun, files, step.Content, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", step.Script)
                 }
-                // wait for config to be visible and non-empty before git commands
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(whome))
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(whome))
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitSetRepoSSH(wpath, whome))
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitPullWithSSH(wpath, whome))
+                for _, sc := range sshw.BuildConfigureScripts(whome, wpath) {
+                    runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sc)
+                }
             }
         }
         // Reuse tmux workflow
