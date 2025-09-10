@@ -1,3 +1,6 @@
 # Built CLI binary
 kit/bin/devctl
 
+# Local Go build caches (should never be committed)
+cli/devctl/.gocache/
+cli/devctl/.gomodcache/
