@@ -17,6 +17,8 @@ import (
     "devkit/cli/devctl/internal/tmuxutil"
     sshcfg "devkit/cli/devctl/internal/sshcfg"
     pth "devkit/cli/devctl/internal/paths"
+    sshsteps "devkit/cli/devctl/internal/sshsteps"
+    gitutil "devkit/cli/devctl/internal/gitutil"
     "devkit/cli/devctl/internal/execx"
     "devkit/cli/devctl/internal/config"
 )
@@ -731,12 +733,12 @@ exit 0`, home, home, home, home, home)
         {
             // agent1 repo path
             rp1 := pth.AgentRepoPath(project, "1", repo)
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "set -e; cd '"+rp1+"'; gd=$(git rev-parse --git-dir); mkdir -p \"$gd/info\"; (grep -qxF '.devhome-agent*' \"$gd/info/exclude\" || echo '.devhome-agent*' >> \"$gd/info/exclude\")")
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", gitutil.UpdateExcludeScript(rp1, ".devhome-agent*"))
             // other agents
             for j := 2; j <= n; j++ {
                 idx := fmt.Sprintf("%d", j)
                 rpj := pth.AgentRepoPath(project, idx, repo)
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+rpj+"'; gd=$(git rev-parse --git-dir); mkdir -p \"$gd/info\"; (grep -qxF '.devhome-agent*' \"$gd/info/exclude\" || echo '.devhome-agent*' >> \"$gd/info/exclude\")")
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", gitutil.UpdateExcludeScript(rpj, ".devhome-agent*"))
             }
         }
         // Ensure SSH config per agent with correct HOME under repo paths, then validate git pull
@@ -754,33 +756,33 @@ exit 0`, home, home, home, home, home)
             // agent 1
             home1 := pth.AgentHomePath(project, "1", repo)
             cfg1 := sshcfg.BuildGitHubConfig(home1)
-            runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "mkdir -p '"+home1+"'/.ssh && chmod 700 '"+home1+"'/.ssh")
+            runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(home1))
             if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/id_ed25519 && chmod 600 '"+home1+"'/.ssh/id_ed25519") }
             if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/id_ed25519.pub && chmod 644 '"+home1+"'/.ssh/id_ed25519.pub") }
             if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/known_hosts && chmod 644 '"+home1+"'/.ssh/known_hosts") }
             runComposeInput(dryRun, files, []byte(cfg1), "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/config && chmod 600 '"+home1+"'/.ssh/config")
             // wait for config to be visible and non-empty before git commands
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "for i in $(seq 1 20); do [ -s '"+home1+"'/.ssh/config ] && break || sleep 0.25; done")
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "export HOME='"+home1+"' && git config --global core.sshCommand 'ssh -F '"+home1+"'/.ssh/config'")
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(home1))
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(home1))
             // also persist in repo config to avoid relying on HOME
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "cd '"+pth.AgentRepoPath(project, "1", repo)+"' && git config core.sshCommand 'ssh -F '"+home1+"'/.ssh/config'")
-            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "set -e; cd '"+pth.AgentRepoPath(project, "1", repo)+"'; GIT_SSH_COMMAND=\"ssh -F '"+home1+"'/.ssh/config\" git pull --ff-only || true")
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitSetRepoSSH(pth.AgentRepoPath(project, "1", repo), home1))
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", sshsteps.GitPullWithSSH(pth.AgentRepoPath(project, "1", repo), home1))
             // agents 2..n
             for i := 2; i <= n; i++ {
                 idx := fmt.Sprintf("%d", i)
                 whome := pth.AgentHomePath(project, idx, repo)
                 wpath := pth.AgentRepoPath(project, idx, repo)
                 cfg := sshcfg.BuildGitHubConfig(whome)
-                runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "mkdir -p '"+whome+"'/.ssh && chmod 700 '"+whome+"'/.ssh")
+                runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.MkdirSSH(whome))
                 if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/id_ed25519 && chmod 600 '"+whome+"'/.ssh/id_ed25519") }
                 if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/id_ed25519.pub && chmod 644 '"+whome+"'/.ssh/id_ed25519.pub") }
                 if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/known_hosts && chmod 644 '"+whome+"'/.ssh/known_hosts") }
                 runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/config && chmod 600 '"+whome+"'/.ssh/config")
                 // wait for config to be visible and non-empty before git commands
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "for i in $(seq 1 20); do [ -s '"+whome+"'/.ssh/config ] && break || sleep 0.25; done")
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+whome+"' && git config --global core.sshCommand 'ssh -F '"+whome+"'/.ssh/config'")
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+wpath+"' && git config core.sshCommand 'ssh -F '"+whome+"'/.ssh/config'")
-                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+wpath+"' 2>/dev/null && GIT_SSH_COMMAND=\"ssh -F '"+whome+"'/.ssh/config\" git pull --ff-only || true")
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.WaitConfigNonEmpty(whome))
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitSetGlobalSSH(whome))
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitSetRepoSSH(wpath, whome))
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", sshsteps.GitPullWithSSH(wpath, whome))
             }
         }
         // Reuse tmux workflow
