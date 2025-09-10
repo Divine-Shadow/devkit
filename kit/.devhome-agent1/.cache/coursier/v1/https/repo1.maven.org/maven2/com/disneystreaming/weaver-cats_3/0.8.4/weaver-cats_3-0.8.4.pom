@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.disneystreaming</groupId>
+    <artifactId>weaver-cats_3</artifactId>
+    <packaging>jar</packaging>
+    <description>cats</description>
+    <url>https://github.com/disneystreaming</url>
+    <version>0.8.4</version>
+    <licenses>
+        <license>
+            <name>Apache</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <name>cats</name>
+    <organization>
+        <name>com.disneystreaming</name>
+        <url>https://github.com/disneystreaming</url>
+    </organization>
+    <scm>
+        <url>https://github.com/disneystreaming/weaver-test</url>
+        <connection>scm:git@github.com:disneystreaming/weaver-test.git</connection>
+    </scm>
+    <developers>
+        <developer>
+            <id>Olivier Mélois</id>
+            <name>Olivier Mélois</name>
+            <url>https://github.com/baccata</url>
+            <email>olivier.melois@disneystreaming.com</email>
+        </developer>
+        <developer>
+            <id>Anton Sviridov</id>
+            <name>Anton Sviridov</name>
+            <url>https://github.com/keynmol</url>
+            <email>anton.sviridov@disneystreaming.com</email>
+        </developer>
+    </developers>
+    <dependencies>
+        <dependency>
+            <groupId>com.disneystreaming</groupId>
+            <artifactId>weaver-framework_3</artifactId>
+            <version>0.8.4</version>
+        </dependency>
+        <dependency>
+            <groupId>com.disneystreaming</groupId>
+            <artifactId>weaver-cats-core_3</artifactId>
+            <version>0.8.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala3-library_3</artifactId>
+            <version>3.2.2</version>
+        </dependency>
+    </dependencies>
+</project>

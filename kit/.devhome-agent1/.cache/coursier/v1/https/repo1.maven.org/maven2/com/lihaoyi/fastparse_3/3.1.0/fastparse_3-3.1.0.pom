@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project 
+xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <modelVersion>4.0.0</modelVersion>
+    <name>fastparse_3</name>
+    <groupId>com.lihaoyi</groupId>
+    <artifactId>fastparse_3</artifactId>
+    <packaging>jar</packaging>
+    <description>fastparse</description>
+    <version>3.1.0</version>
+    <url>https://github.com/lihaoyi/fastparse</url>
+    <licenses>
+        <license>
+            <name>MIT</name>
+            <url>https://spdx.org/licenses/MIT.html</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <scm>
+        <connection>scm:git:git://github.com/com-lihaoyi/fastparse.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com:com-lihaoyi/fastparse.git</developerConnection>
+        <url>https://github.com/com-lihaoyi/fastparse</url>
+    </scm>
+    <developers>
+        <developer>
+            <id>lihaoyi</id>
+            <name>Li Haoyi</name>
+            <url>https://github.com/lihaoyi</url>
+        </developer>
+    </developers>
+    <properties> </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.lihaoyi</groupId>
+            <artifactId>sourcecode_3</artifactId>
+            <version>0.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.lihaoyi</groupId>
+            <artifactId>geny_3</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala3-library_3</artifactId>
+            <version>3.3.1</version>
+        </dependency>
+    </dependencies>
+</project>

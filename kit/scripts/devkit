@@ -8,6 +8,10 @@ ROOT_DIR="$(readlink -f "$(dirname "$0")"/..)"
 BIN="$ROOT_DIR/bin/devctl"
 
 PROJECT="codex"
+# Special-case: if no explicit -p/--project and first arg is 'run', default to dev-all
+if [[ "${1:-}" != "-p" && "${1:-}" != "--project" && "${1:-}" == "run" ]]; then
+  PROJECT="dev-all"
+fi
 if [[ "${1:-}" == "-p" || "${1:-}" == "--project" ]]; then
   PROJECT="$2"; shift 2
 fi
@@ -19,4 +23,3 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 exec "$BIN" -p "$PROJECT" "$@"
-

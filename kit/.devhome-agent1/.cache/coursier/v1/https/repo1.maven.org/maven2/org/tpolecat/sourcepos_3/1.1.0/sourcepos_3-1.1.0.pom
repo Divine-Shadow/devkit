@@ -1,0 +1,53 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>org.tpolecat</groupId>
+    <artifactId>sourcepos_3</artifactId>
+    <packaging>jar</packaging>
+    <description>sourcepos</description>
+    <url>https://github.com/tpolecat/sourcepos</url>
+    <version>1.1.0</version>
+    <licenses>
+        <license>
+            <name>MIT</name>
+            <url>http://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <name>sourcepos</name>
+    <inceptionYear>2022</inceptionYear>
+    <organization>
+        <name>Typelevel</name>
+        <url>https://typelevel.org</url>
+    </organization>
+    <scm>
+        <url>https://github.com/tpolecat/SourcePos</url>
+        <connection>scm:git:https://github.com/tpolecat/SourcePos.git</connection>
+        <developerConnection>scm:git:git@github.com:tpolecat/SourcePos.git</developerConnection>
+    </scm>
+    <developers>
+        <developer>
+            <id>tpolecat</id>
+            <name>Rob Norris</name>
+            <url>http://www.tpolecat.org</url>
+            <email>rob_norris@mac.com</email>
+        </developer>
+    </developers>
+    <properties>
+        <info.apiURL>https://www.javadoc.io/doc/org.tpolecat/sourcepos_3/1.1.0/</info.apiURL>
+        <info.versionScheme>early-semver</info.versionScheme>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala3-library_3</artifactId>
+            <version>3.2.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scalameta</groupId>
+            <artifactId>munit_3</artifactId>
+            <version>1.0.0-M7</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

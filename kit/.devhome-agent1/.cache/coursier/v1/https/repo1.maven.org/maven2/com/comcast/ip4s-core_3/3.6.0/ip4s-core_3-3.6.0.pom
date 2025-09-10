@@ -1,0 +1,92 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.comcast</groupId>
+    <artifactId>ip4s-core_3</artifactId>
+    <packaging>jar</packaging>
+    <description>ip4s-core</description>
+    <url>https://github.com/Comcast/ip4s</url>
+    <version>3.6.0</version>
+    <licenses>
+        <license>
+            <name>Apache-2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <name>ip4s-core</name>
+    <inceptionYear>2018</inceptionYear>
+    <organization>
+        <name>Comcast Cable Communications Management, LLC</name>
+    </organization>
+    <scm>
+        <url>https://github.com/Comcast/ip4s</url>
+        <connection>scm:git:https://github.com/Comcast/ip4s.git</connection>
+        <developerConnection>scm:git:git@github.com:Comcast/ip4s.git</developerConnection>
+    </scm>
+    <developers>
+        <developer>
+            <id>Comcast</id>
+            <name>ip4s contributors</name>
+            <url>https://github.com/Comcast/ip4s/contributors</url>
+            <email>@Comcast</email>
+        </developer>
+        <developer>
+            <id>mpilquist</id>
+            <name>Michael Pilquist</name>
+            <url>https://github.com/mpilquist</url>
+            <email>@mpilquist</email>
+        </developer>
+        <developer>
+            <id>matthughes</id>
+            <name>Matt Hughes</name>
+            <url>https://github.com/matthughes</url>
+            <email>@matthughes</email>
+        </developer>
+        <developer>
+            <id>nequissimus</id>
+            <name>Tim Steinbach</name>
+            <url>https://github.com/nequissimus</url>
+            <email>@nequissimus</email>
+        </developer>
+    </developers>
+    <properties>
+        <info.apiURL>https://www.javadoc.io/doc/com.comcast/ip4s-core_3/3.6.0/</info.apiURL>
+        <info.releaseNotesUrl>https://github.com/Comcast/ip4s/releases/tag/v3.6.0</info.releaseNotesUrl>
+        <info.versionScheme>early-semver</info.versionScheme>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala3-library_3</artifactId>
+            <version>3.3.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.typelevel</groupId>
+            <artifactId>scalac-compat-annotation_3</artifactId>
+            <version>0.1.4</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.typelevel</groupId>
+            <artifactId>literally_3</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.typelevel</groupId>
+            <artifactId>cats-core_3</artifactId>
+            <version>2.10.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.typelevel</groupId>
+            <artifactId>cats-effect_3</artifactId>
+            <version>3.5.4</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scalacheck</groupId>
+            <artifactId>scalacheck_3</artifactId>
+            <version>1.17.1</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

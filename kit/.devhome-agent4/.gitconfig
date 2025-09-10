@@ -1,0 +1,2 @@
+[core]
+	sshCommand = ssh -F /workspace/.devhome-agent4/.ssh/config

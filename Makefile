@@ -5,11 +5,14 @@ KIT        := kit
 OVERLAYS   := overlays
 PROJECT    ?= codex
 CLI        := $(KIT)/bin/devctl
+# Defaults for run/health flows
+REPO       ?= ouroboros-ide
+N          ?= 4
 
 # Compose file set with all profiles + overlay
 COMPOSE_ARGS := -f $(KIT)/compose.yml -f $(KIT)/compose.hardened.yml -f $(KIT)/compose.dns.yml -f $(KIT)/compose.envoy.yml -f $(OVERLAYS)/$(PROJECT)/compose.override.yml
 
-.PHONY: build-cli codex-fresh-open codex-verify codex-down codex-ci
+.PHONY: build-cli codex-fresh-open codex-verify codex-down codex-ci health run
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -42,3 +45,15 @@ codex-down:
 # End-to-end: build, fresh-open, verify, and leave up
 codex-ci: build-cli codex-fresh-open codex-verify
 	@echo "== Codex E2E completed. Use 'make codex-down' to clean up. =="
+
+# Unified health check: verifies ssh + codex + worktrees for both overlays
+health: build-cli
+	@echo "== Health: codex overlay =="
+	@$(CLI) -p codex verify
+	@echo "== Health: dev-all overlay =="
+	@$(CLI) -p dev-all verify
+
+# Idempotent run: ensure worktrees and bring up N agents with tmux windows
+run: build-cli
+	@echo "== Run: $(REPO) with N=$(N) agents (dev-all overlay) =="
+	@$(CLI) -p dev-all run $(REPO) $(N)

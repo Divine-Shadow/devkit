@@ -2,6 +2,8 @@ package main
 
 import (
     "fmt"
+    "io/fs"
+    "context"
     "os"
     "path/filepath"
     "strconv"
@@ -133,6 +135,19 @@ func main() {
         if len(sub) > 1 { rest = sub[1:] }
         // Provide per-agent HOME and CODEX_HOME so codex reads/writes to a writable, isolated path
         home := "/workspace/.devhome-agent" + idx
+        if project == "dev-all" {
+            // Prefer overlay default repo to anchor per-agent HOME paths under /workspaces/dev
+            repo := "ouroboros-ide"
+            if cfg, err := config.ReadAll(paths.Root, project); err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
+                repo = cfg.Defaults.Repo
+            }
+            base := "/workspaces/dev"
+            if idx == "1" {
+                home = filepath.Join(base, repo, ".devhome-agent1")
+            } else {
+                home = filepath.Join(base, "agent"+idx, repo, ".devhome-agent"+idx)
+            }
+        }
         // Interactive exec: do not impose a timeout
         runComposeInteractive(dryRun, files, append([]string{
             "exec", "--index", idx,
@@ -266,7 +281,7 @@ func main() {
                     is := fmt.Sprintf("%d", i)
                     path := wd
                     if i != 1 { path = filepath.Join(base, "agent"+is, repo) }
-                    runCompose(dryRun, files, "exec", "--index", is, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && git status -sb || true")
+                    runCompose(dryRun, files, "exec", "--index", is, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && git status -sb && git rev-parse --abbrev-ref --symbolic-full-name @{u} && git config --get push.default || true")
                 }
             } else {
                 // codex overlay: run from /workspace
@@ -321,21 +336,53 @@ exit 0`, home, home, home, home, home)
         if len(sub) < 2 { die("Usage: exec-cd <index> <subpath> [cmd...]") }
         idx := sub[0]; subpath := sub[1]
         dest := subpath
-        if !strings.HasPrefix(subpath, "/") {
-            dest = filepath.Join("/workspaces/dev", subpath)
+        if !strings.HasPrefix(subpath, "/") { dest = filepath.Join("/workspaces/dev", subpath) }
+        // Compute a sensible per-agent HOME for dev-all based on the destination path
+        home := "/workspace/.devhome-agent" + idx
+        if project == "dev-all" {
+            // Determine repo segment under /workspaces/dev or /workspaces/dev/agentN
+            repo := ""
+            rel := strings.TrimPrefix(dest, "/workspaces/dev/")
+            parts := strings.Split(rel, "/")
+            if len(parts) > 0 {
+                if strings.HasPrefix(parts[0], "agent") && len(parts) > 1 {
+                    repo = parts[1]
+                } else {
+                    repo = parts[0]
+                }
+            }
+            if repo == "" { repo = "ouroboros-ide" }
+            base := "/workspaces/dev"
+            if idx == "1" {
+                home = filepath.Join(base, repo, ".devhome-agent1")
+            } else {
+                home = filepath.Join(base, "agent"+idx, repo, ".devhome-agent"+idx)
+            }
         }
         cmdstr := "bash"
         if len(sub) > 2 { cmdstr = strings.Join(sub[2:], " ") }
-        // Interactive shell: no timeout
-        runComposeInteractive(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec "+cmdstr)
+        // Interactive shell: no timeout; export HOME/XDG so codex uses the seeded per-agent home
+        runComposeInteractive(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+home+"' CODEX_HOME='"+home+"/.codex' CODEX_ROLLOUT_DIR='"+home+"/.codex/rollouts' XDG_CACHE_HOME='"+home+"/.cache' XDG_CONFIG_HOME='"+home+"/.config'; cd '"+dest+"' && exec "+cmdstr)
     case "attach-cd":
         mustProject(project)
         if len(sub) < 2 { die("Usage: attach-cd <index> <subpath>") }
         idx := sub[0]; subpath := sub[1]
         dest := subpath
         if !strings.HasPrefix(subpath, "/") { dest = filepath.Join("/workspaces/dev", subpath) }
+        home := "/workspace/.devhome-agent" + idx
+        if project == "dev-all" {
+            repo := ""
+            rel := strings.TrimPrefix(dest, "/workspaces/dev/")
+            parts := strings.Split(rel, "/")
+            if len(parts) > 0 {
+                if strings.HasPrefix(parts[0], "agent") && len(parts) > 1 { repo = parts[1] } else { repo = parts[0] }
+            }
+            if repo == "" { repo = "ouroboros-ide" }
+            base := "/workspaces/dev"
+            if idx == "1" { home = filepath.Join(base, repo, ".devhome-agent1") } else { home = filepath.Join(base, "agent"+idx, repo, ".devhome-agent"+idx) }
+        }
         // Interactive shell: no timeout
-        runComposeInteractive(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+dest+"' && exec bash")
+        runComposeInteractive(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+home+"' CODEX_HOME='"+home+"/.codex' CODEX_ROLLOUT_DIR='"+home+"/.codex/rollouts' XDG_CACHE_HOME='"+home+"/.cache' XDG_CONFIG_HOME='"+home+"/.config'; cd '"+dest+"' && exec bash")
     case "tmux-shells":
         mustProject(project)
         n := 2; if len(sub) > 0 { n = mustAtoi(sub[0]) }
@@ -569,6 +616,8 @@ exit 0`, home, home, home, home, home)
         repoPath := filepath.Join(devRoot, repo)
         // sanity: fetch on the primary repo
         runHost(dryRun, "git", "-C", repoPath, "fetch", "--all", "--prune")
+        // ensure pushing from local agent branches updates the upstream branch (origin/<baseBranch>)
+        runHost(dryRun, "git", "-C", repoPath, "config", "push.default", "upstream")
         // ensure relative paths for worktrees so mounts work inside containers
         runHost(dryRun, "git", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
         // agent 1: reuse primary repo path; create/switch to branch without resetting files (preserve local work)
@@ -582,10 +631,127 @@ exit 0`, home, home, home, home, home)
             if !dryRun { _ = os.MkdirAll(parent, 0o755) }
             wt := filepath.Join(parent, repo)
             br := fmt.Sprintf("%s%d", base, i)
+            // idempotency: prune dead worktrees and remove existing path if it is already a worktree
+            runHostBestEffort(dryRun, "git", "-C", repoPath, "worktree", "prune")
+            runHostBestEffort(dryRun, "git", "-C", repoPath, "worktree", "remove", "-f", wt)
             runHost(dryRun, "git", "-C", repoPath, "worktree", "add", wt, "-B", br, "origin/"+baseBranch)
+            if !dryRun { rewriteWorktreeGitdir(wt) }
             runHost(dryRun, "git", "-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, br)
         }
         fmt.Printf("Worktrees ready under %s (branches %s1..%s%d tracking origin/%s)\n", devRoot, base, base, n, baseBranch)
+    case "run":
+        // Idempotent end-to-end launcher: ensures worktrees, scales up, and opens tmux across N agents
+        mustProject(project)
+        if project != "dev-all" { die("Use -p dev-all for run") }
+        if len(sub) < 2 { die("Usage: run <repo> <count>") }
+        repo := sub[0]; n := mustAtoi(sub[1])
+        // Ensure worktrees are present and configured (idempotent)
+        // Reuse handler behavior inline
+        {
+            // dev root and repo path
+            devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
+            repoPath := filepath.Join(devRoot, repo)
+            // Ensure host-side git does not inherit any container GIT_SSH_COMMAND
+            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "fetch", "--all", "--prune")
+            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "config", "push.default", "upstream")
+            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
+            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "checkout", "-B", "agent1")
+            runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "branch", "--set-upstream-to=origin/main", "agent1")
+            for i := 2; i <= n; i++ {
+                parent := filepath.Join(devRoot, fmt.Sprintf("agent%d", i))
+                if !dryRun { _ = os.MkdirAll(parent, 0o755) }
+                wt := filepath.Join(parent, repo)
+                br := fmt.Sprintf("agent%d", i)
+                runHostBestEffort(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "worktree", "prune")
+                runHostBestEffort(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "worktree", "remove", "-f", wt)
+                runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", repoPath, "worktree", "add", wt, "-B", br, "origin/main")
+                if !dryRun { rewriteWorktreeGitdir(wt) }
+                runHost(dryRun, "env", "-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh", "-C", wt, "branch", "--set-upstream-to=origin/main", br)
+            }
+        }
+        // Bring up and open tmux windows for N agents
+        // Compose up with scale (remove orphans for idempotency)
+        runCompose(dryRun, files, "up", "-d", "--remove-orphans", "--scale", fmt.Sprintf("dev-agent=%d", n))
+        // Seed per-agent Codex HOME from host mounts so codex can run non-interactively
+        {
+            base := "/workspaces/dev"
+            // agent 1 home under primary repo path
+            home1 := filepath.Join(base, repo, ".devhome-agent1")
+            for _, script := range seed.BuildSeedScripts(home1) {
+                runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", script)
+            }
+            // agents 2..n: home under agentN/<repo>
+            for j := 2; j <= n; j++ {
+                idx := fmt.Sprintf("%d", j)
+                homej := filepath.Join(base, fmt.Sprintf("agent%d", j), repo, fmt.Sprintf(".devhome-agent%d", j))
+                for _, script := range seed.BuildSeedScripts(homej) {
+                    runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", script)
+                }
+            }
+        }
+        // Ensure SSH config per agent with correct HOME under repo paths, then validate git pull
+        {
+            // Make sure ssh.github.com is allowlisted and proxies are active before any git/ssh calls
+            _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "proxy", "allowlist.txt"), "ssh.github.com")
+            _, _ = fz.AppendLineIfMissing(filepath.Join(paths.Kit, "dns", "dnsmasq.conf"), "server=/ssh.github.com/1.1.1.1")
+            runCompose(dryRun, files, "restart", "tinyproxy", "dns")
+            hostKey := filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
+            if _, err := os.Stat(hostKey); err != nil { hostKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa") }
+            keyBytes, _ := os.ReadFile(hostKey)
+            pubBytes, _ := os.ReadFile(hostKey+".pub")
+            known := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
+            knownBytes, _ := os.ReadFile(known)
+            base := "/workspaces/dev"
+            // agent 1
+            home1 := filepath.Join(base, repo, ".devhome-agent1")
+            cfg1 := sshcfg.BuildGitHubConfig(home1)
+            runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "mkdir -p '"+home1+"'/.ssh && chmod 700 '"+home1+"'/.ssh")
+            if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/id_ed25519 && chmod 600 '"+home1+"'/.ssh/id_ed25519") }
+            if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/id_ed25519.pub && chmod 644 '"+home1+"'/.ssh/id_ed25519.pub") }
+            if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/known_hosts && chmod 644 '"+home1+"'/.ssh/known_hosts") }
+            runComposeInput(dryRun, files, []byte(cfg1), "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", "cat > '"+home1+"'/.ssh/config && chmod 600 '"+home1+"'/.ssh/config")
+            // wait for config to be visible and non-empty before git commands
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "for i in $(seq 1 20); do [ -s '"+home1+"'/.ssh/config ] && break || sleep 0.25; done")
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "export HOME='"+home1+"' && git config --global core.sshCommand 'ssh -F '"+home1+"'/.ssh/config'")
+            // also persist in repo config to avoid relying on HOME
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "cd '"+filepath.Join(base, repo)+"' && git config core.sshCommand 'ssh -F '"+home1+"'/.ssh/config'")
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "set -e; cd '"+filepath.Join(base, repo)+"'; GIT_SSH_COMMAND=\"ssh -F '"+home1+"'/.ssh/config\" git pull --ff-only || true")
+            // agents 2..n
+            for i := 2; i <= n; i++ {
+                idx := fmt.Sprintf("%d", i)
+                whome := filepath.Join(base, fmt.Sprintf("agent%d", i), repo, fmt.Sprintf(".devhome-agent%d", i))
+                wpath := filepath.Join(base, fmt.Sprintf("agent%d", i), repo)
+                cfg := sshcfg.BuildGitHubConfig(whome)
+                runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "mkdir -p '"+whome+"'/.ssh && chmod 700 '"+whome+"'/.ssh")
+                if len(keyBytes) > 0 { runComposeInput(dryRun, files, keyBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/id_ed25519 && chmod 600 '"+whome+"'/.ssh/id_ed25519") }
+                if len(pubBytes) > 0 { runComposeInput(dryRun, files, pubBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/id_ed25519.pub && chmod 644 '"+whome+"'/.ssh/id_ed25519.pub") }
+                if len(knownBytes) > 0 { runComposeInput(dryRun, files, knownBytes, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/known_hosts && chmod 644 '"+whome+"'/.ssh/known_hosts") }
+                runComposeInput(dryRun, files, []byte(cfg), "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", "cat > '"+whome+"'/.ssh/config && chmod 600 '"+whome+"'/.ssh/config")
+                // wait for config to be visible and non-empty before git commands
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "for i in $(seq 1 20); do [ -s '"+whome+"'/.ssh/config ] && break || sleep 0.25; done")
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "export HOME='"+whome+"' && git config --global core.sshCommand 'ssh -F '"+whome+"'/.ssh/config'")
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+wpath+"' && git config core.sshCommand 'ssh -F '"+whome+"'/.ssh/config'")
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "cd '"+wpath+"' 2>/dev/null && GIT_SSH_COMMAND=\"ssh -F '"+whome+"'/.ssh/config\" git pull --ff-only || true")
+            }
+        }
+        // Reuse tmux workflow
+        base := "/workspaces/dev"
+        sess := "devkit-worktrees"
+        home1 := base+"/"+repo+"/.devhome-agent1"
+        if !skipTmux() {
+            // Idempotency: kill existing session if present
+            runHostBestEffort(dryRun, "tmux", "kill-session", "-t", sess)
+            cmd := "docker compose "+strings.Join(files, " ")+" exec --index 1 dev-agent bash -lc 'mkdir -p \""+home1+"/.codex/rollouts\" \""+home1+"/.cache\" \""+home1+"/.config\" \""+home1+"/.local\"; export HOME=\""+home1+"\"; export CODEX_HOME=\""+home1+"/.codex\"; export CODEX_ROLLOUT_DIR=\""+home1+"/.codex/rollouts\"; export XDG_CACHE_HOME=\""+home1+"/.cache\"; export XDG_CONFIG_HOME=\""+home1+"/.config\"; cd \""+base+"/"+repo+"\"; exec bash'"
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
+            for i := 2; i <= n; i++ {
+                whome := fmt.Sprintf("%s/agent%d/%s/.devhome-agent%d", base, i, repo, i)
+                wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
+                wcmd := "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", i, whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
+                runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
+            }
+            runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
+        }
     case "worktrees-branch":
         mustProject(project)
         if project != "dev-all" { die("Use -p dev-all for worktrees-branch") }
@@ -622,7 +788,7 @@ exit 0`, home, home, home, home, home)
         op := sub[1]
         idx := ""; if len(sub) >= 4 && sub[2] == "--index" { idx = sub[3] }
         base := "/workspaces/dev"
-        gitcmd := "git pull --ff-only"; if op == "--push" { gitcmd = "git push" }
+        gitcmd := "git pull --ff-only"; if op == "--push" { gitcmd = "git push origin HEAD:main" }
         if idx != "" {
             path := base+"/"+repo
             if idx != "1" { path = base+"/agent"+idx+"/"+repo }
@@ -649,7 +815,7 @@ exit 0`, home, home, home, home, home)
             runHost(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
             runHost(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
             for i := 2; i <= n; i++ {
-                whome := fmt.Sprintf("%s/agent%d/.devhome-agent%d", base, i, i)
+                whome := fmt.Sprintf("%s/agent%d/%s/.devhome-agent%d", base, i, repo, i)
                 wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
             wcmd := "docker compose "+strings.Join(files, " ")+fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", i, whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
                 runHost(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
@@ -683,6 +849,7 @@ exit 0`, home, home, home, home, home)
             devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
             repoPath := filepath.Join(devRoot, repo)
             runHost(dryRun, "git", "-C", repoPath, "fetch", "--all", "--prune")
+            runHost(dryRun, "git", "-C", repoPath, "config", "push.default", "upstream")
             runHost(dryRun, "git", "-C", repoPath, "config", "worktree.useRelativePaths", "true")
             base := "agent"; baseBranch := "main"
             cfg, _ := config.ReadAll(paths.Root, project)
@@ -803,4 +970,20 @@ func mustAtoi(s string) int {
     n, err := strconv.Atoi(s)
     if err != nil || n < 1 { die("count must be a positive integer") }
     return n
+}
+
+// rewriteWorktreeGitdir makes the .git file inside a worktree point to a relative gitdir
+// so that it resolves correctly inside containers where the host absolute path differs.
+func rewriteWorktreeGitdir(wt string) {
+    // Resolve current gitdir
+    out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--git-dir")
+    if res.Code != 0 { return }
+    gitdir := strings.TrimSpace(out)
+    if gitdir == "" { return }
+    // Compute relative path from worktree dir to gitdir
+    rel, err := filepath.Rel(wt, gitdir)
+    if err != nil { return }
+    // Write .git file with strict perms
+    data := []byte("gitdir: "+rel+"\n")
+    _ = os.WriteFile(filepath.Join(wt, ".git"), data, fs.FileMode(0644))
 }

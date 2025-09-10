@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.eed3si9n</groupId>
+    <artifactId>sbt-assembly_2.12_1.0</artifactId>
+    <packaging>jar</packaging>
+    <description>sbt plugin to create a single über jar</description>
+    <url>https://github.com/sbt/sbt-assembly</url>
+    <version>2.2.0</version>
+    <licenses>
+        <license>
+            <name>MIT</name>
+            <url>https://github.com/sbt/sbt-assembly/blob/master/LICENSE</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <name>sbt-assembly</name>
+    <organization>
+        <name>com.eed3si9n</name>
+        <url>https://github.com/sbt/sbt-assembly</url>
+    </organization>
+    <scm>
+        <url>https://github.com/sbt/sbt-assembly</url>
+        <connection>scm:git@github.com:sbt/sbt-assembly.git</connection>
+    </scm>
+    <developers>
+        <developer>
+            <id>eed3si9n</id>
+            <name>Eugene Yokota</name>
+            <url>https://eed3si9n.com/</url>
+            <email>@eed3si9n</email>
+        </developer>
+    </developers>
+    <properties>
+        <scalaVersion>2.12</scalaVersion>
+        <sbtVersion>1.0</sbtVersion>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>2.12.18</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-sbt</groupId>
+            <artifactId>sbt</artifactId>
+            <version>1.2.8</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.eed3si9n.jarjarabrams</groupId>
+            <artifactId>jarjar-abrams-core_2.12</artifactId>
+            <version>1.14.0</version>
+        </dependency>
+    </dependencies>
+</project>

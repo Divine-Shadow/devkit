@@ -1,0 +1,52 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.dimafeng</groupId>
+    <artifactId>testcontainers-scala-scalatest_3</artifactId>
+    <packaging>jar</packaging>
+    <description>testcontainers-scala-scalatest</description>
+    <url>https://github.com/testcontainers/testcontainers-scala</url>
+    <version>0.41.3</version>
+    <licenses>
+        <license>
+            <name>The MIT License (MIT)</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+    <name>testcontainers-scala-scalatest</name>
+    <organization>
+        <name>com.dimafeng</name>
+        <url>https://github.com/testcontainers/testcontainers-scala</url>
+    </organization>
+    <scm>
+        <url>https://github.com/testcontainers/testcontainers-scala</url>
+        <connection>git@github.com:testcontainers/testcontainers-scala.git</connection>
+    </scm>
+    <developers>
+        <developer>
+            <id>testcontainers</id>
+            <name>testcontainers</name>
+            <url>https://github.com/testcontainers</url>
+            <email>dimafeng@gmail.com</email>
+        </developer>
+    </developers>
+    <dependencies>
+        <dependency>
+            <groupId>com.dimafeng</groupId>
+            <artifactId>testcontainers-scala-core_3</artifactId>
+            <version>0.41.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala3-library_3</artifactId>
+            <version>3.1.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.scalatest</groupId>
+            <artifactId>scalatest_3</artifactId>
+            <version>3.2.9</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>
