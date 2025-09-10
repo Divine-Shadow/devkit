@@ -21,11 +21,11 @@ func AgentRepoPath(project, idx, repo string) string {
 }
 
 // AgentHomePath returns the per-agent HOME inside the container for a project/index/repo.
-// - dev-all: <AgentRepoPath>/.devhome-agentN
+// - dev-all: /workspaces/dev/.devhomes/agentN (safe: outside any repo to avoid accidental commits)
 // - codex  : /workspace/.devhome-agentN
 func AgentHomePath(project, idx, repo string) string {
     if project == "dev-all" {
-        return filepath.Join(AgentRepoPath(project, idx, repo), ".devhome-agent"+idx)
+        return filepath.Join("/workspaces/dev", ".devhomes", "agent"+idx)
     }
     return filepath.Join("/workspace", ".devhome-agent"+idx)
 }
@@ -41,4 +41,3 @@ func AgentEnv(project, idx, repo string) map[string]string {
         "XDG_CONFIG_HOME":  filepath.Join(home, ".config"),
     }
 }
-

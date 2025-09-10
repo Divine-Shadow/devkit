@@ -654,7 +654,7 @@ exit 0`, home, home, home, home, home)
         runCompose(dryRun, files, "up", "-d", "--remove-orphans", "--scale", fmt.Sprintf("dev-agent=%d", n))
         // Seed per-agent Codex HOME from host mounts so codex can run non-interactively
         {
-            // agent 1 home under primary repo path
+            // agent 1 per-agent home (outside repo path for safety)
             home1 := pth.AgentHomePath(project, "1", repo)
             for _, script := range seed.BuildSeedScripts(home1) {
                 runCompose(dryRun, files, "exec", "-T", "--index", "1", "dev-agent", "bash", "-lc", script)
@@ -666,6 +666,18 @@ exit 0`, home, home, home, home, home)
                 for _, script := range seed.BuildSeedScripts(homej) {
                     runCompose(dryRun, files, "exec", "-T", "--index", idx, "dev-agent", "bash", "-lc", script)
                 }
+            }
+        }
+        // Ensure sensitive local dirs are ignored by git inside each repo (defense-in-depth)
+        {
+            // agent1 repo path
+            rp1 := pth.AgentRepoPath(project, "1", repo)
+            runCompose(dryRun, files, "exec", "--index", "1", "dev-agent", "bash", "-lc", "set -e; cd '"+rp1+"'; gd=$(git rev-parse --git-dir); mkdir -p \"$gd/info\"; (grep -qxF '.devhome-agent*' \"$gd/info/exclude\" || echo '.devhome-agent*' >> \"$gd/info/exclude\")")
+            // other agents
+            for j := 2; j <= n; j++ {
+                idx := fmt.Sprintf("%d", j)
+                rpj := pth.AgentRepoPath(project, idx, repo)
+                runCompose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+rpj+"'; gd=$(git rev-parse --git-dir); mkdir -p \"$gd/info\"; (grep -qxF '.devhome-agent*' \"$gd/info/exclude\" || echo '.devhome-agent*' >> \"$gd/info/exclude\")")
             }
         }
         // Ensure SSH config per agent with correct HOME under repo paths, then validate git pull
