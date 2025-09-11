@@ -19,7 +19,7 @@ build-cli:
 	@$(MAKE) -C cli/devctl build
 
 # Fresh open with all profiles, N agents, tmux disabled for non-interactive runs
-# Usage: make codex-fresh-open N=1 [INSTALL_CODEX=false INSTALL_CLAUDE=false INSTALL_SBT=false]
+# Usage: make codex-fresh-open N=1 [INSTALL_CODEX=false INSTALL_CLAUDE=false]
 codex-fresh-open: build-cli
 	@echo "== Fresh open for $(PROJECT) with all profiles (N=$(N)) =="
 	@export DEVKIT_NO_TMUX=1; \

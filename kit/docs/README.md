@@ -56,7 +56,7 @@ Convenience targets to validate the codex overlay end‑to‑end:
 Notes:
 - All targets use the Go CLI (`kit/bin/devctl`).
 - `codex-fresh-open` sets `DEVKIT_NO_TMUX=1` to avoid interactive tmux during automation.
-- You can disable heavyweight installs during image build by exporting: `INSTALL_CODEX=false INSTALL_CLAUDE=false INSTALL_SBT=false` before running `codex-fresh-open`.
+- You can disable heavyweight installs during image build by exporting: `INSTALL_CODEX=false INSTALL_CLAUDE=false` before running `codex-fresh-open`.
 
 ### Fresh‑Open Integration Test (Optional)
 
