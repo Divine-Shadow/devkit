@@ -10,6 +10,10 @@ Quick start (with the built‑in `codex` overlay):
 - Hardened + DNS profiles: `devkit/kit/scripts/devkit up --profile hardened,dns`
 - Tear down: `devkit/kit/scripts/devkit down`
 
+Credential pool (proposal, opt‑in):
+- For teams needing multiple Codex identities, see `kit/docs/proposals/codex-credential-pool.md`.
+- Summary: mount a read‑only pool of prepared Codex homes and seed agents from slots by index or per‑run shuffle. Defaults remain unchanged.
+
 Essentials (batteries-included paths):
 - Hard reset + open N agents (alias): `devkit/kit/scripts/devkit reset 3` (same as `fresh-open 3`).
 - Scale agents without teardown: `devkit/kit/scripts/devkit scale 4`.
