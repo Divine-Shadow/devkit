@@ -47,6 +47,8 @@ func Files(p Paths, project, profile string) ([]string, error) {
                 args = append(args, "-f", filepath.Join(p.Kit, "compose.dns.yml"))
             case "envoy":
                 args = append(args, "-f", filepath.Join(p.Kit, "compose.envoy.yml"))
+            case "pool":
+                args = append(args, "-f", filepath.Join(p.Kit, "compose.pool.yml"))
             case "":
                 // skip
             default:
