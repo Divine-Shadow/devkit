@@ -68,3 +68,65 @@ Edge Cases & Notes
 - Duplicates are acceptable and expected when `agents > slots`.
 - Tokens in pool slots can expire; refresh happens locally inside each agent’s `$HOME/.codex` as today. Refresh does not propagate back to the pool.
 
+Domain Model & Components (No Heredocs)
+
+Design goals
+- Keep logic in typed, testable Go packages; avoid monolithic shell heredocs.
+- Compose container commands from small, single‑purpose steps (strings) like current `seed` package.
+- Make selection, assignment, and seeding orthogonal (clean interfaces), so UX wiring in `main.go` stays small.
+
+Core types
+- Config
+  - `type CredMode string // "host"|"pool"`
+  - `type Strategy string // "by_index"|"shuffle"`
+  - `type PoolConfig struct { Mode CredMode; Dir string; Strategy Strategy; Seed int; }`
+  - Source: env vars; parsed in a tiny `internal/config/pool.go` helper.
+
+- Pool slots
+  - `type Slot struct { Name string; Path string }` // Path in container, e.g. `/var/codex-pool/slot1`
+  - Discovery: `pool.Discover(root string) ([]Slot, error)` — lists immediate subdirs under `/var/codex-pool` (no recursion), sorted by name.
+
+- Assignment
+  - `type Assigner interface { Assign(slots []Slot, agentIndex, agentCount int) Slot }`
+  - Implementations:
+    - `assign.ByIndex` — `(agentIndex-1) % len(slots)`
+    - `assign.Shuffle` — creates a per‑run permutation seeded by `PoolConfig.Seed` (or time if 0); returns `perm[(agentIndex-1) % len(slots)]`.
+
+- Seeding plan (imperative but small steps)
+  - `type SeedStep struct { Cmd []string }` // concrete argv to run in container via `docker compose exec -T ...`
+  - `type Plan struct { Steps []SeedStep }`
+  - Builders (pure):
+    - `seed.BuildResetPlan(home string) Plan` — mkdirs and rm -rf `$home/.codex` (split into multiple steps).
+    - `seed.BuildCopyFrom(hostPath, home string) Plan` — copies `hostPath/.` → `$home/.codex` and chmods auth.json.
+    - Existing `internal/seed` returns small bash strings; extend with new helpers that return argv slices (no heredocs), while leaving current functions in place to minimize churn. We can gradually migrate call sites.
+
+Execution flow (fresh-open/reset)
+1) If `PoolConfig.Mode != pool`, use existing host‑seed path unchanged.
+2) Discover `slots := pool.Discover("/var/codex-pool")`; if empty, fall back to host‑seed path.
+3) For each agent i in 1..N:
+   - `slot := assigner.Assign(slots, i, N)`
+   - Build: `steps := seed.BuildResetPlan(home) + seed.BuildCopyFrom(slot.Path, home)`
+   - Execute sequentially via existing `runCompose("exec", "-T", "--index", i, ...steps[j].Cmd...)`.
+   - Log: `Agent i -> slot <slot.Name>` (no sensitive contents).
+
+CLI wiring (ergonomic, minimal)
+- Add `pool` profile in compose to provide the mount only when requested.
+- Parse env to `PoolConfig` in `main.go` (tiny helper).
+- In `fresh-open`/`reset`, branch on `CredMode==pool` and invoke the above flow.
+- `preflight`: If `CredMode==pool`, run `pool.Discover` and warn when `agents > len(slots)`.
+
+Testing strategy
+- `internal/pool`: temp dir with a few subdirs → verify `Discover` order and filtering.
+- `internal/assign`: table tests for by_index and shuffle (with fixed seed) across various counts.
+- `internal/seed`: assert steps contain expected argv (cp, chmod) and that paths are correctly joined.
+- `main` (lightweight): with `--dry-run`, assert the composed docker commands include the correct `--index`, slot path, and home.
+
+Error handling & fallbacks
+- Empty/missing pool → log and fall back to host‑seed path.
+- Missing `auth.json` in slot → proceed (some slots may be intentionally partial); chmod is conditional.
+- Copy failures (permissions/read‑only) → surface error and stop for that agent; others continue (match current failure model).
+
+Why this avoids heredocs
+- Every step is either an argv slice or a small single‑line bash (consistent with existing `seed` package style), executed by `docker compose exec -T ...`.
+- No multiline shell blocks are generated; all quoting stays simple and testable.
+
