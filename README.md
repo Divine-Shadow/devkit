@@ -13,6 +13,12 @@ Quick start (with the built‑in `codex` overlay):
 Credential pool (proposal, opt‑in):
 - For teams needing multiple Codex identities, see `kit/docs/proposals/codex-credential-pool.md`.
 - Summary: mount a read‑only pool of prepared Codex homes and seed agents from slots by index or per‑run shuffle. Defaults remain unchanged.
+ - Usage (opt‑in):
+   - `export DEVKIT_CODEX_CRED_MODE=pool`
+   - `export DEVKIT_CODEX_POOL_DIR=/abs/path/to/pool`
+   - Optional: `export DEVKIT_CODEX_POOL_STRATEGY=shuffle DEVKIT_CODEX_POOL_SEED=123`
+   - Dry run: `devkit/kit/scripts/devkit --dry-run fresh-open 2`
+   - Details: `kit/docs/README.md` and `kit/docs/testing/credential-pool.md`.
 
 Essentials (batteries-included paths):
 - Hard reset + open N agents (alias): `devkit/kit/scripts/devkit reset 3` (same as `fresh-open 3`).

@@ -12,6 +12,7 @@ Dev Kit — Base Kit Details
   - `hardened`: read‑only root, limits; combine with others.
   - `dns`: forces agent DNS via `172.30.10.3` dnsmasq allowlist.
   - `envoy`: starts Envoy HTTP proxy and SNI TCP forward proxy.
+  - `pool`: mounts a read‑only Codex credential pool into the agent (opt‑in).
 - Helper:
 - `devkit/kit/scripts/devkit -p <project> up|down|status|exec|logs|allow|warm|maintain|check-net` (wrapper in-repo; defaults to `-p codex`).
 - Or call the binary directly after build: `devkit/kit/bin/devctl -p <project> ...`.
@@ -33,6 +34,43 @@ Dev Kit — Base Kit Details
   - `DEVKIT_INTERNAL_SUBNET`: internal network CIDR (default `172.30.10.0/24`).
   - `DEVKIT_DNS_IP`: DNS service IP on internal network (default `172.30.10.3`).
     - If you see "Address already in use" on up, pick a different subnet/IP here.
+  - Credential pool (opt‑in; defaults off):
+    - `DEVKIT_CODEX_CRED_MODE=host|pool` (default `host`)
+    - `DEVKIT_CODEX_POOL_DIR=/abs/path/to/pool` (host path; required when `pool`)
+    - `DEVKIT_CODEX_POOL_STRATEGY=by_index|shuffle` (default `by_index`)
+    - `DEVKIT_CODEX_POOL_SEED=<int>` (optional seed for `shuffle`)
+
+## Credential Pool (Opt‑In)
+
+Purpose
+- Seed each agent’s `$HOME/.codex` from a read‑only pool of prepared Codex homes, instead of host `~/.codex`. Writes (refresh tokens, sessions) remain local to each agent’s `$HOME/.codex`.
+
+Mount and profiles
+- The pool is mounted when the compose file `kit/compose.pool.yml` is included (profile `pool`).
+- The CLI will auto‑include this compose file for `fresh-open` and `reset` when `DEVKIT_CODEX_CRED_MODE=pool` is set. For other commands (`up`, `exec`, etc.), add `--profile pool` if the pool mount is needed.
+
+Env configuration
+- `DEVKIT_CODEX_CRED_MODE=pool` — enable pool mode.
+- `DEVKIT_CODEX_POOL_DIR=/abs/path/to/pool` — host directory containing one subdir per slot (each a full `.codex` tree).
+- `DEVKIT_CODEX_POOL_STRATEGY=by_index|shuffle` — slot assignment:
+  - `by_index`: agent N → `slots[(N-1) % S]` (predictable, duplicates allowed).
+  - `shuffle`: per‑run shuffle of slots; assign sequentially; optional `DEVKIT_CODEX_POOL_SEED` for reproducible shuffles.
+
+Seeding behavior
+- Applies to `fresh-open` and `reset` when pool mode is on:
+  - Reset `$HOME/.codex`, copy `slot/.` → `$HOME/.codex`, `chmod 600 auth.json` if present.
+  - Logs: `[seed] Agent i -> slot <name>`.
+- If the pool is empty/missing, falls back to host `~/.codex` seeding (unchanged behavior).
+
+Quickstart (pool mode)
+- Host prep: create `/abs/path/to/pool/slot1`, `/abs/path/to/pool/slot2`, … each containing a `.codex` tree.
+- Run (dry run recommended first):
+  - `export DEVKIT_CODEX_CRED_MODE=pool`
+  - `export DEVKIT_CODEX_POOL_DIR=/abs/path/to/pool`
+  - Optional: `export DEVKIT_CODEX_POOL_STRATEGY=shuffle DEVKIT_CODEX_POOL_SEED=123`
+  - Preflight: `devkit/kit/bin/devctl preflight`
+  - Dry run: `devkit/kit/bin/devctl --dry-run -p codex fresh-open 2`
+
 
 ### Make Targets (Codex Overlay)
 
