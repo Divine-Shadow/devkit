@@ -23,6 +23,7 @@ Credential pool (proposal, opt‑in):
 Essentials (batteries-included paths):
 - Hard reset + open N agents (alias): `devkit/kit/scripts/devkit reset 3` (same as `fresh-open 3`).
 - Scale agents without teardown: `devkit/kit/scripts/devkit scale 4`.
+- Scale and sync tmux windows: `devkit/kit/scripts/devkit scale 5 --tmux-sync`.
 - Per-agent SSH over 443: `devkit/kit/scripts/devkit ssh-setup --index 1` then `ssh-test 1`.
 
 Worktrees (isolated branches per agent, dev-all overlay):
@@ -31,6 +32,13 @@ Worktrees (isolated branches per agent, dev-all overlay):
 - Create/verify manually:
   - Setup: `devkit/kit/scripts/devkit -p dev-all worktrees-setup ouroboros-ide 3`
   - Open windows: `devkit/kit/scripts/devkit -p dev-all worktrees-tmux ouroboros-ide 3`
+
+Tmux ergonomics (new):
+- Sync windows to running agents: `devkit/kit/scripts/devkit tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH]`.
+  - Defaults: session `devkit:<project>`, names `agent-<n>`, cd to `/workspace` (codex) or `/workspaces/dev[/agentN]` (dev-all).
+- Add a single window at a path: `devkit/kit/scripts/devkit tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]`.
+  - Example (dev-all): `devkit/kit/scripts/devkit -p dev-all tmux-add-cd 2 dumb-onion-hax --name doh-2`.
+  - Use the same `--session` across overlays to mix images in one tmux.
 
 SSH (GitHub) quickstart:
 - One-time per agent: `scripts/devkit ssh-setup --index 1` then `scripts/devkit ssh-test 1`

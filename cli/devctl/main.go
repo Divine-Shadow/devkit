@@ -66,35 +66,48 @@ func pickByIndex(names []string, idx string) string {
 // execAgentIdx runs a bash script inside the Nth dev-agent container (1-based),
 // avoiding compose --index brittleness by resolving container names via ps.
 func execAgentIdx(dry bool, files []string, idx string, script string) {
-	name := pickByIndex(listAgentNames(files), idx)
-	if strings.TrimSpace(name) == "" {
-		die("dev-agent not running")
-	}
-	runHost(dry, "docker", "exec", "-t", name, "bash", "-lc", script)
+    name := pickByIndex(listAgentNames(files), idx)
+    if strings.TrimSpace(name) == "" {
+        if dry {
+            // In dry-run, print a compose exec form for visibility and continue
+            runCompose(dry, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
+            return
+        }
+        die("dev-agent not running")
+    }
+    runHost(dry, "docker", "exec", "-t", name, "bash", "-lc", script)
 }
 
 // execAgentIdxInput runs a bash script with stdin content inside the Nth dev-agent container.
 func execAgentIdxInput(dry bool, files []string, idx string, input []byte, script string) {
-	name := pickByIndex(listAgentNames(files), idx)
-	if strings.TrimSpace(name) == "" {
-		die("dev-agent not running")
-	}
-	ctx, cancel := execx.WithTimeout(10 * time.Minute)
-	defer cancel()
-	_ = execx.RunWithInput(ctx, input, "docker", "exec", "-i", name, "bash", "-lc", script)
+    name := pickByIndex(listAgentNames(files), idx)
+    if strings.TrimSpace(name) == "" {
+        if dry {
+            // Dry-run: just echo a compose exec so the plan is visible
+            runCompose(dry, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
+            return
+        }
+        die("dev-agent not running")
+    }
+    ctx, cancel := execx.WithTimeout(10 * time.Minute)
+    defer cancel()
+    _ = execx.RunWithInput(ctx, input, "docker", "exec", "-i", name, "bash", "-lc", script)
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `devctl (Go) — experimental
+    fmt.Fprintf(os.Stderr, `devctl (Go) — experimental
 Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
   up, down, restart, status, logs
-  scale N, exec <n> <cmd...>, attach <n>
+  scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH]],
+  exec <n> <cmd...>, attach <n>
   allow <domain>, warm, maintain, check-net
   proxy {tinyproxy|envoy}
   tmux-shells [N], open [N], fresh-open [N]
   exec-cd <index> <subpath> [cmd...], attach-cd <index> <subpath>
+  tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH]
+  tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]
   ssh-setup [--key path] [--index N], ssh-test [N]
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
@@ -199,7 +212,7 @@ func main() {
 	sub := args[1:]
 	// Read optional credential pool config from env (defaults preserve host behavior)
 	pconf := poolcfg.ReadPoolConfig()
-	switch cmd {
+    switch cmd {
 	case "verify-all":
 		// Run verify for codex overlay and for dev-all overlay
 		// Uses this binary to avoid diverging logic
@@ -298,13 +311,78 @@ func main() {
 	case "logs":
 		mustProject(project)
 		runCompose(dryRun, files, append([]string{"logs"}, sub...)...)
-	case "scale":
-		mustProject(project)
-		n := "1"
-		if len(sub) > 0 {
-			n = sub[0]
-		}
-		runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+    case "scale":
+        mustProject(project)
+        n := "1"
+        doTmuxSync := false
+        sessName := ""
+        namePrefix := "agent-"
+        cdPath := ""
+        // parse: scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH]]
+        if len(sub) > 0 {
+            n = sub[0]
+        }
+        for i := 1; i < len(sub); i++ {
+            switch sub[i] {
+            case "--tmux-sync":
+                doTmuxSync = true
+            case "--session":
+                if i+1 < len(sub) { sessName = sub[i+1]; i++ }
+            case "--name-prefix":
+                if i+1 < len(sub) { namePrefix = sub[i+1]; i++ }
+            case "--cd":
+                if i+1 < len(sub) { cdPath = sub[i+1]; i++ }
+            }
+        }
+        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        if doTmuxSync && !skipTmux() {
+            // Best effort: if tmux present, sync windows up to N
+            doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, mustAtoi(n))
+        }
+    case "tmux-sync":
+        mustProject(project)
+        sessName := ""
+        count := 0
+        namePrefix := "agent-"
+        cdPath := ""
+        for i := 0; i < len(sub); i++ {
+            switch sub[i] {
+            case "--session":
+                if i+1 < len(sub) { sessName = sub[i+1]; i++ }
+            case "--count":
+                if i+1 < len(sub) { count = mustAtoi(sub[i+1]); i++ }
+            case "--name-prefix":
+                if i+1 < len(sub) { namePrefix = sub[i+1]; i++ }
+            case "--cd":
+                if i+1 < len(sub) { cdPath = sub[i+1]; i++ }
+            }
+        }
+        if count <= 0 {
+            // default to number of running agents
+            count = len(listAgentNames(files))
+            if count == 0 {
+                die("no dev-agent containers running; use up/scale first or provide --count")
+            }
+        }
+        doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, count)
+    case "tmux-add-cd":
+        mustProject(project)
+        if len(sub) < 2 {
+            die("Usage: tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]")
+        }
+        idx := sub[0]
+        subpath := sub[1]
+        sessName := ""
+        winName := ""
+        for i := 2; i < len(sub); i++ {
+            if sub[i] == "--session" && i+1 < len(sub) { sessName = sub[i+1]; i++ } else
+            if sub[i] == "--name" && i+1 < len(sub) { winName = sub[i+1]; i++ }
+        }
+        if sessName == "" {
+            sessName = defaultSessionName(project)
+        }
+        // ensure session exists; if not, create it with this window
+        ensureTmuxSessionWithWindow(dryRun, paths, project, files, sessName, idx, subpath, winName)
 	case "exec":
 		mustProject(project)
 		if len(sub) == 0 {
@@ -632,7 +710,7 @@ exit 0`, home, home, home, home, home)
 			// tmux attach is long-lived: no timeout
 			runHostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
 		}
-	case "open":
+    case "open":
 		mustProject(project)
 		n := 2
 		if len(sub) > 0 {
@@ -1039,6 +1117,17 @@ exit 0`, home, home, home, home, home)
 		}
 		repo := sub[0]
 		n := mustAtoi(sub[1])
+		// Ensure any stale networks/containers are removed so the picked subnet/IP apply cleanly
+		// (prevents mismatch when an existing devkit_dev-internal has different IPAM than our choice)
+		// 1) Best-effort compose down with all profiles for this project to stop attached containers
+		all := compose.AllProfilesFiles(paths, project)
+		runCompose(dryRun, all, "down")
+		// 2) Remove known sidecars and any lingering dev-agents
+		runHostBestEffort(dryRun, "docker", "rm", "-f", "devkit_envoy", "devkit_envoy_sni", "devkit_dns", "devkit_tinyproxy")
+		// Remove any devkit-dev-agent-* containers that may still be around and attached
+		runHostBestEffort(dryRun, "bash", "-lc", "docker ps -aq --filter name='^devkit-dev-agent-' | xargs -r docker rm -f")
+		// 3) Now remove networks (will succeed once no active endpoints remain)
+		runHostBestEffort(dryRun, "docker", "network", "rm", "devkit_dev-internal", "devkit_dev-egress")
 		// Ensure worktrees are present and configured (idempotent)
 		if err := wtx.Setup(paths.Root, repo, n, "main", "agent", dryRun); err != nil {
 			die(err.Error())
@@ -1426,6 +1515,106 @@ func mustAtoi(s string) int {
 		die("count must be a positive integer")
 	}
 	return n
+}
+
+// defaultSessionName chooses a stable default tmux session per overlay.
+func defaultSessionName(project string) string { return "devkit:" + project }
+
+// hasTmuxSession returns true if the tmux session exists.
+func hasTmuxSession(session string) bool {
+    res := execx.Run("tmux", tmuxutil.HasSession(session)...)
+    return res.Code == 0
+}
+
+// listTmuxWindows returns a set of window names for a session.
+func listTmuxWindows(session string) map[string]struct{} {
+    out, r := execx.Capture(context.Background(), "tmux", tmuxutil.ListWindows(session)...)
+    if r.Code != 0 { return map[string]struct{}{} }
+    m := map[string]struct{}{}
+    for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+        s := strings.TrimSpace(ln)
+        if s != "" { m[s] = struct{}{} }
+    }
+    return m
+}
+
+// buildWindowCmd composes the docker compose exec bash -lc command string for a given agent index and dest path.
+func buildWindowCmd(fileArgs []string, project, idx, dest string) string {
+    envs := pth.AgentEnv(project, idx, "")
+    home := envs["HOME"]
+    // Build export sequence
+    var b strings.Builder
+    b.WriteString("set -e; ")
+    // mkdirs
+    fmt.Fprintf(&b, "mkdir -p %q %q %q %q; ", filepath.Join(home, ".codex", "rollouts"), filepath.Join(home, ".cache"), filepath.Join(home, ".config"), filepath.Join(home, ".local"))
+    // exports
+    fmt.Fprintf(&b, "export HOME=%q CODEX_HOME=%q CODEX_ROLLOUT_DIR=%q XDG_CACHE_HOME=%q XDG_CONFIG_HOME=%q; ", envs["HOME"], envs["CODEX_HOME"], envs["CODEX_ROLLOUT_DIR"], envs["XDG_CACHE_HOME"], envs["XDG_CONFIG_HOME"])
+    // cd + exec bash
+    fmt.Fprintf(&b, "cd %q 2>/dev/null || true; exec bash", dest)
+    shell := b.String()
+    return "docker compose " + strings.Join(fileArgs, " ") + " exec --index " + idx + " dev-agent bash -lc '" + shell + "'"
+}
+
+// ensureTmuxSessionWithWindow ensures a session exists and adds a window for the given agent index and subpath.
+func ensureTmuxSessionWithWindow(dry bool, paths compose.Paths, project string, fileArgs []string, session, idx, subpath, winName string) {
+    if session == "" { session = defaultSessionName(project) }
+    // compute dest path (relative paths under /workspaces/dev)
+    dest := subpath
+    if !strings.HasPrefix(subpath, "/") {
+        dest = filepath.Join("/workspaces/dev", subpath)
+    }
+    if winName == "" { winName = "agent-" + idx }
+    cmdStr := buildWindowCmd(fileArgs, project, idx, dest)
+    if !hasTmuxSession(session) {
+        // create new session with this window
+        runHost(dry, "tmux", tmuxutil.NewSession(session, cmdStr)...)
+        runHost(dry, "tmux", tmuxutil.RenameWindow(session+":0", winName)...)
+        // attach interactively (short return if not interactive wanted)
+        runHostInteractive(dry, "tmux", tmuxutil.Attach(session)...)
+        return
+    }
+    // session exists: add a new window
+    runHost(dry, "tmux", tmuxutil.NewWindow(session, winName, cmdStr)...)
+}
+
+// doSyncTmux ensures windows agent-1..count exist in the target session.
+func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string, session, namePrefix, cdPath string, count int) {
+    if session == "" { session = defaultSessionName(project) }
+    // Determine default cd path per overlay if not provided
+    // For dev-all, base dir per agent; for codex, /workspace
+    // We'll compute per-index below if cdPath empty
+    present := map[string]struct{}{}
+    sessExists := hasTmuxSession(session)
+    if sessExists {
+        present = listTmuxWindows(session)
+    }
+    // Create session if missing with first window
+    start := 1
+    if !sessExists {
+        idx := "1"
+        dest := cdPath
+        if strings.TrimSpace(dest) == "" {
+            dest = pth.AgentRepoPath(project, idx, "")
+        }
+        cmdStr := buildWindowCmd(fileArgs, project, idx, dest)
+        runHost(dry, "tmux", tmuxutil.NewSession(session, cmdStr)...)
+        runHost(dry, "tmux", tmuxutil.RenameWindow(session+":0", namePrefix+idx)...)
+        present[namePrefix+idx] = struct{}{}
+        start = 2
+    }
+    for i := start; i <= count; i++ {
+        idx := fmt.Sprintf("%d", i)
+        wname := namePrefix + idx
+        if _, ok := present[wname]; ok {
+            continue
+        }
+        dest := cdPath
+        if strings.TrimSpace(dest) == "" {
+            dest = pth.AgentRepoPath(project, idx, "")
+        }
+        cmdStr := buildWindowCmd(fileArgs, project, idx, dest)
+        runHost(dry, "tmux", tmuxutil.NewWindow(session, wname, cmdStr)...)
+    }
 }
 
 // rewriteWorktreeGitdir makes the .git file inside a worktree point to a relative gitdir

@@ -1,8 +1,8 @@
 package tmuxutil
 
 import (
-	"reflect"
-	"testing"
+    "reflect"
+    "testing"
 )
 
 func TestNewSession(t *testing.T) {
@@ -30,9 +30,18 @@ func TestNewWindow(t *testing.T) {
 }
 
 func TestAttach(t *testing.T) {
-	got := Attach("sess")
-	want := []string{"attach", "-t", "sess"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Attach mismatch: got %#v want %#v", got, want)
-	}
+    got := Attach("sess")
+    want := []string{"attach", "-t", "sess"}
+    if !reflect.DeepEqual(got, want) {
+        t.Fatalf("Attach mismatch: got %#v want %#v", got, want)
+    }
+}
+
+func TestHasSessionAndListWindows(t *testing.T) {
+    if got := HasSession("s"); len(got) != 3 || got[0] != "has-session" || got[2] != "s" {
+        t.Fatalf("HasSession args unexpected: %v", got)
+    }
+    if got := ListWindows("s"); len(got) != 5 || got[0] != "list-windows" || got[2] != "s" || got[3] != "-F" {
+        t.Fatalf("ListWindows args unexpected: %v", got)
+    }
 }

@@ -19,6 +19,8 @@ Dev Kit — Base Kit Details
   - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
     - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
     - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
+    - Sync tmux windows to agent count: `scripts/devctl -p dev-all tmux-sync --count 3`
+    - Add a mixed window to same tmux: `scripts/devctl -p dev-all tmux-add-cd 2 dumb-onion-hax --session devkit:mixed --name doh-2`
   - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
   - Worktrees + SSH workflow: see `worktrees_ssh.md` for end‑to‑end flows (`bootstrap`, `worktrees-*`, `open`).
 
@@ -77,6 +79,7 @@ Quickstart (pool mode)
 Convenience commands (essentials):
 - Reset and open N agents (alias of `fresh-open`): `devctl -p <proj> reset [N]`.
 - Scale agents without teardown: `devctl -p <proj> scale N`.
+- Scale and sync tmux: `devctl -p <proj> scale N --tmux-sync [--session NAME]`.
 
 Worktrees workflow (dev-all overlay):
 - Setup per-agent branches + worktrees that track `origin/<base>`: `devctl -p dev-all worktrees-setup <repo> <count> [--base agent] [--branch main]`.
