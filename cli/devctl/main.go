@@ -114,6 +114,7 @@ Commands:
   tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH] [--service NAME]
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   tmux-apply-layout --file <layout.yaml> [--session NAME]
+  layout-apply --file <layout.yaml>    (bring up overlays, then attach tmux)
   ssh-setup [--key path] [--index N], ssh-test [N]
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
@@ -397,7 +398,7 @@ func main() {
         }
         // ensure session exists; if not, create it with this window
         ensureTmuxSessionWithWindow(dryRun, paths, project, files, sessName, idx, subpath, winName, service)
-    case "tmux-apply-layout":
+	case "tmux-apply-layout":
         mustProject(project)
         // Apply a YAML layout file describing multiple windows; allows per-window service and optional project override.
         // Usage: tmux-apply-layout --file <path> [--session NAME]
@@ -449,21 +450,85 @@ func main() {
             // if still not created (no windows), nothing to apply
             die("tmux session not created and layout has no windows")
         }
-        for i := start; i < len(lf.Windows); i++ {
-            w := lf.Windows[i]
-            idx := fmt.Sprintf("%d", w.Index)
-            winProj := project
-            if strings.TrimSpace(w.Project) != "" { winProj = w.Project }
-            fargs, err := compose.Files(paths, winProj, profile)
-            if err != nil { die(err.Error()) }
-            dest := layout.CleanPath(winProj, w.Path)
-            svc := w.Service
-            if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
-            name := w.Name
-            if strings.TrimSpace(name) == "" { name = "agent-" + idx }
-            cmdStr := buildWindowCmd(fargs, winProj, idx, dest, svc)
-            runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
-        }
+		for i := start; i < len(lf.Windows); i++ {
+			w := lf.Windows[i]
+			idx := fmt.Sprintf("%d", w.Index)
+			winProj := project
+			if strings.TrimSpace(w.Project) != "" { winProj = w.Project }
+			fargs, err := compose.Files(paths, winProj, profile)
+			if err != nil { die(err.Error()) }
+			dest := layout.CleanPath(winProj, w.Path)
+			svc := w.Service
+			if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
+			name := w.Name
+			if strings.TrimSpace(name) == "" { name = "agent-" + idx }
+			cmdStr := buildWindowCmd(fargs, winProj, idx, dest, svc)
+			runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
+		}
+	case "layout-apply":
+		mustProject(project)
+		layoutPath := ""
+		for i := 0; i < len(sub); i++ { if sub[i] == "--file" && i+1 < len(sub) { layoutPath = sub[i+1]; i++ } }
+		if strings.TrimSpace(layoutPath) == "" { die("Usage: layout-apply --file <layout.yaml>") }
+		lf, err := layout.Read(layoutPath)
+		if err != nil { die(err.Error()) }
+		// 1) Bring up overlays with their own profiles and project names
+		projMap := map[string]string{}
+		for _, ov := range lf.Overlays {
+			ovProj := strings.TrimSpace(ov.Project)
+			if ovProj == "" { continue }
+			filesOv, err := compose.Files(paths, ovProj, ov.Profiles)
+			if err != nil { die(err.Error()) }
+			svc := ov.Service
+			if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
+			cnt := ov.Count
+			if cnt < 1 { cnt = 1 }
+			pname := ov.ComposeProject
+			if strings.TrimSpace(pname) == "" { pname = "devkit-" + ovProj }
+			projMap[ovProj] = pname
+			args := []string{"up", "-d", "--scale", fmt.Sprintf("%s=%d", svc, cnt)}
+			if ov.Build { args = append(args, "--build") }
+			runComposeWithProject(dryRun, pname, filesOv, args...)
+		}
+		// 2) Apply windows into tmux using the composed project names
+		sessName := strings.TrimSpace(lf.Session)
+		if sessName == "" { sessName = defaultSessionName(project) }
+		if !hasTmuxSession(sessName) {
+			if len(lf.Windows) == 0 { die("no windows to create in session") }
+			w := lf.Windows[0]
+			idx := fmt.Sprintf("%d", w.Index)
+			winProj := project
+			if strings.TrimSpace(w.Project) != "" { winProj = w.Project }
+			fargs, err := compose.Files(paths, winProj, profile)
+			if err != nil { die(err.Error()) }
+			dest := layout.CleanPath(winProj, w.Path)
+			svc := w.Service
+			if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
+			name := w.Name
+			if strings.TrimSpace(name) == "" { name = "agent-" + idx }
+			pname := projMap[winProj]
+			if strings.TrimSpace(pname) == "" { pname = "devkit-" + winProj }
+			cmdStr := buildWindowCmdWithProject(fargs, winProj, idx, dest, svc, pname)
+			runHost(dryRun, "tmux", tmuxutil.NewSession(sessName, cmdStr)...)
+			runHost(dryRun, "tmux", tmuxutil.RenameWindow(sessName+":0", name)...)
+		}
+		for i := 0; i < len(lf.Windows); i++ {
+			w := lf.Windows[i]
+			idx := fmt.Sprintf("%d", w.Index)
+			winProj := project
+			if strings.TrimSpace(w.Project) != "" { winProj = w.Project }
+			fargs, err := compose.Files(paths, winProj, profile)
+			if err != nil { die(err.Error()) }
+			dest := layout.CleanPath(winProj, w.Path)
+			svc := w.Service
+			if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
+			name := w.Name
+			if strings.TrimSpace(name) == "" { name = "agent-" + idx }
+			pname := projMap[winProj]
+			if strings.TrimSpace(pname) == "" { pname = "devkit-" + winProj }
+			cmdStr := buildWindowCmdWithProject(fargs, winProj, idx, dest, svc, pname)
+			runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
+		}
 	case "exec":
 		mustProject(project)
 		if len(sub) == 0 {
@@ -1554,6 +1619,25 @@ func runComposeInput(dry bool, fileArgs []string, input []byte, args ...string) 
 	}
 }
 
+// runComposeWithProject runs docker compose with an explicit project name (-p).
+func runComposeWithProject(dry bool, projectName string, fileArgs []string, args ...string) {
+    ctx, cancel := execx.WithTimeout(10 * time.Minute)
+    defer cancel()
+    all := []string{"compose"}
+    if strings.TrimSpace(projectName) != "" {
+        all = append(all, "-p", projectName)
+    }
+    all = append(all, append(fileArgs, args...)...)
+    if dry {
+        fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
+        return
+    }
+    res := execx.RunCtx(ctx, "docker", all...)
+    if res.Code != 0 {
+        os.Exit(res.Code)
+    }
+}
+
 func runHost(dry bool, name string, args ...string) {
 	ctx, cancel := execx.WithTimeout(10 * time.Minute)
 	defer cancel()
@@ -1635,6 +1719,17 @@ func buildWindowCmd(fileArgs []string, project, idx, dest, service string) strin
     shell := b.String()
     if strings.TrimSpace(service) == "" { service = "dev-agent" }
     return "docker compose " + strings.Join(fileArgs, " ") + " exec --index " + idx + " " + service + " bash -lc '" + shell + "'"
+}
+
+// buildWindowCmdWithProject composes the docker compose exec with -p <composeProject>.
+func buildWindowCmdWithProject(fileArgs []string, project, idx, dest, service, composeProject string) string {
+    cmd := buildWindowCmd(fileArgs, project, idx, dest, service)
+    if strings.TrimSpace(composeProject) == "" {
+        return cmd
+    }
+    // Insert "-p <project>" after "docker compose"
+    needle := "docker compose "
+    return strings.Replace(cmd, needle, needle+"-p "+composeProject+" ", 1)
 }
 
 // ensureTmuxSessionWithWindow ensures a session exists and adds a window for the given agent index and subpath.

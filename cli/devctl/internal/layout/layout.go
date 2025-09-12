@@ -18,7 +18,17 @@ type Window struct {
 
 type File struct {
     Session string   `yaml:"session"`
+    Overlays []Overlay `yaml:"overlays"`
     Windows []Window `yaml:"windows"`
+}
+
+type Overlay struct {
+    Project        string `yaml:"project"`
+    Service        string `yaml:"service"`
+    Count          int    `yaml:"count"`
+    Profiles       string `yaml:"profiles"`
+    Build          bool   `yaml:"build"`
+    ComposeProject string `yaml:"compose_project"`
 }
 
 func Read(p string) (File, error) {
@@ -42,4 +52,3 @@ func CleanPath(project, subpath string) string {
         return filepath.Join("/workspace", subpath)
     }
 }
-

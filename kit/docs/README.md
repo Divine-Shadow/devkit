@@ -33,6 +33,9 @@ Dev Kit — Base Kit Details
             path: dumb-onion-hax
             name: doh-2
             service: dev-agent
+    - Orchestrate overlays + tmux from one file:
+      - `scripts/devctl layout-apply --file orchestration.yaml`
+      - See devkit/README.md for a full example.
   - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
   - Worktrees + SSH workflow: see `worktrees_ssh.md` for end‑to‑end flows (`bootstrap`, `worktrees-*`, `open`).
 

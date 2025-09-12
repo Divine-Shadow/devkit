@@ -54,6 +54,69 @@ Tmux ergonomics (new):
         name: doh-2
         service: dev-agent
 
+Declarative orchestration (new):
+- Bring up overlays and then attach tmux from a single YAML:
+  - `devkit/kit/scripts/devkit layout-apply --file orchestration.yaml`
+  - orchestration.yaml example:
+    session: devkit:mixed
+    overlays:
+      - project: codex
+        service: dev-agent
+        count: 5
+        profiles: dns,hardened
+        compose_project: devkit-codex
+      - project: dumb-onion-hax
+        service: dev-agent
+        count: 1
+        profiles: dns
+        compose_project: devkit-doh
+      - project: pokeemerald
+        service: dev-agent
+        count: 2
+        profiles: dns
+        compose_project: devkit-emerald
+    windows:
+      - index: 1
+        project: codex
+        service: dev-agent
+        path: /workspace
+        name: ouro-1
+      - index: 2
+        project: codex
+        service: dev-agent
+        path: /workspace
+        name: ouro-2
+      - index: 3
+        project: codex
+        service: dev-agent
+        path: /workspace
+        name: ouro-3
+      - index: 4
+        project: codex
+        service: dev-agent
+        path: /workspace
+        name: ouro-4
+      - index: 5
+        project: codex
+        service: dev-agent
+        path: /workspace
+        name: ouro-5
+      - index: 1
+        project: dumb-onion-hax
+        service: dev-agent
+        path: /workspace
+        name: doh-1
+      - index: 1
+        project: pokeemerald
+        service: dev-agent
+        path: /workspace
+        name: emerald-1
+      - index: 2
+        project: pokeemerald
+        service: dev-agent
+        path: /workspace
+        name: emerald-2
+
 SSH (GitHub) quickstart:
 - One-time per agent: `scripts/devkit ssh-setup --index 1` then `scripts/devkit ssh-test 1`
 - Flip origin to SSH and push: `scripts/devkit repo-push-ssh .`
