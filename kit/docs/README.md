@@ -44,6 +44,8 @@ Dev Kit — Base Kit Details
 - Build Go CLI: `cd devkit/cli/devctl && make build` (outputs `devkit/kit/bin/devctl`).
 - Unit tests: `cd devkit/cli/devctl && go test ./...`.
 - Dry‑run preview: append `--dry-run` to print `docker`/`tmux` commands without executing.
+  - Layout only: `devkit/kit/scripts/devkit --dry-run tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
+  - Orchestration: `devkit/kit/scripts/devkit --dry-run layout-apply --file devkit/kit/examples/orchestration.yaml`
 - Useful env vars:
   - `DEVKIT_ROOT`: override devkit root (used by tests).
   - `DEVKIT_NO_TMUX=1`: skip tmux integration (non‑interactive environments).

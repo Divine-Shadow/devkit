@@ -1,0 +1,38 @@
+session: devkit:mixed
+windows:
+  # Ouroboros (codex overlay) — 3 agents
+  - index: 1
+    project: codex
+    service: dev-agent
+    path: /workspace
+    name: ouro-1
+  - index: 2
+    project: codex
+    service: dev-agent
+    path: /workspace
+    name: ouro-2
+  - index: 3
+    project: codex
+    service: dev-agent
+    path: /workspace
+    name: ouro-3
+
+  # Dumb Onion Hax — 1 agent
+  - index: 1
+    project: dumb-onion-hax
+    service: dev-agent
+    path: /workspace
+    name: doh-1
+
+  # Pokeemerald — 2 agents
+  - index: 1
+    project: pokeemerald
+    service: dev-agent
+    path: /workspace
+    name: emerald-1
+  - index: 2
+    project: pokeemerald
+    service: dev-agent
+    path: /workspace
+    name: emerald-2
+
