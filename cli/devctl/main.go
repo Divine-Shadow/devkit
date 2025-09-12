@@ -115,6 +115,7 @@ Commands:
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   tmux-apply-layout --file <layout.yaml> [--session NAME]
   layout-apply --file <layout.yaml>    (bring up overlays, then attach tmux)
+  layout-generate [--service NAME] [--session NAME] [--output PATH]
   ssh-setup [--key path] [--index N], ssh-test [N]
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
@@ -465,7 +466,7 @@ func main() {
 			cmdStr := buildWindowCmd(fargs, winProj, idx, dest, svc)
 			runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
 		}
-	case "layout-apply":
+    case "layout-apply":
 		mustProject(project)
 		layoutPath := ""
 		for i := 0; i < len(sub); i++ { if sub[i] == "--file" && i+1 < len(sub) { layoutPath = sub[i+1]; i++ } }
@@ -512,7 +513,7 @@ func main() {
 			runHost(dryRun, "tmux", tmuxutil.NewSession(sessName, cmdStr)...)
 			runHost(dryRun, "tmux", tmuxutil.RenameWindow(sessName+":0", name)...)
 		}
-		for i := 0; i < len(lf.Windows); i++ {
+        for i := 0; i < len(lf.Windows); i++ {
 			w := lf.Windows[i]
 			idx := fmt.Sprintf("%d", w.Index)
 			winProj := project
@@ -527,8 +528,77 @@ func main() {
 			pname := projMap[winProj]
 			if strings.TrimSpace(pname) == "" { pname = "devkit-" + winProj }
 			cmdStr := buildWindowCmdWithProject(fargs, winProj, idx, dest, svc, pname)
-			runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
-		}
+            runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
+        }
+    case "layout-generate":
+        mustProject(project)
+        // Inspect running containers to infer overlays (by compose project label) and counts per service.
+        // Usage: layout-generate [--service NAME] [--session NAME] [--output PATH]
+        service := "dev-agent"
+        sessName := ""
+        output := ""
+        for i := 0; i < len(sub); i++ {
+            switch sub[i] {
+            case "--service":
+                if i+1 < len(sub) { service = sub[i+1]; i++ }
+            case "--session":
+                if i+1 < len(sub) { sessName = sub[i+1]; i++ }
+            case "--output":
+                if i+1 < len(sub) { output = sub[i+1]; i++ }
+            }
+        }
+        if strings.TrimSpace(sessName) == "" { sessName = defaultSessionName("mixed") }
+        // docker ps labels: project/service
+        type row struct{ Project, Service string }
+        rows := []row{}
+        {
+            out, _ := execx.Capture(context.Background(), "docker", "ps", "--format", "{{.Label \"com.docker.compose.project\"}}\t{{.Label \"com.docker.compose.service\"}}")
+            for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+                ln = strings.TrimSpace(ln)
+                if ln == "" { continue }
+                parts := strings.SplitN(ln, "\t", 2)
+                if len(parts) != 2 { continue }
+                rows = append(rows, row{Project: strings.TrimSpace(parts[0]), Service: strings.TrimSpace(parts[1])})
+            }
+        }
+        // Count per project for the given service
+        counts := map[string]int{}
+        for _, r := range rows {
+            if r.Service == service && r.Project != "" {
+                counts[r.Project]++
+            }
+        }
+        // Build YAML using detected compose project names; attempt to map overlay as suffix after "devkit-"
+        var b strings.Builder
+        fmt.Fprintf(&b, "session: %s\n\n", sessName)
+        fmt.Fprintf(&b, "overlays:\n")
+        type entry struct{ ComposeProject, Overlay string; Count int }
+        entries := []entry{}
+        for proj, c := range counts {
+            // Guess overlay
+            overlay := strings.TrimPrefix(proj, "devkit-")
+            // ensure overlay folder exists
+            if overlay == proj {
+                // fallback: leave overlay as proj; windows will still use compose_project to exec
+            }
+            entries = append(entries, entry{ComposeProject: proj, Overlay: overlay, Count: c})
+            fmt.Fprintf(&b, "  - project: %s\n    service: %s\n    count: %d\n    profiles: dns\n    compose_project: %s\n", overlay, service, c, proj)
+        }
+        fmt.Fprintf(&b, "\nwindows:\n")
+        for _, e := range entries {
+            for i := 1; i <= e.Count; i++ {
+                name := e.Overlay
+                if name == "" { name = e.ComposeProject }
+                fmt.Fprintf(&b, "  - index: %d\n    project: %s\n    service: %s\n    path: /workspace\n    name: %s-%d\n", i, e.Overlay, service, name, i)
+            }
+        }
+        yml := b.String()
+        if strings.TrimSpace(output) == "" {
+            fmt.Fprint(os.Stdout, yml)
+        } else {
+            if err := os.WriteFile(output, []byte(yml), 0644); err != nil { die(err.Error()) }
+            fmt.Fprintf(os.Stderr, "wrote %s\n", output)
+        }
 	case "exec":
 		mustProject(project)
 		if len(sub) == 0 {

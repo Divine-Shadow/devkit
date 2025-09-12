@@ -57,6 +57,7 @@ Tmux ergonomics (new):
 Declarative orchestration (new):
 - Bring up overlays and then attach tmux from a single YAML:
   - `devkit/kit/scripts/devkit layout-apply --file orchestration.yaml`
+  - Generate a YAML from running containers: `devkit/kit/scripts/devkit layout-generate --service dev-agent --output orchestration.yaml`
   - orchestration.yaml example:
     session: devkit:mixed
     overlays:
