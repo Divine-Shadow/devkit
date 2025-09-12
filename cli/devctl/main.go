@@ -1,24 +1,25 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
+    "context"
+    "fmt"
+    "io/fs"
+    "os"
+    "path/filepath"
+    "sort"
+    "strconv"
+    "strings"
+    "time"
 
-	"devkit/cli/devctl/internal/compose"
-	"devkit/cli/devctl/internal/config"
-	"devkit/cli/devctl/internal/execx"
-	fz "devkit/cli/devctl/internal/files"
-	gitutil "devkit/cli/devctl/internal/gitutil"
-	allow "devkit/cli/devctl/internal/netallow"
-	"devkit/cli/devctl/internal/netutil"
-	pth "devkit/cli/devctl/internal/paths"
+    "devkit/cli/devctl/internal/compose"
+    "devkit/cli/devctl/internal/config"
+    "devkit/cli/devctl/internal/execx"
+    "devkit/cli/devctl/internal/layout"
+    fz "devkit/cli/devctl/internal/files"
+    gitutil "devkit/cli/devctl/internal/gitutil"
+    allow "devkit/cli/devctl/internal/netallow"
+    "devkit/cli/devctl/internal/netutil"
+    pth "devkit/cli/devctl/internal/paths"
 	seed "devkit/cli/devctl/internal/seed"
 	sshw "devkit/cli/devctl/internal/ssh"
 	sshcfg "devkit/cli/devctl/internal/sshcfg"
@@ -112,6 +113,7 @@ Commands:
   exec-cd <index> <subpath> [cmd...], attach-cd <index> <subpath>
   tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH] [--service NAME]
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
+  tmux-apply-layout --file <layout.yaml> [--session NAME]
   ssh-setup [--key path] [--index N], ssh-test [N]
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
@@ -395,6 +397,73 @@ func main() {
         }
         // ensure session exists; if not, create it with this window
         ensureTmuxSessionWithWindow(dryRun, paths, project, files, sessName, idx, subpath, winName, service)
+    case "tmux-apply-layout":
+        mustProject(project)
+        // Apply a YAML layout file describing multiple windows; allows per-window service and optional project override.
+        // Usage: tmux-apply-layout --file <path> [--session NAME]
+        layoutPath := ""
+        sessName := ""
+        for i := 0; i < len(sub); i++ {
+            switch sub[i] {
+            case "--file":
+                if i+1 < len(sub) { layoutPath = sub[i+1]; i++ }
+            case "--session":
+                if i+1 < len(sub) { sessName = sub[i+1]; i++ }
+            }
+        }
+        if strings.TrimSpace(layoutPath) == "" {
+            die("Usage: tmux-apply-layout --file <layout.yaml> [--session NAME]")
+        }
+        lf, err := layout.Read(layoutPath)
+        if err != nil { die(err.Error()) }
+        if sessName == "" {
+            if strings.TrimSpace(lf.Session) != "" { sessName = lf.Session } else { sessName = defaultSessionName(project) }
+        }
+        // Ensure session and apply windows
+        // If session missing, first window creates session then the rest are added.
+        sessExists := hasTmuxSession(sessName)
+        if !sessExists && len(lf.Windows) > 0 {
+            w := lf.Windows[0]
+            idx := fmt.Sprintf("%d", w.Index)
+            winProj := project
+            if strings.TrimSpace(w.Project) != "" { winProj = w.Project }
+            fargs, err := compose.Files(paths, winProj, profile)
+            if err != nil { die(err.Error()) }
+            dest := layout.CleanPath(winProj, w.Path)
+            svc := w.Service
+            if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
+            name := w.Name
+            if strings.TrimSpace(name) == "" { name = "agent-" + idx }
+            cmdStr := buildWindowCmd(fargs, winProj, idx, dest, svc)
+            runHost(dryRun, "tmux", tmuxutil.NewSession(sessName, cmdStr)...)
+            runHost(dryRun, "tmux", tmuxutil.RenameWindow(sessName+":0", name)...)
+            sessExists = true
+        }
+        // Remaining windows (or all if session already existed)
+        start := 0
+        if hasTmuxSession(sessName) && len(lf.Windows) > 0 && strings.TrimSpace(lf.Windows[0].Name) != "" {
+            // Even if session existed, if first window is in layout we still add it;
+            // to avoid duplication we just proceed with all windows (tmux will create new)
+        }
+        if !hasTmuxSession(sessName) {
+            // if still not created (no windows), nothing to apply
+            die("tmux session not created and layout has no windows")
+        }
+        for i := start; i < len(lf.Windows); i++ {
+            w := lf.Windows[i]
+            idx := fmt.Sprintf("%d", w.Index)
+            winProj := project
+            if strings.TrimSpace(w.Project) != "" { winProj = w.Project }
+            fargs, err := compose.Files(paths, winProj, profile)
+            if err != nil { die(err.Error()) }
+            dest := layout.CleanPath(winProj, w.Path)
+            svc := w.Service
+            if strings.TrimSpace(svc) == "" { svc = "dev-agent" }
+            name := w.Name
+            if strings.TrimSpace(name) == "" { name = "agent-" + idx }
+            cmdStr := buildWindowCmd(fargs, winProj, idx, dest, svc)
+            runHost(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
+        }
 	case "exec":
 		mustProject(project)
 		if len(sub) == 0 {

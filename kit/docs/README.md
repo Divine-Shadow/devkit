@@ -21,6 +21,18 @@ Dev Kit — Base Kit Details
     - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
     - Sync tmux windows to agent count: `scripts/devctl -p dev-all tmux-sync --count 3` (optionally `--service dev-agent`)
     - Add a mixed window to same tmux: `scripts/devctl -p dev-all tmux-add-cd 2 dumb-onion-hax --session devkit:mixed --name doh-2` (optionally `--service dev-agent`)
+    - Apply a YAML layout: `scripts/devctl -p dev-all tmux-apply-layout --file tmux.yaml [--session NAME]`
+      - Layout example:
+        session: devkit:mixed
+        windows:
+          - index: 1
+            path: ouroboros-ide
+            name: ouro-1
+            service: dev-agent
+          - index: 2
+            path: dumb-onion-hax
+            name: doh-2
+            service: dev-agent
   - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
   - Worktrees + SSH workflow: see `worktrees_ssh.md` for end‑to‑end flows (`bootstrap`, `worktrees-*`, `open`).
 
