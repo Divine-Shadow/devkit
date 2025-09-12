@@ -39,6 +39,7 @@ Tmux ergonomics (new):
 - Add a single window at a path: `devkit/kit/scripts/devkit tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]`.
   - Example (dev-all): `devkit/kit/scripts/devkit -p dev-all tmux-add-cd 2 dumb-onion-hax --name doh-2`.
   - Use the same `--session` across overlays to mix images in one tmux.
+- Target a different service (non-default): append `--service <name>` to `tmux-sync`, `tmux-add-cd`, or `scale --tmux-sync`.
 
 SSH (GitHub) quickstart:
 - One-time per agent: `scripts/devkit ssh-setup --index 1` then `scripts/devkit ssh-test 1`

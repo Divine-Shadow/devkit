@@ -31,23 +31,27 @@ import (
 	pooldisc "devkit/cli/devctl/internal/pool"
 )
 
-// listAgentNames returns running dev-agent container names (sorted) for the given compose files.
-func listAgentNames(files []string) []string {
-	ctx, cancel := execx.WithTimeout(30 * time.Second)
-	defer cancel()
-	args := append([]string{"compose"}, append(files, []string{"ps", "--format", "{{.Name}}", "dev-agent"}...)...)
-	out, _ := execx.Capture(ctx, "docker", args...)
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	names := make([]string, 0, len(lines))
-	for _, s := range lines {
-		s = strings.TrimSpace(s)
-		if s != "" {
-			names = append(names, s)
-		}
-	}
-	sort.Strings(names)
-	return names
+// listServiceNames returns running container names for a service (sorted) for the given compose files.
+func listServiceNames(files []string, service string) []string {
+    ctx, cancel := execx.WithTimeout(30 * time.Second)
+    defer cancel()
+    if strings.TrimSpace(service) == "" { service = "dev-agent" }
+    args := append([]string{"compose"}, append(files, []string{"ps", "--format", "{{.Name}}", service}...)...)
+    out, _ := execx.Capture(ctx, "docker", args...)
+    lines := strings.Split(strings.TrimSpace(out), "\n")
+    names := make([]string, 0, len(lines))
+    for _, s := range lines {
+        s = strings.TrimSpace(s)
+        if s != "" {
+            names = append(names, s)
+        }
+    }
+    sort.Strings(names)
+    return names
 }
+
+// listAgentNames returns running dev-agent container names (sorted) for the given compose files.
+func listAgentNames(files []string) []string { return listServiceNames(files, "dev-agent") }
 
 func pickByIndex(names []string, idx string) string {
 	if len(names) == 0 {
@@ -100,14 +104,14 @@ Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
   up, down, restart, status, logs
-  scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH]],
+  scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]],
   exec <n> <cmd...>, attach <n>
   allow <domain>, warm, maintain, check-net
   proxy {tinyproxy|envoy}
   tmux-shells [N], open [N], fresh-open [N]
   exec-cd <index> <subpath> [cmd...], attach-cd <index> <subpath>
-  tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH]
-  tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]
+  tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH] [--service NAME]
+  tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   ssh-setup [--key path] [--index N], ssh-test [N]
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
@@ -318,10 +322,11 @@ func main() {
         sessName := ""
         namePrefix := "agent-"
         cdPath := ""
-        // parse: scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH]]
+        // parse: scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]]
         if len(sub) > 0 {
             n = sub[0]
         }
+        service := "dev-agent"
         for i := 1; i < len(sub); i++ {
             switch sub[i] {
             case "--tmux-sync":
@@ -332,12 +337,14 @@ func main() {
                 if i+1 < len(sub) { namePrefix = sub[i+1]; i++ }
             case "--cd":
                 if i+1 < len(sub) { cdPath = sub[i+1]; i++ }
+            case "--service":
+                if i+1 < len(sub) { service = sub[i+1]; i++ }
             }
         }
-        runCompose(dryRun, files, "up", "-d", "--scale", "dev-agent="+n)
+        runCompose(dryRun, files, "up", "-d", "--scale", service+"="+n)
         if doTmuxSync && !skipTmux() {
             // Best effort: if tmux present, sync windows up to N
-            doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, mustAtoi(n))
+            doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, mustAtoi(n), service)
         }
     case "tmux-sync":
         mustProject(project)
@@ -345,6 +352,7 @@ func main() {
         count := 0
         namePrefix := "agent-"
         cdPath := ""
+        service := "dev-agent"
         for i := 0; i < len(sub); i++ {
             switch sub[i] {
             case "--session":
@@ -355,34 +363,38 @@ func main() {
                 if i+1 < len(sub) { namePrefix = sub[i+1]; i++ }
             case "--cd":
                 if i+1 < len(sub) { cdPath = sub[i+1]; i++ }
+            case "--service":
+                if i+1 < len(sub) { service = sub[i+1]; i++ }
             }
         }
         if count <= 0 {
             // default to number of running agents
-            count = len(listAgentNames(files))
+            count = len(listServiceNames(files, service))
             if count == 0 {
                 die("no dev-agent containers running; use up/scale first or provide --count")
             }
         }
-        doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, count)
+        doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, count, service)
     case "tmux-add-cd":
         mustProject(project)
         if len(sub) < 2 {
-            die("Usage: tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]")
+            die("Usage: tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]")
         }
         idx := sub[0]
         subpath := sub[1]
         sessName := ""
         winName := ""
+        service := "dev-agent"
         for i := 2; i < len(sub); i++ {
             if sub[i] == "--session" && i+1 < len(sub) { sessName = sub[i+1]; i++ } else
-            if sub[i] == "--name" && i+1 < len(sub) { winName = sub[i+1]; i++ }
+            if sub[i] == "--name" && i+1 < len(sub) { winName = sub[i+1]; i++ } else
+            if sub[i] == "--service" && i+1 < len(sub) { service = sub[i+1]; i++ }
         }
         if sessName == "" {
             sessName = defaultSessionName(project)
         }
         // ensure session exists; if not, create it with this window
-        ensureTmuxSessionWithWindow(dryRun, paths, project, files, sessName, idx, subpath, winName)
+        ensureTmuxSessionWithWindow(dryRun, paths, project, files, sessName, idx, subpath, winName, service)
 	case "exec":
 		mustProject(project)
 		if len(sub) == 0 {
@@ -1539,7 +1551,7 @@ func listTmuxWindows(session string) map[string]struct{} {
 }
 
 // buildWindowCmd composes the docker compose exec bash -lc command string for a given agent index and dest path.
-func buildWindowCmd(fileArgs []string, project, idx, dest string) string {
+func buildWindowCmd(fileArgs []string, project, idx, dest, service string) string {
     envs := pth.AgentEnv(project, idx, "")
     home := envs["HOME"]
     // Build export sequence
@@ -1552,11 +1564,12 @@ func buildWindowCmd(fileArgs []string, project, idx, dest string) string {
     // cd + exec bash
     fmt.Fprintf(&b, "cd %q 2>/dev/null || true; exec bash", dest)
     shell := b.String()
-    return "docker compose " + strings.Join(fileArgs, " ") + " exec --index " + idx + " dev-agent bash -lc '" + shell + "'"
+    if strings.TrimSpace(service) == "" { service = "dev-agent" }
+    return "docker compose " + strings.Join(fileArgs, " ") + " exec --index " + idx + " " + service + " bash -lc '" + shell + "'"
 }
 
 // ensureTmuxSessionWithWindow ensures a session exists and adds a window for the given agent index and subpath.
-func ensureTmuxSessionWithWindow(dry bool, paths compose.Paths, project string, fileArgs []string, session, idx, subpath, winName string) {
+func ensureTmuxSessionWithWindow(dry bool, paths compose.Paths, project string, fileArgs []string, session, idx, subpath, winName, service string) {
     if session == "" { session = defaultSessionName(project) }
     // compute dest path (relative paths under /workspaces/dev)
     dest := subpath
@@ -1564,7 +1577,7 @@ func ensureTmuxSessionWithWindow(dry bool, paths compose.Paths, project string, 
         dest = filepath.Join("/workspaces/dev", subpath)
     }
     if winName == "" { winName = "agent-" + idx }
-    cmdStr := buildWindowCmd(fileArgs, project, idx, dest)
+    cmdStr := buildWindowCmd(fileArgs, project, idx, dest, service)
     if !hasTmuxSession(session) {
         // create new session with this window
         runHost(dry, "tmux", tmuxutil.NewSession(session, cmdStr)...)
@@ -1578,7 +1591,7 @@ func ensureTmuxSessionWithWindow(dry bool, paths compose.Paths, project string, 
 }
 
 // doSyncTmux ensures windows agent-1..count exist in the target session.
-func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string, session, namePrefix, cdPath string, count int) {
+func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string, session, namePrefix, cdPath string, count int, service string) {
     if session == "" { session = defaultSessionName(project) }
     // Determine default cd path per overlay if not provided
     // For dev-all, base dir per agent; for codex, /workspace
@@ -1596,7 +1609,7 @@ func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string
         if strings.TrimSpace(dest) == "" {
             dest = pth.AgentRepoPath(project, idx, "")
         }
-        cmdStr := buildWindowCmd(fileArgs, project, idx, dest)
+        cmdStr := buildWindowCmd(fileArgs, project, idx, dest, service)
         runHost(dry, "tmux", tmuxutil.NewSession(session, cmdStr)...)
         runHost(dry, "tmux", tmuxutil.RenameWindow(session+":0", namePrefix+idx)...)
         present[namePrefix+idx] = struct{}{}
@@ -1612,7 +1625,7 @@ func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string
         if strings.TrimSpace(dest) == "" {
             dest = pth.AgentRepoPath(project, idx, "")
         }
-        cmdStr := buildWindowCmd(fileArgs, project, idx, dest)
+        cmdStr := buildWindowCmd(fileArgs, project, idx, dest, service)
         runHost(dry, "tmux", tmuxutil.NewWindow(session, wname, cmdStr)...)
     }
 }
