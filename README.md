@@ -76,6 +76,17 @@ Declarative orchestration (new):
         count: 2
         profiles: dns
         compose_project: devkit-emerald
+      - project: dev-all
+        service: dev-agent
+        count: 3
+        profiles: dns
+        compose_project: devkit-devall
+        # Optional: prepare host git worktrees before windows (dev-all only)
+        worktrees:
+          repo: dumb-onion-hax
+          count: 3              # defaults to overlays.count when omitted
+          base_branch: main     # optional; falls back to overlays/dev-all/devkit.yaml
+          branch_prefix: agent  # optional; falls back to overlays/dev-all/devkit.yaml
     windows:
       - index: 1
         project: codex
@@ -107,6 +118,17 @@ Declarative orchestration (new):
         service: dev-agent
         path: /workspace
         name: doh-1
+      # Example: windows targeting dev-all agents after worktrees
+      - index: 1
+        project: dev-all
+        service: dev-agent
+        path: dumb-onion-hax
+        name: doh-wt-1
+      - index: 2
+        project: dev-all
+        service: dev-agent
+        path: agent2/dumb-onion-hax
+        name: doh-wt-2
       - index: 1
         project: pokeemerald
         service: dev-agent
@@ -125,6 +147,7 @@ SSH (GitHub) quickstart:
 Layout:
 - `kit/`: base Compose, proxy, DNS, scripts, and docs.
 - `overlays/<project>/`: per‑project overrides (`compose.override.yml`, `devkit.yaml`).
+  - Optional: `service: <name>` sets the default service for CLI exec/attach/ssh/repo commands (defaults to `dev-agent`).
 
 Key design:
 - Dual networks: `dev-internal` (internal: true) for agents; `dev-egress` for internet‑facing proxy.

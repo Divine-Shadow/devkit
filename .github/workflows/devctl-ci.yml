@@ -3,18 +3,18 @@ name: Devkit CLI
 on:
   push:
     paths:
-      - 'cli/devctl/**'
-      - '.github/workflows/devctl-ci.yml'
+      - 'devkit/cli/devctl/**'
+      - 'devkit/.github/workflows/devctl-ci.yml'
   pull_request:
     paths:
-      - 'cli/devctl/**'
+      - 'devkit/cli/devctl/**'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: cli/devctl
+        working-directory: devkit/cli/devctl
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,7 +25,9 @@ jobs:
           go-version: '1.21'
       - name: Build
         run: make build
-      - name: Test
+      - name: Unit tests
+        run: go test ./internal/... ./integration -tags=integration -run TestLayoutApply_Worktrees_DryRun -v
+      - name: All tests
         run: make test
 
   integration:
@@ -37,7 +39,7 @@ jobs:
       DEVKIT_NO_TMUX: '1'
     defaults:
       run:
-        working-directory: cli/devctl
+        working-directory: devkit/cli/devctl
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,5 +50,5 @@ jobs:
           go-version: '1.21'
       - name: Build
         run: make build
-      - name: Run integration test
-        run: go test -tags=integration -run FreshOpen_Integration -v
+      - name: Run integration tests
+        run: go test -tags=integration ./integration -v

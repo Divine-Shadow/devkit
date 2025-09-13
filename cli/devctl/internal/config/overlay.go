@@ -28,6 +28,8 @@ type Defaults struct {
 type OverlayConfig struct {
 	Hooks    Hooks    `yaml:"hooks"`
 	Defaults Defaults `yaml:"defaults"`
+	// Default service name for this overlay (e.g., dev-agent, frontend)
+	Service  string   `yaml:"service"`
 }
 
 // ReadHooks parses overlays/<project>/devkit.yaml and returns warm/maintain hooks.

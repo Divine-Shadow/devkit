@@ -31,7 +31,7 @@ Phase 1 (MVP — lowest risk, highest value):
 - Implement `allow` with safe, idempotent appends (atomic file writes) for proxy and DNS allowlists.
 - Implement `warm|maintain` by reading `overlays/<project>/devkit.yaml` via a YAML parser and executing the resulting hook in the agent container.
 - Add `check-net` basic connectivity check.
-- Preserve `scripts/devkit` wrapper to exec the new binary, falling back to the Bash script if the binary is absent.
+- Preserve `scripts/devkit` wrapper to exec the new binary only. No fallback. If the binary is missing, the wrapper must fail loudly with build instructions.
 
 Phase 2:
 - Port `check-codex`, `check-claude`, `check-sts` with structured output and timeouts.
@@ -72,14 +72,14 @@ devkit/
     bin/
       devctl                 # built binary (ignored by git)
     scripts/
-      devctl                 # legacy bash kept as fallback during migration
+      devctl                 # legacy bash may exist for reference; wrappers must not call it
       net-firewall.sh        # unchanged
 ```
 
 Notes:
 - Place source in `devkit/cli/devctl` to separate code from `kit/` artifacts.
 - Ship a simple `Makefile` target: `make -C devkit/cli/devctl build` that outputs to `devkit/kit/bin/devctl`.
-- Wrapper (`scripts/devkit` and `ouroboros-ide/scripts/devkit`) continues to exec `kit/bin/devctl` if present, otherwise falls back to `kit/scripts/devctl` Bash.
+- Wrappers (`scripts/devkit` and `ouroboros-ide/scripts/devkit`) exec `kit/bin/devctl` only; on missing binary, print a clear error and exit non‑zero.
 
 ## CLI Compatibility
 
@@ -128,7 +128,7 @@ Static checks:
 
 ## Migration Plan and Rollout
 
-1) Add Go scaffold and Makefile; wire the wrappers to prefer binary if present.
+1) Add Go scaffold and Makefile; wire the wrappers to exec the binary only (no fallback).
 2) Implement MVP commands; add unit tests; document usage.
 3) Dogfood internally; collect feedback; fix incompatibilities.
 4) Port remaining commands (checks, tmux, ssh/git/worktrees).
@@ -146,4 +146,3 @@ Static checks:
 - Add Makefile to build into `devkit/kit/bin/devctl` and `.gitignore` entry for that path.
 - Implement MVP subcommands and tests.
 - Update docs to reference the new CLI and migration status.
-

@@ -54,6 +54,13 @@ Dev Kit — Base Kit Details
   - `DEVKIT_INTERNAL_SUBNET`: internal network CIDR (default `172.30.10.0/24`).
   - `DEVKIT_DNS_IP`: DNS service IP on internal network (default `172.30.10.3`).
     - If you see "Address already in use" on up, pick a different subnet/IP here.
+  - Git identity (required; no fallback): set at least one of these or have a host‑level git config.
+    - `DEVKIT_GIT_USER_NAME` and `DEVKIT_GIT_USER_EMAIL` (preferred)
+    - Or host `git config --global user.name` and `user.email` must be set
+    - The CLI will fail fast if both name/email cannot be determined.
+
+Further reading
+- Mixed overlays + frontend notes: overlay-front-end-notes.md
   - Credential pool (opt‑in; defaults off):
     - `DEVKIT_CODEX_CRED_MODE=host|pool` (default `host`)
     - `DEVKIT_CODEX_POOL_DIR=/abs/path/to/pool` (host path; required when `pool`)

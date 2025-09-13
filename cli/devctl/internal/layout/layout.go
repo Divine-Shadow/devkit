@@ -29,6 +29,25 @@ type Overlay struct {
     Profiles       string `yaml:"profiles"`
     Build          bool   `yaml:"build"`
     ComposeProject string `yaml:"compose_project"`
+    // Optional: when targeting the dev-all overlay, request host-side git worktrees
+    // to be prepared before tmux windows are attached. This only applies to
+    // overlays where Project == "dev-all".
+    Worktrees      *Worktrees `yaml:"worktrees"`
+}
+
+// Worktrees declares host-side git worktree setup for dev-all.
+// If provided under an overlay where project == "dev-all", the CLI will
+// create N worktrees for the given repo using the specified base branch and
+// branch prefix before applying tmux windows.
+type Worktrees struct {
+    // Primary repo folder name under the dev root (e.g., "ouroboros-ide" or "dumb-onion-hax").
+    Repo         string `yaml:"repo"`
+    // Number of agents/worktrees to prepare. If 0, falls back to Overlay.Count.
+    Count        int    `yaml:"count"`
+    // Base branch to track from origin (e.g., "main"). Optional.
+    BaseBranch   string `yaml:"base_branch"`
+    // Prefix for per-agent branch names (e.g., "agent" -> agent1, agent2, ...). Optional.
+    BranchPrefix string `yaml:"branch_prefix"`
 }
 
 func Read(p string) (File, error) {
