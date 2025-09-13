@@ -156,6 +156,13 @@ Key design:
 
 See `kit/docs/README.md` for more details.
 
+New overlay guide:
+- Step-by-step: `kit/docs/new-overlay-guide.md` (service selection, compose paths, networking, SSH/Git gotchas, and tmux tips.)
+
+Retrospectives and contributor guidance:
+- Reliability retrospective: `kit/docs/retrospective-ssh-git-anchor.md`
+- Contrib guideline (quoting + file writes): `kit/docs/contrib-quoting-and-file-writes.md`
+
 
 Retrospective: Journey & Lessons
 - Summary of the migration, networking fixes, Codex seeding/env work, tests, and next steps.

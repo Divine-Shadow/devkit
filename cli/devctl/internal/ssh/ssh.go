@@ -31,10 +31,12 @@ func BuildWriteSteps(home string, key, pub, known []byte, cfg string) []WriteSte
 // Includes: wait for ~/.ssh/config to be non-empty, set global core.sshCommand,
 // set repo-level core.sshCommand, and git pull --ff-only using the config.
 func BuildConfigureScripts(home string, repoPath string) []string {
-	return []string{
-		"home=\"" + home + "\"; for i in $(seq 1 20); do [ -s \"$home/.ssh/config\" ] && break || sleep 0.25; done",
-		"home=\"" + home + "\"; export HOME=\"$home\"; git config --global core.sshCommand \"ssh -F \\\"$home/.ssh/config\\\"\"",
-		"home=\"" + home + "\"; cd '" + repoPath + "' && git config core.sshCommand \"ssh -F \\\"$home/.ssh/config\\\"\"",
-		"home=\"" + home + "\"; set -e; cd '" + repoPath + "'; GIT_SSH_COMMAND=\"ssh -F \\\"$home/.ssh/config\\\"\" git pull --ff-only || true",
-	}
+    // Use tilde-based ssh config anchored at the provided home, set global core.sshCommand,
+    // scrub any repo-local override, then validate pull via explicit GIT_SSH_COMMAND.
+    return []string{
+        "home=\"" + home + "\"; for i in $(seq 1 20); do [ -s \"$home/.ssh/config\" ] && break || sleep 0.25; done",
+        "home=\"" + home + "\"; HOME=\"$home\" git config --global core.sshCommand \"ssh -F ~/.ssh/config\"",
+        "cd '" + repoPath + "' && git config --unset core.sshCommand || true",
+        "home=\"" + home + "\"; set -e; cd '" + repoPath + "'; HOME=\"$home\" GIT_SSH_COMMAND=\"ssh -F ~/.ssh/config\" git pull --ff-only || true",
+    }
 }

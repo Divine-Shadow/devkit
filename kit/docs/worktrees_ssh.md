@@ -19,7 +19,7 @@ This guide shows how to run multiple isolated dev agents using Git worktrees and
 
 ## SSH (GitHub) notes
 - `ssh-setup` copies your host key and writes a proxy‑aware SSH config (port 443 via tinyproxy).
-- It also runs `git config --global core.sshCommand 'ssh -F /workspace/.devhome/.ssh/config'` so Git uses the config automatically.
+- It ensures an index‑free HOME anchor `/workspace/.devhome` and runs `git config --global core.sshCommand 'ssh -F ~/.ssh/config'` so Git uses the proxy‑aware SSH config automatically.
 - Test: `scripts/devkit ssh-test <index>`
 
 ## Common workflows
@@ -36,11 +36,10 @@ This guide shows how to run multiple isolated dev agents using Git worktrees and
 ## Alternative: codex overlay (shared mount)
 - For quick starts without worktrees:
   - `scripts/devkit open 2`
-  - Opens `tmux` with 2 windows and sets per‑agent HOME under `/workspace/.devhome-agentN`.
+  - Opens `tmux` with 2 windows and sets per‑container HOME via the index‑free anchor `/workspace/.devhome`.
   - Use this when shared working copy is acceptable (Codex/SSH still isolated).
 
 ## Caveats
 - Avoid running global Git maintenance (e.g., `git gc`) across worktrees concurrently.
 - sbt targets (`target/`) are shared per repo path; parallel builds can contend unless using isolated output dirs.
 - Ensure `ssh.github.com` remains in the allowlist; `ssh-setup` manages this idempotently.
-

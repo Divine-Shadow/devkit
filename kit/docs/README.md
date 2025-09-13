@@ -144,7 +144,7 @@ This verifies hardened profiles and core tools are callable inside the agent.
   - Adds `ssh.github.com` to proxy/DNS allowlists (SSH over port 443).
   - Copies your host SSH key and known_hosts into `/workspace/.devhome/.ssh`.
   - Writes SSH config to tunnel via the proxy: `ProxyCommand nc -X connect -x tinyproxy:8888 %h %p`.
-  - Sets `git config --global core.sshCommand 'ssh -F /workspace/.devhome/.ssh/config'`.
+  - Ensures index‑free HOME anchor `/workspace/.devhome` and sets `git config --global core.sshCommand 'ssh -F ~/.ssh/config'`.
 - Test: `scripts/devkit ssh-test N` (expects the GitHub banner).
 - Flip remote + push: `scripts/devkit repo-push-ssh <repo-path> [--index N]`.
   - For the codex overlay (single repo at `/workspace`), use `.` as `<repo-path>`.

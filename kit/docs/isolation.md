@@ -48,21 +48,21 @@ Two options (not mutually exclusive):
 
 ## Codex & SSH State
 
-- Codex: use wrapper/alias to set `HOME=/workspace/.devhome-agentN` (or `/workspaces/dev/.../.devhome-agentN`).
-- SSH: run `scripts/devkit ssh-setup --index N` once per agent window. For per‑agent HOME, point SSH config and keys to the agent‑specific `.devhome-agentN` directory:
+- Codex: use index‑free HOME anchor: `/workspace/.devhome` (symlink to `.devhomes/<container-id>`). The CLI ensures this on exec/attach.
+- SSH: run `scripts/devkit ssh-setup --index N` once per agent window. The CLI writes SSH config using `~/.ssh/...` and sets global `git config core.sshCommand` so it never depends on an index.
 
 ```
 Host github.com
   HostName ssh.github.com
   Port 443
   ProxyCommand nc -X connect -x tinyproxy:8888 %h %p
-  IdentityFile /path/to/.devhome-agentN/.ssh/id_ed25519
+  IdentityFile ~/.ssh/id_ed25519
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 ```
 
-- Git: configure per‑agent Git to always use the SSH config:
-  - `git config --global core.sshCommand 'ssh -F /path/to/.devhome-agentN/.ssh/config'`
+- Git: configure per‑container global SSH usage (index‑free):
+  - `git config --global core.sshCommand 'ssh -F ~/.ssh/config'`
 
 ## tmux Integration
 
@@ -96,4 +96,3 @@ Host github.com
 - Codex sessions and SSH config are isolated per agent.
 - Disk usage remains within reasonable limits (worktree delta only).
 - Basic ops (ssh-setup, repo-push-ssh) work unchanged within each agent.
-
