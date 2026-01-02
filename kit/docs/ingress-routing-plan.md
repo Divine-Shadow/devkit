@@ -31,7 +31,7 @@ ingress:
   routes:
     - host: ouroboros.test
       service: frontend
-      port: 4173
+      port: 5173
 ```
 
 Rules:
@@ -61,7 +61,7 @@ To keep the implementation predictable we’ll layer the ingress support on top 
        routes:
          - host: ouroboros.test
            service: frontend
-           port: 4173
+           port: 5173
        certs:
          - path: infra/ouroboros.test.pem
          - path: infra/ouroboros.test-key.pem

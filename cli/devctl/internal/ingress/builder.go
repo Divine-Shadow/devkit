@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultIngressImage = "caddy:2.7.6-alpine"
-	defaultPortMapping  = "${DEVKIT_INGRESS_PORT:-8443}:443"
+	defaultPortMapping  = "${DEVKIT_INGRESS_PORT:-443}:443"
 )
 
 // Fragment represents a generated docker compose fragment that wires an ingress service.

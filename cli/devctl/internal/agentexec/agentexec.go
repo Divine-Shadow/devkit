@@ -117,7 +117,7 @@ func BuildCommand(opts CommandOpts) (string, error) {
 		filepath.Join(anchor, ".sbt"),
 	)
 	fmt.Fprintf(&b, "git config --global user.name %s && git config --global user.email %s; ", shSingleQuote(gitName), shSingleQuote(gitEmail))
-	fmt.Fprintf(&b, "cd %q 2>/dev/null || true; exec bash", opts.Dest)
+	fmt.Fprintf(&b, "cd %q 2>/dev/null || true; if [ -d node_modules/.bin ]; then export PATH=\"$(pwd)/node_modules/.bin:$PATH\"; fi; exec bash", opts.Dest)
 	shell := b.String()
 
 	script := shSingleQuote(shell)

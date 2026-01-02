@@ -1,57 +1,32 @@
-
-
 services:
   dev-agent:
-    build:
-      context: ../../ouroboros-ide
-      dockerfile: docker/dev/codex-agent.Dockerfile
-      args:
-        INSTALL_CODEX: "${INSTALL_CODEX:-true}"
-        INSTALL_CLAUDE: "${INSTALL_CLAUDE:-true}"
-        JDK_VERSION: "${JDK_VERSION:-17}"
-        CODEX_VERSION: "${CODEX_VERSION:-rust-v0.74.0}"
-        CODEX_ASSET: "${CODEX_ASSET:-codex-x86_64-unknown-linux-musl.tar.gz}"
-        CODEX_SHA256: "${CODEX_SHA256:-}"
-        CLAUDE_VERSION: "${CLAUDE_VERSION:-latest}"
-        AWSCLI_URL: "${AWSCLI_URL:-https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip}"
-        AWSCLI_SHA256: "${AWSCLI_SHA256:-}"
     image: local/dev-agent:codex
+    build:
+      # Path is relative to devkit/kit/compose.yml.
+      context: ../../ouroboros-ide
+      dockerfile: infra/docker/dev/codex-agent.Dockerfile
+      args:
+        JDK_VERSION: ${DEVKIT_JDK_VERSION:-17}
     environment:
-      - AWS_SHARED_CREDENTIALS_FILE=/workspace/.aws/credentials
-      - AWS_CONFIG_FILE=/workspace/.aws/config
-      - AWS_PROFILE=${AWS_PROFILE:-codex}
+      - VITE_STUB_CLIENTS=${VITE_STUB_CLIENTS:-0}
+      - RUN_LOCAL_SKIP_COMPILE=${RUN_LOCAL_SKIP_COMPILE:-0}
+      - RUN_LOCAL_BACKEND_MAIN=${DEVKIT_BACKEND_MAIN:-}
+      - DOCKER_HOST=${DEVKIT_DOCKER_HOST:-}
+      - TESTCONTAINERS_RYUK_DISABLED=${DEVKIT_TESTCONTAINERS_RYUK_DISABLED:-true}
+      - LOCAL_AURORA_CREDENTIALS_PATH=${DEVKIT_AURORA_CREDENTIALS_PATH:-local-secrets/aurora.json}
+      - RUN_LOCAL_FORCE_JAR=${DEVKIT_FORCE_RUN_LOCAL_JAR:-}
+      - LOCAL_POSTGRES_HOST=${DEVKIT_POSTGRES_HOST:-devkit-postgres}
+      - LOCAL_POSTGRES_PORT=${DEVKIT_POSTGRES_PORT:-5432}
+      - LOCAL_POSTGRES_USER=${DEVKIT_POSTGRES_USER:-ouroboros}
+      - LOCAL_POSTGRES_PASSWORD=${DEVKIT_POSTGRES_PASSWORD:-ouroboros}
+      - LOCAL_POSTGRES_DB=${DEVKIT_POSTGRES_DB:-ouroboros}
       - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=tinyproxy -Dhttp.proxyPort=8888 -Dhttps.proxyHost=tinyproxy -Dhttps.proxyPort=8888 -Djava.net.useSystemProxies=true
-      - SBT_GLOBAL_BASE=/workspace/.devhome/.sbt
-      - DOCKER_HOST=unix:///broker-run/postgres-broker.sock
-      - TESTCONTAINERS_RYUK_DISABLED=true
     volumes:
-      - ${WORKSPACE_DIR:-.}:/workspace:rw
-      - ${DEVKIT_WORKTREE_ROOT}:${DEVKIT_WORKTREE_CONTAINER_ROOT:-/worktrees}:rw
-      - codex-testdata:/workspace/.testdata:rw
-      - ivy2-cache:/home/dev/.ivy2
-      - coursier-cache:/home/dev/.cache/coursier
-      - devkit-auth:/home/dev/.codex
-      # Optional: mount host Codex config dir for seeding auth.json
-      - ${HOST_CODEX_DIR:-${HOME}/.codex}:/var/host-codex:ro
-      - ${HOST_CODEX_FILE:-${HOME}/.codex/auth.json}:/var/auth.json:ro
-      - tmpfs:/tmp
       - broker-run:/broker-run
-    depends_on:
-      postgres-broker:
-        condition: service_started
-      codex-testdata-init:
-        condition: service_completed_successfully
-
-  codex-testdata-init:
-    image: busybox:1.36.1
-    command: ["sh", "-c", "chown -R 1000:1000 /data && chmod 755 /data"]
-    user: "0:0"
-    volumes:
-      - codex-testdata:/data
-    networks:
-      - dev-internal
 
   postgres-broker:
+    profiles:
+      - postgres-broker
     build:
       context: ../brokers/postgres-broker
       dockerfile: Dockerfile
@@ -79,6 +54,18 @@ services:
     networks:
       - dev-internal
 
+  postgres:
+    image: postgres:latest
+    environment:
+      - POSTGRES_USER=${DEVKIT_POSTGRES_USER:-ouroboros}
+      - POSTGRES_PASSWORD=${DEVKIT_POSTGRES_PASSWORD:-ouroboros}
+      - POSTGRES_DB=${DEVKIT_POSTGRES_DB:-ouroboros}
+    ports:
+      - ${DEVKIT_POSTGRES_HOST_PORT:-15432}:5432
+    networks:
+      dev-internal:
+        aliases:
+          - devkit-postgres
+
 volumes:
   broker-run:
-  codex-testdata:

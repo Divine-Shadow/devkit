@@ -5,7 +5,10 @@ services:
     dns:
       - ${DEVKIT_DNS_IP:-172.30.10.53}
     depends_on:
-      - dns
+      tinyproxy:
+        condition: service_healthy
+      dns:
+        condition: service_started
 
   dns:
     image: andyshinn/dnsmasq:latest

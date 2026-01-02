@@ -48,7 +48,7 @@ func TestBuildFragmentGeneratesConfigFromRoutes(t *testing.T) {
 	cfg := &config.IngressConfig{
 		Kind: "caddy",
 		Routes: []config.IngressRoute{
-			{Host: "ouroboros.test", Service: "frontend", Port: 4173},
+			{Host: "ouroboros.test", Service: "frontend", Port: 5173},
 		},
 	}
 	frag, err := BuildFragment(project, cfg, "", dir)

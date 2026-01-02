@@ -16,43 +16,16 @@ hooks:
     if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
       ln -sf "$(command -v python3)" /workspace/.local/bin/python
     fi
-    if command -v go >/dev/null 2>&1; then
-      exit 0
+    if command -v npm >/dev/null 2>&1; then
+      for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/*/ouroboros-ide; do
+        if [ -d "$repo" ] && [ -f "$repo/package.json" ]; then
+          (cd "$repo" && npm ci)
+        fi
+        if [ -d "$repo/frontend" ] && [ -f "$repo/frontend/package.json" ]; then
+          (cd "$repo/frontend" && npm ci)
+        fi
+      done
     fi
-    version="${DEVKIT_GO_VERSION:-1.22.4}"
-    arch="$(uname -m)"
-    case "$arch" in
-      x86_64|amd64) arch=amd64 ;;
-      arm64|aarch64) arch=arm64 ;;
-      *)
-        echo "[dev-all warm] unsupported architecture: $arch" >&2
-        exit 0
-        ;;
-    esac
-    root=/workspace/.toolchains
-    dest="$root/go"
-    mkdir -p "$root"
-    tmpdir="$(mktemp -d)"
-    tarball="go${version}.linux-${arch}.tar.gz"
-    url="${DEVKIT_GO_DOWNLOAD_URL:-https://go.dev/dl/${tarball}}"
-    if command -v curl >/dev/null 2>&1; then
-      if ! curl -fsSL "$url" -o "$tmpdir/go.tgz"; then
-        echo "[dev-all warm] failed to download Go from $url" >&2
-        exit 0
-      fi
-    elif command -v wget >/dev/null 2>&1; then
-      if ! wget -q -O "$tmpdir/go.tgz" "$url"; then
-        echo "[dev-all warm] failed to download Go from $url" >&2
-        exit 0
-      fi
-    else
-      echo "[dev-all warm] curl or wget required to bootstrap Go" >&2
-      exit 0
-    fi
-    rm -rf "$dest"
-    mkdir -p "$dest"
-    tar -C "$root" -xzf "$tmpdir/go.tgz"
-    rm -rf "$tmpdir"
   maintain: ""
 
 env_files:

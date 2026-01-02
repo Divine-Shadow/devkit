@@ -13,7 +13,7 @@ ingress:
   routes:
     - host: ouroboros.test
       service: dev-agent
-      port: 4173
+      port: 5173
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: webserver.ouroboros.test
@@ -44,7 +44,6 @@ hooks:
     ln -sfn "${target}/.sbt" /home/dev/.sbt
     export HOME=/workspace/.devhome
     export SBT_GLOBAL_BASE="${HOME}/.sbt"
-    sbt -v update
   maintain: |
     set -euo pipefail
     mkdir -p /workspace/.local/bin
@@ -64,4 +63,3 @@ hooks:
     ln -sfn "${target}/.sbt" /home/dev/.sbt
     export HOME=/workspace/.devhome
     export SBT_GLOBAL_BASE="${HOME}/.sbt"
-    sbt compile

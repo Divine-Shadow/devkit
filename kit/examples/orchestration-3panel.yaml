@@ -1,0 +1,26 @@
+session: devkit_3panel
+
+overlays:
+  - project: dev-all
+    service: dev-agent
+    count: 3
+    worktrees:
+      repo: ouroboros-ide
+      count: 3
+
+windows:
+  - index: 1
+    project: dev-all
+    service: dev-agent
+    path: ouroboros-ide
+    name: agent-1
+  - index: 2
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent2/ouroboros-ide
+    name: agent-2
+  - index: 3
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent3/ouroboros-ide
+    name: agent-3

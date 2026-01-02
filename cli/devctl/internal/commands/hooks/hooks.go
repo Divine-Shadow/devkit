@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"devkit/cli/devctl/internal/agentexec"
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
 	runner "devkit/cli/devctl/internal/runner"
@@ -31,6 +32,9 @@ func handleHook(ctx *cmdregistry.Context, warm bool) error {
 		fmt.Printf("No %s hook defined\n", label)
 		return nil
 	}
-	runner.Compose(ctx.DryRun, ctx.Files, "exec", "dev-agent", "bash", "-lc", script)
+	projectName := agentexec.ComposeProjectName(project)
+	if err := runner.ComposeWithProject(ctx.DryRun, projectName, ctx.Files, "exec", "dev-agent", "bash", "-lc", script); err != nil {
+		return err
+	}
 	return nil
 }

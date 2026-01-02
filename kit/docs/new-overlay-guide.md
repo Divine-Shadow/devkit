@@ -142,7 +142,7 @@ ingress:
   routes:                     # alternatively, generate a config from host→service mappings
     - host: ouroboros.test
       service: frontend
-      port: 4173
+      port: 5173
   certs:
     - path: infra/ouroboros.test.pem
     - path: infra/ouroboros.test-key.pem
@@ -155,6 +155,6 @@ ingress:
 
 Notes:
 - When `config` is omitted, the CLI renders a simple Caddyfile from `routes` and mounts any listed `certs` into `/ingress/certs`. Without at least two cert entries the generated config falls back to `tls internal`.
-- The ingress container publishes `443` to `127.0.0.1:${DEVKIT_INGRESS_PORT:-8443}`; override `DEVKIT_INGRESS_PORT` before `up` if you need a different binding.
+- The ingress container publishes `443` to `127.0.0.1:${DEVKIT_INGRESS_PORT:-443}`; override `DEVKIT_INGRESS_PORT` before `up` if you need a different binding.
 - `hosts` simply documents the entries developers should add to `/etc/hosts`; ingestion logic does not edit host files automatically.
 - See `ingress-routing-plan.md` for the long-form proposal, constraints, and Go implementation plan.
