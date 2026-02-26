@@ -128,6 +128,8 @@ hooks:
   # Warm frontend deps and ensure playwright/typecheck tooling exists.
   warm: |
     set -euo pipefail
+    export PLAYWRIGHT_MCP_OUTPUT_DIR="logs/playwright-cli"
+    export PLAYWRIGHT_MCP_OUTPUT_MODE="file"
     # Keep a compatibility path for workflows that expect agent1 under agent-worktrees.
     mkdir -p /workspaces/dev/agent-worktrees/agent1
     if [ -d /workspaces/dev/ouroboros-ide ] && [ ! -e /workspaces/dev/agent-worktrees/agent1/ouroboros-ide ]; then
@@ -136,6 +138,7 @@ hooks:
     if command -v npm >/dev/null 2>&1; then
       for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
         if [ -f "$repo/frontend/package.json" ]; then
+          mkdir -p "$repo/$PLAYWRIGHT_MCP_OUTPUT_DIR"
           npm --prefix "$repo/frontend" install --include=dev --no-package-lock
           if [ ! -x "$repo/frontend/node_modules/.bin/tsc" ]; then
             npm --prefix "$repo/frontend" install --include=dev --no-save --no-package-lock typescript

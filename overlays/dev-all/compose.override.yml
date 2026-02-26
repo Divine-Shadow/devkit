@@ -13,6 +13,8 @@ services:
       - DOCKER_HOST=unix:///broker-run/postgres-broker.sock
       - TESTCONTAINERS_RYUK_DISABLED=true
       - TESTCONTAINERS_DEVKIT_NETWORK=${TESTCONTAINERS_DEVKIT_NETWORK:-${COMPOSE_PROJECT_NAME:-devkit-devall}_dev-internal}
+      - PLAYWRIGHT_MCP_OUTPUT_DIR=logs/playwright-cli
+      - PLAYWRIGHT_MCP_OUTPUT_MODE=file
     working_dir: /workspaces/dev
     volumes:
       - ../../:/workspaces/dev:rw

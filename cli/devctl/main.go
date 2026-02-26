@@ -3140,6 +3140,7 @@ func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string
 	if session == "" {
 		session = defaultSessionName(project)
 	}
+	repo := readDefaultRepo(project, paths)
 	// Determine default cd path per overlay if not provided
 	// For dev-all, base dir per agent; for codex, /workspace
 	// We'll compute per-index below if cdPath empty
@@ -3155,7 +3156,7 @@ func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string
 		idx := "1"
 		dest := cdPath
 		if strings.TrimSpace(dest) == "" {
-			dest = pth.AgentRepoPath(project, idx, "")
+			dest = pth.AgentRepoPath(project, idx, repo)
 		}
 		cmdStr := mustBuildWindowCmd(fileArgs, project, idx, dest, service, tracker)
 		runner.Host(dry, "tmux", tmuxutil.NewSession(session, cmdStr)...)
@@ -3171,7 +3172,7 @@ func doSyncTmux(dry bool, paths compose.Paths, project string, fileArgs []string
 		}
 		dest := cdPath
 		if strings.TrimSpace(dest) == "" {
-			dest = pth.AgentRepoPath(project, idx, "")
+			dest = pth.AgentRepoPath(project, idx, repo)
 		}
 		cmdStr := mustBuildWindowCmd(fileArgs, project, idx, dest, service, tracker)
 		runner.Host(dry, "tmux", tmuxutil.NewWindow(session, wname, cmdStr)...)

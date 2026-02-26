@@ -3,7 +3,6 @@ package agentexec
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -108,14 +107,8 @@ func BuildCommand(opts CommandOpts) (string, error) {
 		b.WriteString(joined)
 		b.WriteString("; ")
 	}
-	fmt.Fprintf(&b, "export HOME=%q CODEX_HOME=%q CODEX_ROLLOUT_DIR=%q XDG_CACHE_HOME=%q XDG_CONFIG_HOME=%q SBT_GLOBAL_BASE=%q; ",
-		anchor,
-		filepath.Join(anchor, ".codex"),
-		filepath.Join(anchor, ".codex", "rollouts"),
-		filepath.Join(anchor, ".cache"),
-		filepath.Join(anchor, ".config"),
-		filepath.Join(anchor, ".sbt"),
-	)
+	// Use the per-container target home directly to avoid shared .devhome symlink races.
+	b.WriteString("export HOME=\"$target\" CODEX_HOME=\"$target/.codex\" CODEX_ROLLOUT_DIR=\"$target/.codex/rollouts\" XDG_CACHE_HOME=\"$target/.cache\" XDG_CONFIG_HOME=\"$target/.config\" SBT_GLOBAL_BASE=\"$target/.sbt\"; ")
 	fmt.Fprintf(&b, "git config --global user.name %s && git config --global user.email %s; ", shSingleQuote(gitName), shSingleQuote(gitEmail))
 	fmt.Fprintf(&b, "cd %q 2>/dev/null || true; exec bash", opts.Dest)
 	shell := b.String()

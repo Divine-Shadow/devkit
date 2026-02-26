@@ -89,6 +89,19 @@ Image rebuild note (`ouro8`/`dev-all`):
   - `cd /home/bayesartre/dev && DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 scale 8`
   - `cd /home/bayesartre/dev && DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 tmux-sync --session devkit`
 
+Codex auth sync troubleshooting (`dev-all` / `ouro8`):
+- Symptom: `codex /status` in an agent still shows old account/limits after host auth refresh.
+- Cause: there are three auth surfaces in play:
+  - Host source of truth: `~/.codex/auth.json`.
+  - Container bind mount: `/var/auth.json` (single-file mount, remounted on container restart).
+  - Per-agent anchored home used by tmux/attach shells: `/workspaces/dev/.devhome/.codex/auth.json` -> `/workspaces/dev/.devhomes/<container-id>/.codex/auth.json`.
+- Safe refresh sequence:
+  - Update host auth first (for example, `codex logout && codex login` on the host).
+  - Copy host auth into each running agent anchor under `.devhomes/<container-id>/.codex/auth.json` (mode `600`).
+  - Restart affected agent containers to remount `/var/auth.json` from current host file.
+  - Exit old in-agent Codex TUI sessions and start a fresh `codex` process before checking `/status`.
+- Why restart matters: `/var/auth.json` is a bind-mounted file and cannot be reliably replaced in-place from inside the container.
+
 Auto-readiness (`dev-all`):
 - `up`, `restart`, and `scale` now run readiness automatically for `dev-all`:
   - SSH/bootstrap for all running agents
