@@ -150,6 +150,10 @@ hooks:
           if ! npm --prefix "$repo/frontend" ls playwright >/dev/null 2>&1; then
             npm --prefix "$repo/frontend" install --no-save --no-package-lock playwright
           fi
+          # Netlify CLI is required for frontend deploy/dev workflows in ouro8 sessions.
+          if ! npm --prefix "$repo/frontend" ls netlify-cli >/dev/null 2>&1; then
+            npm --prefix "$repo/frontend" install --no-save --no-package-lock netlify-cli
+          fi
           npm --prefix "$repo/frontend" exec playwright install chromium
         fi
       done

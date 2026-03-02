@@ -53,3 +53,7 @@ playwright.download.prss.microsoft.com
 fonts.googleapis.com
 fonts.gstatic.com
 ouroboros-ai.com
+api.netlify.com
+app.netlify.com
+auth.netlify.com
+netlify.com
