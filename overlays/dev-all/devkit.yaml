@@ -154,6 +154,10 @@ hooks:
           if ! npm --prefix "$repo/frontend" ls netlify-cli >/dev/null 2>&1; then
             npm --prefix "$repo/frontend" install --no-save --no-package-lock netlify-cli
           fi
+          # Token counting script depends on gpt-tokenizer in frontend toolchains.
+          if ! npm --prefix "$repo/frontend" ls gpt-tokenizer >/dev/null 2>&1; then
+            npm --prefix "$repo/frontend" install --no-save --no-package-lock gpt-tokenizer
+          fi
           npm --prefix "$repo/frontend" exec playwright install chromium
         fi
       done
