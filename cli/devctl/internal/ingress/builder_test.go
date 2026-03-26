@@ -75,3 +75,28 @@ func TestBuildFragmentGeneratesConfigFromRoutes(t *testing.T) {
 		t.Fatalf("missing fragment path")
 	}
 }
+
+func TestBuildFragmentRejectsDirectoryCertPath(t *testing.T) {
+	dir := t.TempDir()
+	certDir := filepath.Join(dir, "ouroboros.test.pem")
+	keyPath := filepath.Join(dir, "ouroboros.test-key.pem")
+	if err := os.MkdirAll(certDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.IngressConfig{
+		Kind: "caddy",
+		Routes: []config.IngressRoute{
+			{Host: "ouroboros.test", Service: "frontend", Port: 4173, Cert: certDir, Key: keyPath},
+		},
+	}
+	_, err := BuildFragment("proj-dir-cert", cfg, "", dir)
+	if err == nil {
+		t.Fatal("expected directory cert path error")
+	}
+	if !strings.Contains(err.Error(), "is a directory, expected a file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

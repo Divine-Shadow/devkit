@@ -50,7 +50,10 @@ func buildCaddyFragment(project string, cfg *config.IngressConfig, overlayDir st
 	fallbackCert := ""
 	fallbackKey := ""
 	for idx, cert := range cfg.Certs {
-		dest := mountCertFile(cert.Path, overlayDir, root, certTargetDir, mounted, &volumes)
+		dest, err := mountCertFile(cert.Path, overlayDir, root, certTargetDir, mounted, &volumes)
+		if err != nil {
+			return out, err
+		}
 		if dest == "" {
 			continue
 		}
@@ -167,8 +170,14 @@ func resolveRouteCerts(route config.IngressRoute, overlayDir, root string, mount
 		if certRaw == "" || keyRaw == "" {
 			return "", "", fmt.Errorf("ingress: route %s missing cert or key path", route.Host)
 		}
-		certPath := mountCertFile(certRaw, overlayDir, root, "/ingress/certs", mounted, volumes)
-		keyPath := mountCertFile(keyRaw, overlayDir, root, "/ingress/certs", mounted, volumes)
+		certPath, err := mountCertFile(certRaw, overlayDir, root, "/ingress/certs", mounted, volumes)
+		if err != nil {
+			return "", "", err
+		}
+		keyPath, err := mountCertFile(keyRaw, overlayDir, root, "/ingress/certs", mounted, volumes)
+		if err != nil {
+			return "", "", err
+		}
 		if certPath == "" || keyPath == "" {
 			return "", "", fmt.Errorf("ingress: route %s cert/key not found", route.Host)
 		}
@@ -180,19 +189,29 @@ func resolveRouteCerts(route config.IngressRoute, overlayDir, root string, mount
 	return "", "", nil
 }
 
-func mountCertFile(raw string, overlayDir, root string, targetDir string, mounted map[string]string, volumes *[]string) string {
+func mountCertFile(raw string, overlayDir, root string, targetDir string, mounted map[string]string, volumes *[]string) (string, error) {
 	resolved := resolvePath(raw, overlayDir, root)
 	if resolved == "" {
-		return ""
+		return "", nil
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("ingress: cert path %s not accessible: %w", resolved, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("ingress: cert path %s is a directory, expected a file", resolved)
 	}
 	if dest, ok := mounted[resolved]; ok {
-		return dest
+		return dest, nil
 	}
 	base := filepath.Base(resolved)
 	target := filepath.Join(targetDir, base)
 	*volumes = append(*volumes, fmt.Sprintf("%s:%s:ro", resolved, target))
 	mounted[resolved] = target
-	return target
+	return target, nil
 }
 
 func resolvePath(p string, overlayDir, root string) string {

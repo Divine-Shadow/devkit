@@ -857,6 +857,7 @@ Commands:
   tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH] [--service NAME]
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   tmux-apply-layout --file <layout.yaml> [--session NAME] [--attach]
+  wt-open [--session NAME], wt-release [--session NAME]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]
@@ -996,6 +997,21 @@ func main() {
 	tmuxForceOverride = forceTmux
 	if forceTmux {
 		_ = os.Unsetenv("DEVKIT_NO_TMUX")
+	}
+	if strings.TrimSpace(project) != "" {
+		resolvedComposeProject := resolveComposeProjectName(project, composeProject)
+		_ = os.Setenv("COMPOSE_PROJECT_NAME", resolvedComposeProject)
+		if (strings.TrimSpace(os.Getenv("DEVKIT_INTERNAL_SUBNET")) == "" || strings.TrimSpace(os.Getenv("DEVKIT_DNS_IP")) == "") &&
+			strings.TrimSpace(resolvedComposeProject) != "" {
+			if cidr, dns, ok := netutil.ExistingComposeNetwork(resolvedComposeProject); ok {
+				if strings.TrimSpace(os.Getenv("DEVKIT_INTERNAL_SUBNET")) == "" {
+					_ = os.Setenv("DEVKIT_INTERNAL_SUBNET", cidr)
+				}
+				if strings.TrimSpace(os.Getenv("DEVKIT_DNS_IP")) == "" {
+					_ = os.Setenv("DEVKIT_DNS_IP", dns)
+				}
+			}
+		}
 	}
 	files, err := compose.Files(paths, project, profile)
 	if err != nil {

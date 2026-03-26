@@ -44,4 +44,7 @@ func TestHasSessionAndListWindows(t *testing.T) {
     if got := ListWindows("s"); len(got) != 5 || got[0] != "list-windows" || got[2] != "s" || got[3] != "-F" {
         t.Fatalf("ListWindows args unexpected: %v", got)
     }
+    if got := ListWindowsDetailed("s"); len(got) != 5 || got[0] != "list-windows" || got[2] != "s" || got[3] != "-F" || got[4] != "#{window_index}\t#{window_name}" {
+        t.Fatalf("ListWindowsDetailed args unexpected: %v", got)
+    }
 }

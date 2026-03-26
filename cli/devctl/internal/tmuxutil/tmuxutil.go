@@ -30,3 +30,8 @@ func HasSession(session string) []string {
 func ListWindows(session string) []string {
     return []string{"list-windows", "-t", session, "-F", "#{window_name}"}
 }
+
+// ListWindowsDetailed builds args for: tmux list-windows -t <session> -F '#{window_index}\t#{window_name}'
+func ListWindowsDetailed(session string) []string {
+	return []string{"list-windows", "-t", session, "-F", "#{window_index}\t#{window_name}"}
+}
