@@ -261,6 +261,14 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	wslBinary, err := resolveWSLBinary()
+	if err != nil {
+		return err
+	}
+	wslDistro, err := resolveWSLDistro()
+	if err != nil {
+		return err
+	}
 	tabs, err := tmuxWindowTabs(session)
 	if err != nil {
 		return err
@@ -274,7 +282,7 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 	if ctx.DryRun {
 		for _, tab := range tabs {
 			fmt.Fprintln(os.Stderr, "+ tmux new-session -d -t "+shellSingleQuote(session)+" -s "+shellSingleQuote(tabSessionName(session, tab.Title)))
-			args := wtutil.NewTabArgs(wtutil.ViewerWindowName(session), tab)
+			args := wtutil.NewTabArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tab)
 			fmt.Fprintln(os.Stderr, "+ wt "+strings.Join(args, " "))
 		}
 		return nil
@@ -313,7 +321,7 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 			return fmt.Errorf("failed to select %s in linked tmux session %s", tab.Title, linkedSession)
 		}
 		createdSessions = append(createdSessions, linkedSession)
-		args := wtutil.NewTabArgs(wtutil.ViewerWindowName(session), tab)
+		args := wtutil.NewTabArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tab)
 		runCtx, cancel = execx.WithTimeout(2 * time.Minute)
 		res := execx.RunCtx(runCtx, wtBinary, args...)
 		cancel()
@@ -338,6 +346,37 @@ func resolveWTBinary() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("Windows Terminal not found. On WSL, either add wt.exe to PATH or set DEVKIT_WT_PATH to the full wt.exe path")
+}
+
+func resolveWSLBinary() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DEVKIT_WSL_PATH")); configured != "" {
+		if _, err := os.Stat(configured); err != nil {
+			return "", fmt.Errorf("DEVKIT_WSL_PATH %s not accessible: %w", configured, err)
+		}
+		return configured, nil
+	}
+	for _, candidate := range []string{"wsl.exe", "/mnt/c/Windows/System32/wsl.exe", "/mnt/c/Windows/system32/wsl.exe"} {
+		if filepath.IsAbs(candidate) {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			continue
+		}
+		if resolved, err := exec.LookPath(candidate); err == nil {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("wsl.exe not found. Set DEVKIT_WSL_PATH to the full wsl.exe path")
+}
+
+func resolveWSLDistro() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DEVKIT_WSL_DISTRO")); configured != "" {
+		return configured, nil
+	}
+	if detected := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")); detected != "" {
+		return detected, nil
+	}
+	return "", fmt.Errorf("WSL distro not detected. Set DEVKIT_WSL_DISTRO explicitly")
 }
 
 func handleWTRelease(ctx *cmdregistry.Context) error {

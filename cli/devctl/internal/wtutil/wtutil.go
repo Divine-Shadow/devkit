@@ -22,14 +22,40 @@ func ViewerLockPath(session string) string {
 	return filepath.Join(os.TempDir(), "devkit-wt", sanitize(session)+".lock")
 }
 
-// NewTabArgs builds args for a single `wt` invocation that opens one tab in the named window.
-func NewTabArgs(windowName string, tab TabSpec) []string {
+// NewTabArgs builds args for a single `wt` invocation that opens one tab in the named window via WSL.
+func NewTabArgs(windowName, wslPath, distro string, tab TabSpec) []string {
+	windowsWSLPath := windowsPath(wslPath)
 	return []string{
 		"-w", windowName,
 		"new-tab",
 		"--title", tab.Title,
-		"bash", "-lc", tab.Command,
+		"--",
+		windowsWSLPath,
+		"-d", distro,
+		"zsh", "-lic", tab.Command,
 	}
+}
+
+func windowsPath(path string) string {
+	value := strings.TrimSpace(path)
+	lower := strings.ToLower(value)
+	const prefix = "/mnt/"
+	if !strings.HasPrefix(lower, prefix) || len(value) < len(prefix)+2 {
+		return value
+	}
+	drive := value[len(prefix)]
+	if value[len(prefix)+1] != '/' {
+		return value
+	}
+	rest := value[len(prefix)+2:]
+	if rest == "" {
+		return value
+	}
+	rest = strings.ReplaceAll(rest, "/", `\`)
+	if drive >= 'a' && drive <= 'z' {
+		drive = drive - 'a' + 'A'
+	}
+	return string(drive) + `:\` + rest
 }
 
 func sanitize(raw string) string {

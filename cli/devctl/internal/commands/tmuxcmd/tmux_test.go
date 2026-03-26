@@ -25,8 +25,10 @@ esac
 exit 0
 `)
 	writeStub(t, filepath.Join(dir, "wt.exe"), "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$WT_LOG\"\n")
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("WT_LOG", wtLog)
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 
 	ctx := &cmdregistry.Context{Project: "codex8"}
 	if err := handleWTOpen(ctx); err != nil {
@@ -41,10 +43,10 @@ exit 0
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 wt launches, got %d: %q", len(lines), string(data))
 	}
-	if !strings.Contains(lines[0], "devkit-wt-devkit_codex8 new-tab --title codex-1 bash -lc exec tmux attach-session -t 'devkit-wt-devkit_codex8-codex-1'") {
+	if !strings.Contains(lines[0], "devkit-wt-devkit_codex8 new-tab --title codex-1 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS zsh -lic exec tmux attach-session -t 'devkit-wt-devkit_codex8-codex-1'") {
 		t.Fatalf("unexpected first wt launch: %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "devkit-wt-devkit_codex8 new-tab --title codex-2 bash -lc exec tmux attach-session -t 'devkit-wt-devkit_codex8-codex-2'") {
+	if !strings.Contains(lines[1], "devkit-wt-devkit_codex8 new-tab --title codex-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS zsh -lic exec tmux attach-session -t 'devkit-wt-devkit_codex8-codex-2'") {
 		t.Fatalf("unexpected second wt launch: %q", lines[1])
 	}
 	if _, err := os.Stat(wtutil.ViewerLockPath("devkit:codex8")); err != nil {
@@ -64,7 +66,9 @@ case "$1" in
 esac
 exit 0
 `)
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", dir)
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 
 	err := handleWTOpen(&cmdregistry.Context{Project: "codex8"})
 	if err == nil || !strings.Contains(err.Error(), "Windows Terminal not found") {
@@ -79,7 +83,9 @@ func TestHandleWTOpenFailsWhenSessionMissing(t *testing.T) {
 	dir := t.TempDir()
 	writeStub(t, filepath.Join(dir, "tmux"), "#!/bin/sh\nexit 1\n")
 	writeStub(t, filepath.Join(dir, "wt.exe"), "#!/bin/sh\nexit 0\n")
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 
 	err := handleWTOpen(&cmdregistry.Context{Project: "codex8"})
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
@@ -99,7 +105,9 @@ esac
 exit 0
 `)
 	writeStub(t, filepath.Join(dir, "wt.exe"), "#!/bin/sh\nexit 0\n")
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 	lockPath := wtutil.ViewerLockPath("devkit:codex8")
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		t.Fatalf("mkdir lock dir: %v", err)
@@ -146,6 +154,29 @@ func TestResolveWTBinaryHonorsConfiguredPath(t *testing.T) {
 	}
 	if got != path {
 		t.Fatalf("resolveWTBinary mismatch: got %q want %q", got, path)
+	}
+}
+
+func TestResolveWSLBinaryAndDistro(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wsl.exe")
+	writeStub(t, path, "#!/bin/sh\nexit 0\n")
+	t.Setenv("DEVKIT_WSL_PATH", path)
+	t.Setenv("DEVKIT_WSL_DISTRO", "NixOS")
+
+	gotPath, err := resolveWSLBinary()
+	if err != nil {
+		t.Fatalf("resolveWSLBinary error: %v", err)
+	}
+	if gotPath != path {
+		t.Fatalf("resolveWSLBinary mismatch: got %q want %q", gotPath, path)
+	}
+	gotDistro, err := resolveWSLDistro()
+	if err != nil {
+		t.Fatalf("resolveWSLDistro error: %v", err)
+	}
+	if gotDistro != "NixOS" {
+		t.Fatalf("resolveWSLDistro mismatch: got %q want %q", gotDistro, "NixOS")
 	}
 }
 

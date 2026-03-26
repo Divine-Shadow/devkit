@@ -18,7 +18,7 @@ func TestViewerWindowNameAndLockPath(t *testing.T) {
 }
 
 func TestNewTabArgs(t *testing.T) {
-	got := NewTabArgs("devkit-wt-sess", TabSpec{
+	got := NewTabArgs("devkit-wt-sess", "/mnt/c/Windows/system32/wsl.exe", "NixOS", TabSpec{
 		Title:   "codex-1",
 		Command: `exec tmux attach-session -t 'sess-linked-codex-1'`,
 	})
@@ -26,9 +26,21 @@ func TestNewTabArgs(t *testing.T) {
 		"-w", "devkit-wt-sess",
 		"new-tab",
 		"--title", "codex-1",
-		"bash", "-lc", `exec tmux attach-session -t 'sess-linked-codex-1'`,
+		"--",
+		`C:\Windows\system32\wsl.exe`,
+		"-d", "NixOS",
+		"zsh", "-lic", `exec tmux attach-session -t 'sess-linked-codex-1'`,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("NewTabArgs mismatch: got %#v want %#v", got, want)
+	}
+}
+
+func TestWindowsPath(t *testing.T) {
+	if got, want := windowsPath("/mnt/c/Windows/System32/wsl.exe"), `C:\Windows\System32\wsl.exe`; got != want {
+		t.Fatalf("windowsPath mismatch: got %q want %q", got, want)
+	}
+	if got, want := windowsPath("/run/current-system/sw/bin/zsh"), "/run/current-system/sw/bin/zsh"; got != want {
+		t.Fatalf("windowsPath unexpected conversion: got %q want %q", got, want)
 	}
 }
