@@ -44,7 +44,7 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"mkdir -p \"$target/.sbt\"",
 		"if [ \"$dev_home_ok\" = 1 ] && [ -n \"${DOCKER_HOST:-}\" ]; then printf \"docker.host=%s\\n\" \"$DOCKER_HOST\" > \"$target/.testcontainers.properties\"; ln -sfn \"$target/.testcontainers.properties\" /home/dev/.testcontainers.properties; fi",
 		"ln -sfn \"$target/.sbt\" /home/dev/.sbt",
-		"if [ -r /var/host-home/.p10k.zsh ]; then cp -f /var/host-home/.p10k.zsh \"$target/.p10k.zsh\"; fi",
+		"if [ -r /var/host-home/.p10k.zsh ]; then cp -f /var/host-home/.p10k.zsh \"$target/.p10k.zsh\"; sed -i 's/^\\([[:space:]]*typeset -g POWERLEVEL9K_INSTANT_PROMPT=\\).*/\\1off/' \"$target/.p10k.zsh\"; fi",
 		"POWERLEVEL9K_INSTANT_PROMPT=off",
 		"source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme",
 		"source ~/.p10k.zsh",

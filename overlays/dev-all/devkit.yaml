@@ -146,6 +146,8 @@ hooks:
         done | sha256sum | awk '{print $1}'
       )
     }
+    governance_cache_dir=/tmp/devkit-governance-cache
+    mkdir -p "$governance_cache_dir"
     # Keep a compatibility path for workflows that expect agent1 under agent-worktrees.
     mkdir -p /workspaces/dev/agent-worktrees/agent1
     if [ -d /workspaces/dev/ouroboros-ide ] && [ ! -e /workspaces/dev/agent-worktrees/agent1/ouroboros-ide ]; then
@@ -174,15 +176,23 @@ hooks:
         if [ -d "$repo/tools/subagent-governance/src" ] && [ -x "$repo/scripts/subagent/set-governance-latest-jar" ]; then
           jar_input_hash="$(governance_input_hash "$repo")"
           hash_file="$repo/tools/subagent-governance/subagent-governance.jar.input.sha256"
+          cache_jar="$governance_cache_dir/$jar_input_hash.jar"
           existing_hash=""
           if [ -f "$hash_file" ]; then
             existing_hash="$(cat "$hash_file")"
           fi
           if [ ! -f "$repo/tools/subagent-governance/subagent-governance.jar" ] || [ "$existing_hash" != "$jar_input_hash" ]; then
-            (
-              cd "$repo"
-              sbt 'subagentGovernance/assembly'
-            )
+            if [ -f "$cache_jar" ]; then
+              cp -f "$cache_jar" "$repo/tools/subagent-governance/subagent-governance.jar"
+            else
+              (
+                cd "$repo"
+                sbt 'subagentGovernance/assembly'
+              )
+              if [ -f "$repo/tools/subagent-governance/subagent-governance.jar" ]; then
+                cp -f "$repo/tools/subagent-governance/subagent-governance.jar" "$cache_jar"
+              fi
+            fi
           fi
           if [ -f "$repo/tools/subagent-governance/subagent-governance.jar" ]; then
             (
