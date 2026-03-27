@@ -210,7 +210,11 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 		runner.Host(ctx.DryRun, "tmux", tmuxutil.RenameWindow(sessName+":0", name)...)
 		sessExists = true
 	}
-	for _, w := range lf.Windows {
+	start := 0
+	if sessExists && len(lf.Windows) > 0 {
+		start = 1
+	}
+	for _, w := range lf.Windows[start:] {
 		idx := fmt.Sprintf("%d", w.Index)
 		winProj := ctx.Project
 		if strings.TrimSpace(w.Project) != "" {
