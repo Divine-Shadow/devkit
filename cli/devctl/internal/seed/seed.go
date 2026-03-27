@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+const codexCLIStartupConfig = `
+[mcp_servers.codex-cli]
+command = "codex"
+args = ["mcp-server"]
+startup_timeout_sec = 60
+`
+
 // WaitForHostMountsScript returns a script that waits (up to ~10s) for
 // /var/host-codex or /var/auth.json to become available.
 func WaitForHostMountsScript() string {
@@ -82,7 +89,27 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 		"if [ \"$dev_home_ok\" = 1 ]; then if [ -d /home/dev/.cache/coursier ]; then ln -sfn /home/dev/.cache/coursier \"$target/.cache/coursier\"; fi; fi",
 		"if [ \"$dev_home_ok\" = 1 ] && [ -n \"${DOCKER_HOST:-}\" ]; then printf \"docker.host=%s\\n\" \"$DOCKER_HOST\" > \"$target/.testcontainers.properties\"; ln -sfn \"$target/.testcontainers.properties\" /home/dev/.testcontainers.properties; fi",
 		"if [ -r /var/host-home/.p10k.zsh ]; then cp -f /var/host-home/.p10k.zsh \"$target/.p10k.zsh\"; sed -i 's/^\\([[:space:]]*typeset -g POWERLEVEL9K_INSTANT_PROMPT=\\).*/\\1off/' \"$target/.p10k.zsh\"; fi",
-		"printf '%s\\n' 'export POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true' 'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' '[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' '[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' 'alias codex=codexw' '(( $+commands[claudew] )) && alias claude=claudew' > \"$target/.zshrc\"",
+		"printf '%s\\n' " +
+			"'export POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true' " +
+			"'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' " +
+			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
+			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
+			"'unalias codex 2>/dev/null || true' " +
+			"'codex() {' " +
+			"'  local -a extra' " +
+			"'  extra=(' " +
+			"'    -a never' " +
+			"'    -s danger-full-access' " +
+			"\"    -c 'mcp_servers.codex-cli.command=\\\"codex\\\"'\" " +
+			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
+			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
+			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
+			"'  )' " +
+			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
+			"'}' " +
+			"'(( $+commands[claudew] )) && alias claude=claudew' > \"$target/.zshrc\"",
 	}
 	if cfg.SeedCodex {
 		seedSteps := []string{
@@ -91,6 +118,9 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"mkdir -p \"$target/.codex\" \"$target/.codex/rollouts\" \"$target/.cache\" \"$target/.config\" \"$target/.local\"",
 			"if [ -d /var/host-codex ]; then cp -a /var/host-codex/. \"$target/.codex/\"; fi",
 			"if [ ! -f \"$target/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$target/.codex/auth.json\"; fi",
+			"cfg=\"$target/.codex/config.toml\"",
+			"if [ ! -f \"$cfg\" ]; then cat > \"$cfg\" <<'EOF'\n" + strings.TrimSpace(codexCLIStartupConfig) + "\nEOF\nfi",
+			"if grep -q '^\\[mcp_servers\\.codex-cli\\]' \"$cfg\" 2>/dev/null; then perl -0pi -e 's/\\[mcp_servers\\.codex-cli\\]\\n(?:[^\\[]*\\n)*?(?=\\n\\[|\\z)/[mcp_servers.codex-cli]\\ncommand = \"codex\"\\nargs = [\"mcp-server\"]\\nstartup_timeout_sec = 60\\n/s' \"$cfg\"; else cat >> \"$cfg\" <<'EOF'\n\n" + strings.TrimSpace(codexCLIStartupConfig) + "\nEOF\nfi",
 			"if [ -f \"$target/.codex/auth.json\" ]; then chmod 600 \"$target/.codex/auth.json\"; fi",
 			"touch \"$marker\"",
 		}
