@@ -23,6 +23,7 @@ services:
       # Optional: mount host Codex config dir for seeding auth.json
       - ${HOST_CODEX_DIR:-${HOME}/.codex}:/var/host-codex:ro
       - ${HOST_CODEX_FILE:-${HOME}/.codex/auth.json}:/var/auth.json:ro
+      - ${HOME}:/var/host-home:ro
       - tmpfs:/tmp
       - broker-run:/broker-run
     depends_on:

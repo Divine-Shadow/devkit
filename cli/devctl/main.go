@@ -858,6 +858,8 @@ Commands:
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   tmux-apply-layout --file <layout.yaml> [--session NAME] [--attach]
   wt-open [--session NAME], wt-release [--session NAME]
+  tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
+  tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]

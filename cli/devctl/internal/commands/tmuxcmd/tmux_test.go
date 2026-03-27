@@ -1,12 +1,14 @@
 package tmuxcmd
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"devkit/cli/devctl/internal/cmdregistry"
+	"devkit/cli/devctl/internal/tmuxnotify"
 	"devkit/cli/devctl/internal/wtutil"
 )
 
@@ -183,6 +185,76 @@ func TestResolveWSLBinaryAndDistro(t *testing.T) {
 func TestTabSessionName(t *testing.T) {
 	if got, want := tabSessionName("devkit:codex8", "codex-1"), "devkit-wt-devkit_codex8-codex-1"; got != want {
 		t.Fatalf("tabSessionName mismatch: got %q want %q", got, want)
+	}
+}
+
+func TestHandleTMUXBellInstallWritesExpectedTmuxCommands(t *testing.T) {
+	defaultSessionName = func(project string) string { return "devkit:codex8" }
+	hasTmuxSession = func(session string) bool { return session == "devkit:codex8" }
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "tmux.log")
+	exePath := filepath.Join(dir, "devctl")
+	writeStub(t, exePath, "#!/bin/sh\nexit 0\n")
+	writeStub(t, filepath.Join(dir, "tmux"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TMUX_LOG\"\n")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_LOG", logPath)
+
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Exe:     exePath,
+		Args:    []string{"--session", "devkit:codex8", "--backend", "file", "--file", filepath.Join(dir, "bells.jsonl"), "--debounce-ms", "0"},
+	}
+	if err := handleTMUXBellInstall(ctx); err != nil {
+		t.Fatalf("handleTMUXBellInstall error: %v", err)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read tmux log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 tmux commands, got %d: %q", len(lines), string(data))
+	}
+	if lines[0] != "set-window-option -g monitor-bell on" {
+		t.Fatalf("unexpected first tmux command: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "set-hook -g alert-bell run-shell -b") {
+		t.Fatalf("unexpected second tmux command: %q", lines[1])
+	}
+	if !strings.Contains(lines[1], "tmux-notify-bell") || !strings.Contains(lines[1], "#{session_name}") {
+		t.Fatalf("hook command missing notifier payload: %q", lines[1])
+	}
+}
+
+func TestHandleTMUXNotifyBellWritesEventFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bells.jsonl")
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Args: []string{
+			"--backend", "file",
+			"--file", path,
+			"--debounce-ms", "0",
+			"--session", "devkit_codex8",
+			"--window-index", "4",
+			"--window-name", "codex-4",
+			"--pane-id", "%2",
+			"--pane-title", "codex",
+		},
+	}
+	if err := handleTMUXNotifyBell(ctx); err != nil {
+		t.Fatalf("handleTMUXNotifyBell error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read notify file: %v", err)
+	}
+	var event tmuxnotify.Event
+	if err := json.Unmarshal(data[:len(data)-1], &event); err != nil {
+		t.Fatalf("unmarshal notify event: %v", err)
+	}
+	if event.WindowName != "codex-4" || event.Message != "tmux bell: devkit_codex8 / 4:codex-4" {
+		t.Fatalf("unexpected notify event: %#v", event)
 	}
 }
 

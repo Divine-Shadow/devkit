@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/layout"
 	runner "devkit/cli/devctl/internal/runner"
+	"devkit/cli/devctl/internal/tmuxnotify"
 	"devkit/cli/devctl/internal/tmuxutil"
 	"devkit/cli/devctl/internal/wtutil"
 )
@@ -46,6 +48,9 @@ func Register(
 	r.Register("tmux-apply-layout", handleApplyLayout)
 	r.Register("wt-open", handleWTOpen)
 	r.Register("wt-release", handleWTRelease)
+	r.Register("tmux-bell-install", handleTMUXBellInstall)
+	r.Register("tmux-bell-show-config", handleTMUXBellShowConfig)
+	r.Register("tmux-notify-bell", handleTMUXNotifyBell)
 }
 
 func handleSync(ctx *cmdregistry.Context) error {
@@ -415,6 +420,66 @@ func handleWTRelease(ctx *cmdregistry.Context) error {
 	return nil
 }
 
+func handleTMUXBellInstall(ctx *cmdregistry.Context) error {
+	if err := ensureProject(ctx); err != nil {
+		return err
+	}
+	session, config, err := parseBellArgs(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(session) == "" {
+		session = defaultSessionName(ctx.Project)
+	}
+	if !hasTmuxSession(session) {
+		return fmt.Errorf("tmux session %s does not exist; create it first", session)
+	}
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	hook := "run-shell -b " + shellSingleQuote(tmuxnotify.HookCommand(ctx.Exe, ctx.Project, config))
+	runner.Host(ctx.DryRun, "tmux", tmuxutil.SetWindowOptionGlobal("monitor-bell", "on")...)
+	runner.Host(ctx.DryRun, "tmux", tmuxutil.SetHookGlobal("alert-bell", hook)...)
+	return nil
+}
+
+func handleTMUXBellShowConfig(ctx *cmdregistry.Context) error {
+	if err := ensureProject(ctx); err != nil {
+		return err
+	}
+	_, config, err := parseBellArgs(ctx)
+	if err != nil {
+		return err
+	}
+	if err := config.Validate(); err != nil {
+		return err
+	}
+	hook := "run-shell -b " + shellSingleQuote(tmuxnotify.HookCommand(ctx.Exe, ctx.Project, config))
+	fmt.Println(strings.Join(append([]string{"tmux"}, tmuxutil.SetWindowOptionGlobal("monitor-bell", "on")...), " "))
+	fmt.Println(strings.Join(append([]string{"tmux"}, tmuxutil.SetHookGlobal("alert-bell", hook)...), " "))
+	return nil
+}
+
+func handleTMUXNotifyBell(ctx *cmdregistry.Context) error {
+	if err := ensureProject(ctx); err != nil {
+		return err
+	}
+	_, config, event, err := parseNotifyArgs(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(event.Session) == "" {
+		return fmt.Errorf("--session is required")
+	}
+	if strings.TrimSpace(event.WindowIndex) == "" && strings.TrimSpace(event.WindowName) == "" {
+		return fmt.Errorf("--window-index or --window-name is required")
+	}
+	if err := tmuxnotify.Notify(config, event); err != nil {
+		return err
+	}
+	return nil
+}
+
 func tmuxWindowTabs(session string) ([]wtutil.TabSpec, error) {
 	out, res := execx.Capture(context.Background(), "tmux", tmuxutil.ListWindowsDetailed(session)...)
 	if res.Code != 0 {
@@ -459,6 +524,119 @@ func ensureProject(ctx *cmdregistry.Context) error {
 		return fmt.Errorf("-p <project> is required")
 	}
 	return nil
+}
+
+func parseBellArgs(ctx *cmdregistry.Context) (string, tmuxnotify.Config, error) {
+	session := ""
+	config := tmuxnotify.DefaultConfig()
+	for i := 0; i < len(ctx.Args); i++ {
+		switch ctx.Args[i] {
+		case "--session":
+			if i+1 >= len(ctx.Args) {
+				return "", config, fmt.Errorf("--session requires a value")
+			}
+			session = ctx.Args[i+1]
+			i++
+		case "--backend":
+			if i+1 >= len(ctx.Args) {
+				return "", config, fmt.Errorf("--backend requires a value")
+			}
+			config.Backend = ctx.Args[i+1]
+			i++
+		case "--file":
+			if i+1 >= len(ctx.Args) {
+				return "", config, fmt.Errorf("--file requires a value")
+			}
+			config.FilePath = ctx.Args[i+1]
+			i++
+		case "--debounce-ms":
+			if i+1 >= len(ctx.Args) {
+				return "", config, fmt.Errorf("--debounce-ms requires a value")
+			}
+			value, err := strconv.Atoi(ctx.Args[i+1])
+			if err != nil {
+				return "", config, fmt.Errorf("invalid --debounce-ms value %q", ctx.Args[i+1])
+			}
+			config.DebounceMS = value
+			i++
+		default:
+			return "", config, fmt.Errorf("unknown tmux bell arg %s", ctx.Args[i])
+		}
+	}
+	return session, config.Normalize(), nil
+}
+
+func parseNotifyArgs(ctx *cmdregistry.Context) (string, tmuxnotify.Config, tmuxnotify.Event, error) {
+	session, config, err := parseBellArgs(&cmdregistry.Context{Args: nil})
+	if err != nil {
+		return "", config, tmuxnotify.Event{}, err
+	}
+	event := tmuxnotify.Event{}
+	for i := 0; i < len(ctx.Args); i++ {
+		switch ctx.Args[i] {
+		case "--session":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--session requires a value")
+			}
+			event.Session = ctx.Args[i+1]
+			i++
+		case "--window-index":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--window-index requires a value")
+			}
+			event.WindowIndex = ctx.Args[i+1]
+			i++
+		case "--window-name":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--window-name requires a value")
+			}
+			event.WindowName = ctx.Args[i+1]
+			i++
+		case "--pane-id":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--pane-id requires a value")
+			}
+			event.PaneID = ctx.Args[i+1]
+			i++
+		case "--pane-title":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--pane-title requires a value")
+			}
+			event.PaneTitle = ctx.Args[i+1]
+			i++
+		case "--message":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--message requires a value")
+			}
+			event.Message = ctx.Args[i+1]
+			i++
+		case "--backend":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--backend requires a value")
+			}
+			config.Backend = ctx.Args[i+1]
+			i++
+		case "--file":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--file requires a value")
+			}
+			config.FilePath = ctx.Args[i+1]
+			i++
+		case "--debounce-ms":
+			if i+1 >= len(ctx.Args) {
+				return "", config, event, fmt.Errorf("--debounce-ms requires a value")
+			}
+			value, err := strconv.Atoi(ctx.Args[i+1])
+			if err != nil {
+				return "", config, event, fmt.Errorf("invalid --debounce-ms value %q", ctx.Args[i+1])
+			}
+			config.DebounceMS = value
+			i++
+		default:
+			return session, config, event, fmt.Errorf("unknown tmux notify arg %s", ctx.Args[i])
+		}
+	}
+	return session, config.Normalize(), event, nil
 }
 
 var (
