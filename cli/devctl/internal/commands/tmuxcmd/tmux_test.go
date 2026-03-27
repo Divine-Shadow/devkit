@@ -32,7 +32,7 @@ exit 0
 	t.Setenv("WT_LOG", wtLog)
 	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 
-	ctx := &cmdregistry.Context{Project: "codex8"}
+	ctx := &cmdregistry.Context{Project: "codex8", Exe: "devkit/kit/scripts/devkit"}
 	if err := handleWTOpen(ctx); err != nil {
 		t.Fatalf("handleWTOpen error: %v", err)
 	}
@@ -50,6 +50,13 @@ exit 0
 	}
 	if !strings.Contains(lines[1], "devkit-wt-devkit_codex8 new-tab --title codex-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS zsh -lic exec tmux attach-session -t 'devkit-wt-devkit_codex8-codex-2'") {
 		t.Fatalf("unexpected second wt launch: %q", lines[1])
+	}
+	lock, err := wtutil.ReadViewerLock(wtutil.ViewerLockPath("devkit:codex8"))
+	if err != nil {
+		t.Fatalf("expected structured wt lock: %v", err)
+	}
+	if lock.Project != "codex8" || lock.Session != "devkit:codex8" {
+		t.Fatalf("unexpected lock metadata: %#v", lock)
 	}
 	if _, err := os.Stat(wtutil.ViewerLockPath("devkit:codex8")); err != nil {
 		t.Fatalf("expected wt lock: %v", err)
@@ -119,9 +126,12 @@ exit 0
 	}
 	t.Cleanup(func() { _ = os.Remove(lockPath) })
 
-	err := handleWTOpen(&cmdregistry.Context{Project: "codex8"})
+	err := handleWTOpen(&cmdregistry.Context{Project: "codex8", Exe: "devkit/kit/scripts/devkit"})
 	if err == nil || !strings.Contains(err.Error(), "wt viewer lock exists") {
 		t.Fatalf("expected lock error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "devkit/kit/scripts/devkit -p codex8 wt-release --session devkit:codex8") {
+		t.Fatalf("expected canonical release command in error, got %v", err)
 	}
 }
 
@@ -132,7 +142,7 @@ func TestHandleWTReleaseRemovesLock(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		t.Fatalf("mkdir lock dir: %v", err)
 	}
-	if err := os.WriteFile(lockPath, []byte("locked"), 0o644); err != nil {
+	if err := wtutil.WriteViewerLock(lockPath, wtutil.NewViewerLock("devkit/kit/scripts/devkit", "codex8", "devkit:codex8")); err != nil {
 		t.Fatalf("write lock: %v", err)
 	}
 
@@ -141,6 +151,60 @@ func TestHandleWTReleaseRemovesLock(t *testing.T) {
 	}
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Fatalf("expected lock removed, stat err=%v", err)
+	}
+}
+
+func TestHandleWTReleaseRecoversProjectFromStructuredLock(t *testing.T) {
+	defaultSessionName = func(project string) string { return "devkit:" + project }
+	hasTmuxSession = func(session string) bool { return true }
+	dir := t.TempDir()
+	writeStub(t, filepath.Join(dir, "tmux"), `#!/bin/sh
+case "$1" in
+  list-windows) printf '0	codex-1\n'; exit 0 ;;
+  kill-session) exit 0 ;;
+esac
+exit 0
+`)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	lockPath := wtutil.ViewerLockPath("devkit_codex8")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := wtutil.WriteViewerLock(lockPath, wtutil.NewViewerLock("devkit/kit/scripts/devkit", "dev-all", "devkit_codex8")); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	if err := handleWTRelease(&cmdregistry.Context{
+		Args: []string{"--session", "devkit_codex8"},
+		Exe:  "devkit/kit/scripts/devkit",
+	}); err != nil {
+		t.Fatalf("handleWTRelease error: %v", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected lock removed, stat err=%v", err)
+	}
+}
+
+func TestHandleWTReleaseFailsWithoutProjectMetadataInLegacyLock(t *testing.T) {
+	lockPath := wtutil.ViewerLockPath("devkit_codex8")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("devkit_codex8\n"), 0o644); err != nil {
+		t.Fatalf("write legacy lock: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(lockPath) })
+
+	err := handleWTRelease(&cmdregistry.Context{
+		Args: []string{"--session", "devkit_codex8"},
+		Exe:  "devkit/kit/scripts/devkit",
+	})
+	if err == nil || !strings.Contains(err.Error(), "has no project metadata") {
+		t.Fatalf("expected project metadata error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "devkit/kit/scripts/devkit -p <project> wt-release --session devkit_codex8") {
+		t.Fatalf("expected corrective command in error, got %v", err)
 	}
 }
 

@@ -283,8 +283,16 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		return err
 	}
 	lockPath := wtutil.ViewerLockPath(session)
-	if _, err := os.Stat(lockPath); err == nil {
-		return fmt.Errorf("wt viewer lock exists for %s at %s; run wt-release --session %s after closing the tabs", session, lockPath, session)
+	if lock, err := wtutil.ReadViewerLock(lockPath); err == nil {
+		releaseCommand := strings.TrimSpace(lock.ReleaseCommand)
+		if releaseCommand == "" {
+			project := strings.TrimSpace(lock.Project)
+			if project == "" {
+				project = ctx.Project
+			}
+			releaseCommand = wtutil.DefaultReleaseCommand(ctx.Exe, project, session)
+		}
+		return fmt.Errorf("wt viewer lock exists for %s at %s; close the tabs and run: %s", session, lockPath, releaseCommand)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read wt viewer lock %s: %w", lockPath, err)
 	}
@@ -299,7 +307,7 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return fmt.Errorf("create wt viewer lock directory: %w", err)
 	}
-	if err := os.WriteFile(lockPath, []byte(session+"\n"), 0o644); err != nil {
+	if err := wtutil.WriteViewerLock(lockPath, wtutil.NewViewerLock(ctx.Exe, ctx.Project, session)); err != nil {
 		return fmt.Errorf("create wt viewer lock: %w", err)
 	}
 	createdSessions := make([]string, 0, len(tabs))
@@ -389,9 +397,6 @@ func resolveWSLDistro() (string, error) {
 }
 
 func handleWTRelease(ctx *cmdregistry.Context) error {
-	if err := ensureProject(ctx); err != nil {
-		return err
-	}
 	session := ""
 	for i := 0; i < len(ctx.Args); i++ {
 		switch ctx.Args[i] {
@@ -402,10 +407,27 @@ func handleWTRelease(ctx *cmdregistry.Context) error {
 			}
 		}
 	}
+	project := strings.TrimSpace(ctx.Project)
 	if strings.TrimSpace(session) == "" {
-		session = defaultSessionName(ctx.Project)
+		if project == "" {
+			return fmt.Errorf("wt-release requires either -p <project> or --session NAME")
+		}
+		session = defaultSessionName(project)
 	}
 	lockPath := wtutil.ViewerLockPath(session)
+	if project == "" {
+		lock, err := wtutil.ReadViewerLock(lockPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("wt viewer lock does not exist for %s at %s", session, lockPath)
+			}
+			return fmt.Errorf("read wt viewer lock %s: %w", lockPath, err)
+		}
+		project = strings.TrimSpace(lock.Project)
+		if project == "" {
+			return fmt.Errorf("wt viewer lock for %s at %s has no project metadata; rerun %s", session, lockPath, wtutil.DefaultReleaseCommand(ctx.Exe, "", session))
+		}
+	}
 	tabs, tabsErr := tmuxWindowTabs(session)
 	if tabsErr == nil {
 		for _, tab := range tabs {

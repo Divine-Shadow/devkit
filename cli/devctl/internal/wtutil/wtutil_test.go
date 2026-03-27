@@ -1,8 +1,10 @@
 package wtutil
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +44,68 @@ func TestWindowsPath(t *testing.T) {
 	}
 	if got, want := windowsPath("/run/current-system/sw/bin/zsh"), "/run/current-system/sw/bin/zsh"; got != want {
 		t.Fatalf("windowsPath unexpected conversion: got %q want %q", got, want)
+	}
+}
+
+func TestViewerLockRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "viewer.lock")
+	lock := NewViewerLock("devkit/kit/scripts/devkit", "dev-all", "devkit_codex8")
+
+	if err := WriteViewerLock(path, lock); err != nil {
+		t.Fatalf("WriteViewerLock error: %v", err)
+	}
+	got, err := ReadViewerLock(path)
+	if err != nil {
+		t.Fatalf("ReadViewerLock error: %v", err)
+	}
+	if got.Project != "dev-all" || got.Session != "devkit_codex8" {
+		t.Fatalf("unexpected lock metadata: %#v", got)
+	}
+	if got.ReleaseCommand != "devkit/kit/scripts/devkit -p dev-all wt-release --session devkit_codex8" {
+		t.Fatalf("unexpected release command: %q", got.ReleaseCommand)
+	}
+	if strings.TrimSpace(got.CreatedAt) == "" {
+		t.Fatalf("expected CreatedAt to be populated: %#v", got)
+	}
+}
+
+func TestParseViewerLockSupportsLegacySessionOnlyFormat(t *testing.T) {
+	got, err := ParseViewerLock([]byte("devkit_codex8\n"))
+	if err != nil {
+		t.Fatalf("ParseViewerLock error: %v", err)
+	}
+	if got.Session != "devkit_codex8" {
+		t.Fatalf("unexpected legacy session: %#v", got)
+	}
+	if got.Project != "" || got.ReleaseCommand != "" {
+		t.Fatalf("legacy lock should not infer metadata: %#v", got)
+	}
+}
+
+func TestDefaultReleaseCommandFallsBackToCanonicalWrapper(t *testing.T) {
+	got := DefaultReleaseCommand("", "dev-all", "devkit_codex8")
+	if got != "devkit/kit/scripts/devkit -p dev-all wt-release --session devkit_codex8" {
+		t.Fatalf("DefaultReleaseCommand mismatch: %q", got)
+	}
+}
+
+func TestWriteViewerLockRejectsMissingSession(t *testing.T) {
+	err := WriteViewerLock(filepath.Join(t.TempDir(), "viewer.lock"), ViewerLock{})
+	if err == nil || !strings.Contains(err.Error(), "session is required") {
+		t.Fatalf("expected missing session error, got %v", err)
+	}
+}
+
+func TestReadViewerLockRejectsEmptyContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "viewer.lock")
+	if err := os.WriteFile(path, []byte("\n"), 0o644); err != nil {
+		t.Fatalf("write empty lock: %v", err)
+	}
+	errMsg := ""
+	if _, err := ReadViewerLock(path); err != nil {
+		errMsg = err.Error()
+	}
+	if !strings.Contains(errMsg, "wt viewer lock is empty") {
+		t.Fatalf("expected empty lock error, got %q", errMsg)
 	}
 }
