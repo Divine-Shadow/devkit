@@ -13,8 +13,10 @@ import (
 	agentexec "devkit/cli/devctl/internal/agentexec"
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/compose"
+	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/layout"
+	pth "devkit/cli/devctl/internal/paths"
 	runner "devkit/cli/devctl/internal/runner"
 	"devkit/cli/devctl/internal/tmuxnotify"
 	"devkit/cli/devctl/internal/tmuxutil"
@@ -251,6 +253,10 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		return err
 	}
 	session := ""
+	plain := false
+	count := 0
+	service := "dev-agent"
+	cdPath := ""
 	for i := 0; i < len(ctx.Args); i++ {
 		switch ctx.Args[i] {
 		case "--session":
@@ -258,12 +264,32 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 				session = ctx.Args[i+1]
 				i++
 			}
+		case "--plain":
+			plain = true
+		case "--count":
+			if i+1 < len(ctx.Args) {
+				count = mustAtoi(ctx.Args[i+1])
+				i++
+			}
+		case "--service":
+			if i+1 < len(ctx.Args) {
+				service = ctx.Args[i+1]
+				i++
+			}
+		case "--cd":
+			if i+1 < len(ctx.Args) {
+				cdPath = ctx.Args[i+1]
+				i++
+			}
 		}
 	}
 	if strings.TrimSpace(session) == "" {
 		session = defaultSessionName(ctx.Project)
+		if plain {
+			session += "-plain"
+		}
 	}
-	if !hasTmuxSession(session) {
+	if !plain && !hasTmuxSession(session) {
 		return fmt.Errorf("tmux session %s does not exist; create it first", session)
 	}
 	wtBinary, err := resolveWTBinary()
@@ -278,25 +304,52 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	tabs, err := tmuxWindowTabs(session)
-	if err != nil {
-		return err
+	tabs := []wtutil.TabSpec{}
+	if plain {
+		if strings.TrimSpace(service) == "" {
+			service = "dev-agent"
+		}
+		if service != "dev-agent" {
+			return fmt.Errorf("wt-open --plain currently supports only --service dev-agent")
+		}
+		if count <= 0 {
+			count = len(listServiceNames(ctx.Files, service))
+			if count == 0 {
+				return fmt.Errorf("no running %s containers found; use up/scale first or provide --count", service)
+			}
+		}
+		for i := 1; i <= count; i++ {
+			idx := fmt.Sprintf("%d", i)
+			tabs = append(tabs, wtutil.TabSpec{
+				Title:   fmt.Sprintf("agent-%d", i),
+				Command: plainTabCommand(ctx, idx, cdPath),
+			})
+		}
+	} else {
+		tabs, err = tmuxWindowTabs(session)
+		if err != nil {
+			return err
+		}
 	}
 	lockPath := wtutil.ViewerLockPath(session)
-	if lock, err := wtutil.ReadViewerLock(lockPath); err == nil {
-		releaseCommand := strings.TrimSpace(lock.ReleaseCommand)
-		if releaseCommand == "" {
-			project := strings.TrimSpace(lock.Project)
-			if project == "" {
-				project = ctx.Project
+	if !plain {
+		if lock, err := wtutil.ReadViewerLock(lockPath); err == nil {
+			releaseCommand := strings.TrimSpace(lock.ReleaseCommand)
+			if releaseCommand == "" {
+				project := strings.TrimSpace(lock.Project)
+				if project == "" {
+					project = ctx.Project
+				}
+				releaseCommand = wtutil.DefaultReleaseCommand(ctx.Exe, project, session)
 			}
-			releaseCommand = wtutil.DefaultReleaseCommand(ctx.Exe, project, session)
+			return fmt.Errorf("wt viewer lock exists for %s at %s; close the tabs and run: %s", session, lockPath, releaseCommand)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("read wt viewer lock %s: %w", lockPath, err)
 		}
-		return fmt.Errorf("wt viewer lock exists for %s at %s; close the tabs and run: %s", session, lockPath, releaseCommand)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read wt viewer lock %s: %w", lockPath, err)
+	} else if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale wt viewer lock %s: %w", lockPath, err)
 	}
-	if ctx.DryRun {
+	if !plain && ctx.DryRun {
 		for _, tab := range tabs {
 			fmt.Fprintln(os.Stderr, "+ tmux new-session -d -t "+shellSingleQuote(session)+" -s "+shellSingleQuote(tabSessionName(session, tab.Title)))
 			args := wtutil.NewTabArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tab)
@@ -304,20 +357,32 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return fmt.Errorf("create wt viewer lock directory: %w", err)
+	if plain && ctx.DryRun {
+		args := wtutil.NewTabsArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tabs)
+		fmt.Fprintln(os.Stderr, "+ wt "+strings.Join(args, " "))
+		return nil
 	}
-	if err := wtutil.WriteViewerLock(lockPath, wtutil.NewViewerLock(ctx.Exe, ctx.Project, session)); err != nil {
-		return fmt.Errorf("create wt viewer lock: %w", err)
+	if !plain {
+		if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+			return fmt.Errorf("create wt viewer lock directory: %w", err)
+		}
+		if err := wtutil.WriteViewerLock(lockPath, wtutil.NewViewerLock(ctx.Exe, ctx.Project, session)); err != nil {
+			return fmt.Errorf("create wt viewer lock: %w", err)
+		}
 	}
 	createdSessions := make([]string, 0, len(tabs))
 	cleanupCreated := func() {
 		for _, linked := range createdSessions {
 			_, _ = execx.Capture(context.Background(), "tmux", "kill-session", "-t", linked)
 		}
-		_ = os.Remove(lockPath)
+		if !plain {
+			_ = os.Remove(lockPath)
+		}
 	}
 	for _, tab := range tabs {
+		if plain {
+			break
+		}
 		linkedSession := tabSessionName(session, tab.Title)
 		if hasTmuxSession(linkedSession) {
 			cleanupCreated()
@@ -345,6 +410,16 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		if res.Code != 0 {
 			cleanupCreated()
 			return fmt.Errorf("wt tab launch failed for %s", tab.Title)
+		}
+	}
+	if plain {
+		args := wtutil.NewTabsArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tabs)
+		runCtx, cancel := execx.WithTimeout(2 * time.Minute)
+		res := execx.RunCtx(runCtx, wtBinary, args...)
+		cancel()
+		if res.Code != 0 {
+			cleanupCreated()
+			return fmt.Errorf("wt tab launch failed for session %s", session)
 		}
 	}
 	return nil
@@ -539,6 +614,65 @@ func tmuxWindowTabs(session string) ([]wtutil.TabSpec, error) {
 
 func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func plainTabCommand(ctx *cmdregistry.Context, idx, cdPath string) string {
+	project := detectPlainProject(ctx)
+	dest := strings.TrimSpace(cdPath)
+	if dest == "" && project == "dev-all" {
+		repo := defaultDevAllRepo(ctx)
+		dest = pth.AgentRepoPath(project, idx, repo)
+	}
+	exe := strings.TrimSpace(ctx.Exe)
+	if exe == "" {
+		exe = "devkit/kit/scripts/devkit"
+	}
+	args := []string{"exec", shellSingleQuote(exe)}
+	if strings.TrimSpace(project) != "" {
+		args = append(args, "-p", shellSingleQuote(project))
+	}
+	if strings.TrimSpace(ctx.ComposeProject) != "" {
+		args = append(args, "--compose-project", shellSingleQuote(ctx.ComposeProject))
+	}
+	if dest != "" {
+		args = append(args, "exec-cd", shellSingleQuote(idx), shellSingleQuote(dest), "zsh", "-i")
+	} else {
+		args = append(args, "exec", shellSingleQuote(idx), "zsh", "-i")
+	}
+	return strings.Join(args, " ")
+}
+
+func defaultDevAllRepo(ctx *cmdregistry.Context) string {
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, "dev-all")
+	if err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
+		return strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	return "ouroboros-ide"
+}
+
+var detectPlainProject = func(ctx *cmdregistry.Context) string {
+	project := strings.TrimSpace(ctx.Project)
+	if project == "" {
+		return project
+	}
+	if project == "dev-all" {
+		return project
+	}
+	composeProject := strings.TrimSpace(ctx.ComposeProject)
+	if composeProject == "" {
+		return project
+	}
+	containerName := agentexec.ResolveContainerName(composeProject, "dev-agent", 1)
+	if strings.TrimSpace(containerName) == "" {
+		return project
+	}
+	runCtx, cancel := execx.WithTimeout(10 * time.Second)
+	defer cancel()
+	out, res := execx.Capture(runCtx, "docker", "inspect", "--format", "{{range .Mounts}}{{println .Destination}}{{end}}", containerName)
+	if res.Code == 0 && strings.Contains(out, "/workspaces/dev") {
+		return "dev-all"
+	}
+	return project
 }
 
 func tabSessionName(session, tabTitle string) string {

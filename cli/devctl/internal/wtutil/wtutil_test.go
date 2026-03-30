@@ -38,6 +38,32 @@ func TestNewTabArgs(t *testing.T) {
 	}
 }
 
+func TestNewTabsArgsPreservesOrder(t *testing.T) {
+	got := NewTabsArgs("devkit-wt-sess", "/mnt/c/Windows/system32/wsl.exe", "NixOS", []TabSpec{
+		{Title: "codex-1", Command: "first"},
+		{Title: "codex-2", Command: "second"},
+	})
+	want := []string{
+		"-w", "devkit-wt-sess",
+		"new-tab",
+		"--title", "codex-1",
+		"--",
+		`C:\Windows\system32\wsl.exe`,
+		"-d", "NixOS",
+		"zsh", "-lic", "first",
+		";",
+		"new-tab",
+		"--title", "codex-2",
+		"--",
+		`C:\Windows\system32\wsl.exe`,
+		"-d", "NixOS",
+		"zsh", "-lic", "second",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NewTabsArgs mismatch: got %#v want %#v", got, want)
+	}
+}
+
 func TestWindowsPath(t *testing.T) {
 	if got, want := windowsPath("/mnt/c/Windows/System32/wsl.exe"), `C:\Windows\System32\wsl.exe`; got != want {
 		t.Fatalf("windowsPath mismatch: got %q want %q", got, want)

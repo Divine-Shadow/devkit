@@ -41,10 +41,11 @@ services:
       - ivy2-cache:/home/dev/.ivy2
       - coursier-cache:/home/dev/.cache/coursier
       - devkit-auth:/home/dev/.devkit
-      - tmpfs:/tmp
     depends_on:
       tinyproxy:
         condition: service_healthy
+    tmpfs:
+      - /tmp
 
 networks:
   dev-internal:
@@ -57,4 +58,3 @@ volumes:
   ivy2-cache:
   coursier-cache:
   devkit-auth:
-  tmpfs:

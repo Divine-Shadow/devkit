@@ -46,7 +46,8 @@ services:
       - devkit-auth:/var/host-codex
       - ${HOST_CODEX_DIR:-${HOME}/.codex}:/var/seed-codex:ro
       - ${HOST_CODEX_FILE:-${HOME}/.codex/auth.json}:/var/auth.json:ro
-      - tmpfs:/tmp
+    tmpfs:
+      - /tmp
 
 volumes:
   npm-cache:

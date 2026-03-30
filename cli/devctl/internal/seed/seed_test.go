@@ -68,6 +68,29 @@ func TestBuildAnchorScripts(t *testing.T) {
 	}
 }
 
+func TestBuildForceReseedScripts(t *testing.T) {
+	scripts := BuildForceReseedScripts("/workspace/.devhome")
+	if len(scripts) < 8 {
+		t.Fatalf("expected >=8 scripts, got %d", len(scripts))
+	}
+	joined := ""
+	for _, s := range scripts {
+		joined += s + "\n"
+	}
+	for _, frag := range []string{
+		"rm -rf '/workspace/.devhome/.codex'",
+		"cp -f /var/auth.json '/workspace/.devhome/.codex/auth.json'",
+		"/workspace/.devhome/.codex/config.toml",
+		"[mcp_servers.codex-cli]",
+		"startup_timeout_sec = 60",
+		"touch '/workspace/.devhome/.codex/.seeded'",
+	} {
+		if !contains(joined, frag) {
+			t.Fatalf("missing expected fragment %q in force reseed scripts: %s", frag, joined)
+		}
+	}
+}
+
 func contains(hay, needle string) bool {
 	return len(hay) >= len(needle) && (len(needle) == 0 || indexOf(hay, needle) >= 0)
 }

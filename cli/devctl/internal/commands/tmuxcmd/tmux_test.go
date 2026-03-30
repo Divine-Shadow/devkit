@@ -135,6 +135,83 @@ exit 0
 	}
 }
 
+func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
+	defaultSessionName = func(project string) string { return "devkit:" + project }
+	hasTmuxSession = func(session string) bool { return false }
+	originalDetectPlainProject := detectPlainProject
+	detectPlainProject = func(ctx *cmdregistry.Context) string { return strings.TrimSpace(ctx.Project) }
+	t.Cleanup(func() { detectPlainProject = originalDetectPlainProject })
+	mustAtoi = func(value string) int {
+		switch value {
+		case "2":
+			return 2
+		default:
+			t.Fatalf("unexpected mustAtoi input %q", value)
+			return 0
+		}
+	}
+	listServiceNames = func(_ []string, service string) []string {
+		if service != "dev-agent" {
+			return nil
+		}
+		return []string{"dev-agent-1", "dev-agent-2"}
+	}
+	lockPath := wtutil.ViewerLockPath("devkit:codex8-plain")
+	_ = os.Remove(lockPath)
+	t.Cleanup(func() { _ = os.Remove(lockPath) })
+
+	dir := t.TempDir()
+	wtLog := filepath.Join(dir, "wt.log")
+	writeStub(t, filepath.Join(dir, "wt.exe"), "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$WT_LOG\"\n")
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WT_LOG", wtLog)
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
+
+	ctx := &cmdregistry.Context{
+		Project:        "codex",
+		ComposeProject: "devkit-codex8",
+		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
+		Args:           []string{"--plain", "--count", "2", "--cd", "/workspace"},
+	}
+	if err := handleWTOpen(ctx); err != nil {
+		t.Fatalf("handleWTOpen plain error: %v", err)
+	}
+
+	data, err := os.ReadFile(wtLog)
+	if err != nil {
+		t.Fatalf("read wt log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 wt launch, got %d: %q", len(lines), string(data))
+	}
+	if !strings.Contains(lines[0], "exec '/home/bayesartre/dev/devkit/kit/bin/devctl' -p 'codex' --compose-project 'devkit-codex8' exec-cd '1' '/workspace' zsh -i ; new-tab --title agent-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS zsh -lic exec '/home/bayesartre/dev/devkit/kit/bin/devctl' -p 'codex' --compose-project 'devkit-codex8' exec-cd '2' '/workspace' zsh -i") {
+		t.Fatalf("unexpected plain wt launch: %q", lines[0])
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("plain wt-open should not create viewer lock, stat err=%v", err)
+	}
+}
+
+func TestPlainTabCommandInfersDevAllForCodex8ComposeProject(t *testing.T) {
+	originalDetectPlainProject := detectPlainProject
+	detectPlainProject = func(ctx *cmdregistry.Context) string { return "dev-all" }
+	t.Cleanup(func() { detectPlainProject = originalDetectPlainProject })
+
+	ctx := &cmdregistry.Context{
+		Project:        "codex",
+		ComposeProject: "devkit-codex8",
+		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
+		Paths:          cmdregistry.Context{}.Paths,
+	}
+	got := plainTabCommand(ctx, "5", "")
+	want := "exec '/home/bayesartre/dev/devkit/kit/bin/devctl' -p 'dev-all' --compose-project 'devkit-codex8' exec-cd '5' '/workspaces/dev/agent-worktrees/agent5/ouroboros-ide' zsh -i"
+	if got != want {
+		t.Fatalf("plainTabCommand mismatch:\n got: %q\nwant: %q", got, want)
+	}
+}
+
 func TestHandleWTReleaseRemovesLock(t *testing.T) {
 	defaultSessionName = func(project string) string { return "devkit:" + project }
 	hasTmuxSession = func(session string) bool { return true }

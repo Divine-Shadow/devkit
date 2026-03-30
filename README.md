@@ -107,6 +107,12 @@ Tmux ergonomics (new):
 - Add a single window at a path: `scripts/devkit tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]`.
   - Example (dev-all): `scripts/devkit -p dev-all tmux-add-cd 2 dumb-onion-hax --name doh-2`.
   - Use the same `--session` across overlays to mix images in one tmux.
+- Windows Terminal tabs for an existing tmux session: `scripts/devkit wt-open [--session NAME]`.
+- Windows Terminal tabs without tmux: `scripts/devkit wt-open --plain [--count N] [--cd PATH]`.
+  - This attaches directly to running `dev-agent` containers and does not run `compose up`.
+  - Use it for an already-running stack when you want normal WT tabs instead of tmux-backed tabs.
+  - For the default `devkit-codex8` worktree stack, use `-p dev-all`.
+  - Example: `scripts/devkit -p dev-all --compose-project devkit-codex8 wt-open --plain --count 8`
 - Target a different service (non-default): append `--service <name>` to `tmux-sync`, `tmux-add-cd`, or `scale --tmux-sync`.
 - Apply a layout file (YAML): `scripts/devkit tmux-apply-layout --file tmux.yaml [--session NAME]`.
   - Example tmux.yaml:

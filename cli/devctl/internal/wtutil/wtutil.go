@@ -103,16 +103,28 @@ func WriteViewerLock(path string, lock ViewerLock) error {
 
 // NewTabArgs builds args for a single `wt` invocation that opens one tab in the named window via WSL.
 func NewTabArgs(windowName, wslPath, distro string, tab TabSpec) []string {
+	return NewTabsArgs(windowName, wslPath, distro, []TabSpec{tab})
+}
+
+// NewTabsArgs builds args for a single `wt` invocation that opens multiple tabs
+// in the named window via WSL, preserving the provided order.
+func NewTabsArgs(windowName, wslPath, distro string, tabs []TabSpec) []string {
 	windowsWSLPath := windowsPath(wslPath)
-	return []string{
-		"-w", windowName,
-		"new-tab",
-		"--title", tab.Title,
-		"--",
-		windowsWSLPath,
-		"-d", distro,
-		"zsh", "-lic", tab.Command,
+	args := []string{"-w", windowName}
+	for i, tab := range tabs {
+		if i > 0 {
+			args = append(args, ";")
+		}
+		args = append(args,
+			"new-tab",
+			"--title", tab.Title,
+			"--",
+			windowsWSLPath,
+			"-d", distro,
+			"zsh", "-lic", tab.Command,
+		)
 	}
+	return args
 }
 
 func windowsPath(path string) string {

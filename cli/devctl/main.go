@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -36,6 +37,7 @@ import (
 	sshsteps "devkit/cli/devctl/internal/sshsteps"
 	"devkit/cli/devctl/internal/tmuxutil"
 	wtx "devkit/cli/devctl/internal/worktrees"
+	"devkit/cli/devctl/internal/wtutil"
 	// credential pool components
 	assign "devkit/cli/devctl/internal/assign"
 	poolcfg "devkit/cli/devctl/internal/config"
@@ -849,15 +851,16 @@ Commands:
   scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]] [--skip-ready],
   ensure-ready [--count N] [--service NAME]
   exec <n> <cmd...>, attach <n>
+  codex-auth reseed <n> [--service NAME]
   allow <domain>, warm, maintain, check-net
   hosts [print|apply|check] [--target host|agents|all] [--index N] [--all-agents]
   proxy {tinyproxy|envoy}
-  tmux-shells [N], open [N], fresh-open [N]
+  tmux-shells [N] [--plain], open [N] [--plain], fresh-open [N] [--plain]
   exec-cd <index> <subpath> [cmd...], attach-cd <index> <subpath>
   tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH] [--service NAME]
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   tmux-apply-layout --file <layout.yaml> [--session NAME] [--attach]
-  wt-open [--session NAME], wt-release [--session NAME]
+  wt-open [--session NAME] [--plain] [--count N] [--service NAME] [--cd PATH], wt-release [--session NAME]
   tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
@@ -871,7 +874,7 @@ Commands:
   worktrees-branch <repo> <index> <branch>   (dev-all)
   worktrees-status <repo> [--all|--index N]  (dev-all)
   worktrees-sync <repo> (--pull|--push) [--all|--index N]  (dev-all)
-  worktrees-tmux <repo> <count>              (dev-all)
+  worktrees-tmux <repo> <count> [--plain]    (dev-all)
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (dev-all)
   verify                                     (ssh + codex + worktrees)
@@ -1049,14 +1052,15 @@ func main() {
 	verifyallcmd.Register(registry)
 	tmuxcmd.Register(registry, doSyncTmux, ensureTmuxSessionWithWindow, defaultSessionName, mustAtoi, listServiceNames, buildWindowCmd, agentexec.NewSeedTracker, hasTmuxSession)
 	ctx := &cmdregistry.Context{
-		DryRun:  dryRun,
-		Project: project,
-		Profile: profile,
-		Args:    sub,
-		Files:   files,
-		Paths:   paths,
-		Pool:    pconf,
-		Exe:     exe,
+		DryRun:         dryRun,
+		Project:        project,
+		Profile:        profile,
+		ComposeProject: strings.TrimSpace(os.Getenv("COMPOSE_PROJECT_NAME")),
+		Args:           sub,
+		Files:          files,
+		Paths:          paths,
+		Pool:           pconf,
+		Exe:            exe,
 	}
 	if handler, ok := registry.Lookup(cmd); ok {
 		if cmd == "up" {
@@ -1728,6 +1732,46 @@ func main() {
 		exports := "export HOME='" + anchor + "' CODEX_HOME='" + anchor + "/.codex' CODEX_ROLLOUT_DIR='" + anchor + "/.codex/rollouts' XDG_CACHE_HOME='" + anchor + "/.cache' XDG_CONFIG_HOME='" + anchor + "/.config' DEVKIT_GIT_USER_NAME='" + gname + "' DEVKIT_GIT_USER_EMAIL='" + gemail + "'"
 		cmd := strings.Join(rest, " ")
 		interactiveExecServiceIdx(dryRun, files, svc, idx, exports+"; exec "+cmd)
+	case "codex-auth", "creds":
+		mustProject(project)
+		if len(sub) == 0 {
+			die("Usage: codex-auth reseed <index> [--service NAME]")
+		}
+		action := strings.TrimSpace(sub[0])
+		switch action {
+		case "reseed":
+			idx := "1"
+			svc := resolveService(project, paths.OverlayPaths)
+			seenIndex := false
+			for i := 1; i < len(sub); i++ {
+				switch sub[i] {
+				case "--service":
+					if i+1 >= len(sub) {
+						die("--service requires a value")
+					}
+					svc = strings.TrimSpace(sub[i+1])
+					i++
+				default:
+					if seenIndex {
+						die("Usage: codex-auth reseed <index> [--service NAME]")
+					}
+					idx = sub[i]
+					seenIndex = true
+				}
+			}
+			if strings.TrimSpace(svc) == "" {
+				svc = "dev-agent"
+			}
+			anchor := anchorHome(project)
+			base := anchorBase(project)
+			runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
+			for _, script := range seed.BuildForceReseedScripts(anchor) {
+				execServiceIdx(dryRun, files, svc, idx, script)
+			}
+			fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
+		default:
+			die("Usage: codex-auth reseed <index> [--service NAME]")
+		}
 	case "attach":
 		mustProject(project)
 		idx := "1"
@@ -2017,14 +2061,32 @@ exit 0`, home, home, home, home, home)
 	case "tmux-shells":
 		mustProject(project)
 		n := 2
-		if len(sub) > 0 {
-			n = mustAtoi(sub[0])
+		plain := false
+		for _, arg := range sub {
+			if arg == "--plain" {
+				plain = true
+				continue
+			}
+			n = mustAtoi(arg)
 		}
 		runner.Compose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
 		sess := "devkit-shells"
-		// window 1
-		home1 := "/workspace/.devhome-agent1"
-		if !skipTmux() {
+		if plain {
+			tracker := agentexec.NewSeedTracker()
+			tabs := make([]wtutil.TabSpec, 0, n)
+			for i := 1; i <= n; i++ {
+				cmd := mustBuildWindowCmd(files, project, fmt.Sprintf("%d", i), "/workspace", "dev-agent", tracker)
+				tabs = append(tabs, wtutil.TabSpec{
+					Title:   fmt.Sprintf("agent-%d", i),
+					Command: cmd,
+				})
+			}
+			if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
+				die(err.Error())
+			}
+		} else if !skipTmux() {
+			// window 1
+			home1 := "/workspace/.devhome-agent1"
 			names := listAgentNames(files)
 			if len(names) == 0 {
 				die("no dev-agent containers running")
@@ -2043,13 +2105,31 @@ exit 0`, home, home, home, home, home)
 	case "open":
 		mustProject(project)
 		n := 2
-		if len(sub) > 0 {
-			n = mustAtoi(sub[0])
+		plain := false
+		for _, arg := range sub {
+			if arg == "--plain" {
+				plain = true
+				continue
+			}
+			n = mustAtoi(arg)
 		}
 		runner.Compose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
 		sess := "devkit-open"
-		home1 := "/workspace/.devhome-agent1"
-		if !skipTmux() {
+		if plain {
+			tracker := agentexec.NewSeedTracker()
+			tabs := make([]wtutil.TabSpec, 0, n)
+			for i := 1; i <= n; i++ {
+				cmd := mustBuildWindowCmd(files, project, fmt.Sprintf("%d", i), "/workspace", "dev-agent", tracker)
+				tabs = append(tabs, wtutil.TabSpec{
+					Title:   fmt.Sprintf("agent-%d", i),
+					Command: cmd,
+				})
+			}
+			if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
+				die(err.Error())
+			}
+		} else if !skipTmux() {
+			home1 := "/workspace/.devhome-agent1"
 			names := listAgentNames(files)
 			if len(names) == 0 {
 				die("no dev-agent containers running")
@@ -2067,8 +2147,13 @@ exit 0`, home, home, home, home, home)
 	case "fresh-open":
 		mustProject(project)
 		n := 3
-		if len(sub) > 0 {
-			n = mustAtoi(sub[0])
+		plain := false
+		for _, arg := range sub {
+			if arg == "--plain" {
+				plain = true
+				continue
+			}
+			n = mustAtoi(arg)
 		}
 		all := compose.AllProfilesFiles(paths, project)
 		// If pool mode, include pool compose file to mount read-only pool
@@ -2132,7 +2217,21 @@ exit 0`, home, home, home, home, home)
 		}
 
 		// tmux session
-		if !skipTmux() {
+		if plain {
+			sess := "devkit-open"
+			tracker := agentexec.NewSeedTracker()
+			tabs := make([]wtutil.TabSpec, 0, n)
+			for i := 1; i <= n; i++ {
+				cmd := mustBuildWindowCmd(all, project, fmt.Sprintf("%d", i), "/workspace", "dev-agent", tracker)
+				tabs = append(tabs, wtutil.TabSpec{
+					Title:   fmt.Sprintf("agent-%d", i),
+					Command: cmd,
+				})
+			}
+			if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
+				die(err.Error())
+			}
+		} else if !skipTmux() {
 			sess := "devkit-open"
 			tracker := agentexec.NewSeedTracker()
 			cmd := mustBuildWindowCmd(all, project, "1", "/workspace", "dev-agent", tracker)
@@ -2694,15 +2793,30 @@ exit 0`, home, home, home, home, home)
 			die("Use -p dev-all for worktrees-tmux")
 		}
 		if len(sub) < 2 {
-			die("Usage: -p dev-all worktrees-tmux <repo> <count>")
+			die("Usage: -p dev-all worktrees-tmux <repo> <count> [--plain]")
 		}
 		repo := sub[0]
 		n := mustAtoi(sub[1])
+		plain := hasArgFlag(sub[2:], "--plain")
 		// Bring up and open tmux windows for N agents
 		runner.Compose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
 		sess := "devkit-worktrees"
 		home1 := pth.AgentHomePath(project, "1", repo)
-		if !skipTmux() {
+		if plain {
+			tracker := agentexec.NewSeedTracker()
+			tabs := make([]wtutil.TabSpec, 0, n)
+			for i := 1; i <= n; i++ {
+				dest := pth.AgentRepoPath(project, fmt.Sprintf("%d", i), repo)
+				cmd := mustBuildWindowCmd(files, project, fmt.Sprintf("%d", i), dest, "dev-agent", tracker)
+				tabs = append(tabs, wtutil.TabSpec{
+					Title:   fmt.Sprintf("agent-%d", i),
+					Command: cmd,
+				})
+			}
+			if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
+				die(err.Error())
+			}
+		} else if !skipTmux() {
 			names := listAgentNames(files)
 			if len(names) == 0 {
 				die("no dev-agent containers running")
@@ -2854,6 +2968,80 @@ func hasTmuxSession(session string) bool {
 	// "no server running on /tmp/tmux-<uid>/default" when probing.
 	_, res := execx.Capture(context.Background(), "tmux", tmuxutil.HasSession(session)...)
 	return res.Code == 0
+}
+
+func resolveWTBinary() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DEVKIT_WT_PATH")); configured != "" {
+		if _, err := os.Stat(configured); err != nil {
+			return "", fmt.Errorf("DEVKIT_WT_PATH %s not accessible: %w", configured, err)
+		}
+		return configured, nil
+	}
+	for _, candidate := range []string{"wt.exe", "wt"} {
+		if resolved, err := exec.LookPath(candidate); err == nil {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("Windows Terminal not found. On WSL, either add wt.exe to PATH or set DEVKIT_WT_PATH to the full wt.exe path")
+}
+
+func resolveWSLBinary() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DEVKIT_WSL_PATH")); configured != "" {
+		if _, err := os.Stat(configured); err != nil {
+			return "", fmt.Errorf("DEVKIT_WSL_PATH %s not accessible: %w", configured, err)
+		}
+		return configured, nil
+	}
+	for _, candidate := range []string{"wsl.exe", "/mnt/c/Windows/System32/wsl.exe", "/mnt/c/Windows/system32/wsl.exe"} {
+		if filepath.IsAbs(candidate) {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, nil
+			}
+			continue
+		}
+		if resolved, err := exec.LookPath(candidate); err == nil {
+			return resolved, nil
+		}
+	}
+	return "", fmt.Errorf("wsl.exe not found. Set DEVKIT_WSL_PATH to the full wsl.exe path")
+}
+
+func resolveWSLDistro() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("DEVKIT_WSL_DISTRO")); configured != "" {
+		return configured, nil
+	}
+	if detected := strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")); detected != "" {
+		return detected, nil
+	}
+	return "", fmt.Errorf("WSL distro not detected. Set DEVKIT_WSL_DISTRO explicitly")
+}
+
+func launchPlainTabs(dry bool, project, session string, tabs []wtutil.TabSpec) error {
+	wtBinary, err := resolveWTBinary()
+	if err != nil {
+		return err
+	}
+	wslBinary, err := resolveWSLBinary()
+	if err != nil {
+		return err
+	}
+	wslDistro, err := resolveWSLDistro()
+	if err != nil {
+		return err
+	}
+	windowName := wtutil.ViewerWindowName(session)
+	args := wtutil.NewTabsArgs(windowName, wslBinary, wslDistro, tabs)
+	if dry {
+		fmt.Fprintln(os.Stderr, "+ "+wtBinary+" "+strings.Join(args, " "))
+		return nil
+	}
+	runCtx, cancel := execx.WithTimeout(2 * time.Minute)
+	res := execx.RunCtx(runCtx, wtBinary, args...)
+	cancel()
+	if res.Code != 0 {
+		return fmt.Errorf("wt tab launch failed for session %s", session)
+	}
+	return nil
 }
 
 // listTmuxWindows returns a set of window names for a session.

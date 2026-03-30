@@ -55,6 +55,32 @@ func BuildSeedScripts(home string) []string {
 	}
 }
 
+// BuildForceReseedScripts returns a sequence of bash snippets that forcibly
+// refresh $HOME/.codex from the host mounts, ensure the Codex MCP config exists,
+// and recreate the seeded marker expected by anchor startup flows.
+func BuildForceReseedScripts(home string) []string {
+	h := home
+	cfg := h + "/.codex/config.toml"
+	marker := h + "/.codex/.seeded"
+	return []string{
+		WaitForHostMountsScript(),
+		ResetAndCreateDirsScript(home),
+		CloneHostCodexScript(home),
+		FallbackCopyAuthScript(home),
+		`if [ ! -f '` + cfg + `' ]; then cat > '` + cfg + `' <<'EOF'
+` + strings.TrimSpace(codexCLIStartupConfig) + `
+EOF
+fi`,
+		`if grep -q '^\[mcp_servers\.codex-cli\]' '` + cfg + `' 2>/dev/null; then perl -0pi -e 's/\[mcp_servers\.codex-cli\]\n(?:[^\[]*\n)*?(?=\n\[|\z)/[mcp_servers.codex-cli]\ncommand = "codex"\nargs = ["mcp-server"]\nstartup_timeout_sec = 60\n/s' '` + cfg + `'; else cat >> '` + cfg + `' <<'EOF'
+
+` + strings.TrimSpace(codexCLIStartupConfig) + `
+EOF
+fi`,
+		TightenPermsScript(home),
+		`touch '` + marker + `'`,
+	}
+}
+
 // AnchorConfig describes how to anchor HOME for a container and optionally seed Codex.
 type AnchorConfig struct {
 	// Anchor is the symlink path exposed to tooling, e.g. /workspace/.devhome.
