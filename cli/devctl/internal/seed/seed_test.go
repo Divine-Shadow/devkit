@@ -11,7 +11,7 @@ func TestBuildSeedScripts(t *testing.T) {
 	mustContain := []string{
 		"/var/host-codex", // wait condition
 		"rm -rf '/workspace/.devhome-agent1/.codex'",
-		"/var/host-codex/. '/workspace/.devhome-agent1/.codex/",
+		"/var/host-codex/auth.json '/workspace/.devhome-agent1/.codex/auth.json'",
 		"cp -f /var/auth.json '/workspace/.devhome-agent1/.codex/auth.json'",
 		"chmod 600 '/workspace/.devhome-agent1/.codex/auth.json'",
 	}
@@ -56,7 +56,7 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"if [ ! -f \"$marker\" ]; then",
 		"touch \"$marker\"",
 		"rm -rf \"$target/.codex\"",
-		"cp -a /var/host-codex/. \"$target/.codex/\"",
+		"cp -f /var/host-codex/auth.json \"$target/.codex/auth.json\"",
 	} {
 		if !contains(sc, frag) {
 			t.Fatalf("combined script missing %q: %s", frag, sc)
@@ -70,8 +70,8 @@ func TestBuildAnchorScripts(t *testing.T) {
 
 func TestBuildForceReseedScripts(t *testing.T) {
 	scripts := BuildForceReseedScripts("/workspace/.devhome")
-	if len(scripts) < 8 {
-		t.Fatalf("expected >=8 scripts, got %d", len(scripts))
+	if len(scripts) < 6 {
+		t.Fatalf("expected >=6 scripts, got %d", len(scripts))
 	}
 	joined := ""
 	for _, s := range scripts {
@@ -79,10 +79,8 @@ func TestBuildForceReseedScripts(t *testing.T) {
 	}
 	for _, frag := range []string{
 		"rm -rf '/workspace/.devhome/.codex'",
+		"/var/host-codex/auth.json '/workspace/.devhome/.codex/auth.json'",
 		"cp -f /var/auth.json '/workspace/.devhome/.codex/auth.json'",
-		"/workspace/.devhome/.codex/config.toml",
-		"[mcp_servers.codex-cli]",
-		"startup_timeout_sec = 60",
 		"touch '/workspace/.devhome/.codex/.seeded'",
 	} {
 		if !contains(joined, frag) {

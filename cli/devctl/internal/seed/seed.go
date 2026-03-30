@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-const codexCLIStartupConfig = `
-[mcp_servers.codex-cli]
-command = "codex"
-args = ["mcp-server"]
-startup_timeout_sec = 60
-`
-
 // WaitForHostMountsScript returns a script that waits (up to ~10s) for
 // /var/host-codex or /var/auth.json to become available.
 func WaitForHostMountsScript() string {
@@ -24,10 +17,10 @@ func ResetAndCreateDirsScript(home string) string {
 	return `rm -rf '` + h + `/.codex' && mkdir -p '` + h + `/.codex' '` + h + `/.codex/rollouts' '` + h + `/.cache' '` + h + `/.config' '` + h + `/.local'`
 }
 
-// CloneHostCodexScript clones the entire /var/host-codex into $HOME/.codex (if present).
-func CloneHostCodexScript(home string) string {
+// CopyHostAuthScript copies the host auth.json into $HOME/.codex/auth.json when present.
+func CopyHostAuthScript(home string) string {
 	h := home
-	return `if [ -d /var/host-codex ]; then cp -a /var/host-codex/. '` + h + `/.codex/'; fi`
+	return `if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json '` + h + `/.codex/auth.json'; fi`
 }
 
 // FallbackCopyAuthScript copies /var/auth.json into $HOME/.codex/auth.json if still missing.
@@ -49,33 +42,23 @@ func BuildSeedScripts(home string) []string {
 	return []string{
 		WaitForHostMountsScript(),
 		ResetAndCreateDirsScript(home),
-		CloneHostCodexScript(home),
+		CopyHostAuthScript(home),
 		FallbackCopyAuthScript(home),
 		TightenPermsScript(home),
 	}
 }
 
 // BuildForceReseedScripts returns a sequence of bash snippets that forcibly
-// refresh $HOME/.codex from the host mounts, ensure the Codex MCP config exists,
-// and recreate the seeded marker expected by anchor startup flows.
+// refresh $HOME/.codex auth from the host mounts and recreate the seeded marker
+// expected by anchor startup flows.
 func BuildForceReseedScripts(home string) []string {
 	h := home
-	cfg := h + "/.codex/config.toml"
 	marker := h + "/.codex/.seeded"
 	return []string{
 		WaitForHostMountsScript(),
 		ResetAndCreateDirsScript(home),
-		CloneHostCodexScript(home),
+		CopyHostAuthScript(home),
 		FallbackCopyAuthScript(home),
-		`if [ ! -f '` + cfg + `' ]; then cat > '` + cfg + `' <<'EOF'
-` + strings.TrimSpace(codexCLIStartupConfig) + `
-EOF
-fi`,
-		`if grep -q '^\[mcp_servers\.codex-cli\]' '` + cfg + `' 2>/dev/null; then perl -0pi -e 's/\[mcp_servers\.codex-cli\]\n(?:[^\[]*\n)*?(?=\n\[|\z)/[mcp_servers.codex-cli]\ncommand = "codex"\nargs = ["mcp-server"]\nstartup_timeout_sec = 60\n/s' '` + cfg + `'; else cat >> '` + cfg + `' <<'EOF'
-
-` + strings.TrimSpace(codexCLIStartupConfig) + `
-EOF
-fi`,
 		TightenPermsScript(home),
 		`touch '` + marker + `'`,
 	}
@@ -142,11 +125,8 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			WaitForHostMountsScript(),
 			"rm -rf \"$target/.codex\"",
 			"mkdir -p \"$target/.codex\" \"$target/.codex/rollouts\" \"$target/.cache\" \"$target/.config\" \"$target/.local\"",
-			"if [ -d /var/host-codex ]; then cp -a /var/host-codex/. \"$target/.codex/\"; fi",
+			"if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json \"$target/.codex/auth.json\"; fi",
 			"if [ ! -f \"$target/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$target/.codex/auth.json\"; fi",
-			"cfg=\"$target/.codex/config.toml\"",
-			"if [ ! -f \"$cfg\" ]; then cat > \"$cfg\" <<'EOF'\n" + strings.TrimSpace(codexCLIStartupConfig) + "\nEOF\nfi",
-			"if grep -q '^\\[mcp_servers\\.codex-cli\\]' \"$cfg\" 2>/dev/null; then perl -0pi -e 's/\\[mcp_servers\\.codex-cli\\]\\n(?:[^\\[]*\\n)*?(?=\\n\\[|\\z)/[mcp_servers.codex-cli]\\ncommand = \"codex\"\\nargs = [\"mcp-server\"]\\nstartup_timeout_sec = 60\\n/s' \"$cfg\"; else cat >> \"$cfg\" <<'EOF'\n\n" + strings.TrimSpace(codexCLIStartupConfig) + "\nEOF\nfi",
 			"if [ -f \"$target/.codex/auth.json\" ]; then chmod 600 \"$target/.codex/auth.json\"; fi",
 			"touch \"$marker\"",
 		}
