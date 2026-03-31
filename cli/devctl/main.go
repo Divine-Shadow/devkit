@@ -277,6 +277,21 @@ func gitIdentityFromHost() (name, email string) {
 	return name, email
 }
 
+func gitIdentityForAgent(project, idx string) (name, email string, err error) {
+	if strings.TrimSpace(project) == "dev-all" {
+		agent := strings.TrimSpace(idx)
+		if agent == "" {
+			agent = "1"
+		}
+		return fmt.Sprintf("Agent %s of BayeSartre", agent), fmt.Sprintf("agent+%s@ouroboros-ai.com", agent), nil
+	}
+	name, email = gitIdentityFromHost()
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" {
+		return "", "", fmt.Errorf("git identity not configured. Set DEVKIT_GIT_USER_NAME and DEVKIT_GIT_USER_EMAIL, or configure host git --global user.name/user.email")
+	}
+	return name, email, nil
+}
+
 // shSingleQuote wraps s in single quotes and escapes any embedded single quotes for POSIX shells.
 func shSingleQuote(s string) string {
 	if s == "" {
@@ -1705,9 +1720,9 @@ func main() {
 			rest = sub[1:]
 		}
 		// Enforce git identity
-		gname, gemail := gitIdentityFromHost()
-		if strings.TrimSpace(gname) == "" || strings.TrimSpace(gemail) == "" {
-			die("git identity not configured. Set DEVKIT_GIT_USER_NAME and DEVKIT_GIT_USER_EMAIL, or configure host git --global user.name/user.email")
+		gname, gemail, err := gitIdentityForAgent(project, idx)
+		if err != nil {
+			die(err.Error())
 		}
 		svc := resolveService(project, paths.OverlayPaths)
 		repo := defaultDevAllRepoMain(paths.OverlayPaths)
@@ -1744,8 +1759,9 @@ func main() {
 				execServiceIdxInput(dryRun, files, svc, idx, knownBytes, "mkdir -p '"+anchor+"'/.ssh && cat > '"+anchor+"'/.ssh/known_hosts && chmod 644 '"+anchor+"'/.ssh/known_hosts")
 			}
 			execServiceIdxInput(dryRun, files, svc, idx, []byte(cfg), "mkdir -p '"+anchor+"'/.ssh && cat > '"+anchor+"'/.ssh/config && chmod 600 '"+anchor+"'/.ssh/config")
-			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; touch \"$home/.gitconfig\"; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'")
+			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; touch \"$home/.gitconfig\"; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'; HOME=\"$home\" git config --global user.name "+shSingleQuote(gname)+"; HOME=\"$home\" git config --global user.email "+shSingleQuote(gemail))
 		}
+		configureGitIdentityForRepo(dryRun, files, svc, idx, anchor, pth.AgentRepoPath(project, idx, repo), gname, gemail)
 		exports := "export HOME='" + anchor + "' CODEX_HOME='" + anchor + "/.codex' CODEX_ROLLOUT_DIR='" + anchor + "/.codex/rollouts' XDG_CACHE_HOME='" + anchor + "/.cache' XDG_CONFIG_HOME='" + anchor + "/.config' DEVKIT_GIT_USER_NAME='" + gname + "' DEVKIT_GIT_USER_EMAIL='" + gemail + "'"
 		cmd := strings.Join(rest, " ")
 		interactiveExecServiceIdx(dryRun, files, svc, idx, exports+"; exec "+cmd)
@@ -2057,6 +2073,10 @@ exit 0`, home, home, home, home, home)
 		if len(sub) > 2 {
 			cmdstr = strings.Join(sub[2:], " ")
 		}
+		gname, gemail, err := gitIdentityForAgent(project, idx)
+		if err != nil {
+			die(err.Error())
+		}
 		// Interactive shell: ensure anchor and seed SSH, then cd
 		svc := resolveService(project, paths.OverlayPaths)
 		anchor := anchorHome(project)
@@ -2087,8 +2107,9 @@ exit 0`, home, home, home, home, home)
 				execServiceIdxInput(dryRun, files, svc, idx, knownBytes, "cat > '"+anchor+"'/.ssh/known_hosts && chmod 644 '"+anchor+"'/.ssh/known_hosts")
 			}
 			execServiceIdxInput(dryRun, files, svc, idx, []byte(cfg), "mkdir -p '"+anchor+"'/.ssh && cat > '"+anchor+"'/.ssh/config && chmod 600 '"+anchor+"'/.ssh/config")
-			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; touch \"$home/.gitconfig\"; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'")
+			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; touch \"$home/.gitconfig\"; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'; HOME=\"$home\" git config --global user.name "+shSingleQuote(gname)+"; HOME=\"$home\" git config --global user.email "+shSingleQuote(gemail))
 		}
+		configureGitIdentityForRepo(dryRun, files, svc, idx, anchor, dest, gname, gemail)
 		exports := "export HOME='" + anchor + "' CODEX_HOME='" + anchor + "/.codex' CODEX_ROLLOUT_DIR='" + anchor + "/.codex/rollouts' XDG_CACHE_HOME='" + anchor + "/.cache' XDG_CONFIG_HOME='" + anchor + "/.config'"
 		interactiveExecServiceIdx(dryRun, files, svc, idx, exports+"; cd '"+dest+"' && exec "+cmdstr)
 	case "attach-cd":
@@ -3140,9 +3161,9 @@ func buildWindowCmd(fileArgs []string, project, idx, dest, service, composeProje
 }
 
 func buildWindowCmdForProject(fileArgs []string, project, idx, dest, service, composeProject, containerName string, tracker *agentexec.SeedTracker) (string, error) {
-	gname, gemail := gitIdentityFromHost()
-	if strings.TrimSpace(gname) == "" || strings.TrimSpace(gemail) == "" {
-		return "", fmt.Errorf("git identity not configured. Set DEVKIT_GIT_USER_NAME and DEVKIT_GIT_USER_EMAIL, or configure host git --global user.name/user.email")
+	gname, gemail, err := gitIdentityForAgent(project, idx)
+	if err != nil {
+		return "", err
 	}
 	return agentexec.BuildCommand(agentexec.CommandOpts{
 		Files:          fileArgs,
@@ -3235,6 +3256,17 @@ func agentHomeForProject(project, idx, repo string) string {
 	return anchorHome(project)
 }
 
+func configureGitIdentityForRepo(dry bool, files []string, service, idx, home, repoPath, name, email string) {
+	cmd := fmt.Sprintf(
+		`set -e; if [ -d %[1]s/.git ] || git -C %[1]s rev-parse --git-dir >/dev/null 2>&1; then git -C %[1]s config extensions.worktreeConfig true; git -C %[1]s config --worktree user.name %s; git -C %[1]s config --worktree user.email %s; git -C %[1]s config --worktree core.sshCommand 'ssh -F %[2]s/.ssh/config'; fi`,
+		shSingleQuote(repoPath),
+		home,
+		shSingleQuote(name),
+		shSingleQuote(email),
+	)
+	execServiceIdx(dry, files, service, idx, cmd)
+}
+
 func ensureProjectReady(ctx *cmdregistry.Context, composeProject string, service string, count int, force bool) error {
 	project := strings.TrimSpace(ctx.Project)
 	if project == "" {
@@ -3324,6 +3356,10 @@ func configureSSHAndGit(dry bool, files []string, project string, paths compose.
 	for i := 1; i <= count; i++ {
 		idx := fmt.Sprintf("%d", i)
 		anchor := agentHomeForProject(project, idx, repo)
+		gname, gemail, err := gitIdentityForAgent(project, idx)
+		if err != nil {
+			die(err.Error())
+		}
 		if strings.TrimSpace(project) == "dev-all" {
 			for _, script := range seed.BuildDirectHomeScripts(anchor, true) {
 				execServiceIdx(dry, files, service, idx, script)
@@ -3347,8 +3383,9 @@ func configureSSHAndGit(dry bool, files []string, project string, paths compose.
 			execServiceIdxInput(dry, files, service, idx, knownBytes, "cat > '"+anchor+"'/.ssh/known_hosts && chmod 644 '"+anchor+"'/.ssh/known_hosts")
 		}
 		execServiceIdxInput(dry, files, service, idx, []byte(cfg), "cat > '"+anchor+"'/.ssh/config && chmod 600 '"+anchor+"'/.ssh/config")
-		cmd := fmt.Sprintf(`set -e; home='%[1]s'; user_home="${HOME:-}"; if [ -z "$user_home" ] || [ ! -d "$user_home" ] || [ ! -w "$user_home" ]; then for candidate in /home/dev /home/node; do if [ -d "$candidate" ] && [ -w "$candidate" ]; then user_home="$candidate"; break; fi; done; fi; mkdir -p "$home" "$home/.ssh"; touch "$home/.gitconfig"; git config --file "$home/.gitconfig" core.sshCommand 'ssh -F %[1]s/.ssh/config'; if [ -n "$user_home" ] && [ "$user_home" != "$home" ]; then mkdir -p "$user_home"; if [ -e "$user_home/.ssh" ] && [ ! -L "$user_home/.ssh" ]; then rm -rf "$user_home/.ssh"; fi; ln -sfn "$home/.ssh" "$user_home/.ssh"; if [ -e "$user_home/.gitconfig" ] && [ ! -L "$user_home/.gitconfig" ]; then rm -f "$user_home/.gitconfig"; fi; ln -sfn "$home/.gitconfig" "$user_home/.gitconfig"; fi`, anchor)
+		cmd := fmt.Sprintf(`set -e; home='%[1]s'; user_home="${HOME:-}"; if [ -z "$user_home" ] || [ ! -d "$user_home" ] || [ ! -w "$user_home" ]; then for candidate in /home/dev /home/node; do if [ -d "$candidate" ] && [ -w "$candidate" ]; then user_home="$candidate"; break; fi; done; fi; mkdir -p "$home" "$home/.ssh"; touch "$home/.gitconfig"; git config --file "$home/.gitconfig" core.sshCommand 'ssh -F %[1]s/.ssh/config'; git config --file "$home/.gitconfig" user.name %s; git config --file "$home/.gitconfig" user.email %s; if [ -n "$user_home" ] && [ "$user_home" != "$home" ]; then mkdir -p "$user_home"; if [ -e "$user_home/.ssh" ] && [ ! -L "$user_home/.ssh" ]; then rm -rf "$user_home/.ssh"; fi; ln -sfn "$home/.ssh" "$user_home/.ssh"; if [ -e "$user_home/.gitconfig" ] && [ ! -L "$user_home/.gitconfig" ]; then rm -f "$user_home/.gitconfig"; fi; ln -sfn "$home/.gitconfig" "$user_home/.gitconfig"; fi`, anchor, shSingleQuote(gname), shSingleQuote(gemail))
 		execServiceIdx(dry, files, service, idx, cmd)
+		configureGitIdentityForRepo(dry, files, service, idx, anchor, pth.AgentRepoPath(project, idx, repo), gname, gemail)
 	}
 }
 
