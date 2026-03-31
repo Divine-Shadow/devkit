@@ -89,6 +89,25 @@ func TestBuildForceReseedScripts(t *testing.T) {
 	}
 }
 
+func TestBuildDirectHomeScripts(t *testing.T) {
+	scripts := BuildDirectHomeScripts("/workspaces/dev/agent-worktrees/agent2/.devhome-agent2", true)
+	if len(scripts) != 1 {
+		t.Fatalf("expected single combined script, got %d", len(scripts))
+	}
+	sc := scripts[0]
+	for _, frag := range []string{
+		`home="/workspaces/dev/agent-worktrees/agent2/.devhome-agent2"`,
+		`mkdir -p "$home/.ssh" "$home/.cache" "$home/.config" "$home/.local"`,
+		`cp -f /var/host-codex/auth.json "$home/.codex/auth.json"`,
+		`touch $home/.codex/.seeded`,
+		`codex() {`,
+	} {
+		if !contains(sc, frag) {
+			t.Fatalf("direct home script missing %q: %s", frag, sc)
+		}
+	}
+}
+
 func contains(hay, needle string) bool {
 	return len(hay) >= len(needle) && (len(needle) == 0 || indexOf(hay, needle) >= 0)
 }

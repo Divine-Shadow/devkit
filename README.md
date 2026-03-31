@@ -95,6 +95,11 @@ Auto-readiness (`dev-all`):
   - overlay `warm` hook
   - validation (`git ls-remote`, frontend `tsc`, `@playwright/test`)
 - Run explicitly when needed: `scripts/devkit -p dev-all ensure-ready [--count N] [--service dev-agent]`
+- Agent auth/home state is per-agent for `dev-all`; readiness and reseed no longer share `/workspaces/dev/.devhome`.
+- Reseed one agent in place: `scripts/devkit -p dev-all --compose-project devkit-codex8 codex-auth reseed 4`
+- Reseed all running agents, or an explicit subset, in place:
+  - `scripts/devkit -p dev-all --compose-project devkit-codex8 codex-auth reseed-all`
+  - `scripts/devkit -p dev-all --compose-project devkit-codex8 codex-auth reseed-all 2 3 4 5`
 - Bypass only for emergencies: append `--skip-ready` to `up`, `restart`, or `scale`.
 - Go is installed in the dev-agent image; warm no longer bootstraps Go from `go.dev`.
 - Warm ensures `@playwright/test` is installed and runs `playwright install chromium` in frontend repos.

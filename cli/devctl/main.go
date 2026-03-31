@@ -842,6 +842,16 @@ func resolveService(project string, overlayPaths []string) string {
 	return svc
 }
 
+func defaultDevAllRepoMain(overlayPaths []string) string {
+	cfg, _, err := config.ReadAll(overlayPaths, "dev-all")
+	if err == nil {
+		if repo := strings.TrimSpace(cfg.Defaults.Repo); repo != "" {
+			return repo
+		}
+	}
+	return "ouroboros-ide"
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `devctl (Go) — experimental
 Usage: devctl -p <project> [--profile <profiles>] <command> [args]
@@ -852,6 +862,7 @@ Commands:
   ensure-ready [--count N] [--service NAME]
   exec <n> <cmd...>, attach <n>
   codex-auth reseed <n> [--service NAME]
+  codex-auth reseed-all [indexes...] [--service NAME]
   allow <domain>, warm, maintain, check-net
   hosts [print|apply|check] [--target host|agents|all] [--index N] [--all-agents]
   proxy {tinyproxy|envoy}
@@ -1424,7 +1435,7 @@ func main() {
 				cnt = 1
 			}
 			restoreProj := withComposeProject(run.ComposeProj)
-			configureSSHAndGit(dryRun, filesOv, run.Project, svc, cnt)
+			configureSSHAndGit(dryRun, filesOv, run.Project, paths, svc, cnt)
 			if restoreEnv != nil {
 				restoreEnv()
 			}
@@ -1698,12 +1709,18 @@ func main() {
 		if strings.TrimSpace(gname) == "" || strings.TrimSpace(gemail) == "" {
 			die("git identity not configured. Set DEVKIT_GIT_USER_NAME and DEVKIT_GIT_USER_EMAIL, or configure host git --global user.name/user.email")
 		}
-		// Index-free HOME anchor per container (no reliance on replica index)
-		// Proactively seed SSH+Git so 'git pull' just works in the window
 		svc := resolveService(project, paths.OverlayPaths)
+		repo := defaultDevAllRepoMain(paths.OverlayPaths)
 		anchor := anchorHome(project)
-		base := anchorBase(project)
-		runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true})
+		if project == "dev-all" {
+			anchor = pth.AgentHomePath(project, idx, repo)
+			for _, script := range seed.BuildDirectHomeScripts(anchor, true) {
+				execServiceIdx(dryRun, files, svc, idx, script)
+			}
+		} else {
+			base := anchorBase(project)
+			runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true})
+		}
 		// copy keys + known_hosts + config under the anchor (best effort) and set global ssh
 		{
 			hostEd := filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
@@ -1727,7 +1744,7 @@ func main() {
 				execServiceIdxInput(dryRun, files, svc, idx, knownBytes, "mkdir -p '"+anchor+"'/.ssh && cat > '"+anchor+"'/.ssh/known_hosts && chmod 644 '"+anchor+"'/.ssh/known_hosts")
 			}
 			execServiceIdxInput(dryRun, files, svc, idx, []byte(cfg), "mkdir -p '"+anchor+"'/.ssh && cat > '"+anchor+"'/.ssh/config && chmod 600 '"+anchor+"'/.ssh/config")
-			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'")
+			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; touch \"$home/.gitconfig\"; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'")
 		}
 		exports := "export HOME='" + anchor + "' CODEX_HOME='" + anchor + "/.codex' CODEX_ROLLOUT_DIR='" + anchor + "/.codex/rollouts' XDG_CACHE_HOME='" + anchor + "/.cache' XDG_CONFIG_HOME='" + anchor + "/.config' DEVKIT_GIT_USER_NAME='" + gname + "' DEVKIT_GIT_USER_EMAIL='" + gemail + "'"
 		cmd := strings.Join(rest, " ")
@@ -1735,7 +1752,7 @@ func main() {
 	case "codex-auth", "creds":
 		mustProject(project)
 		if len(sub) == 0 {
-			die("Usage: codex-auth reseed <index> [--service NAME]")
+			die("Usage: codex-auth reseed <index> [--service NAME]\n       codex-auth reseed-all [indexes...] [--service NAME]")
 		}
 		action := strings.TrimSpace(sub[0])
 		switch action {
@@ -1753,7 +1770,7 @@ func main() {
 					i++
 				default:
 					if seenIndex {
-						die("Usage: codex-auth reseed <index> [--service NAME]")
+						die("Usage: codex-auth reseed <index> [--service NAME]\n       codex-auth reseed-all [indexes...] [--service NAME]")
 					}
 					idx = sub[i]
 					seenIndex = true
@@ -1762,15 +1779,61 @@ func main() {
 			if strings.TrimSpace(svc) == "" {
 				svc = "dev-agent"
 			}
+			repo := defaultDevAllRepoMain(paths.OverlayPaths)
 			anchor := anchorHome(project)
-			base := anchorBase(project)
-			runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
+			if project == "dev-all" {
+				anchor = pth.AgentHomePath(project, idx, repo)
+			} else {
+				base := anchorBase(project)
+				runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
+			}
 			for _, script := range seed.BuildForceReseedScripts(anchor) {
 				execServiceIdx(dryRun, files, svc, idx, script)
 			}
 			fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
+		case "reseed-all":
+			svc := resolveService(project, paths.OverlayPaths)
+			indexes := []string{}
+			for i := 1; i < len(sub); i++ {
+				switch sub[i] {
+				case "--service":
+					if i+1 >= len(sub) {
+						die("--service requires a value")
+					}
+					svc = strings.TrimSpace(sub[i+1])
+					i++
+				default:
+					indexes = append(indexes, strings.TrimSpace(sub[i]))
+				}
+			}
+			if strings.TrimSpace(svc) == "" {
+				svc = "dev-agent"
+			}
+			if len(indexes) == 0 {
+				names := listServiceNames(files, svc)
+				if len(names) == 0 {
+					die(fmt.Sprintf("no running %s containers found", svc))
+				}
+				for i := 1; i <= len(names); i++ {
+					indexes = append(indexes, fmt.Sprintf("%d", i))
+				}
+			}
+			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			for _, idx := range indexes {
+				anchor := anchorHome(project)
+				if project == "dev-all" {
+					anchor = pth.AgentHomePath(project, idx, repo)
+				} else {
+					base := anchorBase(project)
+					runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
+				}
+				for _, script := range seed.BuildForceReseedScripts(anchor) {
+					execServiceIdx(dryRun, files, svc, idx, script)
+				}
+				fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
+			}
 		default:
-			die("Usage: codex-auth reseed <index> [--service NAME]")
+			die("Usage: codex-auth reseed <index> [--service NAME]\n       codex-auth reseed-all [indexes...] [--service NAME]")
 		}
 	case "attach":
 		mustProject(project)
@@ -1997,8 +2060,15 @@ exit 0`, home, home, home, home, home)
 		// Interactive shell: ensure anchor and seed SSH, then cd
 		svc := resolveService(project, paths.OverlayPaths)
 		anchor := anchorHome(project)
-		base := anchorBase(project)
-		runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true})
+		if project == "dev-all" {
+			anchor = pth.AgentHomePath(project, idx, repo)
+			for _, script := range seed.BuildDirectHomeScripts(anchor, true) {
+				execServiceIdx(dryRun, files, svc, idx, script)
+			}
+		} else {
+			base := anchorBase(project)
+			runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true})
+		}
 		{
 			hostEd := filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
 			hostRsa := filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")
@@ -2017,7 +2087,7 @@ exit 0`, home, home, home, home, home)
 				execServiceIdxInput(dryRun, files, svc, idx, knownBytes, "cat > '"+anchor+"'/.ssh/known_hosts && chmod 644 '"+anchor+"'/.ssh/known_hosts")
 			}
 			execServiceIdxInput(dryRun, files, svc, idx, []byte(cfg), "mkdir -p '"+anchor+"'/.ssh && cat > '"+anchor+"'/.ssh/config && chmod 600 '"+anchor+"'/.ssh/config")
-			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'")
+			execServiceIdx(dryRun, files, svc, idx, "home='"+anchor+"'; touch \"$home/.gitconfig\"; HOME=\"$home\" git config --global core.sshCommand 'ssh -F ~/.ssh/config'")
 		}
 		exports := "export HOME='" + anchor + "' CODEX_HOME='" + anchor + "/.codex' CODEX_ROLLOUT_DIR='" + anchor + "/.codex/rollouts' XDG_CACHE_HOME='" + anchor + "/.cache' XDG_CONFIG_HOME='" + anchor + "/.config'"
 		interactiveExecServiceIdx(dryRun, files, svc, idx, exports+"; cd '"+dest+"' && exec "+cmdstr)
@@ -2050,12 +2120,16 @@ exit 0`, home, home, home, home, home)
 		// Interactive shell: no timeout, index-free anchor
 		svc := resolveService(project, paths.OverlayPaths)
 		anchor := agentexec.AnchorHome(project)
-		base := "/workspace/.devhomes"
 		if project == "dev-all" {
-			base = "/workspaces/dev/.devhomes"
+			anchor = pth.AgentHomePath(project, idx, repo)
+			for _, script := range seed.BuildDirectHomeScripts(anchor, true) {
+				execServiceIdx(dryRun, files, svc, idx, script)
+			}
+		} else {
+			base := "/workspace/.devhomes"
+			cfg := seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true}
+			runAnchorPlan(dryRun, files, svc, idx, cfg)
 		}
-		cfg := seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true}
-		runAnchorPlan(dryRun, files, svc, idx, cfg)
 		exports := "export HOME='" + anchor + "' CODEX_HOME='" + anchor + "/.codex' CODEX_ROLLOUT_DIR='" + anchor + "/.codex/rollouts' XDG_CACHE_HOME='" + anchor + "/.cache' XDG_CONFIG_HOME='" + anchor + "/.config'"
 		interactiveExecServiceIdx(dryRun, files, svc, idx, exports+"; cd '"+dest+"' && exec bash")
 	case "tmux-shells":
@@ -3154,6 +3228,13 @@ func readDefaultRepo(project string, paths compose.Paths) string {
 	return repo
 }
 
+func agentHomeForProject(project, idx, repo string) string {
+	if strings.TrimSpace(project) == "dev-all" {
+		return pth.AgentHomePath(project, idx, repo)
+	}
+	return anchorHome(project)
+}
+
 func ensureProjectReady(ctx *cmdregistry.Context, composeProject string, service string, count int, force bool) error {
 	project := strings.TrimSpace(ctx.Project)
 	if project == "" {
@@ -3197,7 +3278,7 @@ func ensureProjectReady(ctx *cmdregistry.Context, composeProject string, service
 		return fmt.Errorf("no running %s containers found for compose project %s", svc, pname)
 	}
 
-	configureSSHAndGit(ctx.DryRun, ctx.Files, project, svc, count)
+	configureSSHAndGit(ctx.DryRun, ctx.Files, project, ctx.Paths, svc, count)
 
 	overlayCfg, _, cfgErr := config.ReadAll(ctx.Paths.OverlayPaths, project)
 	if cfgErr != nil {
@@ -3218,7 +3299,7 @@ func ensureProjectReady(ctx *cmdregistry.Context, composeProject string, service
 	for i := 1; i <= count; i++ {
 		idx := fmt.Sprintf("%d", i)
 		repoPath := pth.AgentRepoPath(project, idx, repo)
-		anchor := anchorHome(project)
+		anchor := agentHomeForProject(project, idx, repo)
 		script := fmt.Sprintf(
 			"set -euo pipefail; export HOME=%q; test -f %q/.ssh/config; cd %q; GIT_SSH_COMMAND=\"ssh -F ~/.ssh/config\" git ls-remote --heads origin >/dev/null; if [ -f frontend/package.json ]; then test -x frontend/node_modules/.bin/tsc; npm --prefix frontend ls @playwright/test --depth=0 >/dev/null; fi",
 			anchor, anchor, repoPath,
@@ -3232,18 +3313,25 @@ func seedAfterUp(ctx *cmdregistry.Context, projectName string) {
 	_ = ensureProjectReady(ctx, projectName, "", 0, false)
 }
 
-func configureSSHAndGit(dry bool, files []string, project string, service string, count int) {
+func configureSSHAndGit(dry bool, files []string, project string, paths compose.Paths, service string, count int) {
 	hostEd := filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
 	hostRsa := filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")
 	edBytes, _ := os.ReadFile(hostEd)
 	rsaBytes, _ := os.ReadFile(hostRsa)
 	known := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
 	knownBytes, _ := os.ReadFile(known)
+	repo := readDefaultRepo(project, paths)
 	for i := 1; i <= count; i++ {
 		idx := fmt.Sprintf("%d", i)
-		base := anchorBase(project)
-		anchor := anchorHome(project)
-		runAnchorPlan(dry, files, service, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true})
+		anchor := agentHomeForProject(project, idx, repo)
+		if strings.TrimSpace(project) == "dev-all" {
+			for _, script := range seed.BuildDirectHomeScripts(anchor, true) {
+				execServiceIdx(dry, files, service, idx, script)
+			}
+		} else {
+			base := anchorBase(project)
+			runAnchorPlan(dry, files, service, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: true})
+		}
 		cfg := sshcfg.BuildGitHubConfigFor(anchor, len(edBytes) > 0, len(rsaBytes) > 0)
 		if len(edBytes) > 0 {
 			execServiceIdxInput(dry, files, service, idx, edBytes, "cat > '"+anchor+"'/.ssh/id_ed25519 && chmod 600 '"+anchor+"'/.ssh/id_ed25519")

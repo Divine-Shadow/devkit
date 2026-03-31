@@ -138,6 +138,67 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 	return []string{strings.Join(parts, "; ")}
 }
 
+// BuildDirectHomeScripts returns bash snippets that prepare a concrete home path
+// without using the shared anchor symlink used by older dev-all flows.
+func BuildDirectHomeScripts(home string, seedCodex bool) []string {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return nil
+	}
+	parts := []string{
+		"set -e",
+		fmt.Sprintf("home=%s", shQuote(home)),
+		"mkdir -p \"$home/.ssh\" \"$home/.cache\" \"$home/.config\" \"$home/.local\"",
+		"chmod 700 \"$home/.ssh\"",
+		"dev_home_ok=0; if mkdir -p /home/dev 2>/dev/null; then dev_home_ok=1; elif [ -d /home/dev ]; then dev_home_ok=1; fi",
+		"mkdir -p \"$home/.sbt\"",
+		"chmod -R a+rwX \"$home/.sbt\"",
+		"if [ \"$dev_home_ok\" = 1 ]; then if [ -d /home/dev/.ivy2 ]; then ln -sfn /home/dev/.ivy2 \"$home/.ivy2\"; fi; fi",
+		"if [ \"$dev_home_ok\" = 1 ]; then if [ -e /home/dev/.sbt ] || [ -L /home/dev/.sbt ]; then rm -rf /home/dev/.sbt; fi; ln -sfn \"$home/.sbt\" /home/dev/.sbt; fi",
+		"if [ \"$dev_home_ok\" = 1 ]; then if [ -d /home/dev/.cache/coursier ]; then ln -sfn /home/dev/.cache/coursier \"$home/.cache/coursier\"; fi; fi",
+		"if [ \"$dev_home_ok\" = 1 ] && [ -n \"${DOCKER_HOST:-}\" ]; then printf \"docker.host=%s\\n\" \"$DOCKER_HOST\" > \"$home/.testcontainers.properties\"; ln -sfn \"$home/.testcontainers.properties\" /home/dev/.testcontainers.properties; fi",
+		"if [ -r /var/host-home/.p10k.zsh ]; then cp -f /var/host-home/.p10k.zsh \"$home/.p10k.zsh\"; sed -i 's/^\\([[:space:]]*typeset -g POWERLEVEL9K_INSTANT_PROMPT=\\).*/\\1off/' \"$home/.p10k.zsh\"; fi",
+		"printf '%s\\n' " +
+			"'export POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true' " +
+			"'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' " +
+			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
+			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
+			"'unalias codex 2>/dev/null || true' " +
+			"'codex() {' " +
+			"'  local -a extra' " +
+			"'  extra=(' " +
+			"'    -a never' " +
+			"'    -s danger-full-access' " +
+			"\"    -c 'mcp_servers.codex-cli.command=\\\"codex\\\"'\" " +
+			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
+			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
+			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
+			"'  )' " +
+			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
+			"'}' " +
+			"'(( $+commands[claudew] )) && alias claude=claudew' > \"$home/.zshrc\"",
+	}
+	if seedCodex {
+		marker := "$home/.codex/.seeded"
+		seedSteps := []string{
+			WaitForHostMountsScript(),
+			"rm -rf \"$home/.codex\"",
+			"mkdir -p \"$home/.codex\" \"$home/.codex/rollouts\" \"$home/.cache\" \"$home/.config\" \"$home/.local\"",
+			"if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json \"$home/.codex/auth.json\"; fi",
+			"if [ ! -f \"$home/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$home/.codex/auth.json\"; fi",
+			"if [ -f \"$home/.codex/auth.json\" ]; then chmod 600 \"$home/.codex/auth.json\"; fi",
+			"touch " + marker,
+		}
+		parts = append(parts,
+			"marker="+marker,
+			"if [ ! -f \"$marker\" ]; then "+strings.Join(seedSteps, "; ")+"; fi",
+		)
+	}
+	return []string{strings.Join(parts, "; ")}
+}
+
 // shQuote provides the minimal quoting needed for simple POSIX-safe paths.
 func shQuote(path string) string {
 	if !strings.ContainsAny(path, " '\"$") {
