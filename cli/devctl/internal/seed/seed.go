@@ -56,7 +56,8 @@ func BuildForceReseedScripts(home string) []string {
 	marker := h + "/.codex/.seeded"
 	return []string{
 		WaitForHostMountsScript(),
-		ResetAndCreateDirsScript(home),
+		`mkdir -p '` + h + `/.codex' '` + h + `/.codex/rollouts' '` + h + `/.cache' '` + h + `/.config' '` + h + `/.local'`,
+		`rm -f '` + h + `/.codex/auth.json'`,
 		CopyHostAuthScript(home),
 		FallbackCopyAuthScript(home),
 		TightenPermsScript(home),

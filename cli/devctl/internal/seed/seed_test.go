@@ -78,13 +78,21 @@ func TestBuildForceReseedScripts(t *testing.T) {
 		joined += s + "\n"
 	}
 	for _, frag := range []string{
-		"rm -rf '/workspace/.devhome/.codex'",
+		"mkdir -p '/workspace/.devhome/.codex' '/workspace/.devhome/.codex/rollouts' '/workspace/.devhome/.cache' '/workspace/.devhome/.config' '/workspace/.devhome/.local'",
+		"rm -f '/workspace/.devhome/.codex/auth.json'",
 		"/var/host-codex/auth.json '/workspace/.devhome/.codex/auth.json'",
 		"cp -f /var/auth.json '/workspace/.devhome/.codex/auth.json'",
 		"touch '/workspace/.devhome/.codex/.seeded'",
 	} {
 		if !contains(joined, frag) {
 			t.Fatalf("missing expected fragment %q in force reseed scripts: %s", frag, joined)
+		}
+	}
+	for _, frag := range []string{
+		"rm -rf '/workspace/.devhome/.codex'",
+	} {
+		if contains(joined, frag) {
+			t.Fatalf("unexpected destructive fragment %q in force reseed scripts: %s", frag, joined)
 		}
 	}
 }
