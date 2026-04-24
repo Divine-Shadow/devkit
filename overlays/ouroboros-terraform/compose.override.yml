@@ -3,9 +3,10 @@ services:
   dev-agent:
     image: local/dev-agent:codex
     environment:
-      - AWS_SHARED_CREDENTIALS_FILE=/var/host-home/.aws/credentials
-      - AWS_CONFIG_FILE=/var/host-home/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/var/host-home/dev/.aws/credentials
+      - AWS_CONFIG_FILE=/var/host-home/dev/.aws/config
       - AWS_PROFILE=${AWS_PROFILE:-ouroboros}
+      - PATH=/workspace/.local/bin:/home/dev/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=tinyproxy -Dhttp.proxyPort=8888 -Dhttps.proxyHost=tinyproxy -Dhttps.proxyPort=8888 -Djava.net.useSystemProxies=true
       - SBT_GLOBAL_BASE=/workspace/.devhome/.sbt
       - DOCKER_HOST=unix:///broker-run/postgres-broker.sock

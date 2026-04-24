@@ -67,7 +67,7 @@ hooks:
       url="https://releases.hashicorp.com/${tool}/${version}/${tool}_${version}_linux_${zip_arch}.zip"
       echo "Installing ${tool} ${version} from ${url}" >&2
       curl -fsSL "$url" -o "/tmp/${tool}.zip"
-      unzip -q "/tmp/${tool}.zip" -d /workspace/.local/bin
+      unzip -qo "/tmp/${tool}.zip" "${tool}" -d /workspace/.local/bin
       chmod +x "/workspace/.local/bin/${tool}"
       rm -f "/tmp/${tool}.zip"
     }

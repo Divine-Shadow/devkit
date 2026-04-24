@@ -53,3 +53,7 @@ playwright.download.prss.microsoft.com
 fonts.googleapis.com
 fonts.gstatic.com
 ouroboros-ai.com
+releases.hashicorp.com
+oidc.us-east-2.amazonaws.com
+portal.sso.us-east-2.amazonaws.com
+d-9a670e4542.awsapps.com
