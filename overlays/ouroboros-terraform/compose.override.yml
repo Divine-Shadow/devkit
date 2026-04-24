@@ -1,0 +1,59 @@
+
+services:
+  dev-agent:
+    image: local/dev-agent:codex
+    environment:
+      - AWS_SHARED_CREDENTIALS_FILE=/var/host-home/.aws/credentials
+      - AWS_CONFIG_FILE=/var/host-home/.aws/config
+      - AWS_PROFILE=${AWS_PROFILE:-ouroboros}
+      - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=tinyproxy -Dhttp.proxyPort=8888 -Dhttps.proxyHost=tinyproxy -Dhttps.proxyPort=8888 -Djava.net.useSystemProxies=true
+      - SBT_GLOBAL_BASE=/workspace/.devhome/.sbt
+      - DOCKER_HOST=unix:///broker-run/postgres-broker.sock
+      - TESTCONTAINERS_RYUK_DISABLED=true
+      - TESTCONTAINERS_DEVKIT_NETWORK=${TESTCONTAINERS_DEVKIT_NETWORK:-${COMPOSE_PROJECT_NAME:-devkit-ouroboros-terraform}_dev-internal}
+    volumes:
+      - ${WORKSPACE_DIR:-.}:/workspace:rw
+      - ${DEVKIT_WORKTREE_ROOT}:${DEVKIT_WORKTREE_CONTAINER_ROOT:-/worktrees}:rw
+      - ivy2-cache:/home/dev/.ivy2
+      - coursier-cache:/home/dev/.cache/coursier
+      - devkit-auth:/home/dev/.codex
+      - ${HOST_CODEX_DIR:-${HOME}/.codex}:/var/host-codex:ro
+      - ${HOST_CODEX_FILE:-${HOME}/.codex/auth.json}:/var/auth.json:ro
+      - ${HOME}:/var/host-home:ro
+      - broker-run:/broker-run
+    depends_on:
+      postgres-broker:
+        condition: service_started
+    tmpfs:
+      - /tmp
+
+  postgres-broker:
+    build:
+      context: ../brokers/postgres-broker
+      dockerfile: Dockerfile
+    image: devkit/postgres-broker:dev
+    user: "0:0"
+    environment:
+      - BROKER_LISTEN=unix:///broker-run/postgres-broker.sock
+      - BROKER_UPSTREAM=/var/run/docker.sock
+      - BROKER_ALLOWED_IMAGES=${BROKER_ALLOWED_IMAGES:-postgres:latest,minio/minio:latest}
+      - BROKER_ALLOWED_IMAGE=${BROKER_ALLOWED_IMAGE:-postgres}
+      - BROKER_ALLOWED_TAG=${BROKER_ALLOWED_TAG:-latest}
+      - BROKER_ALLOW_PULLS=${BROKER_ALLOW_PULLS:-true}
+      - BROKER_LOG_LEVEL=${BROKER_LOG_LEVEL:-info}
+      - BROKER_ATTACH_NETWORKS=${BROKER_ATTACH_NETWORKS:-${COMPOSE_PROJECT_NAME:-devkit-ouroboros-terraform}_dev-internal}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      - broker-run:/broker-run
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - dev-internal
+
+volumes:
+  broker-run:

@@ -1,0 +1,95 @@
+workspace: ../../../ouroboros-terraform
+service: dev-agent
+defaults:
+  repo: ouroboros-terraform
+  agents: 1
+  base_branch: main
+  branch_prefix: agent
+env:
+  AWS_PROFILE: ouroboros
+  PATH: /workspace/.local/bin:${PATH}
+hooks:
+  warm: |
+    set -euo pipefail
+
+    mkdir -p /workspace/.local/bin
+
+    if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      ln -sf "$(command -v python3)" /workspace/.local/bin/python
+    fi
+
+    normalize_arch() {
+      local machine
+      machine="$(uname -m)"
+      case "$machine" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) echo "Unsupported architecture: $machine" >&2; return 1 ;;
+      esac
+    }
+
+    ensure_aws_cli() {
+      if command -v aws >/dev/null 2>&1; then
+        return 0
+      fi
+
+      local arch aws_arch
+      arch="$(normalize_arch)"
+      case "$arch" in
+        amd64) aws_arch="x86_64" ;;
+        arm64) aws_arch="aarch64" ;;
+      esac
+
+      local aws_url
+      aws_url="${AWSCLI_URL:-https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip}"
+      echo "Installing awscli from ${aws_url}" >&2
+      curl -fsSL "$aws_url" -o /tmp/awscliv2.zip
+      unzip -q /tmp/awscliv2.zip -d /tmp
+      /tmp/aws/install --bin-dir /workspace/.local/bin --install-dir /workspace/.local/aws-cli --update
+      rm -rf /tmp/aws /tmp/awscliv2.zip
+    }
+
+    ensure_hashicorp_tool() {
+      local tool="$1"
+      local version="$2"
+
+      if command -v "$tool" >/dev/null 2>&1; then
+        return 0
+      fi
+
+      local arch zip_arch url
+      arch="$(normalize_arch)"
+      case "$arch" in
+        amd64) zip_arch="amd64" ;;
+        arm64) zip_arch="arm64" ;;
+      esac
+
+      url="https://releases.hashicorp.com/${tool}/${version}/${tool}_${version}_linux_${zip_arch}.zip"
+      echo "Installing ${tool} ${version} from ${url}" >&2
+      curl -fsSL "$url" -o "/tmp/${tool}.zip"
+      unzip -q "/tmp/${tool}.zip" -d /workspace/.local/bin
+      chmod +x "/workspace/.local/bin/${tool}"
+      rm -f "/tmp/${tool}.zip"
+    }
+
+    ensure_aws_cli
+    ensure_hashicorp_tool terraform "${TERRAFORM_VERSION:-1.9.8}"
+    ensure_hashicorp_tool packer "${PACKER_VERSION:-1.11.2}"
+
+    if [ -z "${AWS_CONFIG_FILE:-}" ] || [ ! -f "${AWS_CONFIG_FILE}" ]; then
+      echo "Expected AWS config file not found at AWS_CONFIG_FILE='${AWS_CONFIG_FILE:-<unset>}'." >&2
+      echo "Mount or create ~/.aws/config on the host and include [profile ouroboros]." >&2
+      exit 1
+    fi
+
+    if ! grep -q '^\[profile ouroboros\]' "${AWS_CONFIG_FILE}"; then
+      echo "Expected [profile ouroboros] in ${AWS_CONFIG_FILE}." >&2
+      echo "Run aws configure sso --profile ouroboros on the host if missing." >&2
+      exit 1
+    fi
+  maintain: |
+    set -euo pipefail
+    mkdir -p /workspace/.local/bin
+    if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      ln -sf "$(command -v python3)" /workspace/.local/bin/python
+    fi
