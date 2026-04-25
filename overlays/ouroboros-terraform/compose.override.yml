@@ -3,8 +3,8 @@ services:
   dev-agent:
     image: local/dev-agent:codex
     environment:
-      - AWS_SHARED_CREDENTIALS_FILE=/var/host-home/dev/.aws/credentials
-      - AWS_CONFIG_FILE=/var/host-home/dev/.aws/config
+      - AWS_SHARED_CREDENTIALS_FILE=/home/dev/.aws/credentials
+      - AWS_CONFIG_FILE=/home/dev/.aws/config
       - AWS_PROFILE=${AWS_PROFILE:-ouroboros}
       - PATH=/workspace/.local/bin:/home/dev/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=tinyproxy -Dhttp.proxyPort=8888 -Dhttps.proxyHost=tinyproxy -Dhttps.proxyPort=8888 -Djava.net.useSystemProxies=true
@@ -14,6 +14,7 @@ services:
       - TESTCONTAINERS_DEVKIT_NETWORK=${TESTCONTAINERS_DEVKIT_NETWORK:-${COMPOSE_PROJECT_NAME:-devkit-ouroboros-terraform}_dev-internal}
     volumes:
       - ${WORKSPACE_DIR:-.}:/workspace:rw
+      - ${HOME}/dev/.aws:/home/dev/.aws:rw
       - ${DEVKIT_WORKTREE_ROOT}:${DEVKIT_WORKTREE_CONTAINER_ROOT:-/worktrees}:rw
       - ivy2-cache:/home/dev/.ivy2
       - coursier-cache:/home/dev/.cache/coursier
