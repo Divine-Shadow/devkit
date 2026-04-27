@@ -28,8 +28,8 @@ services:
     depends_on:
       postgres-broker:
         condition: service_started
-    tmpfs:
-      - /tmp
+    tmpfs: !override
+      - /tmp:exec
 
   postgres-broker:
     build:
