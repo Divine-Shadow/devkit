@@ -46,6 +46,7 @@ services:
       - BROKER_ALLOW_PULLS=${BROKER_ALLOW_PULLS:-true}
       - BROKER_LOG_LEVEL=${BROKER_LOG_LEVEL:-info}
       - BROKER_ATTACH_NETWORKS=${BROKER_ATTACH_NETWORKS:-${COMPOSE_PROJECT_NAME:-devkit-devall}_dev-internal}
+      - BROKER_READONLY_CONTAINER_NAME_PREFIXES=${BROKER_READONLY_CONTAINER_NAME_PREFIXES:-${COMPOSE_PROJECT_NAME:-devkit-devall}-dev-agent-}
     read_only: true
     cap_drop:
       - ALL

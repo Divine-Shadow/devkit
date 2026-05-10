@@ -130,6 +130,47 @@ func TestPolicy_AllowsMultipleImages(t *testing.T) {
 	}
 }
 
+func TestAuthorizeReadOnlyContainerInspection_AllowsConfiguredDevAgentPrefix(t *testing.T) {
+	rc := &requestContext{
+		policy:                        mustPolicy(t, []string{"postgres:latest"}, true),
+		readOnlyContainerNamePrefixes: []string{"devkit-ouro8-dev-agent-"},
+	}
+
+	topReq, _ := http.NewRequest(http.MethodGet, "http://unix/containers/devkit-ouro8-dev-agent-5/top?ps_args=-eo+pid", nil)
+	if err := rc.authorize(topReq); err != nil {
+		t.Fatalf("expected top allow, got %v", err)
+	}
+
+	inspectReq, _ := http.NewRequest(http.MethodGet, "http://unix/containers/devkit-ouro8-dev-agent-5/json", nil)
+	if err := rc.authorize(inspectReq); err != nil {
+		t.Fatalf("expected inspect allow, got %v", err)
+	}
+}
+
+func TestAuthorizeReadOnlyContainerInspection_BlocksMismatchedContainerName(t *testing.T) {
+	rc := &requestContext{
+		policy:                        mustPolicy(t, []string{"postgres:latest"}, true),
+		readOnlyContainerNamePrefixes: []string{"devkit-ouro8-dev-agent-"},
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, "http://unix/containers/unrelated-dev-agent-5/top", nil)
+	if err := rc.authorize(req); err == nil {
+		t.Fatal("expected top block for mismatched container name")
+	}
+}
+
+func TestAuthorizeReadOnlyContainerInspection_BlocksMutatingContainerEndpoints(t *testing.T) {
+	rc := &requestContext{
+		policy:                        mustPolicy(t, []string{"postgres:latest"}, true),
+		readOnlyContainerNamePrefixes: []string{"devkit-ouro8-dev-agent-"},
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, "http://unix/containers/devkit-ouro8-dev-agent-5/exec", bytes.NewReader([]byte(`{"Cmd":["sh"]}`)))
+	if err := rc.authorize(req); err == nil {
+		t.Fatal("expected exec create block despite matching read-only prefix")
+	}
+}
+
 func TestValidatePortBindings_MinioAllowed(t *testing.T) {
 	bindings := map[string][]portBinding{
 		"9000/tcp": []portBinding{{HostPort: ""}},

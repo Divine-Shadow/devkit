@@ -27,6 +27,7 @@
 - Codex and dev-all overlays mount the shared `broker-run` volume into each `dev-agent` container and export `DOCKER_HOST=unix:///broker-run/postgres-broker.sock` so existing tooling (Testcontainers, docker CLI) talks to the broker transparently.
 - Those overlays also export `TESTCONTAINERS_RYUK_DISABLED=true` so Testcontainers skips Ryuk by default; Ryuk is blocked by the broker and leaving it enabled causes 403s when suites first touch Docker.
 - Overlays may set `BROKER_ATTACH_NETWORKS` (for dev-all we default to `devkit-devall_dev-internal`) so the broker automatically connects any approved Postgres container to the internal network that the requesting agent uses. This keeps Testcontainers reachable even when the host bridge (`172.17.0.1`) is blocked in hardened profiles.
+- The dev-all overlay also sets `BROKER_READONLY_CONTAINER_NAME_PREFIXES` to the compose-project dev-agent prefix. This allows only `GET /containers/<name>/json` and `GET /containers/<name>/top` for current dev-agent names, enabling process diagnostics such as governance singleton sweeps without exposing mutating Docker operations or container logs.
 - The broker service only connects to the internal Docker socket and joins the `dev-internal` network; it has no path to `dev-egress`.
 
 ### 3. Daemon Hardening

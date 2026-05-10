@@ -28,13 +28,14 @@ var (
 )
 
 type brokerConfig struct {
-	ListenAddr      string
-	UpstreamAddr    string
-	AllowedImages   []string
-	AllowedEnv      []string
-	AllowImagePulls bool
-	LogLevel        string
-	AttachNetworks  []string
+	ListenAddr                    string
+	UpstreamAddr                  string
+	AllowedImages                 []string
+	AllowedEnv                    []string
+	AllowImagePulls               bool
+	LogLevel                      string
+	AttachNetworks                []string
+	ReadOnlyContainerNamePrefixes []string
 }
 
 type containerRegistry struct {
@@ -83,11 +84,12 @@ func (c *containerRegistry) match(identifier string) (containerRecord, bool) {
 }
 
 type requestContext struct {
-	policy     *policy
-	client     *http.Client
-	target     *url.URL
-	containers *containerRegistry
-	attachNets []string
+	policy                        *policy
+	client                        *http.Client
+	target                        *url.URL
+	containers                    *containerRegistry
+	attachNets                    []string
+	readOnlyContainerNamePrefixes []string
 }
 
 type policy struct {
@@ -397,6 +399,11 @@ func loadConfig() brokerConfig {
 	if net := strings.TrimSpace(os.Getenv("BROKER_ATTACH_NETWORK")); net != "" {
 		cfg.AttachNetworks = append(cfg.AttachNetworks, net)
 	}
+	cfg.ReadOnlyContainerNamePrefixes = splitAndTrim(os.Getenv("BROKER_READONLY_CONTAINER_NAME_PREFIXES"))
+	if prefix := strings.TrimSpace(os.Getenv("BROKER_READONLY_CONTAINER_NAME_PREFIX")); prefix != "" {
+		cfg.ReadOnlyContainerNamePrefixes = append(cfg.ReadOnlyContainerNamePrefixes, prefix)
+	}
+	cfg.ReadOnlyContainerNamePrefixes = uniqueStrings(cfg.ReadOnlyContainerNamePrefixes)
 	return cfg
 }
 
@@ -493,14 +500,18 @@ func main() {
 	}
 
 	rc := &requestContext{
-		policy:     policy,
-		client:     client,
-		target:     targetURL,
-		containers: newContainerRegistry(),
-		attachNets: cfg.AttachNetworks,
+		policy:                        policy,
+		client:                        client,
+		target:                        targetURL,
+		containers:                    newContainerRegistry(),
+		attachNets:                    cfg.AttachNetworks,
+		readOnlyContainerNamePrefixes: cfg.ReadOnlyContainerNamePrefixes,
 	}
 
-	log.WithField("allowed_images", policy.allowedImages()).Info("policy initialised")
+	log.WithFields(log.Fields{
+		"allowed_images":                 policy.allowedImages(),
+		"readonly_container_name_prefix": cfg.ReadOnlyContainerNamePrefixes,
+	}).Info("policy initialised")
 
 	handler := http.HandlerFunc(rc.handle)
 
@@ -759,6 +770,8 @@ func (rc *requestContext) authorize(r *http.Request) error {
 		return nil
 	case cleanPath == "/containers/create" && r.Method == http.MethodPost:
 		return rc.authorizeContainerCreate(r)
+	case isReadOnlyContainerInspection(cleanPath, r.Method):
+		return rc.authorizeReadOnlyContainerInspection(cleanPath)
 	case strings.HasPrefix(cleanPath, "/containers/"):
 		return rc.authorizeContainerAction(cleanPath)
 	case strings.HasPrefix(cleanPath, "/networks/") && r.Method == http.MethodGet:
@@ -766,6 +779,30 @@ func (rc *requestContext) authorize(r *http.Request) error {
 	default:
 		return errForbidden
 	}
+}
+
+func isReadOnlyContainerInspection(cleanPath, method string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	if !strings.HasPrefix(cleanPath, "/containers/") {
+		return false
+	}
+	return strings.HasSuffix(cleanPath, "/json") || strings.HasSuffix(cleanPath, "/top")
+}
+
+func (rc *requestContext) authorizeReadOnlyContainerInspection(cleanPath string) error {
+	identifier := containerIDFromPath(cleanPath)
+	if identifier == "" {
+		return errForbidden
+	}
+	for _, prefix := range rc.readOnlyContainerNamePrefixes {
+		if prefix != "" && strings.HasPrefix(identifier, prefix) {
+			log.WithFields(log.Fields{"container": identifier, "prefix": prefix}).Debug("allowing read-only container inspection")
+			return nil
+		}
+	}
+	return errForbidden
 }
 
 func (rc *requestContext) authorizeImageCreate(r *http.Request) error {
@@ -889,6 +926,9 @@ func validatePortBindings(bindings map[string][]portBinding, allowedPorts []stri
 func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
 	identifier := containerIDFromPath(cleanPath)
 	if identifier == "" {
+		return errForbidden
+	}
+	if rc.containers == nil {
 		return errForbidden
 	}
 	if _, ok := rc.containers.match(identifier); !ok {
