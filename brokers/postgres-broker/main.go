@@ -408,6 +408,7 @@ type containerCreateRequest struct {
 	Env        []string          `json:"Env"`
 	Cmd        []string          `json:"Cmd"`
 	Entrypoint json.RawMessage   `json:"Entrypoint"`
+	Mounts     []json.RawMessage `json:"Mounts"`
 	HostConfig hostConfigSection `json:"HostConfig"`
 }
 
@@ -415,14 +416,23 @@ type hostConfigSection struct {
 	Binds           []string                 `json:"Binds"`
 	CapAdd          []string                 `json:"CapAdd"`
 	CapDrop         []string                 `json:"CapDrop"`
+	CgroupnsMode    string                   `json:"CgroupnsMode"`
+	Devices         []json.RawMessage        `json:"Devices"`
+	DeviceRequests  []json.RawMessage        `json:"DeviceRequests"`
 	Privileged      bool                     `json:"Privileged"`
 	NetworkMode     string                   `json:"NetworkMode"`
 	PublishAllPorts bool                     `json:"PublishAllPorts"`
 	PortBindings    map[string][]portBinding `json:"PortBindings"`
 	ExtraHosts      []string                 `json:"ExtraHosts"`
+	GroupAdd        []string                 `json:"GroupAdd"`
 	IpcMode         string                   `json:"IpcMode"`
+	Mounts          []json.RawMessage        `json:"Mounts"`
 	PidMode         string                   `json:"PidMode"`
 	SecurityOpt     []string                 `json:"SecurityOpt"`
+	Tmpfs           map[string]string        `json:"Tmpfs"`
+	UsernsMode      string                   `json:"UsernsMode"`
+	UtsMode         string                   `json:"UTSMode"`
+	VolumesFrom     []string                 `json:"VolumesFrom"`
 	ReadonlyRootfs  bool                     `json:"ReadonlyRootfs"`
 	Init            bool                     `json:"Init"`
 }
@@ -927,8 +937,17 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return errForbidden
 	}
 
-	if len(payload.HostConfig.Binds) > 0 || len(payload.HostConfig.CapAdd) > 0 || payload.HostConfig.PublishAllPorts {
-		logWarn("blocked container create: binds/caps/publish detected")
+	if len(payload.Mounts) > 0 ||
+		len(payload.HostConfig.Binds) > 0 ||
+		len(payload.HostConfig.Mounts) > 0 ||
+		len(payload.HostConfig.VolumesFrom) > 0 ||
+		len(payload.HostConfig.CapAdd) > 0 ||
+		len(payload.HostConfig.Devices) > 0 ||
+		len(payload.HostConfig.DeviceRequests) > 0 ||
+		len(payload.HostConfig.GroupAdd) > 0 ||
+		len(payload.HostConfig.Tmpfs) > 0 ||
+		payload.HostConfig.PublishAllPorts {
+		logWarn("blocked container create: mounts/binds/volumes/devices/caps/publish detected")
 		return errForbidden
 	}
 
@@ -937,8 +956,14 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return err
 	}
 
-	if len(payload.HostConfig.ExtraHosts) > 0 || payload.HostConfig.IpcMode != "" || payload.HostConfig.PidMode != "" || len(payload.HostConfig.SecurityOpt) > 0 {
-		logWarn("blocked container create: extra host/ipc/pid/security opts")
+	if len(payload.HostConfig.ExtraHosts) > 0 ||
+		payload.HostConfig.CgroupnsMode != "" ||
+		payload.HostConfig.IpcMode != "" ||
+		payload.HostConfig.PidMode != "" ||
+		payload.HostConfig.UsernsMode != "" ||
+		payload.HostConfig.UtsMode != "" ||
+		len(payload.HostConfig.SecurityOpt) > 0 {
+		logWarn("blocked container create: extra host/cgroup/ipc/pid/user/uts/security opts")
 		return errForbidden
 	}
 

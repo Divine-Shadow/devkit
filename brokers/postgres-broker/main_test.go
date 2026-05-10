@@ -75,6 +75,45 @@ func TestAuthorizeContainerCreate_BlocksMinioHostPortOverride(t *testing.T) {
 	}
 }
 
+func TestAuthorizeContainerCreate_BlocksMounts(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
+	body := []byte(`{"Image":"postgres:latest","HostConfig":{"Mounts":[{"Type":"bind","Source":"/","Target":"/host"}]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for HostConfig.Mounts")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksVolumesFrom(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
+	body := []byte(`{"Image":"postgres:latest","HostConfig":{"VolumesFrom":["devkit-ouro8-dev-agent-5"]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for VolumesFrom")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksNamespaceEscapes(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
+	body := []byte(`{"Image":"postgres:latest","HostConfig":{"UsernsMode":"host"}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for namespace escape")
+	}
+}
+
 func TestAuthorizeImageCreate_AllowsWhitelistedPull(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
 
