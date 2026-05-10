@@ -114,7 +114,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
@@ -174,7 +174,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
