@@ -7,17 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdlog "log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -26,6 +26,76 @@ var (
 	errForbidden        = errors.New("forbidden")
 	errUnknownContainer = errors.New("container not managed by broker")
 )
+
+var debugLogging bool
+
+type logFields map[string]any
+
+func configureLog(level string) {
+	stdlog.SetFlags(stdlog.LstdFlags)
+	normalized := strings.ToLower(strings.TrimSpace(level))
+	debugLogging = normalized == "debug" || normalized == "trace"
+	switch normalized {
+	case "", "debug", "trace", "info", "warn", "warning", "error":
+	default:
+		logWarnf("invalid log level %s, defaulting to info", level)
+	}
+}
+
+func formatLogFields(fields logFields) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%q", key, fmt.Sprint(fields[key])))
+	}
+	return " " + strings.Join(parts, " ")
+}
+
+func logMessage(level, message string, fields logFields) {
+	if level == "debug" && !debugLogging {
+		return
+	}
+	stdlog.Printf("level=%s msg=%q%s", level, message, formatLogFields(fields))
+}
+
+func logDebugFields(fields logFields, message string) {
+	logMessage("debug", message, fields)
+}
+
+func logInfoFields(fields logFields, message string) {
+	logMessage("info", message, fields)
+}
+
+func logInfof(format string, args ...any) {
+	logMessage("info", fmt.Sprintf(format, args...), nil)
+}
+
+func logWarn(message string) {
+	logMessage("warn", message, nil)
+}
+
+func logWarnFields(fields logFields, message string) {
+	logMessage("warn", message, fields)
+}
+
+func logWarnf(format string, args ...any) {
+	logMessage("warn", fmt.Sprintf(format, args...), nil)
+}
+
+func logErrorf(format string, args ...any) {
+	logMessage("error", fmt.Sprintf(format, args...), nil)
+}
+
+func logFatalf(format string, args ...any) {
+	stdlog.Fatalf("level=fatal msg=%q", fmt.Sprintf(format, args...))
+}
 
 type brokerConfig struct {
 	ListenAddr                    string
@@ -472,31 +542,25 @@ func buildClient(upstream string) (*http.Client, *url.URL, error) {
 }
 
 func main() {
-	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 	cfg := loadConfig()
-
-	if level, err := log.ParseLevel(cfg.LogLevel); err == nil {
-		log.SetLevel(level)
-	} else {
-		log.Warnf("invalid log level %s, defaulting to info", cfg.LogLevel)
-	}
+	configureLog(cfg.LogLevel)
 
 	listenProto, listenAddr := parseListenAddr(cfg.ListenAddr)
 	if listenProto != "unix" {
-		log.Fatalf("unsupported listen protocol: %s", listenProto)
+		logFatalf("unsupported listen protocol: %s", listenProto)
 	}
 	if err := ensureSocketAbsent(listenAddr); err != nil {
-		log.Fatalf("unable to prepare listen socket: %v", err)
+		logFatalf("unable to prepare listen socket: %v", err)
 	}
 
 	policy, err := newPolicy(cfg.AllowedImages, cfg.AllowImagePulls)
 	if err != nil {
-		log.Fatalf("invalid allowed images: %v", err)
+		logFatalf("invalid allowed images: %v", err)
 	}
 
 	client, targetURL, err := buildClient(cfg.UpstreamAddr)
 	if err != nil {
-		log.Fatalf("invalid upstream address: %v", err)
+		logFatalf("invalid upstream address: %v", err)
 	}
 
 	rc := &requestContext{
@@ -508,10 +572,10 @@ func main() {
 		readOnlyContainerNamePrefixes: cfg.ReadOnlyContainerNamePrefixes,
 	}
 
-	log.WithFields(log.Fields{
+	logInfoFields(logFields{
 		"allowed_images":                 policy.allowedImages(),
 		"readonly_container_name_prefix": cfg.ReadOnlyContainerNamePrefixes,
-	}).Info("policy initialised")
+	}, "policy initialised")
 
 	handler := http.HandlerFunc(rc.handle)
 
@@ -524,16 +588,16 @@ func main() {
 
 	listener, err := net.Listen(listenProto, listenAddr)
 	if err != nil {
-		log.Fatalf("failed to listen on %s: %v", cfg.ListenAddr, err)
+		logFatalf("failed to listen on %s: %v", cfg.ListenAddr, err)
 	}
 	if listenProto == "unix" {
 		if err := os.Chmod(listenAddr, 0o666); err != nil {
-			log.WithError(err).Warn("failed to adjust socket permissions")
+			logWarnf("failed to adjust socket permissions: %v", err)
 		}
 	}
-	log.Infof("postgres broker listening on %s forwarding to %s", cfg.ListenAddr, cfg.UpstreamAddr)
+	logInfof("postgres broker listening on %s forwarding to %s", cfg.ListenAddr, cfg.UpstreamAddr)
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server error: %v", err)
+		logFatalf("server error: %v", err)
 	}
 }
 
@@ -570,17 +634,17 @@ func filepathDir(p string) string {
 }
 
 func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
-	log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("incoming request")
+	logDebugFields(logFields{"method": r.Method, "path": r.URL.Path}, "incoming request")
 	if rc.handleNoop(w, r) {
 		return
 	}
 	if err := rc.authorize(r); err != nil {
 		switch {
 		case errors.Is(err, errForbidden), errors.Is(err, errUnknownContainer):
-			log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Warn("blocked request")
+			logWarnFields(logFields{"method": r.Method, "path": r.URL.Path}, "blocked request")
 			http.Error(w, "forbidden", http.StatusForbidden)
 		default:
-			log.WithError(err).Error("failed to authorize request")
+			logErrorf("failed to authorize request: %v", err)
 			http.Error(w, "broker error", http.StatusInternalServerError)
 		}
 		return
@@ -588,14 +652,14 @@ func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := rc.forward(r)
 	if err != nil {
-		log.WithError(err).Error("forward error")
+		logErrorf("forward error: %v", err)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
 	if err := rc.postProcess(r, resp); err != nil {
-		log.WithError(err).Error("post process error")
+		logErrorf("post process error: %v", err)
 	}
 
 	copyResponse(w, resp)
@@ -604,7 +668,7 @@ func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
 func (rc *requestContext) handleNoop(w http.ResponseWriter, r *http.Request) bool {
 	cleanPath := stripVersionPrefix(r.URL.Path)
 	if cleanPath == "/containers/prune" && r.Method == http.MethodPost {
-		log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("responding to containers prune noop")
+		logDebugFields(logFields{"method": r.Method, "path": r.URL.Path}, "responding to containers prune noop")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -614,7 +678,7 @@ func (rc *requestContext) handleNoop(w http.ResponseWriter, r *http.Request) boo
 		return true
 	}
 	if cleanPath == "/networks/prune" && r.Method == http.MethodPost {
-		log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("responding to networks prune noop")
+		logDebugFields(logFields{"method": r.Method, "path": r.URL.Path}, "responding to networks prune noop")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -623,7 +687,7 @@ func (rc *requestContext) handleNoop(w http.ResponseWriter, r *http.Request) boo
 		return true
 	}
 	if cleanPath == "/volumes/prune" && r.Method == http.MethodPost {
-		log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("responding to volumes prune noop")
+		logDebugFields(logFields{"method": r.Method, "path": r.URL.Path}, "responding to volumes prune noop")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -633,7 +697,7 @@ func (rc *requestContext) handleNoop(w http.ResponseWriter, r *http.Request) boo
 		return true
 	}
 	if cleanPath == "/images/prune" && r.Method == http.MethodPost {
-		log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("responding to images prune noop")
+		logDebugFields(logFields{"method": r.Method, "path": r.URL.Path}, "responding to images prune noop")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -651,7 +715,7 @@ func (rc *requestContext) forward(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	_ = r.Body.Close()
-	log.WithFields(log.Fields{"path": r.URL.Path, "method": r.Method, "len": len(body)}).Debug("forwarding request")
+	logDebugFields(logFields{"path": r.URL.Path, "method": r.Method, "len": len(body)}, "forwarding request")
 
 	clone := r.Clone(r.Context())
 	if len(body) > 0 {
@@ -723,7 +787,7 @@ func (rc *requestContext) attachContainerNetworks(containerID string) {
 			continue
 		}
 		if err := rc.connectNetwork(containerID, name); err != nil {
-			log.WithFields(log.Fields{"container": containerID, "network": name, "error": err.Error()}).Warn("failed to attach network")
+			logWarnFields(logFields{"container": containerID, "network": name, "error": err.Error()}, "failed to attach network")
 		}
 	}
 }
@@ -798,7 +862,7 @@ func (rc *requestContext) authorizeReadOnlyContainerInspection(cleanPath string)
 	}
 	for _, prefix := range rc.readOnlyContainerNamePrefixes {
 		if prefix != "" && strings.HasPrefix(identifier, prefix) {
-			log.WithFields(log.Fields{"container": identifier, "prefix": prefix}).Debug("allowing read-only container inspection")
+			logDebugFields(logFields{"container": identifier, "prefix": prefix}, "allowing read-only container inspection")
 			return nil
 		}
 	}
@@ -812,18 +876,18 @@ func (rc *requestContext) authorizeImageCreate(r *http.Request) error {
 	fromImage := strings.TrimSpace(r.URL.Query().Get("fromImage"))
 	tag := strings.TrimSpace(r.URL.Query().Get("tag"))
 	if !rc.policy.matchesNameAndTag(fromImage, tag) {
-		log.WithFields(log.Fields{
+		logWarnFields(logFields{
 			"fromImage": fromImage,
 			"tag":       tag,
 			"allowed":   strings.Join(rc.policy.allowedImages(), ","),
-		}).Warn("blocked image pull: image mismatch")
+		}, "blocked image pull: image mismatch")
 		return errForbidden
 	}
-	log.WithFields(log.Fields{
+	logDebugFields(logFields{
 		"fromImage": fromImage,
 		"tag":       tag,
 		"allowed":   strings.Join(rc.policy.allowedImages(), ","),
-	}).Debug("allowing image pull")
+	}, "allowing image pull")
 	return nil
 }
 
@@ -840,45 +904,45 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 	}
 
 	if !rc.policy.matchesImage(payload.Image) {
-		log.WithFields(log.Fields{
+		logWarnFields(logFields{
 			"image":   payload.Image,
 			"allowed": strings.Join(rc.policy.allowedImages(), ","),
-		}).Warn("blocked container create: image mismatch")
+		}, "blocked container create: image mismatch")
 		return errForbidden
 	}
-	log.WithFields(log.Fields{
+	logDebugFields(logFields{
 		"image":        payload.Image,
 		"env":          payload.Env,
 		"portBindings": payload.HostConfig.PortBindings,
 		"networkMode":  payload.HostConfig.NetworkMode,
-	}).Debug("inspected container create payload")
+	}, "inspected container create payload")
 
 	if payload.HostConfig.Privileged {
-		log.Warn("blocked container create: privileged requested")
+		logWarn("blocked container create: privileged requested")
 		return errForbidden
 	}
 
 	if nm := payload.HostConfig.NetworkMode; nm != "" && nm != "bridge" && nm != "default" {
-		log.WithField("network_mode", nm).Warn("blocked container create: network mode disallowed")
+		logWarnFields(logFields{"network_mode": nm}, "blocked container create: network mode disallowed")
 		return errForbidden
 	}
 
 	if len(payload.HostConfig.Binds) > 0 || len(payload.HostConfig.CapAdd) > 0 || payload.HostConfig.PublishAllPorts {
-		log.Warn("blocked container create: binds/caps/publish detected")
+		logWarn("blocked container create: binds/caps/publish detected")
 		return errForbidden
 	}
 
 	if err := validatePortBindings(payload.HostConfig.PortBindings, rc.policy.allowedPortsFor(payload.Image)); err != nil {
-		log.WithError(err).Warn("blocked container create: port bindings")
+		logWarnf("blocked container create: port bindings: %v", err)
 		return err
 	}
 
 	if len(payload.HostConfig.ExtraHosts) > 0 || payload.HostConfig.IpcMode != "" || payload.HostConfig.PidMode != "" || len(payload.HostConfig.SecurityOpt) > 0 {
-		log.Warn("blocked container create: extra host/ipc/pid/security opts")
+		logWarn("blocked container create: extra host/ipc/pid/security opts")
 		return errForbidden
 	}
 
-	log.WithField("image", payload.Image).Debug("allowing container create")
+	logDebugFields(logFields{"image": payload.Image}, "allowing container create")
 	return nil
 }
 
@@ -934,7 +998,7 @@ func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
 	if _, ok := rc.containers.match(identifier); !ok {
 		return errUnknownContainer
 	}
-	log.WithField("id", identifier).Debug("allowing container action")
+	logDebugFields(logFields{"id": identifier}, "allowing container action")
 	return nil
 }
 
@@ -942,7 +1006,7 @@ func (rc *requestContext) authorizeNetworkInspect(cleanPath string) error {
 	identifier := resourceIDFromPath(cleanPath)
 	switch identifier {
 	case "bridge", "host", "none":
-		log.WithField("network", identifier).Debug("allowing network inspect")
+		logDebugFields(logFields{"network": identifier}, "allowing network inspect")
 		return nil
 	default:
 		return errForbidden
@@ -957,11 +1021,11 @@ func (rc *requestContext) authorizeImageInspect(cleanPath string) error {
 		return errForbidden
 	}
 	if strings.HasPrefix(identifier, "sha256:") {
-		log.WithField("image", identifier).Debug("allowing digest inspect")
+		logDebugFields(logFields{"image": identifier}, "allowing digest inspect")
 		return nil
 	}
 	if rc.policy.matchesImage(identifier) {
-		log.WithField("image", identifier).Debug("allowing image inspect")
+		logDebugFields(logFields{"image": identifier}, "allowing image inspect")
 		return nil
 	}
 	return errForbidden
