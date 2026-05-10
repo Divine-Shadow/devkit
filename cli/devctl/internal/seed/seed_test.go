@@ -52,6 +52,7 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"codex() {",
 		"mcp_servers.codex-cli.command=\\\"codex\\\"",
 		"mcp_servers.governance.command=\\\"bash\\\"",
+		"exec bash scripts/devops/governance-mcp-stdio-forward",
 		"marker=\"$target/.codex/.seeded\"",
 		"if [ ! -f \"$marker\" ]; then",
 		"touch \"$marker\"",
@@ -65,6 +66,9 @@ func TestBuildAnchorScripts(t *testing.T) {
 	joined := JoinScripts(scripts)
 	if !contains(joined, sc) {
 		t.Fatalf("joined scripts missing combined anchor script: %s", joined)
+	}
+	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {
+		t.Fatalf("anchor script must not disable governance singleton auto-warm: %s", sc)
 	}
 }
 
@@ -109,10 +113,14 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 		`cp -f /var/host-codex/auth.json "$home/.codex/auth.json"`,
 		`touch $home/.codex/.seeded`,
 		`codex() {`,
+		`exec bash scripts/devops/governance-mcp-stdio-forward`,
 	} {
 		if !contains(sc, frag) {
 			t.Fatalf("direct home script missing %q: %s", frag, sc)
 		}
+	}
+	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {
+		t.Fatalf("direct home script must not disable governance singleton auto-warm: %s", sc)
 	}
 }
 
