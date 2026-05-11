@@ -18,6 +18,8 @@ sandbox while current Compose agents can continue running.
   replacing old paths.
 - Make runtime plans inspectable with dry-run output before launching sandboxes.
 - Keep per-overlay flake conversion independent from devkit control-plane work.
+- Verify every Nix artifact with
+  `kit/docs/proposals/nix-runtime-verification-contract.md`.
 - Avoid changing unrelated Compose behavior until the native path can replace it.
 
 ## Phase 0: Stabilize The Transition Surface
@@ -62,6 +64,7 @@ Tasks per overlay:
 - Preserve required tools, language runtimes, CLIs, certificates, and wrappers.
 - Document remaining host capabilities or non-Nix inputs.
 - Add a smoke command that proves the shell has the expected core tools.
+- Record evidence using the Nix runtime verification contract.
 
 Suggested write scopes for subagents:
 
