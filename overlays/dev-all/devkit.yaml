@@ -16,6 +16,25 @@ runtime:
   codex_version: 0.130.0
   core_check: scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.
+readiness:
+  repo_checks:
+    - name: git-remote
+      command: git ls-remote --heads origin >/dev/null
+    - name: frontend-warm
+      command: |
+        if [ -f frontend/package.json ]; then
+          npm --prefix frontend install --include=dev --no-package-lock
+        fi
+    - name: frontend-typecheck
+      command: |
+        test -f frontend/package.json
+        npm --prefix frontend run typecheck
+    - name: frontend-test
+      command: |
+        test -f frontend/package.json
+        npm --prefix frontend run test:raw
+    - name: core-check
+      command: scripts/sbt2 "Compile / compile"
 broker:
   socket: /run/devkit/test-container-broker.sock
   upstream: unix:///var/run/docker.sock

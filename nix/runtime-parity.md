@@ -43,6 +43,11 @@ Compose retirement work. It follows
   `worktrees-branch`, `worktrees-status`, and `worktrees-sync` now use native
   lifecycle/worktree orchestration for `dev-all`; legacy Compose behavior
   remains only for non-`dev-all` overlays pending quarantine.
+- `check-net`, `check-codex`, `check-sts`, `warm`, and `maintain` route
+  `dev-all` diagnostics/hooks through native `devkit exec`.
+- `overlays/dev-all/devkit.yaml` defines explicit native repo readiness checks
+  for git reachability, frontend warm/install, frontend typecheck, frontend
+  tests, and the core SBT compile check.
 
 ## Verified Commands
 
@@ -83,6 +88,10 @@ kit/scripts/devkit -p dev-all --dry-run worktrees-setup ouroboros-ide 2 --base a
 kit/scripts/devkit -p dev-all --dry-run worktrees-branch ouroboros-ide 2 test-branch
 kit/scripts/devkit -p dev-all --dry-run worktrees-status ouroboros-ide --index 2
 kit/scripts/devkit -p dev-all --dry-run worktrees-sync ouroboros-ide --pull --index 2
+kit/scripts/devkit -p dev-all --dry-run check-net
+kit/scripts/devkit -p dev-all --dry-run check-codex
+kit/scripts/devkit -p dev-all --dry-run check-sts tinyproxy
+kit/scripts/devkit -p dev-all --dry-run warm
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and
@@ -163,6 +172,9 @@ Observed key versions:
 - Native run/reset/bootstrap helpers use top-level native lifecycle commands;
   worktree branch/status/sync helpers operate on the configured native host
   worktree root instead of container indexes.
+- Native check and hook helpers execute inside the same bubblewrap path as
+  manual `exec`, and repo readiness diagnostics are listed in overlay config
+  instead of being only hardcoded in legacy Compose readiness.
 
 ## Intentionally Dropped Parity
 

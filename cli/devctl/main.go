@@ -2178,6 +2178,17 @@ exit 0`, home, home, home, home, home)
 		default:
 			die("Usage: check-sts [envoy|tinyproxy]")
 		}
+		if project == "dev-all" {
+			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			script := strings.Join([]string{
+				"HTTPS_PROXY='" + px + "' HTTP_PROXY='" + px + "' curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true",
+				"HTTPS_PROXY='" + px + "' HTTP_PROXY='" + px + "' aws sts get-caller-identity || true",
+				"curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true",
+				"aws sts get-caller-identity || true",
+			}, "\n")
+			nativeExecScriptCommand(dryRun, exe, project, repo, 1, script)
+			break
+		}
 		runner.Compose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "HTTPS_PROXY='"+px+"' HTTP_PROXY='"+px+"' curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true")
 		runner.Compose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "HTTPS_PROXY='"+px+"' HTTP_PROXY='"+px+"' aws sts get-caller-identity || true")
 		runner.Compose(dryRun, files, "exec", "dev-agent", "bash", "-lc", "curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true")
@@ -3276,6 +3287,13 @@ func nativeLifecycleCommand(dry bool, exe, project, command, repo string, count 
 	args := []string{"-p", project, command, "--repo", repo, "--count", fmt.Sprintf("%d", count)}
 	args = append(args, extra...)
 	runner.Host(dry, exe, args...)
+}
+
+func nativeExecScriptCommand(dry bool, exe, project, repo string, index int, script string) {
+	if index < 1 {
+		index = 1
+	}
+	runner.Host(dry, exe, "-p", project, "exec", fmt.Sprintf("%d", index), "--repo", repo, "--", "bash", "-lc", script)
 }
 
 func killNativeAgentSessions(dry bool) {

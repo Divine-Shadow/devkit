@@ -31,6 +31,18 @@ func handleHook(ctx *cmdregistry.Context, warm bool) error {
 		fmt.Printf("No %s hook defined\n", label)
 		return nil
 	}
+	if project == "dev-all" {
+		exe := strings.TrimSpace(ctx.Exe)
+		if exe == "" {
+			exe = "devkit"
+		}
+		repo := "ouroboros-ide"
+		if cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project); err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
+			repo = strings.TrimSpace(cfg.Defaults.Repo)
+		}
+		runner.Host(ctx.DryRun, exe, "-p", project, "exec", "1", "--repo", repo, "--", "bash", "-lc", script)
+		return nil
+	}
 	runner.Compose(ctx.DryRun, ctx.Files, "exec", "dev-agent", "bash", "-lc", script)
 	return nil
 }
