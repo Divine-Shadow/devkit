@@ -260,8 +260,8 @@ them in a generated npm dependency expression.
 
 ## Operation Checkpoint
 
-The next implementation slice makes the native runtime operational enough to
-manage directly from the canonical `devkit` entrypoint:
+The next implementation slice makes the native runtime operational from the
+canonical `devkit` entrypoint:
 
 - `devkit broker start|status|stop` manages the host-side test-container broker
   process and records PID/state/log files under the native runtime state root.
@@ -277,9 +277,12 @@ manage directly from the canonical `devkit` entrypoint:
 - `devkit native capacity` reports runtime capacity separately from repo
   readiness, so repo check failures remain visible and retryable without hiding
   launchable agents.
+- Top-level `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`,
+  `attach`, and `ensure-ready` now target the native runtime for `dev-all`.
 
-Compose is not the default runtime yet. The remaining cutover work is to move
-tmux/layout attachment, long-lived agent session management, and top-level
-`up`/`down`/`restart`/`status` dispatch away from Docker Compose. Until that
-call-site migration is complete, Compose remains the legacy compatibility path
-and native operation is explicit through `broker` and `native` commands.
+Compose is now an explicit legacy compatibility path via
+`devkit compose ...`. Native lifecycle support currently covers `dev-all`; other
+legacy overlays should be operated through `devkit compose ...` until they have
+native plan/lifecycle coverage. Remaining non-default Compose call sites are
+historical helper workflows such as layout/tmux generation and older worktree
+commands.

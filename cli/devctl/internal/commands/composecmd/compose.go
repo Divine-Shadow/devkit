@@ -13,11 +13,34 @@ import (
 
 // Register adds compose lifecycle commands to the registry.
 func Register(r *cmdregistry.Registry) {
-	r.Register("up", handleUp)
-	r.Register("down", handleDown)
-	r.Register("restart", handleRestart)
-	r.Register("status", handleStatus)
-	r.Register("logs", handleLogs)
+	r.Register("compose", handle)
+}
+
+func handle(ctx *cmdregistry.Context) error {
+	if len(ctx.Args) == 0 {
+		return fmt.Errorf("Usage: compose up|down|restart|status|logs|exec|attach [args...]")
+	}
+	sub := ctx.Args[0]
+	next := *ctx
+	next.Args = append([]string{}, ctx.Args[1:]...)
+	switch sub {
+	case "up":
+		return handleUp(&next)
+	case "down":
+		return handleDown(&next)
+	case "restart":
+		return handleRestart(&next)
+	case "status":
+		return handleStatus(&next)
+	case "logs":
+		return handleLogs(&next)
+	case "exec":
+		return handleExec(&next)
+	case "attach":
+		return handleAttach(&next)
+	default:
+		return fmt.Errorf("unknown compose command %s", sub)
+	}
 }
 
 func ensureProject(ctx *cmdregistry.Context) error {
@@ -110,6 +133,24 @@ func handleLogs(ctx *cmdregistry.Context) error {
 	}
 	args := append([]string{"logs"}, ctx.Args...)
 	runner.Compose(ctx.DryRun, ctx.Files, args...)
+	return nil
+}
+
+func handleExec(ctx *cmdregistry.Context) error {
+	if err := ensureProject(ctx); err != nil {
+		return err
+	}
+	args := append([]string{"exec"}, ctx.Args...)
+	runner.Compose(ctx.DryRun, ctx.Files, args...)
+	return nil
+}
+
+func handleAttach(ctx *cmdregistry.Context) error {
+	if err := ensureProject(ctx); err != nil {
+		return err
+	}
+	args := append([]string{"attach"}, ctx.Args...)
+	runner.ComposeInteractive(ctx.DryRun, ctx.Files, args...)
 	return nil
 }
 

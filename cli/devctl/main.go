@@ -951,11 +951,12 @@ func usage() {
 Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
-  up, down, restart, status, logs
+  up, down, restart, status, logs             (native runtime for dev-all)
+  compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
-  scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]] [--skip-ready],
-  ensure-ready [--count N] [--service NAME]
-  exec <n> <cmd...>, attach <n>
+  scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
+  ensure-ready [--count N] [--repo REPO] [--broker-socket PATH]
+  exec <n> <cmd...>, attach <n>              (native runtime for dev-all)
   codex-auth reseed <n> [--service NAME]
   codex-auth reseed-all [indexes...] [--service NAME]
   allow <domain>, warm, maintain, check-net
@@ -1178,7 +1179,7 @@ func main() {
 		Exe:            exe,
 	}
 	if handler, ok := registry.Lookup(cmd); ok {
-		if cmd == "up" {
+		if cmd == "compose" && len(sub) > 0 && sub[0] == "up" {
 			pname := composeProjectName(ctx.Project)
 			composecmd.CleanupSharedInfra(ctx.DryRun, pname, ctx.Files)
 			if err := handler(ctx); err != nil {
@@ -1191,7 +1192,7 @@ func main() {
 			}
 			return
 		}
-		if cmd == "restart" {
+		if cmd == "compose" && len(sub) > 0 && sub[0] == "restart" {
 			pname := composeProjectName(ctx.Project)
 			if err := handler(ctx); err != nil {
 				die(err.Error())

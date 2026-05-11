@@ -207,15 +207,21 @@ func Start(ctx context.Context, c Config, dryRun bool) (Status, error) {
 		return status, nil
 	}
 
+	if dryRun {
+		binary := strings.TrimSpace(c.Binary)
+		if binary == "" {
+			binary = "<nix-built postgres-broker>"
+		}
+		status.Command = []string{binary}
+		status.Message = "dry run: broker would be started"
+		return status, nil
+	}
+
 	binary, err := ResolveBinary(ctx, c)
 	if err != nil {
 		return status, err
 	}
 	status.Command = []string{binary}
-	if dryRun {
-		status.Message = "dry run: broker would be started"
-		return status, nil
-	}
 
 	if err := os.MkdirAll(c.StateRoot, 0o700); err != nil {
 		return status, fmt.Errorf("mkdir broker state root %s: %w", c.StateRoot, err)

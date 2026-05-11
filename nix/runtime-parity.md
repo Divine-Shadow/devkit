@@ -29,6 +29,9 @@ Compose retirement work. It follows
   by native sandboxes.
 - `devctl native prepare` and `devctl native capacity`: prepare dedicated
   worktrees/state and report capacity from native readiness.
+- Top-level `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`,
+  `attach`, and `ensure-ready` target the native runtime for `dev-all`;
+  `devctl compose ...` is the explicit legacy Docker Compose path.
 
 ## Verified Commands
 
@@ -53,6 +56,9 @@ cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell ni
 kit/scripts/devkit -p dev-all broker status --format json
 kit/scripts/devkit -p dev-all native prepare --repo ouroboros-ide --count 2 --dry-run --format json
 kit/scripts/devkit -p dev-all native capacity --repo devkit --count 1 --flake .#runtime-test-agent --repo-check 'exit 7' --format json
+kit/scripts/devkit -p dev-all --dry-run scale 2 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock --broker-state-root /tmp/devkit-scale-state --skip-ready --format json
+kit/scripts/devkit -p dev-all --dry-run exec 1 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock -- echo hi
+kit/scripts/devkit -p dev-all --dry-run compose exec --index 1 dev-agent echo hi
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and
@@ -124,6 +130,9 @@ Observed key versions:
   capacity availability follows runtime readiness only.
 - Native broker lifecycle, worktree fanout, and capacity reporting are available
   through the canonical `kit/scripts/devkit` entrypoint.
+- The default `dev-all` lifecycle and simple agent entry commands now route to
+  the native runtime. Compose remains available only through the explicit
+  `compose` namespace for historical workflows and unsupported overlays.
 
 ## Intentionally Dropped Parity
 
