@@ -160,3 +160,40 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 		t.Fatalf("primary checkout branch changed to %s", got)
 	}
 }
+
+func TestSetupNative_ReusesStandaloneAgentCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	if err := os.MkdirAll(filepath.Join(devRoot, "devkit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+	standalone := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide")
+	if err := os.MkdirAll(filepath.Dir(standalone), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "clone", filepath.Join(root, "remotes", "ouroboros-ide.git"), standalone)
+	mustRun(t, "git", "-C", standalone, "checkout", "main")
+
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        1,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+	}); err != nil {
+		t.Fatalf("native setup should reuse standalone checkout: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(standalone, ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("standalone checkout .git dir was not preserved: %v", err)
+	}
+	if got := readTrim(t, "git", "-C", standalone, "rev-parse", "--show-toplevel"); filepath.Clean(got) != standalone {
+		t.Fatalf("unexpected standalone toplevel: %s", got)
+	}
+}

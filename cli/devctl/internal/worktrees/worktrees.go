@@ -28,6 +28,9 @@ func run(dry bool, name string, args ...string) error {
 
 // rewriteGitdir writes a .git file pointing to a relative gitdir for container correctness.
 func rewriteGitdir(wt string) {
+	if info, err := os.Stat(filepath.Join(wt, ".git")); err == nil && info.IsDir() {
+		return
+	}
 	out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--git-dir")
 	if res.Code != 0 {
 		return
@@ -97,6 +100,35 @@ func cleanWorktreePath(repoWorktreesDir, wt string) error {
 		return err
 	}
 	return nil
+}
+
+func existingGitCheckout(wt string) (bool, error) {
+	info, err := os.Stat(wt)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, nil
+	}
+	out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--show-toplevel")
+	if res.Code != 0 {
+		return false, nil
+	}
+	top := filepath.Clean(strings.TrimSpace(out))
+	if top == "" {
+		return false, nil
+	}
+	if resolvedTop, err := filepath.EvalSymlinks(top); err == nil {
+		top = resolvedTop
+	}
+	resolvedWT := filepath.Clean(wt)
+	if r, err := filepath.EvalSymlinks(resolvedWT); err == nil {
+		resolvedWT = r
+	}
+	return top == resolvedWT, nil
 }
 
 // Setup ensures worktrees and branches exist for agents 1..n.
@@ -269,6 +301,12 @@ func SetupNative(opts NativeOptions) error {
 		wt := filepath.Join(parent, repo)
 		branch := fmt.Sprintf("%s%d", branchPrefix, i)
 		if !opts.DryRun {
+			if ok, err := existingGitCheckout(wt); err != nil {
+				return err
+			} else if ok {
+				_ = run(false, "env", envGit("-C", wt, "config", "worktree.useRelativePaths", "false")...)
+				continue
+			}
 			if err := cleanWorktreePath(repoWorktreesDir, wt); err != nil {
 				return err
 			}
