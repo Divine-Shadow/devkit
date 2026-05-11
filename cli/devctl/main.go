@@ -969,6 +969,7 @@ Commands:
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   native plan --repo REPO [--index N] [--flake REF] [--launcher bubblewrap|systemd-run] [--format text|json]
   native exec --repo REPO [--index N] [--flake REF] [--dry-run] [-- COMMAND...]
+  native readiness --repo REPO [--index N] [--flake REF] [--repo-check CMD] [--format text|json]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]

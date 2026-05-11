@@ -18,9 +18,13 @@ Compose retirement work. It follows
   `tinyproxy`: replacements for lightweight support images.
 - `cli/devctl/internal/runtime/{agent,plan,launch}`: native agent identity,
   launch plan, and bubblewrap command construction.
+- `cli/devctl/internal/runtime/readiness`: runtime-vs-repo readiness model used
+  by native agent checks.
 - `devctl native plan`: inspectable native plan output.
 - `devctl native exec`: prepares per-agent state and runs a flake shell through
   bubblewrap.
+- `devctl native readiness`: reports runtime readiness, repo readiness, and
+  capacity availability separately.
 
 ## Verified Commands
 
@@ -31,15 +35,48 @@ nix --extra-experimental-features 'nix-command flakes' flake check
 nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths .#postgres-broker
 nix --extra-experimental-features 'nix-command flakes' develop .#runtime-test-agent --command bash -lc 'git --version && ssh -V && curl --version | head -1'
 nix --extra-experimental-features 'nix-command flakes' develop .#template-agent --command bash -lc 'git --version && uv --version && python3 --version'
-nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'codex --version && docker --version && go version'
+nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'spago --version && codex --version && docker --version && go version && playwright --version'
 nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'mgba-headless --help 2>&1 | grep -q -- --script'
 nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-terraform --command bash -lc 'terraform version | head -2 && packer version'
 nix --extra-experimental-features 'nix-command flakes' develop .#pokeemerald --command bash -lc 'arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1'
-nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-static-front-end --command bash -lc 'node --version && npm --version && spago --version && netlify --version && codex --version && claude --version'
+nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-static-front-end --command bash -lc 'spago --version && netlify --version'
 nix --extra-experimental-features 'nix-command flakes' develop .#tinyproxy --command bash -lc 'tinyproxy -h 2>&1 | head -5; uv --version'
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 go test ./...
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#runtime-test-agent -- git --version
-cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- bash -lc 'codex --version && docker --version && go version && mgba-headless --help 2>&1 | grep -q -- --script'
+cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- bash -lc 'spago --version && codex --version && docker --version && go version && playwright --version && mgba-headless --help 2>&1 | grep -q -- --script'
+cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- node -e 'const { chromium } = require("@playwright/test"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent("<title>native-bwrap-playwright-ok</title>"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'
+cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native readiness --repo devkit --flake .#runtime-test-agent --repo-check 'exit 7' --format json
+```
+
+Broker smoke command, run with the broker process left open in one terminal and
+the native smoke in another:
+
+```bash
+sock=$(mktemp -u /tmp/devkit-native-broker.XXXXXX.sock)
+cd brokers/postgres-broker
+BROKER_LISTEN="unix://$sock" BROKER_UPSTREAM="unix:///var/run/docker.sock" BROKER_ALLOWED_IMAGES="postgres:latest" BROKER_ALLOW_PULLS=true \
+  nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 go run .
+```
+
+```bash
+sock=/tmp/devkit-native-broker.<id>.sock
+
+cd cli/devctl
+nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit \
+  go run . -p dev-all native exec --repo devkit --flake .#runtime-test-agent --broker-endpoint "$sock" -- bash -lc '
+    set -euo pipefail
+    echo "DOCKER_HOST=$DOCKER_HOST"
+    test "${DEVKIT_NATIVE_AGENT:-}" = 1
+    test "$DOCKER_HOST" = "unix://'"$sock"'"
+    test -S "'"$sock"'"
+    test ! -e /var/run/docker.sock
+    curl --unix-socket "'"$sock"'" -fsS http://docker/_ping | grep -qx OK
+    code=$(curl -sS -o /tmp/redis-create.out -w "%{http_code}" --unix-socket "'"$sock"'" -H "Content-Type: application/json" -d "{\"Image\":\"redis:7\"}" "http://docker/v1.45/containers/create?name=devkit-native-smoke-redis")
+    echo "redis_create_http=$code"
+    test "$code" = 403
+    grep -qi forbidden /tmp/redis-create.out
+    echo native-broker-smoke-ok
+  '
 ```
 
 Observed key versions:
@@ -47,26 +84,56 @@ Observed key versions:
 - Codex CLI: `codex-cli 0.130.0`.
 - Docker CLI: `Docker version 27.5.1`.
 - Go: `go1.22.4`.
+- Spago: `0.93.45`.
+- Netlify CLI: `netlify-cli/26.0.1`.
+- Playwright CLI: `Version 1.52.0`.
 - Terraform: `v1.9.8`.
 - Packer: `v1.11.2`.
 - mGBA: pinned `mgba-headless` build from commit
   `b19b557a78930ede7ee7f5dcbc880f9ff2533ffe` with `--script` support.
 - ARM toolchain smoke: `arm-none-eabi-gcc` and `arm-none-eabi-as` present.
+- Native Playwright smoke output: `native-bwrap-playwright-ok`.
+- Readiness split smoke: `runtime_ready: true`, `repo_ready: false`, and
+  `capacity_available: true` when `--repo-check 'exit 7'` fails.
+- Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-broker.<id>.sock`,
+  `redis_create_http=403`, and `native-broker-smoke-ok`.
+
+## Completed Parity
+
+- `spago` and `netlify-cli` now come from lockfile-backed
+  `nix/npm-tools/package-lock.json`; shell hooks do not install npm packages at
+  runtime.
+- Playwright uses Nix-provisioned `playwright-test` plus
+  `playwright-driver.browsers`. Native bubblewrap can launch Chromium without
+  an ad hoc browser install.
+- Native plans keep `DirectDockerSocket=false`, set `DOCKER_HOST` to the broker
+  socket, and do not bind `/var/run/docker.sock`.
+- Native readiness now reports runtime readiness separately from repo readiness;
+  capacity availability follows runtime readiness only.
+
+## Intentionally Dropped Parity
+
+- `claude-code` is no longer a Nix runtime parity blocker. The static frontend
+  shell may keep the nixpkgs package for convenience, but parity smoke commands
+  no longer validate the Claude CLI, and no implementation time is assigned
+  to pinning or wrapping Claude.
 
 ## Known Parity Gaps
 
-- `spago`: Nix shell currently provides `0.21.0`; Dockerfiles request npm
-  package `spago@0.93.45`.
-- `netlify-cli`: Nix shell currently provides `19.0.2`; Dockerfile requests
-  `netlify-cli@26.0.1`.
-- `claude-code`: Nix shell currently provides `1.0.85`; Docker installs the npm
-  package without a deterministic version pin.
 - npm itself reports `10.8.2`; Docker updates npm to latest at image build time.
-- Browser dependency parity is package-level only so far. Playwright is present,
-  but browser install/runtime checks still need a repo-specific smoke.
-- Broker reachability is planned and environment-wired through
-  `DOCKER_HOST=unix:///run/devkit/test-container-broker.sock`; an actual broker
-  request smoke is still pending.
+- Broker coverage is still a smoke, not full test-container lifecycle parity.
+  The current evidence proves native agent reachability, direct socket absence,
+  and policy rejection of a disallowed image through the broker.
+
+## Host Capability Requirements
+
+- Final broker smokes require a controlled host-side Docker daemon at
+  `/var/run/docker.sock`. That socket is consumed by the broker process on the
+  host and is not mounted into the native agent sandbox.
+- Native bubblewrap execution requires `bwrap` and host Nix flakes support.
+- The default broker endpoint remains
+  `unix:///run/devkit/test-container-broker.sock`; tests can override it with
+  `--broker-endpoint` for temporary broker instances.
 
 ## Native Runtime Boundary
 

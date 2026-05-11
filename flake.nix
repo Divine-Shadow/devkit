@@ -127,6 +127,42 @@
           pinnedTerraform = mkHashicorpTool "terraform" "1.9.8" details.terraformHash;
           pinnedPacker = mkHashicorpTool "packer" "1.11.2" details.packerHash;
 
+          pinnedNpmTools = pkgs.buildNpmPackage {
+            pname = "devkit-npm-tools";
+            version = "1.0.0";
+            src = ./nix/npm-tools;
+            npmDepsHash = "sha256-51Db1LSlJv3MVG8aPYHTV0xJThYecQmyPIQizxJihEE=";
+            dontNpmBuild = true;
+            nativeBuildInputs = with pkgs; [
+              makeWrapper
+              pkg-config
+              python3
+            ];
+            buildInputs = with pkgs; [
+              sqlite
+              vips
+            ];
+            installPhase = ''
+              runHook preInstall
+
+              tools_root="$out/lib/devkit-npm-tools"
+              mkdir -p "$tools_root" "$out/bin"
+              cp -r package.json package-lock.json node_modules "$tools_root/"
+
+              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/spago" \
+                --add-flags "$tools_root/node_modules/spago/bin/bundle.js" \
+                --set NODE_PATH "$tools_root/node_modules"
+              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/netlify" \
+                --add-flags "$tools_root/node_modules/netlify-cli/bin/run.js" \
+                --set NODE_PATH "$tools_root/node_modules"
+              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/ntl" \
+                --add-flags "$tools_root/node_modules/netlify-cli/bin/run.js" \
+                --set NODE_PATH "$tools_root/node_modules"
+
+              runHook postInstall
+            '';
+          };
+
           mgbaRuntimeLibs = with pkgs; [
             libedit
             libpng
@@ -230,10 +266,9 @@
             minizip
             nodejs_20
             pkg-config
-            playwright
+            playwright-test
             purescript
             sbt
-            spago
             sqlite
             tini
             unzip
@@ -242,6 +277,7 @@
             pinnedCodex
             pinnedGo
             pinnedMgbaHeadless
+            pinnedNpmTools
           ]);
 
           mkShell =
@@ -254,6 +290,7 @@
                 export GIT_SSL_CAINFO=$SSL_CERT_FILE
                 export TESTCONTAINERS_RYUK_DISABLED=true
                 export DOCKER_HOST=''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}
+                export PLAYWRIGHT_BROWSERS_PATH=''${PLAYWRIGHT_BROWSERS_PATH:-${pkgs.playwright-driver.browsers}}
                 export HTTP_PROXY=''${HTTP_PROXY:-http://127.0.0.1:8888}
                 export HTTPS_PROXY=''${HTTPS_PROXY:-$HTTP_PROXY}
                 export NO_PROXY=''${NO_PROXY:-localhost,127.0.0.1}
@@ -268,6 +305,7 @@
           ouroboros-dev-agent = mkShell "ouroboros-dev-agent" ouroborosAgentTools ''
             export JAVA_HOME=${pkgs.jdk21}
             export GOROOT=${pinnedGo}
+            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
             export PATH=${pkgs.jdk21}/bin:$PATH
           '';
 
@@ -281,6 +319,7 @@
           ])) ''
             export JAVA_HOME=${pkgs.jdk21}
             export GOROOT=${pinnedGo}
+            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
             export PATH=${pkgs.jdk21}/bin:$PATH
           '';
 
@@ -291,18 +330,20 @@
           ])) ''
             export JAVA_HOME=${pkgs.jdk21}
             export GOROOT=${pinnedGo}
+            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
             export PATH=${pkgs.jdk21}/bin:$PATH
           '';
 
           ouroboros-static-front-end = mkShell "ouroboros-static-front-end" (commonAgentTools ++ (with pkgs; [
             claude-code
-            netlify-cli
             nodejs_20
-            playwright
+            playwright-test
             purescript
-            spago
             pinnedCodex
-          ])) "";
+            pinnedNpmTools
+          ])) ''
+            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
+          '';
 
           runtime-test-agent = mkShell "runtime-test-agent" (with pkgs; [
             bashInteractive

@@ -1,6 +1,7 @@
 package nativecmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/runtime/readiness"
 )
 
 // Register adds Nix-native runtime commands.
@@ -26,6 +28,8 @@ func handle(ctx *cmdregistry.Context) error {
 		return handlePlan(ctx)
 	case "exec":
 		return handleExec(ctx)
+	case "readiness":
+		return handleReadiness(ctx)
 	case "shell":
 		return handleShell(ctx)
 	default:
@@ -34,10 +38,11 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
-	opts    nativeplan.BuildOptions
-	format  string
-	dryRun  bool
-	command []string
+	opts      nativeplan.BuildOptions
+	format    string
+	dryRun    bool
+	repoCheck string
+	command   []string
 }
 
 func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error) {
@@ -92,6 +97,12 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error
 			i++
 		case "--dry-run":
 			parsed.dryRun = true
+		case "--repo-check":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--repo-check requires a value")
+			}
+			parsed.repoCheck = ctx.Args[i+1]
+			i++
 		case "--worktree-root":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--worktree-root requires a value")
@@ -134,6 +145,9 @@ func handlePlan(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	if parsed.repoCheck != "" {
+		return fmt.Errorf("--repo-check is only valid for native readiness")
+	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -170,6 +184,9 @@ func handleExec(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	if parsed.repoCheck != "" {
+		return fmt.Errorf("--repo-check is only valid for native readiness")
+	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -199,4 +216,105 @@ func handleExec(ctx *cmdregistry.Context) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func handleReadiness(ctx *cmdregistry.Context) error {
+	parsed, err := parsePlanArgs(ctx, false)
+	if err != nil {
+		return err
+	}
+	p, err := nativeplan.BuildDevAll(parsed.opts)
+	if err != nil {
+		return err
+	}
+	report := runReadinessReport(p, parsed.repoCheck)
+	switch parsed.format {
+	case "", "json":
+		data, err := json.MarshalIndent(struct {
+			RuntimeReady      bool              `json:"runtime_ready"`
+			RepoReady         bool              `json:"repo_ready"`
+			CapacityAvailable bool              `json:"capacity_available"`
+			Checks            []readiness.Check `json:"checks"`
+		}{
+			RuntimeReady:      report.RuntimeReady(),
+			RepoReady:         report.RepoReady(),
+			CapacityAvailable: report.CapacityAvailable(),
+			Checks:            report.Checks,
+		}, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(data))
+	case "text":
+		fmt.Fprintf(os.Stdout, "runtime_ready: %t\n", report.RuntimeReady())
+		fmt.Fprintf(os.Stdout, "repo_ready: %t\n", report.RepoReady())
+		fmt.Fprintf(os.Stdout, "capacity_available: %t\n", report.CapacityAvailable())
+		for _, check := range report.Checks {
+			fmt.Fprintf(os.Stdout, "%s.%s: ok=%t retryable=%t required_for_capacity=%t", check.Phase, check.Name, check.OK, check.Retryable, check.RequiredForCapacity)
+			if check.Detail != "" {
+				fmt.Fprintf(os.Stdout, " detail=%q", check.Detail)
+			}
+			fmt.Fprintln(os.Stdout)
+		}
+	default:
+		return fmt.Errorf("--format must be text or json")
+	}
+	if !report.RuntimeReady() {
+		return fmt.Errorf("native runtime is not ready")
+	}
+	return nil
+}
+
+func runReadinessReport(p nativeplan.Plan, repoCheck string) readiness.Report {
+	var report readiness.Report
+	if err := launch.Prepare(p); err != nil {
+		report.AddRuntime("prepare-state", false, err.Error())
+		return report
+	}
+	report.AddRuntime("prepare-state", true, "")
+
+	runtimeScript := strings.Join([]string{
+		`test "${DEVKIT_NATIVE_AGENT:-}" = "1"`,
+		`test -d "$HOME"`,
+		`test -d "$CODEX_ROLLOUT_DIR"`,
+		`test -n "${HTTP_PROXY:-}"`,
+		`test -n "${HTTPS_PROXY:-}"`,
+		`test "${DOCKER_HOST:-}" = "unix://` + p.BrokerEndpoint + `"`,
+		`test "${DOCKER_HOST:-}" != "unix:///var/run/docker.sock"`,
+		`test ! -e /var/run/docker.sock`,
+		`pwd >/dev/null`,
+	}, " && ")
+	out, err := runSandboxCommand(p, []string{"bash", "-lc", runtimeScript})
+	report.AddRuntime("sandbox-command", err == nil, detail(err, out))
+	if err != nil {
+		return report
+	}
+	if strings.TrimSpace(repoCheck) == "" {
+		return report
+	}
+	out, err = runSandboxCommand(p, []string{"bash", "-lc", repoCheck})
+	report.AddRepo("repo-check", err == nil, detail(err, out))
+	return report
+}
+
+func runSandboxCommand(p nativeplan.Plan, command []string) (string, error) {
+	cmdSpec, err := launch.BuildBubblewrap(p, command)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(cmdSpec.Path, cmdSpec.Args...)
+	cmd.Dir = cmdSpec.Dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func detail(err error, out string) string {
+	trimmed := strings.TrimSpace(out)
+	if err == nil {
+		return trimmed
+	}
+	if trimmed == "" {
+		return err.Error()
+	}
+	return err.Error() + ": " + trimmed
 }
