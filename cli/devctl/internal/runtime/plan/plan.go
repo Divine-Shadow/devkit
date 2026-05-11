@@ -53,17 +53,18 @@ type Plan struct {
 }
 
 type BuildOptions struct {
-	Paths          compose.Paths
-	Project        string
-	Index          int
-	Repo           string
-	Flake          string
-	Launcher       string
-	WorktreeRoot   string
-	StateRoot      string
-	BrokerEndpoint string
-	Proxy          string
-	DNSResolvConf  string
+	Paths             compose.Paths
+	Project           string
+	Index             int
+	Repo              string
+	Flake             string
+	Launcher          string
+	WorktreeRoot      string
+	StateRoot         string
+	BrokerEndpoint    string
+	Proxy             string
+	DNSResolvConf     string
+	DedicatedWorktree bool
 }
 
 func BuildDevAll(opts BuildOptions) (Plan, error) {
@@ -88,16 +89,21 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 		worktreeRoot = filepath.Join(devRoot, pth.AgentWorktreesDir)
 	}
 	hostWorktree := filepath.Join(devRoot, repo)
-	if index > 1 {
+	if index > 1 || opts.DedicatedWorktree {
 		hostWorktree = filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index), repo)
 	}
 	hostHome := filepath.Join(hostWorktree, fmt.Sprintf(".devhome-agent%d", index))
-	if index > 1 {
+	if index > 1 || opts.DedicatedWorktree {
 		hostHome = filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index), fmt.Sprintf(".devhome-agent%d", index))
 	}
 
 	sandboxWorktree := pth.AgentRepoPath(project, fmt.Sprintf("%d", index), repo)
 	sandboxHome := pth.AgentHomePath(project, fmt.Sprintf("%d", index), repo)
+	if opts.DedicatedWorktree {
+		agentDir := fmt.Sprintf("agent%d", index)
+		sandboxWorktree = filepath.Join("/workspaces/dev", pth.AgentWorktreesDir, agentDir, repo)
+		sandboxHome = filepath.Join("/workspaces/dev", pth.AgentWorktreesDir, agentDir, fmt.Sprintf(".devhome-agent%d", index))
+	}
 	stateRoot := strings.TrimSpace(opts.StateRoot)
 	if stateRoot == "" {
 		stateRoot = filepath.Join(devRoot, ".devkit", "native-agents", fmt.Sprintf("%s-agent%d", project, index))

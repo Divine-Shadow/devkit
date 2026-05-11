@@ -374,13 +374,17 @@ func loadConfig() brokerConfig {
 	}
 
 	allowed := splitAndTrim(os.Getenv("BROKER_ALLOWED_IMAGES"))
-	defaultImage := strings.TrimSpace(getEnv("BROKER_ALLOWED_IMAGE", "postgres"))
-	defaultTag := strings.TrimSpace(os.Getenv("BROKER_ALLOWED_TAG"))
-	if defaultImage != "" {
-		if defaultTag != "" {
-			allowed = append(allowed, fmt.Sprintf("%s:%s", defaultImage, defaultTag))
+	_, explicitLegacyImage := os.LookupEnv("BROKER_ALLOWED_IMAGE")
+	_, explicitLegacyTag := os.LookupEnv("BROKER_ALLOWED_TAG")
+	if len(allowed) == 0 || explicitLegacyImage || explicitLegacyTag {
+		defaultImage := strings.TrimSpace(getEnv("BROKER_ALLOWED_IMAGE", "postgres"))
+		defaultTag := strings.TrimSpace(os.Getenv("BROKER_ALLOWED_TAG"))
+		if defaultImage != "" {
+			if defaultTag != "" {
+				allowed = append(allowed, fmt.Sprintf("%s:%s", defaultImage, defaultTag))
+			}
+			allowed = append(allowed, defaultImage)
 		}
-		allowed = append(allowed, defaultImage)
 	}
 	cfg.AllowedImages = uniqueStrings(allowed)
 

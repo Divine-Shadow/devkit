@@ -58,6 +58,44 @@ func TestReadAllIncludesWorkspaceAndEnv(t *testing.T) {
 	}
 }
 
+func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
+	dir := t.TempDir()
+	over := filepath.Join(dir, "overlays", "proj")
+	if err := os.MkdirAll(over, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "" +
+		"broker:\n" +
+		"  socket: /run/devkit/test-container-broker.sock\n" +
+		"  upstream: unix:///var/run/docker.sock\n" +
+		"  allowed_images:\n" +
+		"    - postgres:latest\n" +
+		"  allow_pulls: true\n" +
+		"readiness:\n" +
+		"  repo_checks:\n" +
+		"    - name: typecheck\n" +
+		"      command: npm test\n"
+	if err := os.WriteFile(filepath.Join(over, "devkit.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := ReadAll([]string{filepath.Join(dir, "overlays")}, "proj")
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if cfg.Broker.Socket != "/run/devkit/test-container-broker.sock" {
+		t.Fatalf("broker socket = %q", cfg.Broker.Socket)
+	}
+	if cfg.Broker.AllowPulls == nil || !*cfg.Broker.AllowPulls {
+		t.Fatalf("allow pulls = %#v", cfg.Broker.AllowPulls)
+	}
+	if len(cfg.Broker.AllowedImages) != 1 || cfg.Broker.AllowedImages[0] != "postgres:latest" {
+		t.Fatalf("allowed images = %#v", cfg.Broker.AllowedImages)
+	}
+	if len(cfg.Readiness.RepoChecks) != 1 || cfg.Readiness.RepoChecks[0].Name != "typecheck" || cfg.Readiness.RepoChecks[0].Command != "npm test" {
+		t.Fatalf("repo checks = %#v", cfg.Readiness.RepoChecks)
+	}
+}
+
 func TestReadAllSkipsMissing(t *testing.T) {
 	cfg, dirPath, err := ReadAll([]string{"/does/not/exist"}, "proj")
 	if err != nil {

@@ -45,6 +45,23 @@ type Runtime struct {
 	Notes string `yaml:"notes"`
 }
 
+type Broker struct {
+	Socket        string   `yaml:"socket"`
+	Upstream      string   `yaml:"upstream"`
+	AllowedImages []string `yaml:"allowed_images"`
+	AllowPulls    *bool    `yaml:"allow_pulls"`
+	LogLevel      string   `yaml:"log_level"`
+}
+
+type RepoCheck struct {
+	Name    string `yaml:"name"`
+	Command string `yaml:"command"`
+}
+
+type Readiness struct {
+	RepoChecks []RepoCheck `yaml:"repo_checks"`
+}
+
 type OverlayConfig struct {
 	Workspace string            `yaml:"workspace"`
 	Env       map[string]string `yaml:"env"`
@@ -52,6 +69,8 @@ type OverlayConfig struct {
 	Hooks     Hooks             `yaml:"hooks"`
 	Defaults  Defaults          `yaml:"defaults"`
 	Runtime   Runtime           `yaml:"runtime"`
+	Broker    Broker            `yaml:"broker"`
+	Readiness Readiness         `yaml:"readiness"`
 	// Default service name for this overlay (e.g., dev-agent, frontend)
 	Service string `yaml:"service"`
 	// Optional HTTPS ingress configuration for this overlay.

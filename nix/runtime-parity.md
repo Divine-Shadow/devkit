@@ -25,6 +25,10 @@ Compose retirement work. It follows
   bubblewrap.
 - `devctl native readiness`: reports runtime readiness, repo readiness, and
   capacity availability separately.
+- `devctl broker start|status|stop`: manages the host-side broker process used
+  by native sandboxes.
+- `devctl native prepare` and `devctl native capacity`: prepare dedicated
+  worktrees/state and report capacity from native readiness.
 
 ## Verified Commands
 
@@ -46,6 +50,9 @@ cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell ni
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- bash -lc 'spago --version && codex --version && docker --version && go version && playwright --version && mgba-headless --help 2>&1 | grep -q -- --script'
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- node -e 'const { chromium } = require("@playwright/test"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent("<title>native-bwrap-playwright-ok</title>"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native readiness --repo devkit --flake .#runtime-test-agent --repo-check 'exit 7' --format json
+kit/scripts/devkit -p dev-all broker status --format json
+kit/scripts/devkit -p dev-all native prepare --repo ouroboros-ide --count 2 --dry-run --format json
+kit/scripts/devkit -p dev-all native capacity --repo devkit --count 1 --flake .#runtime-test-agent --repo-check 'exit 7' --format json
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and
@@ -97,6 +104,11 @@ Observed key versions:
   `capacity_available: true` when `--repo-check 'exit 7'` fails.
 - Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-broker.<id>.sock`,
   `redis_create_http=403`, and `native-broker-smoke-ok`.
+- Managed broker lifecycle smoke output: `running: true` after
+  `broker start`, `canonical-managed-broker-ok` from a native agent using the
+  managed broker socket, and `running: false` after `broker stop`.
+- Native capacity smoke output: `runtime_ready: 1`, `repo_ready: 0`, and
+  `capacity_available: 1` when the repo check exits non-zero.
 
 ## Completed Parity
 
@@ -110,6 +122,8 @@ Observed key versions:
   socket, and do not bind `/var/run/docker.sock`.
 - Native readiness now reports runtime readiness separately from repo readiness;
   capacity availability follows runtime readiness only.
+- Native broker lifecycle, worktree fanout, and capacity reporting are available
+  through the canonical `kit/scripts/devkit` entrypoint.
 
 ## Intentionally Dropped Parity
 
@@ -134,6 +148,9 @@ Observed key versions:
 - The default broker endpoint remains
   `unix:///run/devkit/test-container-broker.sock`; tests can override it with
   `--broker-endpoint` for temporary broker instances.
+- On this host, the current user cannot create `/run/devkit`, so lifecycle
+  verification used a temporary socket override. Production use of the default
+  path requires a host-created `/run/devkit` directory with suitable ownership.
 
 ## Native Runtime Boundary
 

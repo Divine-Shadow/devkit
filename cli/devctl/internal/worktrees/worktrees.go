@@ -192,3 +192,106 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 	}
 	return nil
 }
+
+type NativeOptions struct {
+	DevkitRoot   string
+	Repo         string
+	Count        int
+	BaseBranch   string
+	BranchPrefix string
+	WorktreeRoot string
+	DryRun       bool
+}
+
+// SetupNative creates dedicated worktrees for every native agent, including
+// agent1, without changing the primary checkout's current branch.
+func SetupNative(opts NativeOptions) error {
+	devkitRoot := filepath.Clean(opts.DevkitRoot)
+	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
+	repo := strings.TrimSpace(opts.Repo)
+	if repo == "" {
+		return fmt.Errorf("repo is required")
+	}
+	count := opts.Count
+	if count < 1 {
+		count = 1
+	}
+	baseBranch := strings.TrimSpace(opts.BaseBranch)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	branchPrefix := strings.TrimSpace(opts.BranchPrefix)
+	if branchPrefix == "" {
+		branchPrefix = "agent"
+	}
+	worktreesRoot := strings.TrimSpace(opts.WorktreeRoot)
+	if worktreesRoot == "" {
+		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
+	}
+	repoPath := filepath.Join(devRoot, repo)
+	envGit := func(args ...string) []string {
+		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh"}, args...)
+	}
+	var repoWorktreesDir string
+	if !opts.DryRun {
+		if out, res := execx.Capture(context.Background(), "git", "-C", repoPath, "rev-parse", "--git-dir"); res.Code == 0 {
+			gitdir := strings.TrimSpace(out)
+			if gitdir != "" {
+				if !filepath.IsAbs(gitdir) {
+					gitdir = filepath.Clean(filepath.Join(repoPath, gitdir))
+				}
+				if resolved, err := filepath.EvalSymlinks(gitdir); err == nil {
+					gitdir = resolved
+				}
+				repoWorktreesDir = filepath.Join(gitdir, "worktrees")
+				if resolved, err := filepath.EvalSymlinks(repoWorktreesDir); err == nil {
+					repoWorktreesDir = resolved
+				} else {
+					repoWorktreesDir = filepath.Clean(repoWorktreesDir)
+				}
+			}
+		}
+	}
+	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "fetch", "--all", "--prune")...); err != nil {
+		return err
+	}
+	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "config", "worktree.useRelativePaths", "false")...); err != nil {
+		return err
+	}
+	if !opts.DryRun {
+		_ = os.MkdirAll(worktreesRoot, 0o755)
+	}
+	for i := 1; i <= count; i++ {
+		parent := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i))
+		if !opts.DryRun {
+			_ = os.MkdirAll(parent, 0o755)
+		}
+		wt := filepath.Join(parent, repo)
+		branch := fmt.Sprintf("%s%d", branchPrefix, i)
+		if !opts.DryRun {
+			if err := cleanWorktreePath(repoWorktreesDir, wt); err != nil {
+				return err
+			}
+		}
+		_ = run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "prune")...)
+		_ = run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "remove", "-f", wt)...)
+		if err := run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
+			if opts.DryRun {
+				return err
+			}
+			if remErr := os.RemoveAll(wt); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
+				return fmt.Errorf("remove stale worktree %s: %w", wt, remErr)
+			}
+			if err2 := run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err2 != nil {
+				return err2
+			}
+		}
+		if !opts.DryRun {
+			rewriteGitdir(wt)
+		}
+		if err := run(opts.DryRun, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}

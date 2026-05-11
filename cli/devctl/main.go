@@ -15,6 +15,7 @@ import (
 	agentexec "devkit/cli/devctl/internal/agentexec"
 	"devkit/cli/devctl/internal/cmdregistry"
 	allowcmd "devkit/cli/devctl/internal/commands/allow"
+	brokercmd "devkit/cli/devctl/internal/commands/brokercmd"
 	composecmd "devkit/cli/devctl/internal/commands/composecmd"
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
@@ -951,6 +952,7 @@ Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
   up, down, restart, status, logs
+  broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]] [--skip-ready],
   ensure-ready [--count N] [--service NAME]
   exec <n> <cmd...>, attach <n>
@@ -968,8 +970,10 @@ Commands:
   tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   native plan --repo REPO [--index N] [--flake REF] [--launcher bubblewrap|systemd-run] [--format text|json]
+  native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX] [--format text|json]
   native exec --repo REPO [--index N] [--flake REF] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--repo-check CMD] [--format text|json]
+  native capacity --repo REPO [--count N] [--flake REF] [--format text|json]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]
@@ -1152,6 +1156,7 @@ func main() {
 	pconf := poolcfg.ReadPoolConfig()
 	registry := cmdregistry.New()
 	allowcmd.Register(registry)
+	brokercmd.Register(registry)
 	composecmd.Register(registry)
 	hostscmd.Register(registry)
 	hookcmd.Register(registry)

@@ -257,3 +257,29 @@ Next central work should move tmux/layout/exec/readiness call sites from Docker
 exec command construction to the native runtime model. Next per-overlay work
 should close the npm-version gaps for Spago and Netlify or intentionally pin
 them in a generated npm dependency expression.
+
+## Operation Checkpoint
+
+The next implementation slice makes the native runtime operational enough to
+manage directly from the canonical `devkit` entrypoint:
+
+- `devkit broker start|status|stop` manages the host-side test-container broker
+  process and records PID/state/log files under the native runtime state root.
+  The configured default endpoint is `/run/devkit/test-container-broker.sock`;
+  hosts that do not allow the current user to create `/run/devkit` must create
+  that directory out of band or pass `--socket` for a writable endpoint.
+- `devkit native prepare` creates dedicated native worktrees for every agent,
+  including agent 1, and prepares separate per-agent HOME/state directories.
+  It defaults to `native-agent<N>` branch names so it does not collide with
+  legacy Compose worktrees that may still have `agent<N>` checked out.
+- `devkit native readiness` can load repo checks from overlay config, falling
+  back to the existing warm hook and `runtime.core_check`.
+- `devkit native capacity` reports runtime capacity separately from repo
+  readiness, so repo check failures remain visible and retryable without hiding
+  launchable agents.
+
+Compose is not the default runtime yet. The remaining cutover work is to move
+tmux/layout attachment, long-lived agent session management, and top-level
+`up`/`down`/`restart`/`status` dispatch away from Docker Compose. Until that
+call-site migration is complete, Compose remains the legacy compatibility path
+and native operation is explicit through `broker` and `native` commands.

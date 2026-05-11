@@ -9,9 +9,12 @@ import (
 	"strings"
 
 	"devkit/cli/devctl/internal/cmdregistry"
+	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/runtime/capacity"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/runtime/readiness"
+	wtx "devkit/cli/devctl/internal/worktrees"
 )
 
 // Register adds Nix-native runtime commands.
@@ -21,15 +24,19 @@ func Register(r *cmdregistry.Registry) {
 
 func handle(ctx *cmdregistry.Context) error {
 	if len(ctx.Args) == 0 {
-		return fmt.Errorf("Usage: native plan|exec --repo REPO [--index N] [--flake REF] [--launcher bubblewrap|systemd-run]")
+		return fmt.Errorf("Usage: native plan|prepare|exec|readiness|capacity --repo REPO [--index N] [--flake REF]")
 	}
 	switch ctx.Args[0] {
 	case "plan":
 		return handlePlan(ctx)
+	case "prepare":
+		return handlePrepare(ctx)
 	case "exec":
 		return handleExec(ctx)
 	case "readiness":
 		return handleReadiness(ctx)
+	case "capacity":
+		return handleCapacity(ctx)
 	case "shell":
 		return handleShell(ctx)
 	default:
@@ -38,11 +45,16 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
-	opts      nativeplan.BuildOptions
-	format    string
-	dryRun    bool
-	repoCheck string
-	command   []string
+	opts               nativeplan.BuildOptions
+	format             string
+	dryRun             bool
+	count              int
+	baseBranch         string
+	branchPrefix       string
+	dedicatedWorktrees bool
+	skipRepoChecks     bool
+	repoCheck          string
+	command            []string
 }
 
 func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error) {
@@ -97,6 +109,33 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error
 			i++
 		case "--dry-run":
 			parsed.dryRun = true
+		case "--count":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--count requires a value")
+			}
+			count, err := strconv.Atoi(ctx.Args[i+1])
+			if err != nil || count < 1 {
+				return parsed, fmt.Errorf("--count must be a positive integer")
+			}
+			parsed.count = count
+			i++
+		case "--base-branch":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--base-branch requires a value")
+			}
+			parsed.baseBranch = ctx.Args[i+1]
+			i++
+		case "--branch-prefix":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--branch-prefix requires a value")
+			}
+			parsed.branchPrefix = ctx.Args[i+1]
+			i++
+		case "--dedicated-worktrees":
+			parsed.dedicatedWorktrees = true
+			parsed.opts.DedicatedWorktree = true
+		case "--skip-repo-checks":
+			parsed.skipRepoChecks = true
 		case "--repo-check":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--repo-check requires a value")
@@ -146,7 +185,7 @@ func handlePlan(ctx *cmdregistry.Context) error {
 		return err
 	}
 	if parsed.repoCheck != "" {
-		return fmt.Errorf("--repo-check is only valid for native readiness")
+		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
@@ -174,6 +213,104 @@ func handlePlan(ctx *cmdregistry.Context) error {
 	return nil
 }
 
+func handlePrepare(ctx *cmdregistry.Context) error {
+	parsed, err := parsePlanArgs(ctx, false)
+	if err != nil {
+		return err
+	}
+	if parsed.repoCheck != "" {
+		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
+	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	repo := strings.TrimSpace(parsed.opts.Repo)
+	if repo == "" {
+		repo = strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	if repo == "" {
+		repo = "ouroboros-ide"
+	}
+	count := parsed.count
+	if count < 1 {
+		count = cfg.Defaults.Agents
+	}
+	if count < 1 {
+		count = 1
+	}
+	baseBranch := strings.TrimSpace(parsed.baseBranch)
+	if baseBranch == "" {
+		baseBranch = strings.TrimSpace(cfg.Defaults.BaseBranch)
+	}
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	branchPrefix := strings.TrimSpace(parsed.branchPrefix)
+	if branchPrefix == "" {
+		branchPrefix = "native-agent"
+	}
+	if err := wtx.SetupNative(wtx.NativeOptions{
+		DevkitRoot:   ctx.Paths.Root,
+		Repo:         repo,
+		Count:        count,
+		BaseBranch:   baseBranch,
+		BranchPrefix: branchPrefix,
+		WorktreeRoot: parsed.opts.WorktreeRoot,
+		DryRun:       ctx.DryRun || parsed.dryRun,
+	}); err != nil {
+		return err
+	}
+	type preparedAgent struct {
+		Index        int    `json:"index"`
+		HostWorktree string `json:"host_worktree"`
+		HostHome     string `json:"host_home"`
+		StateRoot    string `json:"state_root"`
+	}
+	out := struct {
+		Repo   string          `json:"repo"`
+		Count  int             `json:"count"`
+		Agents []preparedAgent `json:"agents"`
+	}{Repo: repo, Count: count}
+	for i := 1; i <= count; i++ {
+		opts := parsed.opts
+		opts.Index = i
+		opts.Repo = repo
+		opts.DedicatedWorktree = true
+		p, err := nativeplan.BuildDevAll(opts)
+		if err != nil {
+			return err
+		}
+		if !ctx.DryRun && !parsed.dryRun {
+			if err := launch.Prepare(p); err != nil {
+				return err
+			}
+		}
+		out.Agents = append(out.Agents, preparedAgent{
+			Index:        i,
+			HostWorktree: p.Agent.HostWorktree,
+			HostHome:     p.Agent.HostHome,
+			StateRoot:    p.Agent.StateRoot,
+		})
+	}
+	switch parsed.format {
+	case "", "text":
+		fmt.Fprintf(os.Stdout, "repo: %s\ncount: %d\n", out.Repo, out.Count)
+		for _, agent := range out.Agents {
+			fmt.Fprintf(os.Stdout, "agent%d: worktree=%s home=%s state=%s\n", agent.Index, agent.HostWorktree, agent.HostHome, agent.StateRoot)
+		}
+	case "json":
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(data))
+	default:
+		return fmt.Errorf("--format must be text or json")
+	}
+	return nil
+}
+
 func handleShell(ctx *cmdregistry.Context) error {
 	ctx.Args[0] = "exec"
 	return handleExec(ctx)
@@ -185,7 +322,7 @@ func handleExec(ctx *cmdregistry.Context) error {
 		return err
 	}
 	if parsed.repoCheck != "" {
-		return fmt.Errorf("--repo-check is only valid for native readiness")
+		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
@@ -227,7 +364,11 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	report := runReadinessReport(p, parsed.repoCheck)
+	repoChecks, err := repoChecksFor(ctx, parsed)
+	if err != nil {
+		return err
+	}
+	report := runReadinessReport(p, repoChecks)
 	switch parsed.format {
 	case "", "json":
 		data, err := json.MarshalIndent(struct {
@@ -265,7 +406,110 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	return nil
 }
 
-func runReadinessReport(p nativeplan.Plan, repoCheck string) readiness.Report {
+func handleCapacity(ctx *cmdregistry.Context) error {
+	parsed, err := parsePlanArgs(ctx, false)
+	if err != nil {
+		return err
+	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	count := parsed.count
+	if count < 1 {
+		count = cfg.Defaults.Agents
+	}
+	if count < 1 {
+		count = 1
+	}
+	repo := strings.TrimSpace(parsed.opts.Repo)
+	if repo == "" {
+		repo = strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	if repo == "" {
+		repo = "ouroboros-ide"
+	}
+	repoChecks, err := repoChecksFor(ctx, parsed)
+	if err != nil {
+		return err
+	}
+	reports := make(map[int]readiness.Report, count)
+	for i := 1; i <= count; i++ {
+		opts := parsed.opts
+		opts.Index = i
+		opts.Repo = repo
+		p, err := nativeplan.BuildDevAll(opts)
+		if err != nil {
+			return err
+		}
+		reports[i] = runReadinessReport(p, repoChecks)
+	}
+	summary := capacity.Build(reports)
+	switch parsed.format {
+	case "", "json":
+		data, err := json.MarshalIndent(summary, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(data))
+	case "text":
+		fmt.Fprintf(os.Stdout, "total: %d\n", summary.Total)
+		fmt.Fprintf(os.Stdout, "runtime_ready: %d\n", summary.RuntimeReady)
+		fmt.Fprintf(os.Stdout, "repo_ready: %d\n", summary.RepoReady)
+		fmt.Fprintf(os.Stdout, "capacity_available: %d\n", summary.CapacityAvailable)
+		for _, agent := range summary.Agents {
+			fmt.Fprintf(os.Stdout, "agent%d: runtime_ready=%t repo_ready=%t capacity_available=%t\n", agent.Index, agent.RuntimeReady, agent.RepoReady, agent.CapacityAvailable)
+		}
+	default:
+		return fmt.Errorf("--format must be text or json")
+	}
+	if summary.CapacityAvailable != summary.Total {
+		return fmt.Errorf("native capacity is not fully available")
+	}
+	return nil
+}
+
+type repoCheck struct {
+	Name    string
+	Command string
+}
+
+func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, error) {
+	if strings.TrimSpace(parsed.repoCheck) != "" {
+		return []repoCheck{{Name: "repo-check", Command: parsed.repoCheck}}, nil
+	}
+	if parsed.skipRepoChecks {
+		return nil, nil
+	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]repoCheck, 0, len(cfg.Readiness.RepoChecks)+2)
+	for i, check := range cfg.Readiness.RepoChecks {
+		command := strings.TrimSpace(check.Command)
+		if command == "" {
+			continue
+		}
+		name := strings.TrimSpace(check.Name)
+		if name == "" {
+			name = fmt.Sprintf("repo-check-%d", i+1)
+		}
+		checks = append(checks, repoCheck{Name: name, Command: command})
+	}
+	if len(checks) > 0 {
+		return checks, nil
+	}
+	if warm := strings.TrimSpace(cfg.Hooks.Warm); warm != "" {
+		checks = append(checks, repoCheck{Name: "warm-hook", Command: warm})
+	}
+	if core := strings.TrimSpace(cfg.Runtime.CoreCheck); core != "" {
+		checks = append(checks, repoCheck{Name: "core-check", Command: core})
+	}
+	return checks, nil
+}
+
+func runReadinessReport(p nativeplan.Plan, repoChecks []repoCheck) readiness.Report {
 	var report readiness.Report
 	if err := launch.Prepare(p); err != nil {
 		report.AddRuntime("prepare-state", false, err.Error())
@@ -289,11 +533,13 @@ func runReadinessReport(p nativeplan.Plan, repoCheck string) readiness.Report {
 	if err != nil {
 		return report
 	}
-	if strings.TrimSpace(repoCheck) == "" {
-		return report
+	for _, check := range repoChecks {
+		if strings.TrimSpace(check.Command) == "" {
+			continue
+		}
+		out, err = runSandboxCommand(p, []string{"bash", "-lc", check.Command})
+		report.AddRepo(check.Name, err == nil, detail(err, out))
 	}
-	out, err = runSandboxCommand(p, []string{"bash", "-lc", repoCheck})
-	report.AddRepo("repo-check", err == nil, detail(err, out))
 	return report
 }
 

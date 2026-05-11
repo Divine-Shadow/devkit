@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +130,41 @@ func TestPolicy_AllowsMultipleImages(t *testing.T) {
 	if p.matchesImage("redis:latest") {
 		t.Fatal("expected redis to be blocked")
 	}
+}
+
+func TestLoadConfig_ExplicitAllowedImagesDoNotAppendLegacyDefault(t *testing.T) {
+	t.Setenv("BROKER_ALLOWED_IMAGES", "minio/minio:latest")
+	unsetEnv(t, "BROKER_ALLOWED_IMAGE")
+	unsetEnv(t, "BROKER_ALLOWED_TAG")
+
+	cfg := loadConfig()
+	if len(cfg.AllowedImages) != 1 || cfg.AllowedImages[0] != "minio/minio:latest" {
+		t.Fatalf("allowed images = %#v", cfg.AllowedImages)
+	}
+}
+
+func TestLoadConfig_AppendsExplicitLegacyImage(t *testing.T) {
+	t.Setenv("BROKER_ALLOWED_IMAGES", "minio/minio:latest")
+	t.Setenv("BROKER_ALLOWED_IMAGE", "postgres")
+	t.Setenv("BROKER_ALLOWED_TAG", "15")
+
+	cfg := loadConfig()
+	if got, want := strings.Join(cfg.AllowedImages, ","), "minio/minio:latest,postgres:15,postgres"; got != want {
+		t.Fatalf("allowed images = %q, want %q", got, want)
+	}
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, ok := os.LookupEnv(key)
+	_ = os.Unsetenv(key)
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, old)
+			return
+		}
+		_ = os.Unsetenv(key)
+	})
 }
 
 func TestValidatePortBindings_MinioAllowed(t *testing.T) {

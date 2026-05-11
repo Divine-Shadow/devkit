@@ -130,3 +130,33 @@ func TestSetup_RemovesStaleWorktreeDirectories(t *testing.T) {
 
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
 }
+
+func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	if err := os.MkdirAll(filepath.Join(devRoot, "devkit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        2,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+	}); err != nil {
+		t.Fatalf("native setup failed: %v", err)
+	}
+
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
+	if got := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
+		t.Fatalf("primary checkout branch changed to %s", got)
+	}
+}

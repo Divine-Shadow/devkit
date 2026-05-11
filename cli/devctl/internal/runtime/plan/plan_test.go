@@ -55,6 +55,28 @@ func TestBuildDevAllRejectsOtherProjects(t *testing.T) {
 	}
 }
 
+func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
+	p, err := BuildDevAll(BuildOptions{
+		Paths:             compose.Paths{Root: "/home/bayesartre/dev/devkit"},
+		Project:           "dev-all",
+		Index:             1,
+		Repo:              "ouroboros-ide",
+		DedicatedWorktree: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if p.Agent.HostWorktree != "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" {
+		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
+	}
+	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" {
+		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
+	}
+	if p.Agent.HostHome != "/home/bayesartre/dev/agent-worktrees/agent1/.devhome-agent1" {
+		t.Fatalf("host home = %q", p.Agent.HostHome)
+	}
+}
+
 func TestRenderJSONRoundTrip(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{Paths: compose.Paths{Root: "/repo/devkit"}})
 	if err != nil {
