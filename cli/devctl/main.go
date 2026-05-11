@@ -2110,19 +2110,6 @@ for p in "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json" "/var/auth.json" "/var
   [ -n "$p" ] || continue; echo -n "$p : "; [ -f "$p" ] && wc -c < "$p" || echo "(missing)"; done
 exit 0`, home, home, home, home, home)
 		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
-	case "check-claude":
-		mustProject(project)
-		idx := "1"
-		if len(sub) > 0 {
-			idx = sub[0]
-		}
-		fmt.Println("== Env vars ==")
-		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true")
-		fmt.Println("== Curl checks (through proxy) ==")
-		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; echo -n 'claude.ai            : '; curl -sSvo /dev/null -w '%{http_code}\\n' https://claude.ai || true")
-		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; echo -n 'anthropic.com        : '; curl -sSvo /dev/null -w '%{http_code}\\n' https://www.anthropic.com || true")
-		home := fmt.Sprintf("/workspace/.devhome-agent%s", idx)
-		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "mkdir -p '"+home+"'; HOME='"+home+"' timeout 15s claude --version || claude --help || true")
 	case "check-sts":
 		mustProject(project)
 		which := "envoy"

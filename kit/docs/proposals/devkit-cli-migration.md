@@ -34,7 +34,7 @@ Phase 1 (MVP — lowest risk, highest value):
 - Preserve `scripts/devkit` wrapper to exec the new binary only. No fallback. If the binary is missing, the wrapper must fail loudly with build instructions.
 
 Phase 2:
-- Port `check-codex`, `check-claude`, `check-sts` with structured output and timeouts.
+- Port `check-codex` and `check-sts` with structured output and timeouts.
 - Port tmux session orchestration: `tmux-shells`, `fresh-open` (better parameter validation, clearer logs).
 - Port SSH/Git helpers and worktrees commands.
 

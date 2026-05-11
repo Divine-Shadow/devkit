@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// This test is opt-in: requires Docker and an image with git, codex, claude installed.
+// This test is opt-in: requires Docker and an image with git and codex installed.
 // Set DEVKIT_INTEGRATION=1 and DEVKIT_IT_IMAGE to run.
 func TestFreshOpen_Integration(t *testing.T) {
 	if os.Getenv("DEVKIT_INTEGRATION") != "1" {
@@ -61,7 +61,7 @@ func TestFreshOpen_Integration(t *testing.T) {
 		t.Fatalf("devctl fresh-open failed: %v\n%s\n%s", err, out, stderr.String())
 	}
 
-	// Exec in container: verify hardened (read-only root), and that git, codex, claude are callable non-interactively
+	// Exec in container: verify hardened (read-only root), and that git and codex are callable non-interactively
 	comp := func(args ...string) *exec.Cmd {
 		a := append([]string{"compose", "-f", filepath.Join(root, "kit/compose.yml"), "-f", filepath.Join(root, "kit/compose.hardened.yml"), "-f", filepath.Join(root, "kit/compose.dns.yml"), "-f", filepath.Join(root, "kit/compose.envoy.yml")}, args...)
 		return exec.Command("docker", a...)
@@ -79,11 +79,6 @@ func TestFreshOpen_Integration(t *testing.T) {
 	if out, err := comp("exec", "dev-agent", "bash", "-lc", "timeout 10s codex --version || timeout 10s codex exec 'ok' || true").CombinedOutput(); err != nil {
 		t.Fatalf("codex check failed: %v\n%s", err, out)
 	}
-	// claude non-interactive
-	if out, err := comp("exec", "dev-agent", "bash", "-lc", "timeout 10s claude --version || timeout 10s claude --help || true").CombinedOutput(); err != nil {
-		t.Fatalf("claude check failed: %v\n%s", err, out)
-	}
-
 	// Teardown
 	_ = comp("down").Run()
 	_ = exec.Command("docker", "rm", "-f", "devkit_envoy", "devkit_envoy_sni", "devkit_dns", "devkit_tinyproxy").Run()

@@ -19,20 +19,19 @@ build-cli:
 	@$(MAKE) -C cli/devctl build
 
 # Fresh open with all profiles, N agents, tmux disabled for non-interactive runs
-# Usage: make codex-fresh-open N=1 [INSTALL_CODEX=false INSTALL_CLAUDE=false]
+# Usage: make codex-fresh-open N=1 [INSTALL_CODEX=false]
 codex-fresh-open: build-cli
 	@echo "== Fresh open for $(PROJECT) with all profiles (N=$(N)) =="
 	@export DEVKIT_NO_TMUX=1; \
 	  N=${N:-1}; \
 	  $(CLI) -p $(PROJECT) fresh-open $$N
 
-# Verify core behavior inside the dev-agent: proxy env, git, codex/claude, hardened rootfs
+# Verify core behavior inside the dev-agent: proxy env, git, codex, hardened rootfs
 codex-verify:
-	@echo "== Verifying dev-agent behavior (proxy env, git, codex/claude, hardened) =="
+	@echo "== Verifying dev-agent behavior (proxy env, git, codex, hardened) =="
 	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true"
 	@docker compose $(COMPOSE_ARGS) exec -T dev-agent git --version
 	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "timeout 10s codex --version || timeout 10s codex exec 'ok' || true"
-	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "timeout 10s claude --version || timeout 10s claude --help || true"
 	@docker compose $(COMPOSE_ARGS) exec -T dev-agent bash -lc "touch /should_fail && echo wrote || echo denied"
 
 # Bring down everything (all profiles)

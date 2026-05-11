@@ -23,7 +23,7 @@ contract wins.
 Claude is not a blocker for Nix runtime parity.
 
 - Remove Claude from must-match Dockerfile parity and smoke requirements.
-- Keep shells functional if `claude-code` remains available from nixpkgs.
+- Keep shells functional without requiring `claude-code` from nixpkgs.
 - Do not spend implementation time pinning, packaging, wrapping, or validating
   Claude unless explicitly reauthorized.
 

@@ -173,20 +173,20 @@ Convenience targets to validate the codex overlay end‑to‑end:
 Notes:
 - All targets use the Go CLI (`kit/bin/devctl`).
 - `codex-fresh-open` sets `DEVKIT_NO_TMUX=1` to avoid interactive tmux during automation.
-- You can disable heavyweight installs during image build by exporting: `INSTALL_CODEX=false INSTALL_CLAUDE=false` before running `codex-fresh-open`.
+- You can disable heavyweight installs during image build by exporting: `INSTALL_CODEX=false` before running `codex-fresh-open`.
 
 ### Fresh‑Open Integration Test (Optional)
 
 This verifies hardened profiles and core tools are callable inside the agent.
 
-- Requirements: Docker, and a container image that has `git`, `codex`, and `claude` installed and callable non‑interactively.
+- Requirements: Docker, and a container image that has `git` and `codex` installed and callable non‑interactively.
 - Run:
   - `cd devkit/cli/devctl`
   - `DEVKIT_INTEGRATION=1 DEVKIT_IT_IMAGE=<image> go test -tags=integration -run FreshOpen_Integration`
 - What it does:
   - Stitches compose with all profiles (hardened,dns,envoy) and overlay.
   - Brings up the stack via `fresh-open 1`.
-  - Checks: `git --version`, `timeout 10s codex --version | codex exec 'ok'`, and `timeout 10s claude --version | --help`.
+  - Checks: `git --version` and `timeout 10s codex --version | codex exec 'ok'`.
   - Tears down containers and networks.
 
 ## Git Over SSH (GitHub)

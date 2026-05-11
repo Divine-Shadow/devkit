@@ -6,13 +6,12 @@ services:
       dockerfile: infra/docker/dev/codex-agent.Dockerfile
       args:
         - INSTALL_CODEX=${INSTALL_CODEX:-true}
-        - INSTALL_CLAUDE=${INSTALL_CLAUDE:-true}
+        - INSTALL_CLAUDE=false
         - INSTALL_SPAGO=${INSTALL_SPAGO:-true}
         - JDK_VERSION=${JDK_VERSION:-21}
         - CODEX_VERSION
         - CODEX_ASSET
         - CODEX_SHA256
-        - CLAUDE_VERSION=${CLAUDE_VERSION:-latest}
         - AWSCLI_URL=${AWSCLI_URL:-https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip}
         - AWSCLI_SHA256=${AWSCLI_SHA256:-}
     image: local/dev-agent:ouroboros-ide

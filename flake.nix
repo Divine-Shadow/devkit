@@ -254,7 +254,6 @@
 
           ouroborosAgentTools = commonAgentTools ++ (with pkgs; [
             awscli2
-            claude-code
             cmake
             gcc
             gnumake
@@ -335,7 +334,6 @@
           '';
 
           ouroboros-static-front-end = mkShell "ouroboros-static-front-end" (commonAgentTools ++ (with pkgs; [
-            claude-code
             nodejs_20
             playwright-test
             purescript

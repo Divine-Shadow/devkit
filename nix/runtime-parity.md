@@ -136,10 +136,8 @@ Observed key versions:
 
 ## Intentionally Dropped Parity
 
-- `claude-code` is no longer a Nix runtime parity blocker. The static frontend
-  shell may keep the nixpkgs package for convenience, but parity smoke commands
-  no longer validate the Claude CLI, and no implementation time is assigned
-  to pinning or wrapping Claude.
+- `claude-code` is no longer a Nix runtime parity blocker. Nix shells and the
+  static frontend Dockerfile do not install or validate the Claude CLI.
 
 ## Known Parity Gaps
 

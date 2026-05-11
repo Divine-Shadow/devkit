@@ -118,8 +118,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
-			"'}' " +
-			"'(( $+commands[claudew] )) && alias claude=claudew' > \"$target/.zshrc\"",
+			"'}' > \"$target/.zshrc\"",
 	}
 	if cfg.SeedCodex {
 		seedSteps := []string{
@@ -178,8 +177,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
-			"'}' " +
-			"'(( $+commands[claudew] )) && alias claude=claudew' > \"$home/.zshrc\"",
+			"'}' > \"$home/.zshrc\"",
 	}
 	if seedCodex {
 		marker := "$home/.codex/.seeded"
