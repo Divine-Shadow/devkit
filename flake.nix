@@ -1,0 +1,360 @@
+{
+  description = "Devkit Nix-native agent runtime shells and migration checks";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+  };
+
+  outputs =
+    { self, nixpkgs, ... }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forEachSystem =
+        f:
+        nixpkgs.lib.genAttrs systems (
+          system:
+          f {
+            inherit system;
+            pkgs = import nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+            };
+          }
+        );
+      systemDetails = {
+        x86_64-linux = {
+          dockerArch = "x86_64";
+          hashicorpArch = "amd64";
+          goArch = "amd64";
+          codexAsset = "codex-x86_64-unknown-linux-musl";
+          codexHash = "sha256-Fneee3hXUIp2ijbX1OCE7sM27COUbtcKmwlIm4+GEZA=";
+          dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
+          goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
+          terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
+          packerHash = "sha256-ztE+/CV9AlWTLRS4ro84hjJlEzc5oAfEMMrhBq/PxFo=";
+        };
+        aarch64-linux = {
+          dockerArch = "aarch64";
+          hashicorpArch = "arm64";
+          goArch = "arm64";
+          codexAsset = "codex-aarch64-unknown-linux-musl";
+          codexHash = "sha256-HX4A8sIsMBa1vLccYQEJR7AiqQ4pAbxrqv6CJWSSx2c=";
+          dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
+          goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
+          terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
+          packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
+        };
+      };
+    in
+    {
+      devShells = forEachSystem (
+        { system, pkgs, ... }:
+        let
+          details = systemDetails.${system};
+          pinnedCodex = pkgs.stdenvNoCC.mkDerivation {
+            pname = "codex";
+            version = "rust-v0.130.0";
+            src = pkgs.fetchurl {
+              url = "https://github.com/openai/codex/releases/download/rust-v0.130.0/${details.codexAsset}.tar.gz";
+              hash = details.codexHash;
+            };
+            dontUnpack = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/bin"
+              tar -xzf "$src" -C "$TMPDIR"
+              install -m 0755 "$TMPDIR/${details.codexAsset}" "$out/bin/codex"
+              runHook postInstall
+            '';
+          };
+
+          pinnedDockerCli = pkgs.stdenvNoCC.mkDerivation {
+            pname = "docker-cli";
+            version = "27.5.1";
+            src = pkgs.fetchurl {
+              url = "https://download.docker.com/linux/static/stable/${details.dockerArch}/docker-27.5.1.tgz";
+              hash = details.dockerHash;
+            };
+            dontUnpack = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/bin"
+              tar -xzf "$src" -C "$TMPDIR"
+              install -m 0755 "$TMPDIR/docker/docker" "$out/bin/docker"
+              runHook postInstall
+            '';
+          };
+
+          pinnedGo = pkgs.stdenvNoCC.mkDerivation {
+            pname = "go";
+            version = "1.22.4";
+            src = pkgs.fetchurl {
+              url = "https://go.dev/dl/go1.22.4.linux-${details.goArch}.tar.gz";
+              hash = details.goHash;
+            };
+            dontUnpack = true;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out"
+              tar -xzf "$src" -C "$out" --strip-components=1
+              runHook postInstall
+            '';
+          };
+
+          mkHashicorpTool =
+            name: version: hash:
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = name;
+              inherit version;
+              src = pkgs.fetchurl {
+                url = "https://releases.hashicorp.com/${name}/${version}/${name}_${version}_linux_${details.hashicorpArch}.zip";
+                inherit hash;
+              };
+              dontUnpack = true;
+              nativeBuildInputs = [ pkgs.unzip ];
+              installPhase = ''
+                runHook preInstall
+                mkdir -p "$out/bin"
+                unzip -q "$src" -d "$TMPDIR"
+                install -m 0755 "$TMPDIR/${name}" "$out/bin/${name}"
+                runHook postInstall
+              '';
+            };
+
+          pinnedTerraform = mkHashicorpTool "terraform" "1.9.8" details.terraformHash;
+          pinnedPacker = mkHashicorpTool "packer" "1.11.2" details.packerHash;
+
+          mgbaRuntimeLibs = with pkgs; [
+            libedit
+            libpng
+            libzip
+            lua5_2
+            minizip
+            sqlite
+            zlib
+          ];
+
+          pinnedMgbaHeadless = pkgs.stdenv.mkDerivation {
+            pname = "mgba-headless";
+            version = "b19b557a78930ede7ee7f5dcbc880f9ff2533ffe";
+            src = pkgs.fetchFromGitHub {
+              owner = "mgba-emu";
+              repo = "mgba";
+              rev = "b19b557a78930ede7ee7f5dcbc880f9ff2533ffe";
+              hash = "sha256-wUS4wLYPk/E8Ro/C7ZBhxUDOwVOV5JmKLuyDdvfdnTA=";
+            };
+            nativeBuildInputs = with pkgs; [
+              cmake
+              patchelf
+              pkg-config
+            ];
+            buildInputs = mgbaRuntimeLibs;
+            configurePhase = ''
+              runHook preConfigure
+              cmake -S . -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DBUILD_HEADLESS=ON \
+                -DBUILD_QT=OFF \
+                -DBUILD_SDL=OFF \
+                -DBUILD_TEST=OFF \
+                -DBUILD_SUITE=OFF \
+                -DBUILD_PERF=OFF \
+                -DBUILD_ROM_TEST=OFF \
+                -DBUILD_CINEMA=OFF \
+                -DBUILD_LIBRETRO=OFF \
+                -DBUILD_SHARED=ON \
+                -DENABLE_SCRIPTING=ON \
+                -DUSE_LUA=ON \
+                -DUSE_DISCORD_RPC=OFF \
+                -DUSE_FFMPEG=OFF
+              runHook postConfigure
+            '';
+            buildPhase = ''
+              runHook preBuild
+              cmake --build build --target mgba-headless -j"$NIX_BUILD_CORES"
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              install -Dm755 build/mgba-headless "$out/bin/mgba-headless"
+              mkdir -p "$out/lib"
+              find build -type f \( -name '*.so' -o -name '*.so.*' \) -exec cp -a {} "$out/lib/" \;
+              ln -sfn libmgba.so.0.11.0 "$out/lib/libmgba.so.0.11"
+              ln -sfn libmgba.so.0.11.0 "$out/lib/libmgba.so"
+              patchelf --set-rpath "$out/lib:${pkgs.lib.makeLibraryPath mgbaRuntimeLibs}" "$out/bin/mgba-headless"
+              runHook postInstall
+            '';
+          };
+
+          commonAgentTools = with pkgs; [
+            bashInteractive
+            bubblewrap
+            cacert
+            coreutils
+            curl
+            file
+            findutils
+            gawk
+            git
+            gnugrep
+            gnused
+            jq
+            less
+            netcat-openbsd
+            openssh
+            procps
+            python3
+            ripgrep
+            tmux
+            uv
+            vim
+            which
+            zsh
+            pinnedDockerCli
+          ];
+
+          ouroborosAgentTools = commonAgentTools ++ (with pkgs; [
+            awscli2
+            claude-code
+            cmake
+            gcc
+            gnumake
+            jdk21
+            libedit
+            libpng
+            libzip
+            lua5_2
+            minizip
+            nodejs_20
+            pkg-config
+            playwright
+            purescript
+            sbt
+            spago
+            sqlite
+            tini
+            unzip
+            zip
+            zlib
+            pinnedCodex
+            pinnedGo
+            pinnedMgbaHeadless
+          ]);
+
+          mkShell =
+            name: packages: extraHook:
+            pkgs.mkShell {
+              inherit packages;
+              shellHook = ''
+                export DEVKIT_NIX_SHELL=${name}
+                export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+                export GIT_SSL_CAINFO=$SSL_CERT_FILE
+                export TESTCONTAINERS_RYUK_DISABLED=true
+                export DOCKER_HOST=''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}
+                export HTTP_PROXY=''${HTTP_PROXY:-http://127.0.0.1:8888}
+                export HTTPS_PROXY=''${HTTPS_PROXY:-$HTTP_PROXY}
+                export NO_PROXY=''${NO_PROXY:-localhost,127.0.0.1}
+              '' + extraHook;
+            };
+        in
+        {
+          default = self.devShells.${pkgs.system}.dev-all;
+
+          template-agent = mkShell "template-agent" commonAgentTools "";
+
+          ouroboros-dev-agent = mkShell "ouroboros-dev-agent" ouroborosAgentTools ''
+            export JAVA_HOME=${pkgs.jdk21}
+            export GOROOT=${pinnedGo}
+            export PATH=${pkgs.jdk21}/bin:$PATH
+          '';
+
+          dev-all = self.devShells.${pkgs.system}.ouroboros-dev-agent;
+
+          codex = self.devShells.${pkgs.system}.ouroboros-dev-agent;
+
+          ouroboros-terraform = mkShell "ouroboros-terraform" (ouroborosAgentTools ++ (with pkgs; [
+            pinnedPacker
+            pinnedTerraform
+          ])) ''
+            export JAVA_HOME=${pkgs.jdk21}
+            export GOROOT=${pinnedGo}
+            export PATH=${pkgs.jdk21}/bin:$PATH
+          '';
+
+          ouro-integration = self.devShells.${pkgs.system}.ouroboros-terraform;
+
+          pokeemerald = mkShell "pokeemerald" (ouroborosAgentTools ++ (with pkgs; [
+            gcc-arm-embedded
+          ])) ''
+            export JAVA_HOME=${pkgs.jdk21}
+            export GOROOT=${pinnedGo}
+            export PATH=${pkgs.jdk21}/bin:$PATH
+          '';
+
+          ouroboros-static-front-end = mkShell "ouroboros-static-front-end" (commonAgentTools ++ (with pkgs; [
+            claude-code
+            netlify-cli
+            nodejs_20
+            playwright
+            purescript
+            spago
+            pinnedCodex
+          ])) "";
+
+          runtime-test-agent = mkShell "runtime-test-agent" (with pkgs; [
+            bashInteractive
+            cacert
+            curl
+            git
+            openssh
+          ]) "";
+
+          tinyproxy = mkShell "tinyproxy" (with pkgs; [
+            bashInteractive
+            cacert
+            curl
+            netcat-openbsd
+            python3
+            tinyproxy
+            uv
+          ]) "";
+        }
+      );
+
+      packages = forEachSystem (
+        { pkgs, ... }:
+        {
+          postgres-broker = pkgs.buildGoModule {
+            pname = "devkit-postgres-broker";
+            version = "dev";
+            src = ./brokers/postgres-broker;
+            vendorHash = "sha256-0HDZ3llIgLMxRLNei93XrcYliBzjajU6ZPllo3/IZVY=";
+            env.CGO_ENABLED = "0";
+            ldflags = [ "-s" "-w" ];
+          };
+
+          default = self.packages.${pkgs.system}.postgres-broker;
+        }
+      );
+
+      checks = forEachSystem (
+        { pkgs, ... }:
+        {
+          runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" { } ''
+            mkdir -p "$out"
+            cat > "$out/README" <<'EOF'
+            Devkit Nix runtime shell inventory evaluates.
+
+            Required follow-up evidence for each shell:
+            - nix develop .#<shell> --command <tool smoke>
+            - tool parity against the source Dockerfile
+            - brokered OCI access check where applicable
+            EOF
+          '';
+        }
+      );
+    };
+}

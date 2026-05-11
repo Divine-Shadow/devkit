@@ -236,3 +236,24 @@ Avoid assigning overlapping write scopes:
 - Do not mix overlay flake conversion with runtime command refactors.
 - Do not rewrite Compose files as part of native launcher scaffolding unless the
   task is explicitly a legacy cleanup.
+
+## Implementation Checkpoint
+
+The first implementation slice is now present:
+
+- Root `flake.nix` and `flake.lock` define Nix shells for the current checked-in
+  Dockerfile families plus the external Ouroboros agent image family.
+- Deterministic Dockerfile pins are represented directly for Codex
+  `rust-v0.130.0`, Docker CLI `27.5.1`, Go `1.22.4`, Terraform `1.9.8`,
+  Packer `1.11.2`, and the pinned headless mGBA commit.
+- `devctl native plan` renders native agent identity, binds, HOME/Codex state,
+  DNS/proxy fields, broker endpoint, and resource limits without launching.
+- `devctl native exec` prepares per-agent state and launches a flake shell
+  through bubblewrap for real command execution.
+- Verification evidence and remaining parity gaps live in
+  `nix/runtime-parity.md`.
+
+Next central work should move tmux/layout/exec/readiness call sites from Docker
+exec command construction to the native runtime model. Next per-overlay work
+should close the npm-version gaps for Spago and Netlify or intentionally pin
+them in a generated npm dependency expression.

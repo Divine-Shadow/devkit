@@ -97,8 +97,7 @@ Gaps and follow-ups:
 
 ## Current Baseline
 
-At the time this contract was added, devkit had no checked-in Nix artifacts:
-there was no `flake.nix`, `flake.lock`, or `*.nix` file under the repository.
-The first verification work should therefore begin with the first artifact added
-by the flake-conversion tasks described in
-`kit/docs/proposals/nix-sandbox-agent-runtime-plan.md`.
+At the time this contract was added, devkit had no checked-in Nix artifacts.
+The first implementation slice added a root flake, native runtime plan/launch
+scaffolding, and shell smoke evidence. Current evidence is recorded in
+`nix/runtime-parity.md`.

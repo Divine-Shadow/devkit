@@ -19,6 +19,7 @@ import (
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
 	imagematrixcmd "devkit/cli/devctl/internal/commands/imagematrix"
+	nativecmd "devkit/cli/devctl/internal/commands/nativecmd"
 	networkcmd "devkit/cli/devctl/internal/commands/network"
 	preflightcmd "devkit/cli/devctl/internal/commands/preflight"
 	tmuxcmd "devkit/cli/devctl/internal/commands/tmuxcmd"
@@ -966,6 +967,8 @@ Commands:
   wt-open [--session NAME] [--plain] [--index N|--count N] [--service NAME] [--cd PATH], wt-release [--session NAME]
   tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
+  native plan --repo REPO [--index N] [--flake REF] [--launcher bubblewrap|systemd-run] [--format text|json]
+  native exec --repo REPO [--index N] [--flake REF] [--dry-run] [-- COMMAND...]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]
@@ -1154,6 +1157,7 @@ func main() {
 	networkcmd.Register(registry)
 	preflightcmd.Register(registry)
 	imagematrixcmd.Register(registry)
+	nativecmd.Register(registry)
 	verifyallcmd.Register(registry)
 	tmuxcmd.Register(registry, doSyncTmux, ensureTmuxSessionWithWindow, defaultSessionName, mustAtoi, listServiceNames, buildWindowCmd, agentexec.NewSeedTracker, hasTmuxSession)
 	ctx := &cmdregistry.Context{
