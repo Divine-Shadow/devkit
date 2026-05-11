@@ -1,6 +1,7 @@
 package tmuxnotify
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -200,13 +201,17 @@ func allowEvent(config Config, event Event, now time.Time) (bool, error) {
 	if config.DebounceMS <= 0 {
 		return true, nil
 	}
-	keyPath := filepath.Join(os.TempDir(), "devkit-tmux-notify", sanitize(event.Session)+"__"+sanitize(event.WindowIndex)+"__"+sanitize(event.WindowName)+".stamp")
+	scopeHash := sha256.Sum256([]byte(config.Backend + "\x00" + config.FilePath))
+	keyPath := filepath.Join(os.TempDir(), "devkit-tmux-notify", fmt.Sprintf("%x", scopeHash[:8])+"__"+sanitize(event.Session)+"__"+sanitize(event.WindowIndex)+"__"+sanitize(event.WindowName)+".stamp")
 	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
 		return false, fmt.Errorf("create debounce directory: %w", err)
 	}
-	if info, err := os.Stat(keyPath); err == nil {
-		if now.Sub(info.ModTime()) < time.Duration(config.DebounceMS)*time.Millisecond {
-			return false, nil
+	if data, err := os.ReadFile(keyPath); err == nil {
+		if nanos, parseErr := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); parseErr == nil {
+			last := time.Unix(0, nanos)
+			if now.Sub(last) < time.Duration(config.DebounceMS)*time.Millisecond {
+				return false, nil
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return false, fmt.Errorf("read debounce state: %w", err)
