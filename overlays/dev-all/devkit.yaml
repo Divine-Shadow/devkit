@@ -11,6 +11,11 @@ defaults:
   auto_ready: true
   # Warm hook is required for readiness.
   require_warm: true
+runtime:
+  image: local/dev-agent:ouroboros-ide
+  codex_version: 0.130.0
+  core_check: scripts/sbt2 "Compile / compile"
+  notes: Canonical multi-worktree runtime for ouroboros-ide.
 ingress:
   kind: caddy
   routes:
@@ -19,9 +24,21 @@ ingress:
       port: 5173
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros.test
+      path: /_governance/*
+      service: dev-agent
+      port: 7778
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-1.test
       service: dev-agent@1
       port: 5173
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-1.test
+      path: /_governance/*
+      service: dev-agent@1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-2.test
@@ -29,9 +46,21 @@ ingress:
       port: 5173
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-2.test
+      path: /_governance/*
+      service: dev-agent@2
+      port: 7778
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-3.test
       service: dev-agent@3
       port: 5173
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-3.test
+      path: /_governance/*
+      service: dev-agent@3
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-4.test
@@ -39,9 +68,21 @@ ingress:
       port: 5173
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-4.test
+      path: /_governance/*
+      service: dev-agent@4
+      port: 7778
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-5.test
       service: dev-agent@5
       port: 5173
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-5.test
+      path: /_governance/*
+      service: dev-agent@5
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-6.test
@@ -49,9 +90,21 @@ ingress:
       port: 5173
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-6.test
+      path: /_governance/*
+      service: dev-agent@6
+      port: 7778
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-7.test
       service: dev-agent@7
       port: 5173
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-7.test
+      path: /_governance/*
+      service: dev-agent@7
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-8.test
@@ -59,6 +112,48 @@ ingress:
       port: 5173
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-8.test
+      path: /_governance/*
+      service: dev-agent@8
+      port: 7778
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: localhost
+      path: /operator-attention/*
+      service: operator-attention-listener
+      port: 7779
+    - host: localhost
+      path: /ouroboros-1/_governance/*
+      service: dev-agent@1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-2/_governance/*
+      service: dev-agent@2
+      port: 7778
+    - host: localhost
+      path: /ouroboros-3/_governance/*
+      service: dev-agent@3
+      port: 7778
+    - host: localhost
+      path: /ouroboros-4/_governance/*
+      service: dev-agent@4
+      port: 7778
+    - host: localhost
+      path: /ouroboros-5/_governance/*
+      service: dev-agent@5
+      port: 7778
+    - host: localhost
+      path: /ouroboros-6/_governance/*
+      service: dev-agent@6
+      port: 7778
+    - host: localhost
+      path: /ouroboros-7/_governance/*
+      service: dev-agent@7
+      port: 7778
+    - host: localhost
+      path: /ouroboros-8/_governance/*
+      service: dev-agent@8
+      port: 7778
     - host: webserver.ouroboros.test
       service: dev-agent
       port: 8080

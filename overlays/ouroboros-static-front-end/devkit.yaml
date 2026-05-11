@@ -5,6 +5,11 @@ defaults:
   agents: 1
   base_branch: main
   branch_prefix: agent
+runtime:
+  image: local/dev-agent:ouroboros-static-front-end
+  codex_version: 0.130.0
+  core_check: npm run build
+  notes: Node/Gatsby image for the standalone static front end.
 env:
   NODE_ENV: development
   GATSBY_TELEMETRY_DISABLED: "1"

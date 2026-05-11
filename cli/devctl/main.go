@@ -18,6 +18,7 @@ import (
 	composecmd "devkit/cli/devctl/internal/commands/composecmd"
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
+	imagematrixcmd "devkit/cli/devctl/internal/commands/imagematrix"
 	networkcmd "devkit/cli/devctl/internal/commands/network"
 	preflightcmd "devkit/cli/devctl/internal/commands/preflight"
 	tmuxcmd "devkit/cli/devctl/internal/commands/tmuxcmd"
@@ -344,6 +345,82 @@ func listServiceNamesProject(project, service string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+type composeServiceContainer struct {
+	Name  string
+	Index int
+}
+
+func listComposeServiceContainers(project, service string) []composeServiceContainer {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return nil
+	}
+	if strings.TrimSpace(service) == "" {
+		service = "dev-agent"
+	}
+	ctx, cancel := execx.WithTimeout(30 * time.Second)
+	defer cancel()
+	out, _ := execx.Capture(ctx, "docker",
+		"ps",
+		"-a",
+		"--filter", "label=com.docker.compose.project="+project,
+		"--filter", "label=com.docker.compose.service="+service,
+		"--format", `{{.Names}}	{{.Label "com.docker.compose.container-number"}}`,
+	)
+	containers := parseComposeServiceContainers(out)
+	sort.Slice(containers, func(i, j int) bool {
+		if containers[i].Index == containers[j].Index {
+			return containers[i].Name < containers[j].Name
+		}
+		return containers[i].Index < containers[j].Index
+	})
+	return containers
+}
+
+func parseComposeServiceContainers(raw string) []composeServiceContainer {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	containers := make([]composeServiceContainer, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		idx, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if name == "" || err != nil || idx < 1 {
+			continue
+		}
+		containers = append(containers, composeServiceContainer{Name: name, Index: idx})
+	}
+	return containers
+}
+
+func planScaleContainers(containers []composeServiceContainer, desired int) (remove []string, remaining int, maxIndex int) {
+	if desired < 1 {
+		desired = 1
+	}
+	for _, c := range containers {
+		if c.Index > maxIndex {
+			maxIndex = c.Index
+		}
+		if c.Index > desired {
+			remove = append(remove, c.Name)
+			continue
+		}
+		remaining++
+	}
+	sort.Strings(remove)
+	return remove, remaining, maxIndex
+}
+
+func needsComposeAfterScalePlan(remove []string, remaining, maxIndex, desired int) bool {
+	return len(remove) == 0 && (desired > remaining || maxIndex < desired)
 }
 
 // listAgentNames returns running dev-agent container names (sorted) for the given compose files.
@@ -886,7 +963,7 @@ Commands:
   tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH] [--service NAME]
   tmux-add-cd <index> <subpath> [--session NAME] [--name NAME] [--service NAME]
   tmux-apply-layout --file <layout.yaml> [--session NAME] [--attach]
-  wt-open [--session NAME] [--plain] [--count N] [--service NAME] [--cd PATH], wt-release [--session NAME]
+  wt-open [--session NAME] [--plain] [--index N|--count N] [--service NAME] [--cd PATH], wt-release [--session NAME]
   tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
@@ -903,6 +980,7 @@ Commands:
   worktrees-tmux <repo> <count> [--plain]    (dev-all)
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (dev-all)
+  image-matrix [--check] [--all]             (repo to image pairing report)
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
   preflight                                  (host checks: docker, tmux, ssh keys, ~/.codex)
@@ -1075,6 +1153,7 @@ func main() {
 	hookcmd.Register(registry)
 	networkcmd.Register(registry)
 	preflightcmd.Register(registry)
+	imagematrixcmd.Register(registry)
 	verifyallcmd.Register(registry)
 	tmuxcmd.Register(registry, doSyncTmux, ensureTmuxSessionWithWindow, defaultSessionName, mustAtoi, listServiceNames, buildWindowCmd, agentexec.NewSeedTracker, hasTmuxSession)
 	ctx := &cmdregistry.Context{
@@ -1161,9 +1240,19 @@ func main() {
 				}
 			}
 		}
-		runner.Compose(dryRun, files, "up", "-d", "--scale", service+"="+n)
-		if !skipReady {
-			if err := ensureProjectReady(ctx, composeProjectName(project), service, mustAtoi(n), false); err != nil {
+		desired := mustAtoi(n)
+		composeProject := composeProjectName(project)
+		containers := listComposeServiceContainers(composeProject, service)
+		remove, remaining, maxIndex := planScaleContainers(containers, desired)
+		if len(remove) > 0 {
+			runner.Host(dryRun, "docker", append([]string{"rm", "-f"}, remove...)...)
+		}
+		needsCompose := needsComposeAfterScalePlan(remove, remaining, maxIndex, desired)
+		if needsCompose {
+			runner.Compose(dryRun, files, "up", "-d", "--no-recreate", "--scale", service+"="+n)
+		}
+		if !skipReady && needsCompose {
+			if err := ensureProjectReady(ctx, composeProject, service, desired, false); err != nil {
 				die(err.Error())
 			}
 		}
@@ -3257,14 +3346,17 @@ func agentHomeForProject(project, idx, repo string) string {
 }
 
 func configureGitIdentityForRepo(dry bool, files []string, service, idx, home, repoPath, name, email string) {
-	cmd := fmt.Sprintf(
-		`set -e; if [ -d %[1]s/.git ] || git -C %[1]s rev-parse --git-dir >/dev/null 2>&1; then git -C %[1]s config extensions.worktreeConfig true; git -C %[1]s config --worktree user.name %s; git -C %[1]s config --worktree user.email %s; git -C %[1]s config --worktree core.sshCommand 'ssh -F %[2]s/.ssh/config'; fi`,
+	execServiceIdx(dry, files, service, idx, gitIdentityForRepoCommand(home, repoPath, name, email))
+}
+
+func gitIdentityForRepoCommand(home, repoPath, name, email string) string {
+	return fmt.Sprintf(
+		`set -e; if [ -d %[1]s/.git ] || git -C %[1]s rev-parse --git-dir >/dev/null 2>&1; then git -C %[1]s config extensions.worktreeConfig true; git -C %[1]s config --worktree user.name %[3]s; git -C %[1]s config --worktree user.email %[4]s; git -C %[1]s config --worktree core.sshCommand %[2]s; fi`,
 		shSingleQuote(repoPath),
-		home,
+		shSingleQuote("ssh -F "+filepath.Join(home, ".ssh", "config")),
 		shSingleQuote(name),
 		shSingleQuote(email),
 	)
-	execServiceIdx(dry, files, service, idx, cmd)
 }
 
 func ensureProjectReady(ctx *cmdregistry.Context, composeProject string, service string, count int, force bool) error {
@@ -3383,7 +3475,7 @@ func configureSSHAndGit(dry bool, files []string, project string, paths compose.
 			execServiceIdxInput(dry, files, service, idx, knownBytes, "cat > '"+anchor+"'/.ssh/known_hosts && chmod 644 '"+anchor+"'/.ssh/known_hosts")
 		}
 		execServiceIdxInput(dry, files, service, idx, []byte(cfg), "cat > '"+anchor+"'/.ssh/config && chmod 600 '"+anchor+"'/.ssh/config")
-		cmd := fmt.Sprintf(`set -e; home='%[1]s'; user_home="${HOME:-}"; if [ -z "$user_home" ] || [ ! -d "$user_home" ] || [ ! -w "$user_home" ]; then for candidate in /home/dev /home/node; do if [ -d "$candidate" ] && [ -w "$candidate" ]; then user_home="$candidate"; break; fi; done; fi; mkdir -p "$home" "$home/.ssh"; touch "$home/.gitconfig"; git config --file "$home/.gitconfig" core.sshCommand 'ssh -F %[1]s/.ssh/config'; git config --file "$home/.gitconfig" user.name %s; git config --file "$home/.gitconfig" user.email %s; if [ -n "$user_home" ] && [ "$user_home" != "$home" ]; then mkdir -p "$user_home"; if [ -e "$user_home/.ssh" ] && [ ! -L "$user_home/.ssh" ]; then rm -rf "$user_home/.ssh"; fi; ln -sfn "$home/.ssh" "$user_home/.ssh"; if [ -e "$user_home/.gitconfig" ] && [ ! -L "$user_home/.gitconfig" ]; then rm -f "$user_home/.gitconfig"; fi; ln -sfn "$home/.gitconfig" "$user_home/.gitconfig"; fi`, anchor, shSingleQuote(gname), shSingleQuote(gemail))
+		cmd := fmt.Sprintf(`set -e; home=%[1]s; user_home="${HOME:-}"; if [ -z "$user_home" ] || [ ! -d "$user_home" ] || [ ! -w "$user_home" ]; then for candidate in /home/dev /home/node; do if [ -d "$candidate" ] && [ -w "$candidate" ]; then user_home="$candidate"; break; fi; done; fi; mkdir -p "$home" "$home/.ssh"; touch "$home/.gitconfig"; git config --file "$home/.gitconfig" core.sshCommand %[2]s; git config --file "$home/.gitconfig" user.name %[3]s; git config --file "$home/.gitconfig" user.email %[4]s; if [ -n "$user_home" ] && [ "$user_home" != "$home" ]; then mkdir -p "$user_home"; if [ -e "$user_home/.ssh" ] && [ ! -L "$user_home/.ssh" ]; then rm -rf "$user_home/.ssh"; fi; ln -sfn "$home/.ssh" "$user_home/.ssh"; if [ -e "$user_home/.gitconfig" ] && [ ! -L "$user_home/.gitconfig" ]; then rm -f "$user_home/.gitconfig"; fi; ln -sfn "$home/.gitconfig" "$user_home/.gitconfig"; fi`, shSingleQuote(anchor), shSingleQuote("ssh -F "+filepath.Join(anchor, ".ssh", "config")), shSingleQuote(gname), shSingleQuote(gemail))
 		execServiceIdx(dry, files, service, idx, cmd)
 		configureGitIdentityForRepo(dry, files, service, idx, anchor, pth.AgentRepoPath(project, idx, repo), gname, gemail)
 	}

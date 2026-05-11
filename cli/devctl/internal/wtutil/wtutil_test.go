@@ -64,6 +64,37 @@ func TestNewTabsArgsPreservesOrder(t *testing.T) {
 	}
 }
 
+func TestNewTabsArgsSupportsExecArgs(t *testing.T) {
+	got := NewTabsArgs("devkit-wt-sess", "/mnt/c/Windows/system32/wsl.exe", "NixOS", []TabSpec{
+		{Title: "agent-5", Args: []string{
+			"/home/bayesartre/dev/devkit/kit/bin/devctl",
+			"-p", "dev-all",
+			"--compose-project", "devkit-ouro8",
+			"exec-cd", "5",
+			"/workspaces/dev/agent-worktrees/agent5/ouroboros-ide",
+			"zsh", "-i",
+		}},
+	})
+	want := []string{
+		"-w", "devkit-wt-sess",
+		"new-tab",
+		"--title", "agent-5",
+		"--",
+		`C:\Windows\system32\wsl.exe`,
+		"-d", "NixOS",
+		"--exec",
+		"/home/bayesartre/dev/devkit/kit/bin/devctl",
+		"-p", "dev-all",
+		"--compose-project", "devkit-ouro8",
+		"exec-cd", "5",
+		"/workspaces/dev/agent-worktrees/agent5/ouroboros-ide",
+		"zsh", "-i",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NewTabsArgs exec mismatch: got %#v want %#v", got, want)
+	}
+}
+
 func TestWindowsPath(t *testing.T) {
 	if got, want := windowsPath("/mnt/c/Windows/System32/wsl.exe"), `C:\Windows\System32\wsl.exe`; got != want {
 		t.Fatalf("windowsPath mismatch: got %q want %q", got, want)

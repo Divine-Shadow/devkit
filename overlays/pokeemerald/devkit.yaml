@@ -1,10 +1,15 @@
-workspace: ../../../pokeemerald-expansion
+workspace: ../../../pokeemerald
 service: dev-agent
 defaults:
-  repo: pokeemerald-expansion
+  repo: pokeemerald
   agents: 1
   base_branch: main
   branch_prefix: agent
+runtime:
+  image: local/dev-agent:pokeemerald
+  codex_version: 0.130.0
+  core_check: make modern
+  notes: GBA build workspace; current warm hook is intentionally no-op.
 env:
   PATH: /workspace/.local/bin:${PATH}
 hooks:

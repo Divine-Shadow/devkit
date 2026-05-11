@@ -32,11 +32,16 @@ ingress:
     - host: ouroboros.test
       service: frontend
       port: 4173
+    - host: ouroboros.test
+      path: /_governance/*
+      service: frontend
+      port: 7778
 ```
 
 Rules:
 - When `config` is supplied, the CLI mounts that file (plus any listed cert/key paths) into a shared ingress image and launches Caddy with it.
 - When only `routes` are provided, the CLI renders a minimal Caddy config from a template that proxies each host to the requested overlay service/port and optionally mounts mkcert certs (either repo-committed or provided via env variables).
+- Route entries may include `path`. Routes with the same host are emitted as one Caddy site block; `path` routes use `handle_path` and a host-level route without `path` becomes the fallback handler.
 - Missing `ingress` means noop, so existing overlays remain unchanged.
 - Hosts entries are documented so developers continue to add the appropriate `127.0.0.1 <host>` lines locally, matching the current mkcert flow.
 
@@ -62,6 +67,10 @@ To keep the implementation predictable we’ll layer the ingress support on top 
          - host: ouroboros.test
            service: frontend
            port: 4173
+         - host: ouroboros.test
+           path: /_governance/*
+           service: frontend
+           port: 7778
        certs:
          - path: infra/ouroboros.test.pem
          - path: infra/ouroboros.test-key.pem
@@ -76,6 +85,7 @@ To keep the implementation predictable we’ll layer the ingress support on top 
    - New package responsible for:
      - Generating a compose fragment (service definition + volumes) for the ingress container.
      - Rendering a Caddy config on the fly when `routes` is provided, or mounting a repo-supplied config file directly.
+     - Grouping routes by host so overlays can reserve path prefixes for internal operator surfaces without exposing extra host ports.
      - Managing temporary files (e.g., under `$TMPDIR/devkit-ingress/<project>/`), returning the path so callers can append `-f <fragment.yml>`.
    - Helper should accept the overlay directory/root so relative paths resolve correctly, and surface descriptive errors when inputs are invalid.
 

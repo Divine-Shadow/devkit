@@ -76,6 +76,36 @@ func TestBuildFragmentGeneratesConfigFromRoutes(t *testing.T) {
 	}
 }
 
+func TestBuildFragmentGroupsPathRoutesByHost(t *testing.T) {
+	dir := t.TempDir()
+	project := "proj-path-routes"
+	cfg := &config.IngressConfig{
+		Kind: "caddy",
+		Routes: []config.IngressRoute{
+			{Host: "ouroboros-1.test", Service: "dev-agent@1", Port: 5173},
+			{Host: "ouroboros-1.test", Path: "/_governance/*", Service: "dev-agent@1", Port: 7778},
+		},
+	}
+	if _, err := BuildFragment(project, cfg, "", dir); err != nil {
+		t.Fatalf("BuildFragment error: %v", err)
+	}
+	genFile := filepath.Join(os.TempDir(), "devkit-ingress", sanitize(project), "Caddyfile.generated")
+	content, err := os.ReadFile(genFile)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	text := string(content)
+	if strings.Count(text, "ouroboros-1.test {") != 1 {
+		t.Fatalf("expected one grouped site block: %s", text)
+	}
+	if !strings.Contains(text, "handle_path /_governance/*") || !strings.Contains(text, "devkit-proj-path-routes-dev-agent-1:7778") {
+		t.Fatalf("generated config missing path route: %s", text)
+	}
+	if !strings.Contains(text, "handle {") || !strings.Contains(text, "devkit-proj-path-routes-dev-agent-1:5173") {
+		t.Fatalf("generated config missing fallback route: %s", text)
+	}
+}
+
 func TestBuildFragmentRejectsDirectoryCertPath(t *testing.T) {
 	dir := t.TempDir()
 	certDir := filepath.Join(dir, "ouroboros.test.pem")

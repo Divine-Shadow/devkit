@@ -2,7 +2,7 @@
 
 services:
   dev-agent:
-    image: local/dev-agent:codex
+    image: local/dev-agent:dumb-onion-hax
     environment:
       - AWS_SHARED_CREDENTIALS_FILE=/workspace/.aws/credentials
       - AWS_CONFIG_FILE=/workspace/.aws/config

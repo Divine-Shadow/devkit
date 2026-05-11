@@ -39,7 +39,7 @@ services:
     build:
       context: ../overlays/<name>   # relative to devkit/kit/compose.yml
       dockerfile: Dockerfile
-    image: local/dev-agent:node18-git
+    image: local/dev-agent:<repo-name>
     command: ["bash", "-lc", "sleep infinity"]  # keep container alive for tmux/exec
     stdin_open: true
     tty: true
@@ -143,6 +143,10 @@ ingress:
     - host: ouroboros.test
       service: frontend
       port: 4173
+    - host: ouroboros.test
+      path: /_governance/*
+      service: frontend
+      port: 7778
   certs:
     - path: infra/ouroboros.test.pem
     - path: infra/ouroboros.test-key.pem
@@ -155,6 +159,7 @@ ingress:
 
 Notes:
 - When `config` is omitted, the CLI renders a simple Caddyfile from `routes` and mounts any listed `certs` into `/ingress/certs`. Without at least two cert entries the generated config falls back to `tls internal`.
+- Routes may include an optional `path` matcher. Multiple routes for the same host are grouped into one Caddy site block; path routes render as `handle_path`, which strips the matched prefix before proxying, and the route without `path` remains the fallback for that host. All routes for one host must use the same cert/key pair.
 - The ingress container publishes `443` to `127.0.0.1:${DEVKIT_INGRESS_PORT:-8443}`; override `DEVKIT_INGRESS_PORT` before `up` if you need a different binding.
 - `hosts` documents the required hostnames and can be synced with `scripts/devkit -p <overlay> hosts apply --target host|agents|all`.
 - See `ingress-routing-plan.md` for the long-form proposal, constraints, and Go implementation plan.

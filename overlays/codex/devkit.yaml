@@ -5,6 +5,13 @@ defaults:
   agents: 1
   base_branch: main
   branch_prefix: agent
+runtime:
+  # Legacy single-checkout overlay kept for image builds and direct debugging.
+  # dev-all is the canonical ouroboros-ide runtime pairing.
+  canonical: false
+  image: local/dev-agent:ouroboros-ide
+  codex_version: 0.130.0
+  core_check: scripts/sbt2 "Compile / compile"
 env:
   AWS_PROFILE: codex
   PATH: /workspace/.local/bin:${PATH}

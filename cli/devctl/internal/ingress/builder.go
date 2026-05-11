@@ -16,6 +16,15 @@ const (
 	defaultPortMapping  = "${DEVKIT_INGRESS_PORT:-8443}:443"
 )
 
+type renderedRoute struct {
+	host     string
+	path     string
+	service  string
+	port     int
+	certPath string
+	keyPath  string
+}
+
 // Fragment represents a generated docker compose fragment that wires an ingress service.
 type Fragment struct {
 	Path string
@@ -119,30 +128,117 @@ func ensureConfigFile(project string, tmpDir string, cfg *config.IngressConfig, 
 		return "", fmt.Errorf("ingress: config path or routes required")
 	}
 	dest := filepath.Join(tmpDir, "Caddyfile.generated")
-	var b strings.Builder
+	routes := make([]renderedRoute, 0, len(cfg.Routes))
 	for _, route := range cfg.Routes {
 		host := strings.TrimSpace(route.Host)
+		path := strings.TrimSpace(route.Path)
 		svc := resolveServiceName(strings.TrimSpace(route.Service), project)
 		if host == "" || svc == "" || route.Port <= 0 {
 			return "", fmt.Errorf("ingress: invalid route %+v", route)
 		}
-		b.WriteString(fmt.Sprintf("%s {\n", host))
+		if path != "" && !strings.HasPrefix(path, "/") {
+			return "", fmt.Errorf("ingress: route %s path must start with /", route.Host)
+		}
 		certPath, keyPath, err := resolveRouteCerts(route, overlayDir, root, mounted, volumes, fallbackCert, fallbackKey)
 		if err != nil {
 			return "", err
 		}
-		if certPath != "" && keyPath != "" {
-			b.WriteString(fmt.Sprintf("  tls %s %s\n", certPath, keyPath))
-		} else {
-			b.WriteString("  tls internal\n")
-		}
-		b.WriteString(fmt.Sprintf("  reverse_proxy %s:%d\n", svc, route.Port))
-		b.WriteString("}\n\n")
+		routes = append(routes, renderedRoute{
+			host:     host,
+			path:     path,
+			service:  svc,
+			port:     route.Port,
+			certPath: certPath,
+			keyPath:  keyPath,
+		})
 	}
-	if err := os.WriteFile(dest, []byte(b.String()), 0o644); err != nil {
+	caddyfile, err := renderCaddyfile(routes)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(dest, []byte(caddyfile), 0o644); err != nil {
 		return "", err
 	}
 	return dest, nil
+}
+
+func renderCaddyfile(routes []renderedRoute) (string, error) {
+	type site struct {
+		routes []renderedRoute
+	}
+	sites := map[string]*site{}
+	order := make([]string, 0, len(routes))
+	for _, route := range routes {
+		if _, ok := sites[route.host]; !ok {
+			sites[route.host] = &site{}
+			order = append(order, route.host)
+		}
+		sites[route.host].routes = append(sites[route.host].routes, route)
+	}
+
+	var b strings.Builder
+	for _, host := range order {
+		siteRoutes := sites[host].routes
+		if len(siteRoutes) == 1 && siteRoutes[0].path == "" {
+			writeSimpleSite(&b, siteRoutes[0])
+			continue
+		}
+		if err := writeRoutedSite(&b, host, siteRoutes); err != nil {
+			return "", err
+		}
+	}
+	return b.String(), nil
+}
+
+func writeSimpleSite(b *strings.Builder, route renderedRoute) {
+	b.WriteString(fmt.Sprintf("%s {\n", route.host))
+	writeTLS(b, route.certPath, route.keyPath)
+	b.WriteString(fmt.Sprintf("  reverse_proxy %s:%d\n", route.service, route.port))
+	b.WriteString("}\n\n")
+}
+
+func writeRoutedSite(b *strings.Builder, host string, routes []renderedRoute) error {
+	certPath := routes[0].certPath
+	keyPath := routes[0].keyPath
+	for _, route := range routes[1:] {
+		if route.certPath != certPath || route.keyPath != keyPath {
+			return fmt.Errorf("ingress: routes for host %s must use the same cert/key", host)
+		}
+	}
+
+	fallbackCount := 0
+	b.WriteString(fmt.Sprintf("%s {\n", host))
+	writeTLS(b, certPath, keyPath)
+	for _, route := range routes {
+		if route.path == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("  handle_path %s {\n", route.path))
+		b.WriteString(fmt.Sprintf("    reverse_proxy %s:%d\n", route.service, route.port))
+		b.WriteString("  }\n")
+	}
+	for _, route := range routes {
+		if route.path != "" {
+			continue
+		}
+		fallbackCount++
+		if fallbackCount > 1 {
+			return fmt.Errorf("ingress: multiple fallback routes for host %s", host)
+		}
+		b.WriteString("  handle {\n")
+		b.WriteString(fmt.Sprintf("    reverse_proxy %s:%d\n", route.service, route.port))
+		b.WriteString("  }\n")
+	}
+	b.WriteString("}\n\n")
+	return nil
+}
+
+func writeTLS(b *strings.Builder, certPath string, keyPath string) {
+	if certPath != "" && keyPath != "" {
+		b.WriteString(fmt.Sprintf("  tls %s %s\n", certPath, keyPath))
+	} else {
+		b.WriteString("  tls internal\n")
+	}
 }
 
 func resolveServiceName(service string, project string) string {

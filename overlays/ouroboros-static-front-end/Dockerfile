@@ -3,10 +3,11 @@ FROM node:20-bullseye
 ARG INSTALL_CODEX=true
 ARG INSTALL_CLAUDE=true
 ARG CLAUDE_INSTALL_TIMEOUT=1200
-ARG CODEX_VERSION="rust-v0.116.0"
+ARG CODEX_VERSION="rust-v0.130.0"
 ARG CODEX_ASSET="codex-x86_64-unknown-linux-musl.tar.gz"
 ARG CODEX_SHA256=""
 ARG SPAGO_VERSION="0.93.45"
+ARG NETLIFY_CLI_VERSION="26.0.1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash","-lc"]
@@ -15,7 +16,7 @@ SHELL ["/bin/bash","-lc"]
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates netcat-openbsd \
-      curl jq ripgrep tmux vim \
+      curl jq ripgrep tmux vim bubblewrap \
       python3 python3-venv python3-pip \
  && rm -rf /var/lib/apt/lists/*
 
@@ -25,6 +26,10 @@ RUN npm install -g npm@latest
 # Install Spago (PureScript build tool)
 RUN npm install -g "spago@${SPAGO_VERSION}" \
  && spago --version
+
+# Install Netlify CLI for static front-end deploy workflows.
+RUN npm install -g "netlify-cli@${NETLIFY_CLI_VERSION}" \
+ && netlify --version
 
 # Install uv (provides `uv` and `uvx`) to /usr/local/bin
 RUN curl -fsSL https://astral.sh/uv/install.sh -o /tmp/install-uv.sh \
@@ -68,7 +73,9 @@ RUN if [ "$INSTALL_CLAUDE" = "true" ]; then \
     fi
 
 # Add codex wrapper that enforces credentials presence (no best-effort)
-RUN printf '%s\n' \
+RUN mkdir -p /usr/local/lib/codex \
+  && if [ -x /usr/local/bin/codex ]; then mv /usr/local/bin/codex /usr/local/lib/codex/codex-bin; fi \
+  && printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
   'DEV_HOME="${HOME:-/workspace/.devhome}"' \
@@ -81,8 +88,10 @@ RUN printf '%s\n' \
   'chmod 600 "$DEV_HOME/.codex/auth.json" || true' \
   'export HOME="$DEV_HOME"' \
   'export CODEX_ROLLOUT_DIR="$DEV_HOME/.codex/rollouts"' \
-  'exec /usr/local/bin/codex "$@"' \
-  > /usr/local/bin/codexw \
+  'exec /usr/local/lib/codex/codex-bin "$@"' \
+  > /usr/local/bin/codex \
+  && chmod +x /usr/local/bin/codex \
+  && ln -sf /usr/local/bin/codex /usr/local/bin/codexw \
   && chmod +x /usr/local/bin/codexw \
   && echo 'alias codex=codexw' >> /etc/bash.bashrc
 

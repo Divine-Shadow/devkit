@@ -36,6 +36,11 @@ services:
     user: "1000:1000"
     cap_drop:
       - ALL
+    security_opt:
+      # Codex 0.130 uses Bubblewrap for the Linux sandbox. Docker's default
+      # seccomp profile blocks the namespace syscalls Bubblewrap needs; keep
+      # capabilities dropped while allowing the sandbox helper to run.
+      - seccomp=unconfined
     volumes:
       - ${WORKSPACE_DIR:-.}:/workspace:rw
       - ivy2-cache:/home/dev/.ivy2

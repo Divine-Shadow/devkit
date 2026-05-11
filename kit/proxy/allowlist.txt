@@ -3,17 +3,34 @@
 github.com
 api.github.com
 objects.githubusercontent.com
+codeload.github.com
 ssh.github.com
+cache.nixos.org
+ftpmirror.gnu.org
 deb.nodesource.com
 registry.npmjs.org
 registry.npmjs.com
 nodejs.org
+images.ctfassets.net
 cdn.contentful.com
 api.contentful.com
+api.netlify.com
+app.netlify.com
+cli.netlify.com
+developers.netlify.com
+docs.netlify.com
+edge.netlify.com
+netlify.com
+netlify.app
+open-api.netlify.com
+analytics.services.netlify.com
+socketeer.services.netlify.com
 pypi.org
 files.pythonhosted.org
 repo1.maven.org
 repo.scala-sbt.org
+repo.typesafe.com
+scala.jfrog.io
 oss.sonatype.org
 jitpack.io
 archive.ubuntu.com
@@ -26,6 +43,12 @@ platform.openai.com
 chatgpt.com
 auth.openai.com
 
+# Mistral
+api.mistral.ai
+
+# DNS provider automation
+api.dnsimple.com
+
 # AWS (us-east-2 primary)
 sts.amazonaws.com
 sts.us-east-2.amazonaws.com
@@ -37,6 +60,22 @@ rekognition.us-east-2.amazonaws.com
 rekognition-fips.us-east-2.amazonaws.com
 secretsmanager.us-east-1.amazonaws.com
 secretsmanager.us-east-2.amazonaws.com
+route53.amazonaws.com
+route53domains.us-east-1.amazonaws.com
+route53domains.us-east-2.amazonaws.com
+email.us-east-1.amazonaws.com
+email.us-east-2.amazonaws.com
+email.us-west-2.amazonaws.com
+email-smtp.us-east-1.amazonaws.com
+inbound-smtp.us-east-1.amazonaws.com
+inbound-smtp.us-east-2.amazonaws.com
+s3.us-east-1.amazonaws.com
+cloudformation.us-east-2.amazonaws.com
+lambda.us-east-2.amazonaws.com
+logs.us-east-2.amazonaws.com
+autoscaling.us-east-2.amazonaws.com
+sns.us-east-2.amazonaws.com
+sqs.us-east-2.amazonaws.com
 docs.aws.amazon.com
 awscli.amazonaws.com
 
@@ -54,6 +93,7 @@ fonts.googleapis.com
 fonts.gstatic.com
 ouroboros-ai.com
 releases.hashicorp.com
+checkpoint-api.hashicorp.com
 oidc.us-east-2.amazonaws.com
 portal.sso.us-east-2.amazonaws.com
 d-9a670e4542.awsapps.com
@@ -72,3 +112,4 @@ ecs.us-west-2.amazonaws.com
 kms.us-east-2.amazonaws.com
 api.ecr.us-east-2.amazonaws.com
 ecr.us-east-2.amazonaws.com
+developers.openai.com

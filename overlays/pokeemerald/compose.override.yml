@@ -2,7 +2,10 @@
 
 services:
   dev-agent:
-    image: local/dev-agent:codex
+    build:
+      context: ../overlays/pokeemerald
+      dockerfile: Dockerfile
+    image: local/dev-agent:pokeemerald
     environment:
       - AWS_SHARED_CREDENTIALS_FILE=/workspace/.aws/credentials
       - AWS_CONFIG_FILE=/workspace/.aws/config

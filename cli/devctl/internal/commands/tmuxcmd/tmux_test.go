@@ -186,7 +186,10 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 wt launch, got %d: %q", len(lines), string(data))
 	}
-	if !strings.Contains(lines[0], "exec '/home/bayesartre/dev/devkit/kit/bin/devctl' -p 'codex' --compose-project 'devkit-codex8' exec-cd '1' '/workspace' zsh -i ; new-tab --title agent-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS zsh -lic exec '/home/bayesartre/dev/devkit/kit/bin/devctl' -p 'codex' --compose-project 'devkit-codex8' exec-cd '2' '/workspace' zsh -i") {
+	if strings.Contains(lines[0], "zsh -lic") {
+		t.Fatalf("plain wt launch should not use nested zsh -lic: %q", lines[0])
+	}
+	if !strings.Contains(lines[0], "--exec /home/bayesartre/dev/devkit/kit/bin/devctl -p codex --compose-project devkit-codex8 exec-cd 1 /workspace zsh -i ; new-tab --title agent-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS --exec /home/bayesartre/dev/devkit/kit/bin/devctl -p codex --compose-project devkit-codex8 exec-cd 2 /workspace zsh -i") {
 		t.Fatalf("unexpected plain wt launch: %q", lines[0])
 	}
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
@@ -194,7 +197,7 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 	}
 }
 
-func TestPlainTabCommandInfersDevAllForCodex8ComposeProject(t *testing.T) {
+func TestPlainTabArgsInfersDevAllForCodex8ComposeProject(t *testing.T) {
 	originalDetectPlainProject := detectPlainProject
 	detectPlainProject = func(ctx *cmdregistry.Context) string { return "dev-all" }
 	t.Cleanup(func() { detectPlainProject = originalDetectPlainProject })
@@ -205,10 +208,80 @@ func TestPlainTabCommandInfersDevAllForCodex8ComposeProject(t *testing.T) {
 		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
 		Paths:          cmdregistry.Context{}.Paths,
 	}
-	got := plainTabCommand(ctx, "5", "")
-	want := "exec '/home/bayesartre/dev/devkit/kit/bin/devctl' -p 'dev-all' --compose-project 'devkit-codex8' exec-cd '5' '/workspaces/dev/agent-worktrees/agent5/ouroboros-ide' zsh -i"
+	got := strings.Join(plainTabArgs(ctx, "5", ""), " ")
+	want := "/home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all --compose-project devkit-codex8 exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
 	if got != want {
-		t.Fatalf("plainTabCommand mismatch:\n got: %q\nwant: %q", got, want)
+		t.Fatalf("plainTabArgs mismatch:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestHandleWTOpenPlainIndexLaunchesSingleDirectExecTab(t *testing.T) {
+	defaultSessionName = func(project string) string { return "devkit:" + project }
+	hasTmuxSession = func(session string) bool { return false }
+	originalDetectPlainProject := detectPlainProject
+	detectPlainProject = func(ctx *cmdregistry.Context) string { return "dev-all" }
+	t.Cleanup(func() { detectPlainProject = originalDetectPlainProject })
+	mustAtoi = func(value string) int {
+		switch value {
+		case "5":
+			return 5
+		default:
+			t.Fatalf("unexpected mustAtoi input %q", value)
+			return 0
+		}
+	}
+
+	dir := t.TempDir()
+	wtLog := filepath.Join(dir, "wt.log")
+	writeStub(t, filepath.Join(dir, "wt.exe"), "#!/bin/sh\nprintf '%s\n' \"$*\" >> \"$WT_LOG\"\n")
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WT_LOG", wtLog)
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
+
+	ctx := &cmdregistry.Context{
+		Project:        "dev-all",
+		ComposeProject: "devkit-ouro8",
+		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
+		Args:           []string{"--plain", "--index", "5"},
+	}
+	if err := handleWTOpen(ctx); err != nil {
+		t.Fatalf("handleWTOpen plain index error: %v", err)
+	}
+
+	data, err := os.ReadFile(wtLog)
+	if err != nil {
+		t.Fatalf("read wt log: %v", err)
+	}
+	line := strings.TrimSpace(string(data))
+	if strings.Contains(line, "agent-1") || strings.Contains(line, "agent-4") {
+		t.Fatalf("index launch should only target agent-5: %q", line)
+	}
+	if strings.Contains(line, "zsh -lic") {
+		t.Fatalf("plain index launch should not use nested zsh -lic: %q", line)
+	}
+	want := "new-tab --title agent-5 -- " + filepath.Join(dir, "wsl.exe") + " -d NixOS --exec /home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all --compose-project devkit-ouro8 exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
+	if !strings.Contains(line, want) {
+		t.Fatalf("unexpected plain index wt launch:\n got: %q\nwant substring: %q", line, want)
+	}
+}
+
+func TestHandleWTOpenPlainRejectsIndexAndCount(t *testing.T) {
+	defaultSessionName = func(project string) string { return "devkit:" + project }
+	hasTmuxSession = func(session string) bool { return false }
+	mustAtoi = func(value string) int { return 5 }
+	dir := t.TempDir()
+	writeStub(t, filepath.Join(dir, "wt.exe"), "#!/bin/sh\nexit 0\n")
+	writeStub(t, filepath.Join(dir, "wsl.exe"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WSL_DISTRO_NAME", "NixOS")
+
+	err := handleWTOpen(&cmdregistry.Context{
+		Project: "dev-all",
+		Args:    []string{"--plain", "--index", "5", "--count", "5"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "either --index or --count") {
+		t.Fatalf("expected index/count validation error, got %v", err)
 	}
 }
 

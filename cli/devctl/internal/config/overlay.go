@@ -31,12 +31,27 @@ type Defaults struct {
 	RequireWarm *bool `yaml:"require_warm"`
 }
 
+type Runtime struct {
+	// Canonical marks this overlay as the one supported repo/container pairing
+	// for Defaults.Repo. Legacy build shims can set this false.
+	Canonical *bool `yaml:"canonical"`
+	// Image is the stable repo-specific image reference operators should target.
+	Image string `yaml:"image"`
+	// CodexVersion is the expected `codex --version` semantic version.
+	CodexVersion string `yaml:"codex_version"`
+	// CoreCheck documents the command used to prove the mounted repo still builds.
+	CoreCheck string `yaml:"core_check"`
+	// Notes captures short operator context without overloading image names.
+	Notes string `yaml:"notes"`
+}
+
 type OverlayConfig struct {
 	Workspace string            `yaml:"workspace"`
 	Env       map[string]string `yaml:"env"`
 	EnvFiles  []string          `yaml:"env_files"`
 	Hooks     Hooks             `yaml:"hooks"`
 	Defaults  Defaults          `yaml:"defaults"`
+	Runtime   Runtime           `yaml:"runtime"`
 	// Default service name for this overlay (e.g., dev-agent, frontend)
 	Service string `yaml:"service"`
 	// Optional HTTPS ingress configuration for this overlay.
@@ -56,6 +71,7 @@ type IngressConfig struct {
 // IngressRoute describes a single host → service:port mapping for generated configs.
 type IngressRoute struct {
 	Host    string `yaml:"host"`
+	Path    string `yaml:"path"`
 	Service string `yaml:"service"`
 	Port    int    `yaml:"port"`
 	Cert    string `yaml:"cert"`

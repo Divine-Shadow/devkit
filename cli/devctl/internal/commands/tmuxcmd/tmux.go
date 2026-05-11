@@ -255,6 +255,8 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 	session := ""
 	plain := false
 	count := 0
+	index := 0
+	indexSet := false
 	service := "dev-agent"
 	cdPath := ""
 	for i := 0; i < len(ctx.Args); i++ {
@@ -269,6 +271,12 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		case "--count":
 			if i+1 < len(ctx.Args) {
 				count = mustAtoi(ctx.Args[i+1])
+				i++
+			}
+		case "--index":
+			if i+1 < len(ctx.Args) {
+				index = mustAtoi(ctx.Args[i+1])
+				indexSet = true
 				i++
 			}
 		case "--service":
@@ -312,18 +320,32 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		if service != "dev-agent" {
 			return fmt.Errorf("wt-open --plain currently supports only --service dev-agent")
 		}
-		if count <= 0 {
-			count = len(listServiceNames(ctx.Files, service))
-			if count == 0 {
-				return fmt.Errorf("no running %s containers found; use up/scale first or provide --count", service)
-			}
+		if indexSet && count > 0 {
+			return fmt.Errorf("wt-open --plain accepts either --index or --count, not both")
 		}
-		for i := 1; i <= count; i++ {
-			idx := fmt.Sprintf("%d", i)
+		if indexSet && index <= 0 {
+			return fmt.Errorf("wt-open --plain --index must be positive")
+		}
+		if indexSet {
+			idx := fmt.Sprintf("%d", index)
 			tabs = append(tabs, wtutil.TabSpec{
-				Title:   fmt.Sprintf("agent-%d", i),
-				Command: plainTabCommand(ctx, idx, cdPath),
+				Title: fmt.Sprintf("agent-%d", index),
+				Args:  plainTabArgs(ctx, idx, cdPath),
 			})
+		} else {
+			if count <= 0 {
+				count = len(listServiceNames(ctx.Files, service))
+				if count == 0 {
+					return fmt.Errorf("no running %s containers found; use up/scale first or provide --count", service)
+				}
+			}
+			for i := 1; i <= count; i++ {
+				idx := fmt.Sprintf("%d", i)
+				tabs = append(tabs, wtutil.TabSpec{
+					Title: fmt.Sprintf("agent-%d", i),
+					Args:  plainTabArgs(ctx, idx, cdPath),
+				})
+			}
 		}
 	} else {
 		tabs, err = tmuxWindowTabs(session)
@@ -353,13 +375,13 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		for _, tab := range tabs {
 			fmt.Fprintln(os.Stderr, "+ tmux new-session -d -t "+shellSingleQuote(session)+" -s "+shellSingleQuote(tabSessionName(session, tab.Title)))
 			args := wtutil.NewTabArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tab)
-			fmt.Fprintln(os.Stderr, "+ wt "+strings.Join(args, " "))
+			fmt.Fprintln(os.Stderr, "+ "+wtBinary+" "+strings.Join(args, " "))
 		}
 		return nil
 	}
 	if plain && ctx.DryRun {
 		args := wtutil.NewTabsArgs(wtutil.ViewerWindowName(session), wslBinary, wslDistro, tabs)
-		fmt.Fprintln(os.Stderr, "+ wt "+strings.Join(args, " "))
+		fmt.Fprintln(os.Stderr, "+ "+wtBinary+" "+strings.Join(args, " "))
 		return nil
 	}
 	if !plain {
@@ -616,7 +638,7 @@ func shellSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
-func plainTabCommand(ctx *cmdregistry.Context, idx, cdPath string) string {
+func plainTabArgs(ctx *cmdregistry.Context, idx, cdPath string) []string {
 	project := detectPlainProject(ctx)
 	dest := strings.TrimSpace(cdPath)
 	if dest == "" && project == "dev-all" {
@@ -625,21 +647,25 @@ func plainTabCommand(ctx *cmdregistry.Context, idx, cdPath string) string {
 	}
 	exe := strings.TrimSpace(ctx.Exe)
 	if exe == "" {
-		exe = "devkit/kit/scripts/devkit"
+		if strings.TrimSpace(ctx.Paths.Kit) != "" {
+			exe = filepath.Join(ctx.Paths.Kit, "scripts", "devkit")
+		} else {
+			exe = "devkit/kit/scripts/devkit"
+		}
 	}
-	args := []string{"exec", shellSingleQuote(exe)}
+	args := []string{exe}
 	if strings.TrimSpace(project) != "" {
-		args = append(args, "-p", shellSingleQuote(project))
+		args = append(args, "-p", project)
 	}
 	if strings.TrimSpace(ctx.ComposeProject) != "" {
-		args = append(args, "--compose-project", shellSingleQuote(ctx.ComposeProject))
+		args = append(args, "--compose-project", ctx.ComposeProject)
 	}
 	if dest != "" {
-		args = append(args, "exec-cd", shellSingleQuote(idx), shellSingleQuote(dest), "zsh", "-i")
+		args = append(args, "exec-cd", idx, dest, "zsh", "-i")
 	} else {
-		args = append(args, "exec", shellSingleQuote(idx), "zsh", "-i")
+		args = append(args, "exec", idx, "zsh", "-i")
 	}
-	return strings.Join(args, " ")
+	return args
 }
 
 func defaultDevAllRepo(ctx *cmdregistry.Context) string {

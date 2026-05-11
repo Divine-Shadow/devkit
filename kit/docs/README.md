@@ -133,17 +133,20 @@ Convenience commands (essentials):
 - Reset and open N agents (alias of `fresh-open`): `devctl -p <proj> reset [N]`.
 - Scale agents without teardown: `devctl -p <proj> scale N`.
  - Scale and sync tmux: `devctl -p <proj> scale N --tmux-sync [--session NAME] [--service NAME]`.
+- Open one plain Windows Terminal tab without tmux: `devctl -p dev-all --compose-project devkit-ouro8 wt-open --plain --index 5`.
 
 Worktrees workflow (dev-all overlay):
 - Setup per-agent branches + worktrees that track `origin/<base>`: `devctl -p dev-all worktrees-setup <repo> <count> [--base agent] [--branch main]`.
 - Bootstrap using defaults from `overlays/dev-all/devkit.yaml`: `devctl -p dev-all bootstrap`.
 - Open tmux across worktrees: `devctl -p dev-all worktrees-tmux <repo> <count>`.
 
-Image rebuild note (`ouro8` / `dev-all`):
-- `dev-all` reuses `image: local/dev-agent:codex`; it does not rebuild `dev-agent`.
-- Rebuild via the codex overlay first:
-  - `cd devkit && DEVKIT_WORKTREE_ROOT=/home/bayesartre/dev/agent-worktrees docker compose -p devkit-codex-build -f kit/compose.yml -f overlays/codex/compose.override.yml build --no-cache dev-agent`
-- Then recreate and resync the ouro8 stack:
+Image pairing and rebuild note:
+- Repo-to-image pairings are declared in overlay `runtime:` metadata and summarized in `kit/docs/repo-container-image-pairings.md`.
+- Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only.
+- Verify the local image/Codex matrix with `scripts/devkit image-matrix --check`.
+- Rebuild `local/dev-agent:ouroboros-ide` when the Ouroboros image changes:
+  - `cd /home/bayesartre/dev && docker build -t local/dev-agent:ouroboros-ide -f ouroboros-ide/infra/docker/dev/codex-agent.Dockerfile --build-arg JDK_VERSION=21 ouroboros-ide`
+- Then recreate and resync the matching runtime stack:
   - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 down`
   - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 up`
   - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 scale 8`

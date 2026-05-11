@@ -13,6 +13,7 @@ import (
 type TabSpec struct {
 	Title   string
 	Command string
+	Args    []string
 }
 
 // ViewerLock captures the metadata needed to recover a WT viewer session.
@@ -121,8 +122,13 @@ func NewTabsArgs(windowName, wslPath, distro string, tabs []TabSpec) []string {
 			"--",
 			windowsWSLPath,
 			"-d", distro,
-			"zsh", "-lic", tab.Command,
 		)
+		if len(tab.Args) > 0 {
+			args = append(args, "--exec")
+			args = append(args, tab.Args...)
+			continue
+		}
+		args = append(args, "zsh", "-lic", tab.Command)
 	}
 	return args
 }

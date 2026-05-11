@@ -12,7 +12,7 @@ services:
       # so use a path relative to that file for correct context.
       context: ../overlays/ouroboros-static-front-end
       dockerfile: Dockerfile
-    image: local/dev-agent:node18-git
+    image: local/dev-agent:ouroboros-static-front-end
     command: ["bash", "-lc", "sleep infinity"]
     stdin_open: true
     tty: true
