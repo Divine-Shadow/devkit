@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	pth "devkit/cli/devctl/internal/paths"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestRun_DryRun ensures the run command produces expected docker compose invocations
+// TestRun_DryRun ensures the run command produces expected native invocations
 // and does not error when invoked in dry-run mode with a minimal dev-all overlay.
 func TestRun_DryRun(t *testing.T) {
 	root := t.TempDir()
@@ -50,18 +49,16 @@ func TestRun_DryRun(t *testing.T) {
 		t.Fatalf("run dry-run failed: %v\nstderr=%s", err, stderr.String())
 	}
 	out := stderr.String()
-	// Expect compose up scaling and some execs
+	// Expect native lifecycle and tmux commands, not Compose-backed agent execs.
 	wants := []string{
-		"compose -f ",
-		" up -d --remove-orphans --scale dev-agent=2",
-		"/workspaces/dev/" + pth.AgentWorktreesDir + "/agent2/testrepo",
+		" -p dev-all up --repo testrepo --count 2",
 	}
 	for _, w := range wants {
 		if !strings.Contains(out, w) {
 			t.Fatalf("missing %q in:\n%s", w, out)
 		}
 	}
-	if !(strings.Contains(out, "docker exec -t") && strings.Contains(out, "dev-agent-1 bash -lc")) {
-		t.Fatalf("missing docker exec for agent1 in:\n%s", out)
+	if strings.Contains(out, "docker compose") || strings.Contains(out, "docker exec") {
+		t.Fatalf("run dry-run should not use Docker/Compose for dev-all:\n%s", out)
 	}
 }

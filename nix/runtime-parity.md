@@ -39,6 +39,10 @@ Compose retirement work. It follows
 - `tmux-sync`, `tmux-add-cd`, `tmux-apply-layout`, `layout-apply`,
   `tmux-shells`, `open`, and `worktrees-tmux` now route `dev-all` sessions
   through native `devkit exec` commands instead of Docker exec.
+- `fresh-open`, `reset`, `run`, `bootstrap`, `worktrees-setup`,
+  `worktrees-branch`, `worktrees-status`, and `worktrees-sync` now use native
+  lifecycle/worktree orchestration for `dev-all`; legacy Compose behavior
+  remains only for non-`dev-all` overlays pending quarantine.
 
 ## Verified Commands
 
@@ -71,6 +75,14 @@ kit/scripts/devkit -p dev-all --dry-run native prepare --repo ouroboros-ide --co
 kit/scripts/devkit -p dev-all --dry-run tmux-sync --count 2 --session devkit-native-smoke
 kit/scripts/devkit -p dev-all --dry-run worktrees-tmux ouroboros-ide 2
 bash -lc 'kit/scripts/devkit -p dev-all --dry-run layout-apply --file <(printf "%s\n" "session: native-layout" "windows:" "  - index: 1" "    name: agent-1" "    path: frontend" "  - index: 2" "    name: agent-2" "    path: /workspaces/dev/agent-worktrees/agent2/ouroboros-ide")'
+DEVKIT_NO_TMUX=1 kit/scripts/devkit -p dev-all --dry-run fresh-open 2
+DEVKIT_NO_TMUX=1 kit/scripts/devkit -p dev-all --dry-run reset 2
+kit/scripts/devkit -p dev-all --dry-run run ouroboros-ide 2
+DEVKIT_NO_TMUX=1 kit/scripts/devkit -p dev-all --dry-run bootstrap ouroboros-ide 2
+kit/scripts/devkit -p dev-all --dry-run worktrees-setup ouroboros-ide 2 --base agent --branch main
+kit/scripts/devkit -p dev-all --dry-run worktrees-branch ouroboros-ide 2 test-branch
+kit/scripts/devkit -p dev-all --dry-run worktrees-status ouroboros-ide --index 2
+kit/scripts/devkit -p dev-all --dry-run worktrees-sync ouroboros-ide --pull --index 2
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and
@@ -148,6 +160,9 @@ Observed key versions:
 - Native tmux/layout/session helpers use the same top-level `exec` path as
   manual attachment, so tmux windows inherit the native worktree, HOME/state,
   broker, and bubblewrap plan model.
+- Native run/reset/bootstrap helpers use top-level native lifecycle commands;
+  worktree branch/status/sync helpers operate on the configured native host
+  worktree root instead of container indexes.
 
 ## Intentionally Dropped Parity
 

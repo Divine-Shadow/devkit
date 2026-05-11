@@ -28,7 +28,6 @@ import (
 	"devkit/cli/devctl/internal/compose"
 	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/execx"
-	gitutil "devkit/cli/devctl/internal/gitutil"
 	"devkit/cli/devctl/internal/layout"
 	allow "devkit/cli/devctl/internal/netallow"
 	"devkit/cli/devctl/internal/netutil"
@@ -37,7 +36,6 @@ import (
 	seed "devkit/cli/devctl/internal/seed"
 	sshw "devkit/cli/devctl/internal/ssh"
 	sshcfg "devkit/cli/devctl/internal/sshcfg"
-	sshsteps "devkit/cli/devctl/internal/sshsteps"
 	"devkit/cli/devctl/internal/tmuxutil"
 	wtx "devkit/cli/devctl/internal/worktrees"
 	"devkit/cli/devctl/internal/wtutil"
@@ -2452,6 +2450,16 @@ exit 0`, home, home, home, home, home)
 			}
 			n = mustAtoi(arg)
 		}
+		if project == "dev-all" {
+			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			nativeLifecycleCommand(dryRun, exe, project, "down", repo, n)
+			if !skipTmux() {
+				killNativeAgentSessions(dryRun)
+			}
+			nativeLifecycleCommand(dryRun, exe, project, "up", repo, n)
+			openNativeAgentSession(dryRun, exe, project, repo, "devkit-open", n, plain)
+			break
+		}
 		all := compose.AllProfilesFiles(paths, project)
 		// If pool mode, include pool compose file to mount read-only pool
 		if pconf.Mode == poolcfg.CredModePool {
@@ -2547,6 +2555,16 @@ exit 0`, home, home, home, home, home)
 		n := 3
 		if len(sub) > 0 {
 			n = mustAtoi(sub[0])
+		}
+		if project == "dev-all" {
+			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			nativeLifecycleCommand(dryRun, exe, project, "down", repo, n)
+			if !skipTmux() {
+				killNativeAgentSessions(dryRun)
+			}
+			nativeLifecycleCommand(dryRun, exe, project, "up", repo, n)
+			openNativeAgentSession(dryRun, exe, project, repo, "devkit-open", n, false)
+			break
 		}
 		all := compose.AllProfilesFiles(paths, project)
 		runner.Compose(dryRun, all, "down")
@@ -2879,7 +2897,15 @@ exit 0`, home, home, home, home, home)
 				baseBranch = sub[i+1]
 			}
 		}
-		if err := wtx.Setup(paths.Root, repo, n, baseBranch, branchPrefix, dryRun); err != nil {
+		if err := wtx.SetupNative(wtx.NativeOptions{
+			DevkitRoot:   paths.Root,
+			Repo:         repo,
+			Count:        n,
+			BaseBranch:   baseBranch,
+			BranchPrefix: branchPrefix,
+			WorktreeRoot: nativeWorktreeRoot(paths, project),
+			DryRun:       dryRun,
+		}); err != nil {
 			die(err.Error())
 		}
 	case "run":
@@ -2893,114 +2919,15 @@ exit 0`, home, home, home, home, home)
 		}
 		repo := sub[0]
 		n := mustAtoi(sub[1])
-		// Ensure any stale networks/containers are removed so the picked subnet/IP apply cleanly
-		// (prevents mismatches when a previous compose project network used different IPAM settings)
-		// 1) Best-effort compose down with all profiles for this project to stop attached containers
-		all := compose.AllProfilesFiles(paths, project)
-		runner.Compose(dryRun, all, "down")
-		// 2) Remove known sidecars and any lingering dev-agents
-		removeLegacySharedContainers(dryRun)
-		// Remove any devkit-dev-agent-* containers that may still be around and attached
-		runner.HostBestEffort(dryRun, "bash", "-lc", "docker ps -aq --filter name='^devkit-dev-agent-' | xargs -r docker rm -f")
-		// 3) Now remove networks (will succeed once no active endpoints remain)
-		removeProjectNetworks(dryRun, composeProjectName(project))
-		// Ensure worktrees are present and configured (idempotent)
-		if err := wtx.Setup(paths.Root, repo, n, "main", "agent", dryRun); err != nil {
-			die(err.Error())
+		if noSeed || reSeed {
+			fmt.Fprintln(os.Stderr, "[run] native agents use per-agent state; --no-seed/--reseed are ignored")
 		}
-		// Bring up and open tmux windows for N agents
-		// Compose up with scale (remove orphans for idempotency)
-		runner.Compose(dryRun, files, "up", "-d", "--remove-orphans", "--scale", fmt.Sprintf("dev-agent=%d", n))
-		// Seed per-agent Codex HOME from host mounts so codex can run non-interactively
-		if !noSeed || reSeed {
-			// agent 1 per-agent home (outside repo path for safety)
-			home1 := pth.AgentHomePath(project, "1", repo)
-			for _, script := range seed.BuildSeedScripts(home1) {
-				execAgentIdx(dryRun, files, "1", script)
-			}
-			// agents 2..n: home under agentN/<repo>
-			for j := 2; j <= n; j++ {
-				idx := fmt.Sprintf("%d", j)
-				homej := pth.AgentHomePath(project, idx, repo)
-				for _, script := range seed.BuildSeedScripts(homej) {
-					execAgentIdx(dryRun, files, idx, script)
-				}
-			}
-		}
-		// Ensure sensitive local dirs are ignored by git inside each repo (defense-in-depth)
-		{
-			// agent1 repo path
-			rp1 := pth.AgentRepoPath(project, "1", repo)
-			execAgentIdx(dryRun, files, "1", gitutil.UpdateExcludeScript(rp1, ".devhome-agent*"))
-			// other agents
-			for j := 2; j <= n; j++ {
-				idx := fmt.Sprintf("%d", j)
-				rpj := pth.AgentRepoPath(project, idx, repo)
-				execAgentIdx(dryRun, files, idx, gitutil.UpdateExcludeScript(rpj, ".devhome-agent*"))
-			}
-		}
-		// Ensure SSH config per agent with correct HOME under repo paths, then validate git pull
-		{
-			// Make sure ssh.github.com is allowlisted and proxies are active before any git/ssh calls
-			_, _, _ = allow.EnsureSSHGitHub(paths.Kit)
-			runner.Compose(dryRun, files, "restart", "tinyproxy", "dns")
-			hostKey := filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
-			if _, err := os.Stat(hostKey); err != nil {
-				hostKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")
-			}
-			keyBytes, _ := os.ReadFile(hostKey)
-			pubBytes, _ := os.ReadFile(hostKey + ".pub")
-			known := filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts")
-			knownBytes, _ := os.ReadFile(known)
-			// agent 1
-			home1 := pth.AgentHomePath(project, "1", repo)
-			cfg1 := sshcfg.BuildGitHubConfig(home1)
-			execAgentIdx(dryRun, files, "1", sshsteps.MkdirSSH(home1))
-			for _, step := range sshw.BuildWriteSteps(home1, keyBytes, pubBytes, knownBytes, cfg1) {
-				execAgentIdxInput(dryRun, files, "1", step.Content, step.Script)
-			}
-			for _, sc := range sshw.BuildConfigureScripts(home1, pth.AgentRepoPath(project, "1", repo)) {
-				execAgentIdx(dryRun, files, "1", sc)
-			}
-			// agents 2..n
-			for i := 2; i <= n; i++ {
-				idx := fmt.Sprintf("%d", i)
-				whome := pth.AgentHomePath(project, idx, repo)
-				wpath := pth.AgentRepoPath(project, idx, repo)
-				cfg := sshcfg.BuildGitHubConfig(whome)
-				execAgentIdx(dryRun, files, idx, sshsteps.MkdirSSH(whome))
-				for _, step := range sshw.BuildWriteSteps(whome, keyBytes, pubBytes, knownBytes, cfg) {
-					execAgentIdxInput(dryRun, files, idx, step.Content, step.Script)
-				}
-				for _, sc := range sshw.BuildConfigureScripts(whome, wpath) {
-					execAgentIdx(dryRun, files, idx, sc)
-				}
-			}
-		}
-		// Reuse tmux workflow
+		nativeLifecycleCommand(dryRun, exe, project, "up", repo, n)
 		sess := "devkit-worktrees"
-		home1 := pth.AgentHomePath(project, "1", repo)
 		if !skipTmux() {
-			// Idempotency: kill existing session if present
 			runner.HostBestEffort(dryRun, "tmux", "kill-session", "-t", sess)
-			names := listAgentNames(files)
-			if len(names) == 0 {
-				die("no dev-agent containers running")
-			}
-			cmd := fmt.Sprintf("docker exec -it %s bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", names[0], home1, home1, home1, home1, home1, home1, home1, home1, home1, pth.AgentRepoPath(project, "1", repo))
-			runner.Host(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
-			runner.Host(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
-			for i := 2; i <= n; i++ {
-				whome := pth.AgentHomePath(project, fmt.Sprintf("%d", i), repo)
-				wpath := pth.AgentRepoPath(project, fmt.Sprintf("%d", i), repo)
-				if i > len(names) {
-					break
-				}
-				wcmd := fmt.Sprintf("docker exec -it %s bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", names[i-1], whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
-				runner.Host(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
-			}
-			runner.HostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
 		}
+		openNativeAgentSession(dryRun, exe, project, repo, sess, n, false)
 	case "worktrees-branch":
 		mustProject(project)
 		if project != "dev-all" {
@@ -3012,14 +2939,8 @@ exit 0`, home, home, home, home, home)
 		repo := sub[0]
 		idx := sub[1]
 		branch := sub[2]
-		base := "/workspaces/dev"
-		var path string
-		if idx == "1" {
-			path = base + "/" + repo
-		} else {
-			path = base + "/agent" + idx + "/" + repo
-		}
-		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+path+"'; git checkout -b '"+branch+"'")
+		path := nativeHostWorktree(paths, project, repo, mustAtoi(idx))
+		runner.Host(dryRun, "git", "-C", path, "checkout", "-b", branch)
 	case "worktrees-status":
 		mustProject(project)
 		if project != "dev-all" {
@@ -3033,21 +2954,20 @@ exit 0`, home, home, home, home, home)
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
 		}
-		base := "/workspaces/dev"
 		if idx != "" {
-			path := base + "/" + repo
-			if idx != "1" {
-				path = base + "/agent" + idx + "/" + repo
-			}
-			runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+path+"'; git status -sb")
+			path := nativeHostWorktree(paths, project, repo, mustAtoi(idx))
+			runner.Host(dryRun, "git", "-C", path, "status", "-sb")
 		} else {
-			// sample for first two agents
-			for _, i := range []string{"1", "2"} {
-				path := base + "/" + repo
-				if i != "1" {
-					path = base + "/agent" + i + "/" + repo
+			count := nativeDefaultAgentCount(paths, project, 2)
+			for i := 1; i <= count; i++ {
+				path := nativeHostWorktree(paths, project, repo, i)
+				if dryRun {
+					runner.Host(dryRun, "git", "-C", path, "status", "-sb")
+					continue
 				}
-				runner.Compose(dryRun, files, "exec", "--index", i, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && git status -sb || true")
+				if _, err := os.Stat(path); err == nil {
+					runner.Host(false, "git", "-C", path, "status", "-sb")
+				}
 			}
 		}
 	case "worktrees-sync":
@@ -3064,24 +2984,26 @@ exit 0`, home, home, home, home, home)
 		if len(sub) >= 4 && sub[2] == "--index" {
 			idx = sub[3]
 		}
-		base := "/workspaces/dev"
-		gitcmd := "git pull --ff-only"
+		gitcmd := []string{"pull", "--ff-only"}
 		if op == "--push" {
-			gitcmd = "git push origin HEAD:main"
+			gitcmd = []string{"push", "origin", "HEAD:main"}
+		} else if op != "--pull" {
+			die("Usage: worktrees-sync <repo> (--pull|--push) [--all|--index N]")
 		}
 		if idx != "" {
-			path := base + "/" + repo
-			if idx != "1" {
-				path = base + "/agent" + idx + "/" + repo
-			}
-			runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", "set -e; cd '"+path+"'; "+gitcmd)
+			path := nativeHostWorktree(paths, project, repo, mustAtoi(idx))
+			runner.Host(dryRun, "git", append([]string{"-C", path}, gitcmd...)...)
 		} else {
-			for _, i := range []string{"1", "2", "3", "4", "5", "6"} {
-				path := base + "/" + repo
-				if i != "1" {
-					path = base + "/agent" + i + "/" + repo
+			count := nativeDefaultAgentCount(paths, project, 6)
+			for i := 1; i <= count; i++ {
+				path := nativeHostWorktree(paths, project, repo, i)
+				if dryRun {
+					runner.Host(dryRun, "git", append([]string{"-C", path}, gitcmd...)...)
+					continue
 				}
-				runner.Compose(dryRun, files, "exec", "--index", i, "dev-agent", "bash", "-lc", "cd '"+path+"' 2>/dev/null && (set -e; cd '"+path+"'; "+gitcmd+") || true")
+				if _, err := os.Stat(path); err == nil {
+					runner.Host(false, "git", append([]string{"-C", path}, gitcmd...)...)
+				}
 			}
 		}
 	case "worktrees-tmux":
@@ -3138,61 +3060,12 @@ exit 0`, home, home, home, home, home)
 			repo = cfg.Defaults.Repo
 			n = cfg.Defaults.Agents
 		}
-		// Create worktrees and open tmux windows
-		// Reuse this process: invoke internal handlers directly
-		// Setup worktrees
-		{
-			// dev root path (parent of devkit)
-			devRoot := filepath.Clean(filepath.Join(paths.Root, ".."))
-			repoPath := filepath.Join(devRoot, repo)
-			runner.Host(dryRun, "git", "-C", repoPath, "fetch", "--all", "--prune")
-			runner.Host(dryRun, "git", "-C", repoPath, "config", "push.default", "upstream")
-			runner.Host(dryRun, "git", "-C", repoPath, "config", "worktree.useRelativePaths", "false")
-			base := "agent"
-			baseBranch := "main"
-			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
-			if strings.TrimSpace(cfg.Defaults.BranchPrefix) != "" {
-				base = cfg.Defaults.BranchPrefix
-			}
-			if strings.TrimSpace(cfg.Defaults.BaseBranch) != "" {
-				baseBranch = cfg.Defaults.BaseBranch
-			}
-			br1 := fmt.Sprintf("%s1", base)
-			// preserve local work for agent1 by not resetting to origin
-			runner.Host(dryRun, "git", "-C", repoPath, "checkout", "-B", br1)
-			runner.Host(dryRun, "git", "-C", repoPath, "branch", "--set-upstream-to=origin/"+baseBranch, br1)
-			for i := 2; i <= n; i++ {
-				parent := filepath.Join(devRoot, fmt.Sprintf("%s%d", base, i))
-				if !dryRun {
-					_ = os.MkdirAll(parent, 0o755)
-				}
-				wt := filepath.Join(parent, repo)
-				bri := fmt.Sprintf("%s%d", base, i)
-				runner.Host(dryRun, "git", "-C", repoPath, "worktree", "add", wt, "-B", bri, "origin/"+baseBranch)
-				runner.Host(dryRun, "git", "-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, bri)
-			}
+		nativeLifecycleCommand(dryRun, exe, project, "up", repo, n)
+		sess := "devkit-worktrees"
+		if !skipTmux() {
+			runner.HostBestEffort(dryRun, "tmux", "kill-session", "-t", sess)
 		}
-		// Bring up N agents and open tmux using existing worktrees-tmux behavior
-		runner.Compose(dryRun, compose.AllProfilesFiles(paths, project), "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
-		// finally open tmux
-		// call existing worktrees-tmux handler logic inline
-		{
-			base := "/workspaces/dev"
-			sess := "devkit-worktrees"
-			home1 := base + "/" + repo + "/.devhome-agent1"
-			if !skipTmux() {
-				cmd := "docker compose " + strings.Join(compose.AllProfilesFiles(paths, project), " ") + " exec --index 1 dev-agent bash -lc 'mkdir -p \"" + home1 + "/.codex/rollouts\" \"" + home1 + "/.cache\" \"" + home1 + "/.config\" \"" + home1 + "/.local\"; export HOME=\"" + home1 + "\"; export CODEX_HOME=\"" + home1 + "/.codex\"; export CODEX_ROLLOUT_DIR=\"" + home1 + "/.codex/rollouts\"; export XDG_CACHE_HOME=\"" + home1 + "/.cache\"; export XDG_CONFIG_HOME=\"" + home1 + "/.config\"; cd \"" + base + "/" + repo + "\"; exec bash'"
-				runner.Host(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
-				runner.Host(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
-				for i := 2; i <= n; i++ {
-					whome := fmt.Sprintf("%s/agent%d/.devhome-agent%d", base, i, i)
-					wpath := fmt.Sprintf("%s/agent%d/%s", base, i, repo)
-					wcmd := "docker compose " + strings.Join(compose.AllProfilesFiles(paths, project), " ") + fmt.Sprintf(" exec --index %d dev-agent bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", i, whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
-					runner.Host(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
-				}
-				runner.HostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
-			}
-		}
+		openNativeAgentSession(dryRun, exe, project, repo, sess, n, false)
 	default:
 		usage()
 		os.Exit(2)
@@ -3394,6 +3267,83 @@ func mustBuildNativeWindowCmd(exe, project, repo string, index int, dest string)
 		die(err.Error())
 	}
 	return cmd
+}
+
+func nativeLifecycleCommand(dry bool, exe, project, command, repo string, count int, extra ...string) {
+	if count < 1 {
+		count = 1
+	}
+	args := []string{"-p", project, command, "--repo", repo, "--count", fmt.Sprintf("%d", count)}
+	args = append(args, extra...)
+	runner.Host(dry, exe, args...)
+}
+
+func killNativeAgentSessions(dry bool) {
+	for _, sess := range []string{"devkit-open", "devkit-shells", "devkit-worktrees"} {
+		runner.HostBestEffort(dry, "tmux", "kill-session", "-t", sess)
+	}
+}
+
+func openNativeAgentSession(dry bool, exe, project, repo, sess string, count int, plain bool) {
+	if count < 1 {
+		count = 1
+	}
+	if plain {
+		tabs := make([]wtutil.TabSpec, 0, count)
+		for i := 1; i <= count; i++ {
+			tabs = append(tabs, wtutil.TabSpec{
+				Title:   fmt.Sprintf("agent-%d", i),
+				Command: mustBuildNativeWindowCmd(exe, project, repo, i, ""),
+			})
+		}
+		if err := launchPlainTabs(dry, project, sess, tabs); err != nil {
+			die(err.Error())
+		}
+		return
+	}
+	if skipTmux() {
+		return
+	}
+	cmd := mustBuildNativeWindowCmd(exe, project, repo, 1, "")
+	runner.Host(dry, "tmux", tmuxutil.NewSession(sess, cmd)...)
+	runner.Host(dry, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
+	for i := 2; i <= count; i++ {
+		wcmd := mustBuildNativeWindowCmd(exe, project, repo, i, "")
+		runner.Host(dry, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
+	}
+	runner.HostInteractive(dry, "tmux", tmuxutil.Attach(sess)...)
+}
+
+func nativeDefaultAgentCount(paths compose.Paths, project string, fallback int) int {
+	cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
+	if err == nil && cfg.Defaults.Agents > 0 {
+		return cfg.Defaults.Agents
+	}
+	if fallback < 1 {
+		return 1
+	}
+	return fallback
+}
+
+func nativeWorktreeRoot(paths compose.Paths, project string) string {
+	cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
+	if err == nil {
+		value := strings.TrimSpace(cfg.Native.WorktreeRoot)
+		if value != "" {
+			if filepath.IsAbs(value) {
+				return filepath.Clean(value)
+			}
+			return filepath.Clean(filepath.Join(paths.Root, value))
+		}
+	}
+	return filepath.Clean(filepath.Join(paths.Root, "..", pth.AgentWorktreesDir))
+}
+
+func nativeHostWorktree(paths compose.Paths, project, repo string, index int) string {
+	if index < 1 {
+		index = 1
+	}
+	return filepath.Join(nativeWorktreeRoot(paths, project), fmt.Sprintf("agent%d", index), repo)
 }
 
 func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {
