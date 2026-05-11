@@ -1,0 +1,43 @@
+workspace: ../../../agent-worktrees/integration
+service: dev-agent
+
+defaults:
+  repo: ouroboros-ide
+  agents: 1
+  base_branch: main
+  branch_prefix: agent
+
+runtime:
+  image: local/dev-agent:ouro-integration
+  codex_version: 0.130.0
+  core_check: |
+    (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)
+    (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")
+  notes: Integration runtime with the Ouroboros Scala toolchain plus Terraform/AWS tooling and dedicated integration worktrees mounted read-write.
+
+env:
+  AWS_PROFILE: codex
+
+hooks:
+  warm: |
+    set -euo pipefail
+
+    mkdir -p /workspaces/dev/.local/bin /workspace/.local/bin
+
+    if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      ln -sf "$(command -v python3)" /workspaces/dev/.local/bin/python
+      ln -sf "$(command -v python3)" /workspace/.local/bin/python
+    fi
+
+    if [ -f /workspaces/dev/.aws/config ]; then
+      printf 'AWS config available at /workspaces/dev/.aws/config\n'
+    else
+      printf 'Expected AWS config at /workspaces/dev/.aws/config\n' >&2
+      exit 1
+    fi
+
+    command -v aws >/dev/null
+    command -v terraform >/dev/null
+    command -v sbt >/dev/null
+    command -v java >/dev/null
+  maintain: ""
