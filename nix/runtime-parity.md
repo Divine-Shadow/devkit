@@ -36,6 +36,9 @@ Compose retirement work. It follows
   including agent 1, and keep HOME/Codex/XDG state under `/agent-state`.
   `native prepare` and lifecycle `up` write a JSON manifest under the native
   host state root for downstream tmux/layout/session orchestration.
+- `tmux-sync`, `tmux-add-cd`, `tmux-apply-layout`, `layout-apply`,
+  `tmux-shells`, `open`, and `worktrees-tmux` now route `dev-all` sessions
+  through native `devkit exec` commands instead of Docker exec.
 
 ## Verified Commands
 
@@ -65,6 +68,9 @@ kit/scripts/devkit -p dev-all --dry-run exec 1 --repo ouroboros-ide --broker-soc
 kit/scripts/devkit -p dev-all --dry-run compose exec --index 1 dev-agent echo hi
 kit/scripts/devkit -p dev-all native plan --repo ouroboros-ide --index 1 --format json
 kit/scripts/devkit -p dev-all --dry-run native prepare --repo ouroboros-ide --count 2 --format json
+kit/scripts/devkit -p dev-all --dry-run tmux-sync --count 2 --session devkit-native-smoke
+kit/scripts/devkit -p dev-all --dry-run worktrees-tmux ouroboros-ide 2
+bash -lc 'kit/scripts/devkit -p dev-all --dry-run layout-apply --file <(printf "%s\n" "session: native-layout" "windows:" "  - index: 1" "    name: agent-1" "    path: frontend" "  - index: 2" "    name: agent-2" "    path: /workspaces/dev/agent-worktrees/agent2/ouroboros-ide")'
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and
@@ -139,6 +145,9 @@ Observed key versions:
 - The default `dev-all` lifecycle and simple agent entry commands now route to
   the native runtime. Compose remains available only through the explicit
   `compose` namespace for historical workflows and unsupported overlays.
+- Native tmux/layout/session helpers use the same top-level `exec` path as
+  manual attachment, so tmux windows inherit the native worktree, HOME/state,
+  broker, and bubblewrap plan model.
 
 ## Intentionally Dropped Parity
 

@@ -94,6 +94,21 @@ func handleSync(ctx *cmdregistry.Context) error {
 		}
 	}
 	if count <= 0 {
+		if ctx.Project == "dev-all" {
+			cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+			if err != nil {
+				return err
+			}
+			count = cfg.Defaults.Agents
+			if count <= 0 {
+				return fmt.Errorf("tmux-sync requires --count for native dev-all when defaults.agents is unset")
+			}
+		}
+	}
+	if ctx.Project == "dev-all" {
+		return nativeSyncTmux(ctx, sessName, namePrefix, cdPath, count)
+	}
+	if count <= 0 {
 		count = len(listServiceNames(ctx.Files, service))
 		if count == 0 {
 			return fmt.Errorf("no dev-agent containers running; use up/scale first or provide --count")
@@ -137,6 +152,9 @@ func handleAddCD(ctx *cmdregistry.Context) error {
 	if sessName == "" {
 		sessName = defaultSessionName(ctx.Project)
 	}
+	if ctx.Project == "dev-all" {
+		return nativeEnsureTmuxSessionWithWindow(ctx, sessName, idx, subpath, winName)
+	}
 	ensureTmuxSessionWithWindow(ctx.DryRun, ctx.Paths, ctx.Project, ctx.Files, sessName, idx, subpath, winName, service)
 	return nil
 }
@@ -177,6 +195,9 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 		} else {
 			sessName = defaultSessionName(ctx.Project)
 		}
+	}
+	if nativeLayoutEligible(ctx.Project, lf) {
+		return nativeApplyLayout(ctx, lf, sessName, doAttach)
 	}
 	sessExists := hasTmuxSession(sessName)
 	tracker := newSeedTracker()
@@ -246,6 +267,149 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 		runner.HostInteractive(ctx.DryRun, "tmux", tmuxutil.Attach(sessName)...)
 	}
 	return nil
+}
+
+func nativeSyncTmux(ctx *cmdregistry.Context, session, namePrefix, cdPath string, count int) error {
+	if session == "" {
+		session = defaultSessionName(ctx.Project)
+	}
+	if namePrefix == "" {
+		namePrefix = "agent-"
+	}
+	present := map[string]struct{}{}
+	sessExists := hasTmuxSession(session)
+	if sessExists {
+		present = listTmuxWindows(session)
+	}
+	start := 1
+	if !sessExists {
+		idx := "1"
+		cmdStr, err := nativeWindowCommand(ctx, idx, cdPath)
+		if err != nil {
+			return err
+		}
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewSession(session, cmdStr)...)
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.RenameWindow(session+":0", namePrefix+idx)...)
+		present[namePrefix+idx] = struct{}{}
+		start = 2
+	}
+	for i := start; i <= count; i++ {
+		idx := fmt.Sprintf("%d", i)
+		wname := namePrefix + idx
+		if _, ok := present[wname]; ok {
+			continue
+		}
+		cmdStr, err := nativeWindowCommand(ctx, idx, cdPath)
+		if err != nil {
+			return err
+		}
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewWindow(session, wname, cmdStr)...)
+	}
+	return nil
+}
+
+func listTmuxWindows(session string) map[string]struct{} {
+	out := map[string]struct{}{}
+	tabs, err := tmuxWindowTabs(session)
+	if err != nil {
+		return out
+	}
+	for _, tab := range tabs {
+		name := strings.TrimSpace(tab.Title)
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
+}
+
+func nativeEnsureTmuxSessionWithWindow(ctx *cmdregistry.Context, session, idx, subpath, winName string) error {
+	if winName == "" {
+		winName = "agent-" + idx
+	}
+	cmdStr, err := nativeWindowCommand(ctx, idx, subpath)
+	if err != nil {
+		return err
+	}
+	if !hasTmuxSession(session) {
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewSession(session, cmdStr)...)
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.RenameWindow(session+":0", winName)...)
+		runner.HostInteractive(ctx.DryRun, "tmux", tmuxutil.Attach(session)...)
+		return nil
+	}
+	runner.Host(ctx.DryRun, "tmux", tmuxutil.NewWindow(session, winName, cmdStr)...)
+	return nil
+}
+
+func nativeLayoutEligible(defaultProject string, lf layout.File) bool {
+	for _, w := range lf.Windows {
+		winProj := strings.TrimSpace(w.Project)
+		if winProj == "" {
+			winProj = defaultProject
+		}
+		if winProj != "dev-all" {
+			return false
+		}
+		if svc := strings.TrimSpace(w.Service); svc != "" && svc != "dev-agent" {
+			return false
+		}
+	}
+	return strings.TrimSpace(defaultProject) == "dev-all"
+}
+
+func nativeApplyLayout(ctx *cmdregistry.Context, lf layout.File, session string, attach bool) error {
+	sessExists := hasTmuxSession(session)
+	start := 0
+	if !sessExists && len(lf.Windows) > 0 {
+		w := lf.Windows[0]
+		idx := fmt.Sprintf("%d", w.Index)
+		name := w.Name
+		if strings.TrimSpace(name) == "" {
+			name = "agent-" + idx
+		}
+		cmdStr, err := nativeWindowCommand(ctx, idx, w.Path)
+		if err != nil {
+			return err
+		}
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewSession(session, cmdStr)...)
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.RenameWindow(session+":0", name)...)
+		start = 1
+	}
+	for _, w := range lf.Windows[start:] {
+		idx := fmt.Sprintf("%d", w.Index)
+		name := w.Name
+		if strings.TrimSpace(name) == "" {
+			name = "agent-" + idx
+		}
+		cmdStr, err := nativeWindowCommand(ctx, idx, w.Path)
+		if err != nil {
+			return err
+		}
+		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewWindow(session, name, cmdStr)...)
+	}
+	if attach {
+		runner.HostInteractive(ctx.DryRun, "tmux", tmuxutil.Attach(session)...)
+	}
+	return nil
+}
+
+func nativeWindowCommand(ctx *cmdregistry.Context, idx, dest string) (string, error) {
+	repo := nativeRepo(ctx)
+	return agentexec.BuildNativeCommand(agentexec.NativeCommandOpts{
+		Exe:     ctx.Exe,
+		Project: ctx.Project,
+		Index:   idx,
+		Repo:    repo,
+		Dest:    dest,
+	})
+}
+
+func nativeRepo(ctx *cmdregistry.Context) string {
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
+		return strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	return "ouroboros-ide"
 }
 
 func handleWTOpen(ctx *cmdregistry.Context) error {

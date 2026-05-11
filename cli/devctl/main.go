@@ -1314,6 +1314,61 @@ func main() {
 		if err != nil {
 			die(err.Error())
 		}
+		if layoutIsNativeDevAll(lf, project) {
+			repo, count := layoutNativeRepoAndCount(paths, project, lf)
+			runner.Host(dryRun, exe, "-p", "dev-all", "up", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			if skipTmux() {
+				fmt.Fprintln(os.Stderr, "[layout] tmux skipped via DEVKIT_NO_TMUX")
+				break
+			}
+			sessName := strings.TrimSpace(lf.Session)
+			if sessName == "" {
+				sessName = defaultSessionName(project)
+			}
+			if len(lf.Windows) == 0 {
+				break
+			}
+			createdSession := false
+			if !hasTmuxSession(sessName) {
+				w := lf.Windows[0]
+				idx := w.Index
+				if idx < 1 {
+					idx = 1
+				}
+				name := strings.TrimSpace(w.Name)
+				if name == "" {
+					name = fmt.Sprintf("agent-%d", idx)
+				}
+				cmdStr := mustBuildNativeWindowCmd(exe, project, repo, idx, w.Path)
+				runner.Host(dryRun, "tmux", tmuxutil.NewSession(sessName, cmdStr)...)
+				runner.Host(dryRun, "tmux", tmuxutil.RenameWindow(sessName+":0", name)...)
+				createdSession = true
+			}
+			start := 0
+			if createdSession {
+				start = 1
+			}
+			for _, w := range lf.Windows[start:] {
+				idx := w.Index
+				if idx < 1 {
+					idx = 1
+				}
+				name := strings.TrimSpace(w.Name)
+				if name == "" {
+					name = fmt.Sprintf("agent-%d", idx)
+				}
+				cmdStr := mustBuildNativeWindowCmd(exe, project, repo, idx, w.Path)
+				runner.Host(dryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
+			}
+			if doAttach {
+				if !stdoutIsTTY() {
+					fmt.Fprintln(os.Stderr, "layout-apply: --attach skipped because stdout is not a TTY")
+				} else {
+					runner.HostInteractive(dryRun, "tmux", tmuxutil.Attach(sessName)...)
+				}
+			}
+			break
+		}
 		type overlayRun struct {
 			Project     string
 			Service     string
@@ -2251,6 +2306,36 @@ exit 0`, home, home, home, home, home)
 			}
 			n = mustAtoi(arg)
 		}
+		if project == "dev-all" {
+			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+			repo := strings.TrimSpace(cfg.Defaults.Repo)
+			if repo == "" {
+				repo = "ouroboros-ide"
+			}
+			sess := "devkit-shells"
+			if plain {
+				tabs := make([]wtutil.TabSpec, 0, n)
+				for i := 1; i <= n; i++ {
+					tabs = append(tabs, wtutil.TabSpec{
+						Title:   fmt.Sprintf("agent-%d", i),
+						Command: mustBuildNativeWindowCmd(exe, project, repo, i, ""),
+					})
+				}
+				if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
+					die(err.Error())
+				}
+			} else if !skipTmux() {
+				cmd := mustBuildNativeWindowCmd(exe, project, repo, 1, "")
+				runner.Host(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+				runner.Host(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
+				for i := 2; i <= n; i++ {
+					wcmd := mustBuildNativeWindowCmd(exe, project, repo, i, "")
+					runner.Host(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
+				}
+				runner.HostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
+			}
+			break
+		}
 		runner.Compose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
 		sess := "devkit-shells"
 		if plain {
@@ -2294,6 +2379,36 @@ exit 0`, home, home, home, home, home)
 				continue
 			}
 			n = mustAtoi(arg)
+		}
+		if project == "dev-all" {
+			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+			repo := strings.TrimSpace(cfg.Defaults.Repo)
+			if repo == "" {
+				repo = "ouroboros-ide"
+			}
+			sess := "devkit-open"
+			if plain {
+				tabs := make([]wtutil.TabSpec, 0, n)
+				for i := 1; i <= n; i++ {
+					tabs = append(tabs, wtutil.TabSpec{
+						Title:   fmt.Sprintf("agent-%d", i),
+						Command: mustBuildNativeWindowCmd(exe, project, repo, i, ""),
+					})
+				}
+				if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
+					die(err.Error())
+				}
+			} else if !skipTmux() {
+				cmd := mustBuildNativeWindowCmd(exe, project, repo, 1, "")
+				runner.Host(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
+				runner.Host(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
+				for i := 2; i <= n; i++ {
+					wcmd := mustBuildNativeWindowCmd(exe, project, repo, i, "")
+					runner.Host(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
+				}
+				runner.HostInteractive(dryRun, "tmux", tmuxutil.Attach(sess)...)
+			}
+			break
 		}
 		runner.Compose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
 		sess := "devkit-open"
@@ -2980,39 +3095,24 @@ exit 0`, home, home, home, home, home)
 		repo := sub[0]
 		n := mustAtoi(sub[1])
 		plain := hasArgFlag(sub[2:], "--plain")
-		// Bring up and open tmux windows for N agents
-		runner.Compose(dryRun, files, "up", "-d", "--scale", fmt.Sprintf("dev-agent=%d", n))
 		sess := "devkit-worktrees"
-		home1 := pth.AgentHomePath(project, "1", repo)
 		if plain {
-			tracker := agentexec.NewSeedTracker()
 			tabs := make([]wtutil.TabSpec, 0, n)
 			for i := 1; i <= n; i++ {
-				dest := pth.AgentRepoPath(project, fmt.Sprintf("%d", i), repo)
-				cmd := mustBuildWindowCmd(files, project, fmt.Sprintf("%d", i), dest, "dev-agent", tracker)
 				tabs = append(tabs, wtutil.TabSpec{
 					Title:   fmt.Sprintf("agent-%d", i),
-					Command: cmd,
+					Command: mustBuildNativeWindowCmd(exe, project, repo, i, ""),
 				})
 			}
 			if err := launchPlainTabs(dryRun, project, sess, tabs); err != nil {
 				die(err.Error())
 			}
 		} else if !skipTmux() {
-			names := listAgentNames(files)
-			if len(names) == 0 {
-				die("no dev-agent containers running")
-			}
-			cmd := fmt.Sprintf("docker exec -it %s bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", names[0], home1, home1, home1, home1, home1, home1, home1, home1, home1, pth.AgentRepoPath(project, "1", repo))
+			cmd := mustBuildNativeWindowCmd(exe, project, repo, 1, "")
 			runner.Host(dryRun, "tmux", tmuxutil.NewSession(sess, cmd)...)
 			runner.Host(dryRun, "tmux", tmuxutil.RenameWindow(sess+":0", "agent-1")...)
 			for i := 2; i <= n; i++ {
-				whome := pth.AgentHomePath(project, fmt.Sprintf("%d", i), repo)
-				wpath := pth.AgentRepoPath(project, fmt.Sprintf("%d", i), repo)
-				if i > len(names) {
-					break
-				}
-				wcmd := fmt.Sprintf("docker exec -it %s bash -lc 'mkdir -p \"%s/.codex/rollouts\" \"%s/.cache\" \"%s/.config\" \"%s/.local\"; export HOME=\"%s\"; export CODEX_HOME=\"%s/.codex\"; export CODEX_ROLLOUT_DIR=\"%s/.codex/rollouts\"; export XDG_CACHE_HOME=\"%s/.cache\"; export XDG_CONFIG_HOME=\"%s/.config\"; cd \"%s\"; exec bash'", names[i-1], whome, whome, whome, whome, whome, whome, whome, whome, whome, wpath)
+				wcmd := mustBuildNativeWindowCmd(exe, project, repo, i, "")
 				runner.Host(dryRun, "tmux", tmuxutil.NewWindow(sess, fmt.Sprintf("agent-%d", i), wcmd)...)
 			}
 			// tmux attach is long-lived: no timeout
@@ -3280,6 +3380,82 @@ func mustBuildWindowCmdForProject(fileArgs []string, project, idx, dest, service
 		die(err.Error())
 	}
 	return cmd
+}
+
+func mustBuildNativeWindowCmd(exe, project, repo string, index int, dest string) string {
+	cmd, err := agentexec.BuildNativeCommand(agentexec.NativeCommandOpts{
+		Exe:     exe,
+		Project: project,
+		Index:   fmt.Sprintf("%d", index),
+		Repo:    repo,
+		Dest:    dest,
+	})
+	if err != nil {
+		die(err.Error())
+	}
+	return cmd
+}
+
+func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {
+	if strings.TrimSpace(defaultProject) != "dev-all" {
+		return false
+	}
+	for _, ov := range lf.Overlays {
+		proj := strings.TrimSpace(ov.Project)
+		if proj != "" && proj != "dev-all" {
+			return false
+		}
+		if svc := strings.TrimSpace(ov.Service); svc != "" && svc != "dev-agent" {
+			return false
+		}
+		if strings.TrimSpace(ov.ComposeProject) != "" || strings.TrimSpace(ov.Profiles) != "" || ov.Build || ov.Network != nil || len(ov.Env) > 0 {
+			return false
+		}
+	}
+	for _, w := range lf.Windows {
+		proj := strings.TrimSpace(w.Project)
+		if proj != "" && proj != "dev-all" {
+			return false
+		}
+		if svc := strings.TrimSpace(w.Service); svc != "" && svc != "dev-agent" {
+			return false
+		}
+		if strings.TrimSpace(w.ComposeProject) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func layoutNativeRepoAndCount(paths compose.Paths, project string, lf layout.File) (string, int) {
+	cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+	repo := strings.TrimSpace(cfg.Defaults.Repo)
+	count := cfg.Defaults.Agents
+	for _, ov := range lf.Overlays {
+		if ov.Worktrees != nil {
+			if strings.TrimSpace(ov.Worktrees.Repo) != "" {
+				repo = strings.TrimSpace(ov.Worktrees.Repo)
+			}
+			if ov.Worktrees.Count > count {
+				count = ov.Worktrees.Count
+			}
+		}
+		if ov.Count > count {
+			count = ov.Count
+		}
+	}
+	for _, w := range lf.Windows {
+		if w.Index > count {
+			count = w.Index
+		}
+	}
+	if repo == "" {
+		repo = "ouroboros-ide"
+	}
+	if count < 1 {
+		count = 1
+	}
+	return repo, count
 }
 
 func runAnchorPlan(dry bool, files []string, service, idx string, cfg seed.AnchorConfig) {
