@@ -45,6 +45,9 @@ func Prepare(p nativeplan.Plan) error {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
+	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
+		return err
+	}
 	if err := ensureResolvConf(p.DNS.ResolvConf); err != nil {
 		return err
 	}
@@ -55,6 +58,51 @@ func Prepare(p nativeplan.Plan) error {
 		if _, err := os.Stat(bind.Source); err != nil {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
+	}
+	return nil
+}
+
+func SeedCodexAuth(hostHome string, force bool) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	src := strings.TrimSpace(os.Getenv("CODEX_AUTH_JSON"))
+	if src == "" {
+		codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+		if codexHome == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				codexHome = filepath.Join(home, ".codex")
+			}
+		}
+		if codexHome != "" {
+			src = filepath.Join(codexHome, "auth.json")
+		}
+	}
+	if src == "" {
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read Codex auth %s: %w", src, err)
+	}
+	targetDir := filepath.Join(hostHome, ".codex")
+	target := filepath.Join(targetDir, "auth.json")
+	if !force {
+		if _, err := os.Stat(target); err == nil {
+			return nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("stat Codex auth %s: %w", target, err)
+		}
+	}
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", targetDir, err)
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		return fmt.Errorf("write Codex auth %s: %w", target, err)
 	}
 	return nil
 }

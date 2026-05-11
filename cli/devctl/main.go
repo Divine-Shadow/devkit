@@ -33,6 +33,8 @@ import (
 	"devkit/cli/devctl/internal/netutil"
 	pth "devkit/cli/devctl/internal/paths"
 	runner "devkit/cli/devctl/internal/runner"
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
+	nativelaunch "devkit/cli/devctl/internal/runtime/launch"
 	seed "devkit/cli/devctl/internal/seed"
 	sshw "devkit/cli/devctl/internal/ssh"
 	sshcfg "devkit/cli/devctl/internal/sshcfg"
@@ -1367,6 +1369,9 @@ func main() {
 			}
 			break
 		}
+		if project == "dev-all" {
+			die("layout-apply for dev-all only supports native dev-all layouts; move Compose/mixed layouts behind explicit legacy Compose workflows")
+		}
 		type overlayRun struct {
 			Project     string
 			Service     string
@@ -1800,6 +1805,32 @@ func main() {
 		if strings.TrimSpace(sessName) == "" {
 			sessName = defaultSessionName("mixed")
 		}
+		if project == "dev-all" {
+			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+			repo := strings.TrimSpace(cfg.Defaults.Repo)
+			if repo == "" {
+				repo = "ouroboros-ide"
+			}
+			count := cfg.Defaults.Agents
+			if count < 1 {
+				count = 1
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "session: %s\n\nwindows:\n", sessName)
+			for i := 1; i <= count; i++ {
+				fmt.Fprintf(&b, "  - index: %d\n    project: dev-all\n    service: dev-agent\n    path: %s\n    name: agent-%d\n", i, filepath.Join("/worktrees", fmt.Sprintf("agent%d", i), repo), i)
+			}
+			yml := b.String()
+			if strings.TrimSpace(output) == "" {
+				fmt.Fprint(os.Stdout, yml)
+			} else {
+				if err := os.WriteFile(output, []byte(yml), 0644); err != nil {
+					die(err.Error())
+				}
+				fmt.Fprintf(os.Stderr, "wrote %s\n", output)
+			}
+			break
+		}
 		// docker ps labels: project/service
 		type row struct{ Project, Service string }
 		rows := []row{}
@@ -1949,13 +1980,14 @@ func main() {
 				svc = "dev-agent"
 			}
 			repo := defaultDevAllRepoMain(paths.OverlayPaths)
-			anchor := anchorHome(project)
 			if project == "dev-all" {
-				anchor = pth.AgentHomePath(project, idx, repo)
-			} else {
-				base := anchorBase(project)
-				runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
+				seedNativeCodexAuth(dryRun, paths, project, repo, mustAtoi(idx))
+				fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
+				break
 			}
+			anchor := anchorHome(project)
+			base := anchorBase(project)
+			runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
 			for _, script := range seed.BuildForceReseedScripts(anchor) {
 				execServiceIdx(dryRun, files, svc, idx, script)
 			}
@@ -1979,6 +2011,14 @@ func main() {
 				svc = "dev-agent"
 			}
 			if len(indexes) == 0 {
+				if project == "dev-all" {
+					count := nativeDefaultAgentCount(paths, project, 1)
+					for i := 1; i <= count; i++ {
+						indexes = append(indexes, fmt.Sprintf("%d", i))
+					}
+				}
+			}
+			if len(indexes) == 0 {
 				names := listServiceNames(files, svc)
 				if len(names) == 0 {
 					die(fmt.Sprintf("no running %s containers found", svc))
@@ -1989,13 +2029,14 @@ func main() {
 			}
 			repo := defaultDevAllRepoMain(paths.OverlayPaths)
 			for _, idx := range indexes {
-				anchor := anchorHome(project)
 				if project == "dev-all" {
-					anchor = pth.AgentHomePath(project, idx, repo)
-				} else {
-					base := anchorBase(project)
-					runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
+					seedNativeCodexAuth(dryRun, paths, project, repo, mustAtoi(idx))
+					fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
+					continue
 				}
+				anchor := anchorHome(project)
+				base := anchorBase(project)
+				runAnchorPlan(dryRun, files, svc, idx, seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: false})
 				for _, script := range seed.BuildForceReseedScripts(anchor) {
 					execServiceIdx(dryRun, files, svc, idx, script)
 				}
@@ -2054,6 +2095,11 @@ func main() {
 		if strings.TrimSpace(repo) == "" {
 			repo = "ouroboros-ide"
 		}
+		if project == "dev-all" {
+			script := "set -euo pipefail; if codex exec 'reply with: ok' 2>&1 | tr -d '\\r' | grep -m1 -x ok >/dev/null; then echo ok; else echo 'codex-test failed'; exit 1; fi"
+			nativeExecScriptCommand(dryRun, exe, project, repo, mustAtoi(idx), script)
+			break
+		}
 		// Determine working directory/home inside container using helpers
 		wd := pth.AgentRepoPath(project, idx, repo)
 		home := pth.AgentHomePath(project, idx, repo)
@@ -2062,6 +2108,9 @@ func main() {
 		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
 	case "doctor-runtime":
 		mustProject(project)
+		if project == "dev-all" {
+			die("doctor-runtime is a legacy Compose diagnostic for dev-all; use native readiness or native capacity")
+		}
 		if os.Getenv("DEVKIT_ENABLE_RUNTIME_CONFIG") != "1" {
 			die("runtime config disabled; set DEVKIT_ENABLE_RUNTIME_CONFIG=1")
 		}
@@ -2102,6 +2151,20 @@ func main() {
 	case "verify":
 		// Verify SSH to GitHub, Codex basic exec, and worktrees status (when applicable)
 		mustProject(project)
+		if project == "dev-all" {
+			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+			repo := strings.TrimSpace(cfg.Defaults.Repo)
+			if repo == "" {
+				repo = "ouroboros-ide"
+			}
+			count := cfg.Defaults.Agents
+			if count < 1 {
+				count = 1
+			}
+			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			fmt.Println("verify completed")
+			break
+		}
 		// 1) SSH test on agent 1
 		{
 			home := "/workspace/.devhome-agent1"
@@ -2149,6 +2212,17 @@ func main() {
 		idx := "1"
 		if len(sub) > 0 {
 			idx = sub[0]
+		}
+		if project == "dev-all" {
+			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			script := `set -e
+echo "HOME=$HOME"; echo "CODEX_HOME=$CODEX_HOME"
+echo "-- locations --"
+for p in "$HOME/.codex/auth.json" "$CODEX_HOME/auth.json"; do
+  [ -n "$p" ] || continue; echo -n "$p : "; [ -f "$p" ] && wc -c < "$p" || echo "(missing)"; done
+exit 0`
+			nativeExecScriptCommand(dryRun, exe, project, repo, mustAtoi(idx), script)
+			break
 		}
 		home := fmt.Sprintf("/workspace/.devhome-agent%s", idx)
 		script := fmt.Sprintf(`set -e
@@ -2200,6 +2274,19 @@ exit 0`, home, home, home, home, home)
 		}
 		idx := sub[0]
 		subpath := sub[1]
+		if project == "dev-all" {
+			repo := nativeRepoForSubpath(paths, project, subpath)
+			index := mustAtoi(idx)
+			dest := nativeSandboxDest(index, repo, subpath)
+			base := nativeSandboxDest(index, repo, "")
+			cmdstr := "bash"
+			if len(sub) > 2 {
+				cmdstr = strings.Join(sub[2:], " ")
+			}
+			script := "set -e; cd " + shSingleQuote(dest) + " 2>/dev/null || cd " + shSingleQuote(base) + "; exec " + cmdstr
+			nativeExecScriptCommandInteractive(dryRun, exe, project, repo, index, script)
+			break
+		}
 		dest := subpath
 		if !strings.HasPrefix(subpath, "/") {
 			dest = filepath.Join("/workspaces/dev", subpath)
@@ -2270,6 +2357,15 @@ exit 0`, home, home, home, home, home)
 		}
 		idx := sub[0]
 		subpath := sub[1]
+		if project == "dev-all" {
+			repo := nativeRepoForSubpath(paths, project, subpath)
+			index := mustAtoi(idx)
+			dest := nativeSandboxDest(index, repo, subpath)
+			base := nativeSandboxDest(index, repo, "")
+			script := "set -e; cd " + shSingleQuote(dest) + " 2>/dev/null || cd " + shSingleQuote(base) + "; exec bash"
+			nativeExecScriptCommandInteractive(dryRun, exe, project, repo, index, script)
+			break
+		}
 		dest := subpath
 		if !strings.HasPrefix(subpath, "/") {
 			dest = filepath.Join("/workspaces/dev", subpath)
@@ -2645,6 +2741,10 @@ exit 0`, home, home, home, home, home)
 		}
 	case "ssh-setup":
 		mustProject(project)
+		if project == "dev-all" {
+			fmt.Println("ssh-setup: native dev-all uses host SSH credentials with host git worktrees; no container SSH setup is required")
+			break
+		}
 		// Parse flags: [--key path] [--index N]
 		idx := "1"
 		keyfile := ""
@@ -2758,6 +2858,10 @@ exit 0`, home, home, home, home, home)
 		}
 	case "ssh-test":
 		mustProject(project)
+		if project == "dev-all" {
+			runner.Host(dryRun, "bash", "-lc", "ssh -T github.com -o BatchMode=yes || true")
+			break
+		}
 		idx := "1"
 		if len(sub) > 0 {
 			idx = sub[0]
@@ -2777,6 +2881,13 @@ exit 0`, home, home, home, home, home)
 		idx := "1"
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
+		}
+		if project == "dev-all" {
+			repoName := nativeRepoForSubpath(paths, project, repo)
+			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
+			cmd := "set -euo pipefail; cd " + shSingleQuote(path) + "; url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^https://github.com/([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to \"$newurl\"; git remote set-url origin \"$newurl\"; else echo \"Origin already SSH: $url\"; fi"
+			runner.Host(dryRun, "bash", "-lc", cmd)
+			break
 		}
 		base := "/workspace"
 		if project == "dev-all" {
@@ -2801,6 +2912,13 @@ exit 0`, home, home, home, home, home)
 		idx := "1"
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
+		}
+		if project == "dev-all" {
+			repoName := nativeRepoForSubpath(paths, project, repo)
+			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
+			cmd := "set -euo pipefail; cd " + shSingleQuote(path) + "; url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^git@github.com:([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=https://github.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting HTTPS origin to \"$newurl\"; git remote set-url origin \"$newurl\"; else echo \"Origin already HTTPS: $url\"; fi"
+			runner.Host(dryRun, "bash", "-lc", cmd)
+			break
 		}
 		base := "/workspace"
 		if project == "dev-all" {
@@ -2827,6 +2945,13 @@ exit 0`, home, home, home, home, home)
 				idx = sub[i+1]
 			}
 		}
+		if project == "dev-all" {
+			repoName := nativeRepoForSubpath(paths, project, repo)
+			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
+			cmd := "set -euo pipefail; cd " + shSingleQuote(path) + "; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^https://github.com/([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to \"$newurl\"; git remote set-url origin \"$newurl\"; fi; echo Pushing branch \"$cur\" to origin...; git push -u origin HEAD"
+			runner.Host(dryRun, "bash", "-lc", cmd)
+			break
+		}
 		// best-effort ensure ssh
 		// assemble dest and push
 		base := "/workspace"
@@ -2852,6 +2977,12 @@ exit 0`, home, home, home, home, home)
 		idx := "1"
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
+		}
+		if project == "dev-all" {
+			repoName := nativeRepoForSubpath(paths, project, repo)
+			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
+			runner.Host(dryRun, "bash", "-lc", "set -euo pipefail; cd "+shSingleQuote(path)+"; echo Pushing branch $(git rev-parse --abbrev-ref HEAD) to origin...; git push -u origin HEAD")
+			break
 		}
 		// ensure HTTPS config then push
 		base := "/workspace"
@@ -3296,6 +3427,13 @@ func nativeExecScriptCommand(dry bool, exe, project, repo string, index int, scr
 	runner.Host(dry, exe, "-p", project, "exec", fmt.Sprintf("%d", index), "--repo", repo, "--", "bash", "-lc", script)
 }
 
+func nativeExecScriptCommandInteractive(dry bool, exe, project, repo string, index int, script string) {
+	if index < 1 {
+		index = 1
+	}
+	runner.HostInteractive(dry, exe, "-p", project, "exec", fmt.Sprintf("%d", index), "--repo", repo, "--", "bash", "-lc", script)
+}
+
 func killNativeAgentSessions(dry bool) {
 	for _, sess := range []string{"devkit-open", "devkit-shells", "devkit-worktrees"} {
 		runner.HostBestEffort(dry, "tmux", "kill-session", "-t", sess)
@@ -3362,6 +3500,116 @@ func nativeHostWorktree(paths compose.Paths, project, repo string, index int) st
 		index = 1
 	}
 	return filepath.Join(nativeWorktreeRoot(paths, project), fmt.Sprintf("agent%d", index), repo)
+}
+
+func nativeResolvedAgentPaths(paths compose.Paths, project, repo string, index int) (nativeagent.Paths, error) {
+	cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+	return nativeagent.ResolvePaths(nativeagent.PathConfig{
+		DevkitRoot:            paths.Root,
+		Project:               project,
+		Repo:                  repo,
+		Index:                 index,
+		WorktreeRoot:          nativeWorktreeRoot(paths, project),
+		StateRoot:             nativeStateRoot(paths, project),
+		WorktreeContainerRoot: cfg.Native.WorktreeContainerRoot,
+		StateContainerRoot:    cfg.Native.StateContainerRoot,
+		DedicatedWorktree:     true,
+	})
+}
+
+func seedNativeCodexAuth(dry bool, paths compose.Paths, project, repo string, index int) {
+	resolved, err := nativeResolvedAgentPaths(paths, project, repo, index)
+	if err != nil {
+		die(err.Error())
+	}
+	if dry {
+		fmt.Fprintf(os.Stderr, "+ seed codex auth %s\n", filepath.Join(resolved.HostHome, ".codex", "auth.json"))
+		return
+	}
+	if err := nativelaunch.SeedCodexAuth(resolved.HostHome, true); err != nil {
+		die(err.Error())
+	}
+}
+
+func nativeStateRoot(paths compose.Paths, project string) string {
+	cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
+	if err == nil {
+		value := strings.TrimSpace(cfg.Native.StateRoot)
+		if value != "" {
+			if filepath.IsAbs(value) {
+				return filepath.Clean(value)
+			}
+			return filepath.Clean(filepath.Join(paths.Root, value))
+		}
+	}
+	return filepath.Clean(filepath.Join(paths.Root, "..", ".devkit", "native-agents"))
+}
+
+func nativeRepoForSubpath(paths compose.Paths, project, subpath string) string {
+	def := defaultDevAllRepoMain(paths.OverlayPaths)
+	cleaned := filepath.Clean(strings.TrimSpace(subpath))
+	if cleaned == "." || cleaned == "" {
+		return def
+	}
+	for _, prefix := range []string{"/worktrees/", "/workspaces/dev/agent-worktrees/"} {
+		if strings.HasPrefix(cleaned, prefix) {
+			rel := strings.TrimPrefix(cleaned, prefix)
+			parts := strings.Split(rel, "/")
+			if len(parts) >= 2 && strings.HasPrefix(parts[0], "agent") {
+				return parts[1]
+			}
+		}
+	}
+	if strings.HasPrefix(cleaned, "/workspaces/dev/") {
+		rel := strings.TrimPrefix(cleaned, "/workspaces/dev/")
+		parts := strings.Split(rel, "/")
+		if len(parts) >= 1 && strings.TrimSpace(parts[0]) != "" {
+			return parts[0]
+		}
+	}
+	if !strings.HasPrefix(cleaned, "/") {
+		parts := strings.Split(cleaned, string(filepath.Separator))
+		if len(parts) > 1 && strings.TrimSpace(parts[0]) != "" {
+			devRootRepo := filepath.Join(paths.Root, "..", parts[0])
+			if info, err := os.Stat(devRootRepo); err == nil && info.IsDir() {
+				return parts[0]
+			}
+		}
+	}
+	return def
+}
+
+func nativeSandboxDest(index int, repo, subpath string) string {
+	if index < 1 {
+		index = 1
+	}
+	base := filepath.Join("/worktrees", fmt.Sprintf("agent%d", index), repo)
+	cleaned := filepath.Clean(strings.TrimSpace(subpath))
+	if cleaned == "." || cleaned == "" {
+		return base
+	}
+	if !strings.HasPrefix(cleaned, "/") {
+		parts := strings.Split(cleaned, string(filepath.Separator))
+		if len(parts) > 1 && parts[0] == repo {
+			return filepath.Join(append([]string{base}, parts[1:]...)...)
+		}
+		return filepath.Join(base, cleaned)
+	}
+	if strings.HasPrefix(cleaned, "/worktrees/") {
+		return cleaned
+	}
+	devPrefix := "/workspaces/dev/"
+	if strings.HasPrefix(cleaned, devPrefix) {
+		rel := strings.TrimPrefix(cleaned, devPrefix)
+		parts := strings.Split(rel, "/")
+		if len(parts) >= 3 && parts[0] == pth.AgentWorktreesDir && strings.HasPrefix(parts[1], "agent") {
+			return filepath.Join(append([]string{"/worktrees", parts[1]}, parts[2:]...)...)
+		}
+		if len(parts) >= 1 && parts[0] == repo {
+			return filepath.Join(append([]string{base}, parts[1:]...)...)
+		}
+	}
+	return cleaned
 }
 
 func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {

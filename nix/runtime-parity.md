@@ -48,6 +48,12 @@ Compose retirement work. It follows
 - `overlays/dev-all/devkit.yaml` defines explicit native repo readiness checks
   for git reachability, frontend warm/install, frontend typecheck, frontend
   tests, and the core SBT compile check.
+- Native launch preparation seeds Codex auth into per-agent native HOME state
+  when host Codex auth is present.
+- `codex-auth`, `codex-test`, `codex-debug`, `exec-cd`, `attach-cd`,
+  `verify`, SSH smoke helpers, repo remote/push helpers, and `layout-generate`
+  now avoid Compose for `dev-all`. Legacy Compose-only doctor/layout fallback
+  paths refuse `dev-all` instead of silently falling back.
 
 ## Verified Commands
 
@@ -92,6 +98,16 @@ kit/scripts/devkit -p dev-all --dry-run check-net
 kit/scripts/devkit -p dev-all --dry-run check-codex
 kit/scripts/devkit -p dev-all --dry-run check-sts tinyproxy
 kit/scripts/devkit -p dev-all --dry-run warm
+kit/scripts/devkit -p dev-all --dry-run layout-generate
+kit/scripts/devkit -p dev-all --dry-run codex-auth reseed 1
+kit/scripts/devkit -p dev-all --dry-run codex-test 1 ouroboros-ide
+kit/scripts/devkit -p dev-all --dry-run codex-debug 1
+kit/scripts/devkit -p dev-all --dry-run exec-cd 2 ouroboros-ide/frontend bash
+kit/scripts/devkit -p dev-all --dry-run attach-cd 2 ouroboros-ide/frontend
+kit/scripts/devkit -p dev-all --dry-run verify
+kit/scripts/devkit -p dev-all --dry-run ssh-test
+kit/scripts/devkit -p dev-all --dry-run repo-config-https ouroboros-ide --index 2
+kit/scripts/devkit -p dev-all --dry-run doctor-runtime
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and
@@ -175,6 +191,9 @@ Observed key versions:
 - Native check and hook helpers execute inside the same bubblewrap path as
   manual `exec`, and repo readiness diagnostics are listed in overlay config
   instead of being only hardcoded in legacy Compose readiness.
+- Legacy helper surfaces that still have Compose implementations either take a
+  native `dev-all` branch first or refuse `dev-all`; Compose remains available
+  through the explicit `compose` namespace and non-`dev-all` legacy overlays.
 
 ## Intentionally Dropped Parity
 

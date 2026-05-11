@@ -199,6 +199,9 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 	if nativeLayoutEligible(ctx.Project, lf) {
 		return nativeApplyLayout(ctx, lf, sessName, doAttach)
 	}
+	if ctx.Project == "dev-all" {
+		return fmt.Errorf("tmux-apply-layout for dev-all only supports native dev-all layouts; use explicit legacy Compose workflows for mixed layouts")
+	}
 	sessExists := hasTmuxSession(sessName)
 	tracker := newSeedTracker()
 	if tracker == nil {
