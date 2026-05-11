@@ -1,0 +1,109 @@
+package agent
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+
+	pth "devkit/cli/devctl/internal/paths"
+)
+
+type PathConfig struct {
+	DevkitRoot            string
+	Project               string
+	Repo                  string
+	Index                 int
+	WorktreeRoot          string
+	StateRoot             string
+	WorktreeContainerRoot string
+	StateContainerRoot    string
+	DedicatedWorktree     bool
+}
+
+type Paths struct {
+	DevRoot               string
+	HostWorktreeRoot      string
+	HostStateRoot         string
+	HostWorktree          string
+	HostAgentStateRoot    string
+	HostHome              string
+	SandboxWorktreeRoot   string
+	SandboxStateRoot      string
+	SandboxWorktree       string
+	SandboxAgentStateRoot string
+	SandboxHome           string
+}
+
+func ResolvePaths(cfg PathConfig) (Paths, error) {
+	devkitRoot := strings.TrimSpace(cfg.DevkitRoot)
+	if devkitRoot == "" {
+		return Paths{}, fmt.Errorf("devkit root is required")
+	}
+	devkitRoot = filepath.Clean(devkitRoot)
+	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
+	project := strings.TrimSpace(cfg.Project)
+	if project == "" {
+		project = "dev-all"
+	}
+	repo := strings.TrimSpace(cfg.Repo)
+	if repo == "" {
+		repo = "ouroboros-ide"
+	}
+	index := cfg.Index
+	if index < 1 {
+		index = 1
+	}
+
+	hostWorktreeRoot := resolveHostPath(cfg.WorktreeRoot, devkitRoot, filepath.Join(devRoot, pth.AgentWorktreesDir))
+	hostStateRoot := resolveHostPath(cfg.StateRoot, devkitRoot, filepath.Join(devRoot, ".devkit", "native-agents"))
+	sandboxWorktreeRoot := cleanContainerRoot(cfg.WorktreeContainerRoot, "/worktrees")
+	sandboxStateRoot := cleanContainerRoot(cfg.StateContainerRoot, "/agent-state")
+
+	agentDir := fmt.Sprintf("agent%d", index)
+	agentName := fmt.Sprintf("%s-agent%d", project, index)
+
+	hostWorktree := filepath.Join(devRoot, repo)
+	sandboxWorktree := filepath.Join("/workspaces/dev", repo)
+	if cfg.DedicatedWorktree || index > 1 {
+		hostWorktree = filepath.Join(hostWorktreeRoot, agentDir, repo)
+		sandboxWorktree = filepath.Join(sandboxWorktreeRoot, agentDir, repo)
+	}
+
+	hostAgentStateRoot := filepath.Join(hostStateRoot, agentName)
+	sandboxAgentStateRoot := filepath.Join(sandboxStateRoot, agentName)
+	return Paths{
+		DevRoot:               devRoot,
+		HostWorktreeRoot:      hostWorktreeRoot,
+		HostStateRoot:         hostStateRoot,
+		HostWorktree:          hostWorktree,
+		HostAgentStateRoot:    hostAgentStateRoot,
+		HostHome:              filepath.Join(hostAgentStateRoot, "home"),
+		SandboxWorktreeRoot:   sandboxWorktreeRoot,
+		SandboxStateRoot:      sandboxStateRoot,
+		SandboxWorktree:       sandboxWorktree,
+		SandboxAgentStateRoot: sandboxAgentStateRoot,
+		SandboxHome:           filepath.Join(sandboxAgentStateRoot, "home"),
+	}, nil
+}
+
+func resolveHostPath(value, devkitRoot, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return filepath.Clean(fallback)
+	}
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(filepath.Join(devkitRoot, value))
+}
+
+func cleanContainerRoot(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
+	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join("/", value)
+	}
+	return filepath.Clean(value)
+}

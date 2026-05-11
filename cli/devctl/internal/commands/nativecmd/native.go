@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
 	"devkit/cli/devctl/internal/runtime/launch"
@@ -70,43 +72,48 @@ type planArgs struct {
 }
 
 type lifecycleArgs struct {
-	repo             string
-	flake            string
-	count            int
-	format           string
-	brokerSocket     string
-	brokerStateRoot  string
-	brokerBinary     string
-	brokerAllowPulls *bool
-	brokerAllowImage []string
-	worktreeRoot     string
-	agentStateRoot   string
-	baseBranch       string
-	branchPrefix     string
-	repoCheck        string
-	skipBroker       bool
-	skipPrepare      bool
-	skipReady        bool
-	skipRepoChecks   bool
-	tailLines        int
+	repo                    string
+	flake                   string
+	count                   int
+	format                  string
+	brokerSocket            string
+	brokerStateRoot         string
+	brokerBinary            string
+	brokerAllowPulls        *bool
+	brokerAllowImage        []string
+	worktreeRoot            string
+	agentStateRoot          string
+	worktreeContainerRoot   string
+	agentStateContainerRoot string
+	baseBranch              string
+	branchPrefix            string
+	repoCheck               string
+	skipBroker              bool
+	skipPrepare             bool
+	skipReady               bool
+	skipRepoChecks          bool
+	tailLines               int
 }
 
 type topExecArgs struct {
-	index          int
-	repo           string
-	flake          string
-	brokerSocket   string
-	worktreeRoot   string
-	agentStateRoot string
-	command        []string
+	index                   int
+	repo                    string
+	flake                   string
+	brokerSocket            string
+	worktreeRoot            string
+	agentStateRoot          string
+	worktreeContainerRoot   string
+	agentStateContainerRoot string
+	command                 []string
 }
 
 func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error) {
 	opts := nativeplan.BuildOptions{
-		Paths:    ctx.Paths,
-		Project:  ctx.Project,
-		Index:    1,
-		Launcher: "bubblewrap",
+		Paths:             ctx.Paths,
+		Project:           ctx.Project,
+		Index:             1,
+		Launcher:          "bubblewrap",
+		DedicatedWorktree: true,
 	}
 	parsed := planArgs{opts: opts, format: "text"}
 	for i := 1; i < len(ctx.Args); i++ {
@@ -197,6 +204,18 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error
 				return parsed, fmt.Errorf("--state-root requires a value")
 			}
 			parsed.opts.StateRoot = ctx.Args[i+1]
+			i++
+		case "--worktree-container-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--worktree-container-root requires a value")
+			}
+			parsed.opts.WorktreeContainerRoot = ctx.Args[i+1]
+			i++
+		case "--state-container-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--state-container-root requires a value")
+			}
+			parsed.opts.StateContainerRoot = ctx.Args[i+1]
 			i++
 		case "--broker-endpoint":
 			if i+1 >= len(ctx.Args) {
@@ -297,6 +316,18 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 			}
 			parsed.agentStateRoot = ctx.Args[i+1]
 			i++
+		case "--worktree-container-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--worktree-container-root requires a value")
+			}
+			parsed.worktreeContainerRoot = ctx.Args[i+1]
+			i++
+		case "--agent-state-container-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--agent-state-container-root requires a value")
+			}
+			parsed.agentStateContainerRoot = ctx.Args[i+1]
+			i++
 		case "--base-branch":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--base-branch requires a value")
@@ -346,22 +377,26 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 }
 
 type lifecycleStatus struct {
-	Command  string                   `json:"command"`
-	Runtime  string                   `json:"runtime"`
-	Repo     string                   `json:"repo,omitempty"`
-	Count    int                      `json:"count,omitempty"`
-	Broker   *runtimebroker.Status    `json:"broker,omitempty"`
-	Capacity *capacity.Summary        `json:"capacity,omitempty"`
-	Agents   []preparedLifecycleAgent `json:"agents,omitempty"`
-	LogPath  string                   `json:"log_path,omitempty"`
-	Message  string                   `json:"message,omitempty"`
+	Command      string                   `json:"command"`
+	Runtime      string                   `json:"runtime"`
+	Repo         string                   `json:"repo,omitempty"`
+	Count        int                      `json:"count,omitempty"`
+	Broker       *runtimebroker.Status    `json:"broker,omitempty"`
+	Capacity     *capacity.Summary        `json:"capacity,omitempty"`
+	Agents       []preparedLifecycleAgent `json:"agents,omitempty"`
+	ManifestPath string                   `json:"manifest_path,omitempty"`
+	LogPath      string                   `json:"log_path,omitempty"`
+	Message      string                   `json:"message,omitempty"`
 }
 
 type preparedLifecycleAgent struct {
-	Index        int    `json:"index"`
-	HostWorktree string `json:"host_worktree"`
-	HostHome     string `json:"host_home"`
-	StateRoot    string `json:"state_root"`
+	Index            int    `json:"index"`
+	HostWorktree     string `json:"host_worktree"`
+	SandboxWorktree  string `json:"sandbox_worktree"`
+	HostHome         string `json:"host_home"`
+	SandboxHome      string `json:"sandbox_home"`
+	StateRoot        string `json:"state_root"`
+	SandboxStateRoot string `json:"sandbox_state_root"`
 }
 
 func handleLifecycle(ctx *cmdregistry.Context, command string) error {
@@ -418,7 +453,7 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 		return err
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
-	opts := lifecyclePlanOptions(ctx, parsed, repo, brokerCfg)
+	opts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 	summary, err := lifecycleCapacity(ctx, parsed, opts, count)
 	if err != nil {
 		return err
@@ -516,19 +551,21 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		return err
 	}
 	lifecycleParsed := lifecycleArgs{
-		repo:           parsed.repo,
-		flake:          parsed.flake,
-		brokerSocket:   parsed.brokerSocket,
-		worktreeRoot:   parsed.worktreeRoot,
-		agentStateRoot: parsed.agentStateRoot,
-		skipRepoChecks: true,
+		repo:                    parsed.repo,
+		flake:                   parsed.flake,
+		brokerSocket:            parsed.brokerSocket,
+		worktreeRoot:            parsed.worktreeRoot,
+		agentStateRoot:          parsed.agentStateRoot,
+		worktreeContainerRoot:   parsed.worktreeContainerRoot,
+		agentStateContainerRoot: parsed.agentStateContainerRoot,
+		skipRepoChecks:          true,
 	}
 	cfg, repo, _, _, _, err := lifecycleDefaults(ctx, lifecycleParsed)
 	if err != nil {
 		return err
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleParsed)
-	opts := lifecyclePlanOptions(ctx, lifecycleParsed, repo, brokerCfg)
+	opts := lifecyclePlanOptions(ctx, cfg, lifecycleParsed, repo, brokerCfg)
 	opts.Index = parsed.index
 	p, err := nativeplan.BuildDevAll(opts)
 	if err != nil {
@@ -597,6 +634,9 @@ func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.O
 	}
 	branchPrefix := strings.TrimSpace(parsed.branchPrefix)
 	if branchPrefix == "" {
+		branchPrefix = strings.TrimSpace(cfg.Defaults.BranchPrefix)
+	}
+	if branchPrefix == "" {
 		branchPrefix = "native-agent"
 	}
 	return cfg, repo, count, baseBranch, branchPrefix, nil
@@ -627,18 +667,75 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 	return runtimebroker.Normalize(brokerCfg)
 }
 
-func lifecyclePlanOptions(ctx *cmdregistry.Context, parsed lifecycleArgs, repo string, brokerCfg runtimebroker.Config) nativeplan.BuildOptions {
+func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs, repo string, brokerCfg runtimebroker.Config) nativeplan.BuildOptions {
 	return nativeplan.BuildOptions{
-		Paths:             ctx.Paths,
-		Project:           ctx.Project,
-		Repo:              repo,
-		Flake:             strings.TrimSpace(parsed.flake),
-		Launcher:          "bubblewrap",
-		WorktreeRoot:      strings.TrimSpace(parsed.worktreeRoot),
-		StateRoot:         strings.TrimSpace(parsed.agentStateRoot),
-		BrokerEndpoint:    brokerCfg.Socket,
-		DedicatedWorktree: true,
+		Paths:                 ctx.Paths,
+		Project:               ctx.Project,
+		Repo:                  repo,
+		Flake:                 strings.TrimSpace(parsed.flake),
+		Launcher:              "bubblewrap",
+		WorktreeRoot:          resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
+		StateRoot:             resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
+		WorktreeContainerRoot: firstNonEmpty(parsed.worktreeContainerRoot, cfg.Native.WorktreeContainerRoot),
+		StateContainerRoot:    firstNonEmpty(parsed.agentStateContainerRoot, cfg.Native.StateContainerRoot),
+		BaseBranch:            strings.TrimSpace(parsed.baseBranch),
+		BranchPrefix:          strings.TrimSpace(parsed.branchPrefix),
+		BrokerEndpoint:        brokerCfg.Socket,
+		DedicatedWorktree:     true,
 	}
+}
+
+func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) {
+	if strings.TrimSpace(opts.Repo) == "" {
+		opts.Repo = strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	if strings.TrimSpace(opts.WorktreeRoot) == "" {
+		opts.WorktreeRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.WorktreeRoot)
+	}
+	if strings.TrimSpace(opts.StateRoot) == "" {
+		opts.StateRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.StateRoot)
+	}
+	if strings.TrimSpace(opts.WorktreeContainerRoot) == "" {
+		opts.WorktreeContainerRoot = strings.TrimSpace(cfg.Native.WorktreeContainerRoot)
+	}
+	if strings.TrimSpace(opts.StateContainerRoot) == "" {
+		opts.StateContainerRoot = strings.TrimSpace(cfg.Native.StateContainerRoot)
+	}
+	if strings.TrimSpace(opts.BaseBranch) == "" {
+		opts.BaseBranch = strings.TrimSpace(cfg.Defaults.BaseBranch)
+	}
+	if strings.TrimSpace(opts.BranchPrefix) == "" {
+		opts.BranchPrefix = strings.TrimSpace(cfg.Defaults.BranchPrefix)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func resolveNativeRoot(devkitRoot, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Clean(filepath.Join(devkitRoot, value))
+}
+
+func writeNativeManifest(ctx *cmdregistry.Context, opts nativeplan.BuildOptions, count int, dryRun bool) (nativeagent.Manifest, string, error) {
+	manifest, err := nativeplan.BuildManifest(opts, count)
+	if err != nil {
+		return nativeagent.Manifest{}, "", err
+	}
+	path := nativeagent.ManifestPath(manifest.HostStateRoot, ctx.Project)
+	if err := nativeagent.WriteManifest(path, manifest, dryRun); err != nil {
+		return nativeagent.Manifest{}, "", err
+	}
+	return manifest, path, nil
 }
 
 func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string) error {
@@ -655,7 +752,9 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 		}
 		status.Broker = &brokerStatus
 	}
-	planOpts := lifecyclePlanOptions(ctx, parsed, repo, brokerCfg)
+	parsed.baseBranch = baseBranch
+	parsed.branchPrefix = branchPrefix
+	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 	if !parsed.skipPrepare {
 		if err := wtx.SetupNative(wtx.NativeOptions{
 			DevkitRoot:   ctx.Paths.Root,
@@ -663,7 +762,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 			Count:        count,
 			BaseBranch:   baseBranch,
 			BranchPrefix: branchPrefix,
-			WorktreeRoot: parsed.worktreeRoot,
+			WorktreeRoot: planOpts.WorktreeRoot,
 			DryRun:       ctx.DryRun,
 		}); err != nil {
 			return err
@@ -681,12 +780,20 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 				}
 			}
 			status.Agents = append(status.Agents, preparedLifecycleAgent{
-				Index:        i,
-				HostWorktree: p.Agent.HostWorktree,
-				HostHome:     p.Agent.HostHome,
-				StateRoot:    p.Agent.StateRoot,
+				Index:            i,
+				HostWorktree:     p.Agent.HostWorktree,
+				SandboxWorktree:  p.Agent.SandboxWorktree,
+				HostHome:         p.Agent.HostHome,
+				SandboxHome:      p.Agent.SandboxHome,
+				StateRoot:        p.Agent.StateRoot,
+				SandboxStateRoot: p.Agent.SandboxStateRoot,
 			})
 		}
+		_, manifestPath, err := writeNativeManifest(ctx, planOpts, count, ctx.DryRun)
+		if err != nil {
+			return err
+		}
+		status.ManifestPath = manifestPath
 	}
 	if !parsed.skipReady && !ctx.DryRun {
 		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
@@ -744,7 +851,7 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 	}
 	status := lifecycleStatus{Command: "status", Runtime: "native", Repo: repo, Count: count, Broker: &brokerStatus}
 	if !parsed.skipReady {
-		planOpts := lifecyclePlanOptions(ctx, parsed, repo, brokerCfg)
+		planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
 		if err == nil {
 			status.Capacity = &summary
@@ -844,6 +951,9 @@ func printLifecycleStatus(status lifecycleStatus, format string) error {
 			fmt.Fprintf(os.Stdout, "runtime_ready: %d/%d\n", status.Capacity.RuntimeReady, status.Capacity.Total)
 			fmt.Fprintf(os.Stdout, "repo_ready: %d/%d\n", status.Capacity.RepoReady, status.Capacity.Total)
 		}
+		if status.ManifestPath != "" {
+			fmt.Fprintf(os.Stdout, "manifest: %s\n", status.ManifestPath)
+		}
 		for _, agent := range status.Agents {
 			fmt.Fprintf(os.Stdout, "agent%d: worktree=%s home=%s state=%s\n", agent.Index, agent.HostWorktree, agent.HostHome, agent.StateRoot)
 		}
@@ -881,6 +991,13 @@ func handlePlan(ctx *cmdregistry.Context) error {
 	if parsed.repoCheck != "" {
 		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	parsed.opts.BaseBranch = parsed.baseBranch
+	parsed.opts.BranchPrefix = parsed.branchPrefix
+	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -942,8 +1059,15 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	}
 	branchPrefix := strings.TrimSpace(parsed.branchPrefix)
 	if branchPrefix == "" {
+		branchPrefix = strings.TrimSpace(cfg.Defaults.BranchPrefix)
+	}
+	if branchPrefix == "" {
 		branchPrefix = "native-agent"
 	}
+	parsed.opts.Repo = repo
+	parsed.opts.BaseBranch = baseBranch
+	parsed.opts.BranchPrefix = branchPrefix
+	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
 	if err := wtx.SetupNative(wtx.NativeOptions{
 		DevkitRoot:   ctx.Paths.Root,
 		Repo:         repo,
@@ -956,15 +1080,19 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 		return err
 	}
 	type preparedAgent struct {
-		Index        int    `json:"index"`
-		HostWorktree string `json:"host_worktree"`
-		HostHome     string `json:"host_home"`
-		StateRoot    string `json:"state_root"`
+		Index            int    `json:"index"`
+		HostWorktree     string `json:"host_worktree"`
+		SandboxWorktree  string `json:"sandbox_worktree"`
+		HostHome         string `json:"host_home"`
+		SandboxHome      string `json:"sandbox_home"`
+		StateRoot        string `json:"state_root"`
+		SandboxStateRoot string `json:"sandbox_state_root"`
 	}
 	out := struct {
-		Repo   string          `json:"repo"`
-		Count  int             `json:"count"`
-		Agents []preparedAgent `json:"agents"`
+		Repo         string          `json:"repo"`
+		Count        int             `json:"count"`
+		ManifestPath string          `json:"manifest_path"`
+		Agents       []preparedAgent `json:"agents"`
 	}{Repo: repo, Count: count}
 	for i := 1; i <= count; i++ {
 		opts := parsed.opts
@@ -981,15 +1109,24 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 			}
 		}
 		out.Agents = append(out.Agents, preparedAgent{
-			Index:        i,
-			HostWorktree: p.Agent.HostWorktree,
-			HostHome:     p.Agent.HostHome,
-			StateRoot:    p.Agent.StateRoot,
+			Index:            i,
+			HostWorktree:     p.Agent.HostWorktree,
+			SandboxWorktree:  p.Agent.SandboxWorktree,
+			HostHome:         p.Agent.HostHome,
+			SandboxHome:      p.Agent.SandboxHome,
+			StateRoot:        p.Agent.StateRoot,
+			SandboxStateRoot: p.Agent.SandboxStateRoot,
 		})
 	}
+	_, manifestPath, err := writeNativeManifest(ctx, parsed.opts, count, ctx.DryRun || parsed.dryRun)
+	if err != nil {
+		return err
+	}
+	out.ManifestPath = manifestPath
 	switch parsed.format {
 	case "", "text":
 		fmt.Fprintf(os.Stdout, "repo: %s\ncount: %d\n", out.Repo, out.Count)
+		fmt.Fprintf(os.Stdout, "manifest: %s\n", out.ManifestPath)
 		for _, agent := range out.Agents {
 			fmt.Fprintf(os.Stdout, "agent%d: worktree=%s home=%s state=%s\n", agent.Index, agent.HostWorktree, agent.HostHome, agent.StateRoot)
 		}
@@ -1018,6 +1155,13 @@ func handleExec(ctx *cmdregistry.Context) error {
 	if parsed.repoCheck != "" {
 		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	parsed.opts.BaseBranch = parsed.baseBranch
+	parsed.opts.BranchPrefix = parsed.branchPrefix
+	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -1054,6 +1198,13 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	parsed.opts.BaseBranch = parsed.baseBranch
+	parsed.opts.BranchPrefix = parsed.branchPrefix
+	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -1123,6 +1274,10 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 	if repo == "" {
 		repo = "ouroboros-ide"
 	}
+	parsed.opts.Repo = repo
+	parsed.opts.BaseBranch = parsed.baseBranch
+	parsed.opts.BranchPrefix = parsed.branchPrefix
+	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
 	repoChecks, err := repoChecksFor(ctx, parsed)
 	if err != nil {
 		return err

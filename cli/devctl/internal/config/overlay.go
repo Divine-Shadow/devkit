@@ -62,6 +62,13 @@ type Readiness struct {
 	RepoChecks []RepoCheck `yaml:"repo_checks"`
 }
 
+type Native struct {
+	WorktreeRoot          string `yaml:"worktree_root"`
+	StateRoot             string `yaml:"state_root"`
+	WorktreeContainerRoot string `yaml:"worktree_container_root"`
+	StateContainerRoot    string `yaml:"state_container_root"`
+}
+
 type OverlayConfig struct {
 	Workspace string            `yaml:"workspace"`
 	Env       map[string]string `yaml:"env"`
@@ -71,6 +78,7 @@ type OverlayConfig struct {
 	Runtime   Runtime           `yaml:"runtime"`
 	Broker    Broker            `yaml:"broker"`
 	Readiness Readiness         `yaml:"readiness"`
+	Native    Native            `yaml:"native"`
 	// Default service name for this overlay (e.g., dev-agent, frontend)
 	Service string `yaml:"service"`
 	// Optional HTTPS ingress configuration for this overlay.

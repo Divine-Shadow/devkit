@@ -23,6 +23,11 @@ broker:
     - postgres:latest
   allow_pulls: true
   log_level: info
+native:
+  worktree_root: ../agent-worktrees
+  state_root: ../.devkit/native-agents
+  worktree_container_root: /worktrees
+  state_container_root: /agent-state
 ingress:
   kind: caddy
   routes:

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"devkit/cli/devctl/internal/compose"
-	pth "devkit/cli/devctl/internal/paths"
 	"devkit/cli/devctl/internal/runtime/agent"
 )
 
@@ -36,35 +35,43 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
-	Agent              agent.Spec        `json:"agent"`
-	DevkitHostRoot     string            `json:"devkit_host_root"`
-	DevkitSandboxRoot  string            `json:"devkit_sandbox_root"`
-	Flake              string            `json:"flake"`
-	Launcher           string            `json:"launcher"`
-	LauncherArgs       []string          `json:"launcher_args"`
-	Binds              []Bind            `json:"binds"`
-	Env                map[string]string `json:"env"`
-	Proxy              ProxyConfig       `json:"proxy"`
-	DNS                DNSConfig         `json:"dns"`
-	BrokerEndpoint     string            `json:"broker_endpoint"`
-	DirectDockerSocket bool              `json:"direct_docker_socket"`
-	ResourceLimits     ResourceLimits    `json:"resource_limits"`
-	Notes              []string          `json:"notes,omitempty"`
+	Agent               agent.Spec        `json:"agent"`
+	DevkitHostRoot      string            `json:"devkit_host_root"`
+	DevkitSandboxRoot   string            `json:"devkit_sandbox_root"`
+	HostWorktreeRoot    string            `json:"host_worktree_root"`
+	HostStateRoot       string            `json:"host_state_root"`
+	SandboxWorktreeRoot string            `json:"sandbox_worktree_root"`
+	SandboxStateRoot    string            `json:"sandbox_state_root"`
+	Flake               string            `json:"flake"`
+	Launcher            string            `json:"launcher"`
+	LauncherArgs        []string          `json:"launcher_args"`
+	Binds               []Bind            `json:"binds"`
+	Env                 map[string]string `json:"env"`
+	Proxy               ProxyConfig       `json:"proxy"`
+	DNS                 DNSConfig         `json:"dns"`
+	BrokerEndpoint      string            `json:"broker_endpoint"`
+	DirectDockerSocket  bool              `json:"direct_docker_socket"`
+	ResourceLimits      ResourceLimits    `json:"resource_limits"`
+	Notes               []string          `json:"notes,omitempty"`
 }
 
 type BuildOptions struct {
-	Paths             compose.Paths
-	Project           string
-	Index             int
-	Repo              string
-	Flake             string
-	Launcher          string
-	WorktreeRoot      string
-	StateRoot         string
-	BrokerEndpoint    string
-	Proxy             string
-	DNSResolvConf     string
-	DedicatedWorktree bool
+	Paths                 compose.Paths
+	Project               string
+	Index                 int
+	Repo                  string
+	Flake                 string
+	Launcher              string
+	WorktreeRoot          string
+	StateRoot             string
+	WorktreeContainerRoot string
+	StateContainerRoot    string
+	BaseBranch            string
+	BranchPrefix          string
+	BrokerEndpoint        string
+	Proxy                 string
+	DNSResolvConf         string
+	DedicatedWorktree     bool
 }
 
 func BuildDevAll(opts BuildOptions) (Plan, error) {
@@ -83,30 +90,19 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	if repo == "" {
 		repo = "ouroboros-ide"
 	}
-	devRoot := filepath.Clean(filepath.Join(opts.Paths.Root, ".."))
-	worktreeRoot := strings.TrimSpace(opts.WorktreeRoot)
-	if worktreeRoot == "" {
-		worktreeRoot = filepath.Join(devRoot, pth.AgentWorktreesDir)
-	}
-	hostWorktree := filepath.Join(devRoot, repo)
-	if index > 1 || opts.DedicatedWorktree {
-		hostWorktree = filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index), repo)
-	}
-	hostHome := filepath.Join(hostWorktree, fmt.Sprintf(".devhome-agent%d", index))
-	if index > 1 || opts.DedicatedWorktree {
-		hostHome = filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index), fmt.Sprintf(".devhome-agent%d", index))
-	}
-
-	sandboxWorktree := pth.AgentRepoPath(project, fmt.Sprintf("%d", index), repo)
-	sandboxHome := pth.AgentHomePath(project, fmt.Sprintf("%d", index), repo)
-	if opts.DedicatedWorktree {
-		agentDir := fmt.Sprintf("agent%d", index)
-		sandboxWorktree = filepath.Join("/workspaces/dev", pth.AgentWorktreesDir, agentDir, repo)
-		sandboxHome = filepath.Join("/workspaces/dev", pth.AgentWorktreesDir, agentDir, fmt.Sprintf(".devhome-agent%d", index))
-	}
-	stateRoot := strings.TrimSpace(opts.StateRoot)
-	if stateRoot == "" {
-		stateRoot = filepath.Join(devRoot, ".devkit", "native-agents", fmt.Sprintf("%s-agent%d", project, index))
+	paths, err := agent.ResolvePaths(agent.PathConfig{
+		DevkitRoot:            opts.Paths.Root,
+		Project:               project,
+		Repo:                  repo,
+		Index:                 index,
+		WorktreeRoot:          opts.WorktreeRoot,
+		StateRoot:             opts.StateRoot,
+		WorktreeContainerRoot: opts.WorktreeContainerRoot,
+		StateContainerRoot:    opts.StateContainerRoot,
+		DedicatedWorktree:     true,
+	})
+	if err != nil {
+		return Plan{}, err
 	}
 	flake := strings.TrimSpace(opts.Flake)
 	if flake == "" {
@@ -126,16 +122,16 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	}
 	resolvConf := strings.TrimSpace(opts.DNSResolvConf)
 	if resolvConf == "" {
-		resolvConf = filepath.Join(stateRoot, "resolv.conf")
+		resolvConf = filepath.Join(paths.HostAgentStateRoot, "resolv.conf")
 	}
 
 	env := map[string]string{
-		"HOME":                         sandboxHome,
-		"CODEX_HOME":                   filepath.Join(sandboxHome, ".codex"),
-		"CODEX_ROLLOUT_DIR":            filepath.Join(sandboxHome, ".codex", "rollouts"),
-		"XDG_CACHE_HOME":               filepath.Join(sandboxHome, ".cache"),
-		"XDG_CONFIG_HOME":              filepath.Join(sandboxHome, ".config"),
-		"SBT_GLOBAL_BASE":              filepath.Join(sandboxHome, ".sbt"),
+		"HOME":                         paths.SandboxHome,
+		"CODEX_HOME":                   filepath.Join(paths.SandboxHome, ".codex"),
+		"CODEX_ROLLOUT_DIR":            filepath.Join(paths.SandboxHome, ".codex", "rollouts"),
+		"XDG_CACHE_HOME":               filepath.Join(paths.SandboxHome, ".cache"),
+		"XDG_CONFIG_HOME":              filepath.Join(paths.SandboxHome, ".config"),
+		"SBT_GLOBAL_BASE":              filepath.Join(paths.SandboxHome, ".sbt"),
 		"HTTP_PROXY":                   proxyURL,
 		"HTTPS_PROXY":                  proxyURL,
 		"NO_PROXY":                     "localhost,127.0.0.1",
@@ -151,20 +147,25 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 				Index:   index,
 				Repo:    repo,
 			},
-			HostWorktree:    hostWorktree,
-			SandboxWorktree: sandboxWorktree,
-			HostHome:        hostHome,
-			SandboxHome:     sandboxHome,
-			StateRoot:       stateRoot,
+			HostWorktree:     paths.HostWorktree,
+			SandboxWorktree:  paths.SandboxWorktree,
+			HostHome:         paths.HostHome,
+			SandboxHome:      paths.SandboxHome,
+			StateRoot:        paths.HostAgentStateRoot,
+			SandboxStateRoot: paths.SandboxAgentStateRoot,
 		},
-		DevkitHostRoot:    opts.Paths.Root,
-		DevkitSandboxRoot: filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
-		Flake:             flake,
-		Launcher:          launcher,
+		DevkitHostRoot:      opts.Paths.Root,
+		DevkitSandboxRoot:   filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
+		HostWorktreeRoot:    paths.HostWorktreeRoot,
+		HostStateRoot:       paths.HostStateRoot,
+		SandboxWorktreeRoot: paths.SandboxWorktreeRoot,
+		SandboxStateRoot:    paths.SandboxStateRoot,
+		Flake:               flake,
+		Launcher:            launcher,
 		Binds: []Bind{
-			{Source: devRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
-			{Source: worktreeRoot, Target: "/worktrees", Mode: "rw", Required: false},
-			{Source: hostHome, Target: sandboxHome, Mode: "rw", Required: true},
+			{Source: paths.DevRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
+			{Source: paths.HostWorktreeRoot, Target: paths.SandboxWorktreeRoot, Mode: "rw", Required: false},
+			{Source: paths.HostStateRoot, Target: paths.SandboxStateRoot, Mode: "rw", Required: true},
 			{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
 			{Source: broker, Target: broker, Mode: "rw", Required: false},
 			{Source: resolvConf, Target: "/etc/resolv.conf", Mode: "ro", Required: false},

@@ -7,6 +7,8 @@ import (
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/compose"
+	"devkit/cli/devctl/internal/config"
+	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 )
 
 func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
@@ -107,6 +109,54 @@ func TestParseLifecycleArgs(t *testing.T) {
 	}
 	if !parsed.skipRepoChecks || parsed.format != "json" {
 		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestLifecyclePlanOptionsUsesOverlayNativeRoots(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		Native: config.Native{
+			WorktreeRoot:          "../native-worktrees",
+			StateRoot:             "../native-state",
+			WorktreeContainerRoot: "/native-worktrees",
+			StateContainerRoot:    "/native-state",
+		},
+	}, lifecycleArgs{}, "ouroboros-ide", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.WorktreeRoot != "/home/me/dev/native-worktrees" {
+		t.Fatalf("worktree root = %q", opts.WorktreeRoot)
+	}
+	if opts.StateRoot != "/home/me/dev/native-state" {
+		t.Fatalf("state root = %q", opts.StateRoot)
+	}
+	if opts.WorktreeContainerRoot != "/native-worktrees" || opts.StateContainerRoot != "/native-state" {
+		t.Fatalf("container roots = %q %q", opts.WorktreeContainerRoot, opts.StateContainerRoot)
+	}
+}
+
+func TestLifecyclePlanOptionsCLIOverridesOverlayNativeRoots(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		Native: config.Native{
+			WorktreeRoot: "../native-worktrees",
+			StateRoot:    "../native-state",
+		},
+	}, lifecycleArgs{
+		worktreeRoot:            "/tmp/wt",
+		agentStateRoot:          "/tmp/state",
+		worktreeContainerRoot:   "/wt",
+		agentStateContainerRoot: "/state",
+	}, "ouroboros-ide", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.WorktreeRoot != "/tmp/wt" || opts.StateRoot != "/tmp/state" {
+		t.Fatalf("host roots = %q %q", opts.WorktreeRoot, opts.StateRoot)
+	}
+	if opts.WorktreeContainerRoot != "/wt" || opts.StateContainerRoot != "/state" {
+		t.Fatalf("container roots = %q %q", opts.WorktreeContainerRoot, opts.StateContainerRoot)
 	}
 }
 

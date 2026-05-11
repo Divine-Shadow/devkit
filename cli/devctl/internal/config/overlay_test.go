@@ -74,7 +74,12 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"readiness:\n" +
 		"  repo_checks:\n" +
 		"    - name: typecheck\n" +
-		"      command: npm test\n"
+		"      command: npm test\n" +
+		"native:\n" +
+		"  worktree_root: ../agent-worktrees\n" +
+		"  state_root: ../.devkit/native-agents\n" +
+		"  worktree_container_root: /worktrees\n" +
+		"  state_container_root: /agent-state\n"
 	if err := os.WriteFile(filepath.Join(over, "devkit.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +98,12 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if len(cfg.Readiness.RepoChecks) != 1 || cfg.Readiness.RepoChecks[0].Name != "typecheck" || cfg.Readiness.RepoChecks[0].Command != "npm test" {
 		t.Fatalf("repo checks = %#v", cfg.Readiness.RepoChecks)
+	}
+	if cfg.Native.WorktreeRoot != "../agent-worktrees" || cfg.Native.StateRoot != "../.devkit/native-agents" {
+		t.Fatalf("native roots = %#v", cfg.Native)
+	}
+	if cfg.Native.WorktreeContainerRoot != "/worktrees" || cfg.Native.StateContainerRoot != "/agent-state" {
+		t.Fatalf("native container roots = %#v", cfg.Native)
 	}
 }
 

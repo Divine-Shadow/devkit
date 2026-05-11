@@ -42,10 +42,11 @@ func itoa(n int) string {
 // Spec contains the filesystem anchors that make an agent durable across
 // launcher implementations.
 type Spec struct {
-	ID              ID     `json:"id"`
-	HostWorktree    string `json:"host_worktree"`
-	SandboxWorktree string `json:"sandbox_worktree"`
-	HostHome        string `json:"host_home"`
-	SandboxHome     string `json:"sandbox_home"`
-	StateRoot       string `json:"state_root"`
+	ID               ID     `json:"id"`
+	HostWorktree     string `json:"host_worktree"`
+	SandboxWorktree  string `json:"sandbox_worktree"`
+	HostHome         string `json:"host_home"`
+	SandboxHome      string `json:"sandbox_home"`
+	StateRoot        string `json:"state_root"`
+	SandboxStateRoot string `json:"sandbox_state_root"`
 }

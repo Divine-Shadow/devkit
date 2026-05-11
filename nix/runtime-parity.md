@@ -32,6 +32,10 @@ Compose retirement work. It follows
 - Top-level `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`,
   `attach`, and `ensure-ready` target the native runtime for `dev-all`;
   `devctl compose ...` is the explicit legacy Docker Compose path.
+- Native agent plans now use `/worktrees/agentN/<repo>` for every agent,
+  including agent 1, and keep HOME/Codex/XDG state under `/agent-state`.
+  `native prepare` and lifecycle `up` write a JSON manifest under the native
+  host state root for downstream tmux/layout/session orchestration.
 
 ## Verified Commands
 
@@ -59,6 +63,8 @@ kit/scripts/devkit -p dev-all native capacity --repo devkit --count 1 --flake .#
 kit/scripts/devkit -p dev-all --dry-run scale 2 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock --broker-state-root /tmp/devkit-scale-state --skip-ready --format json
 kit/scripts/devkit -p dev-all --dry-run exec 1 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock -- echo hi
 kit/scripts/devkit -p dev-all --dry-run compose exec --index 1 dev-agent echo hi
+kit/scripts/devkit -p dev-all native plan --repo ouroboros-ide --index 1 --format json
+kit/scripts/devkit -p dev-all --dry-run native prepare --repo ouroboros-ide --count 2 --format json
 ```
 
 Broker smoke command, run with the broker process left open in one terminal and

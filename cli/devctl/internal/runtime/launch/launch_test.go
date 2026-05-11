@@ -28,6 +28,9 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir host worktree: %v", err)
+	}
 	if err := os.MkdirAll(p.Agent.HostHome, 0o700); err != nil {
 		t.Fatalf("mkdir host home: %v", err)
 	}
@@ -52,7 +55,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 			t.Fatalf("command missing %q:\n%s", want, joined)
 		}
 	}
-	if len(cmd.Args) < 1 || !strings.Contains(cmd.Args[len(cmd.Args)-1], "cd '/workspaces/dev/ouroboros-ide' && exec 'git' '--version'") {
+	if len(cmd.Args) < 1 || !strings.Contains(cmd.Args[len(cmd.Args)-1], "cd '/worktrees/agent1/ouroboros-ide' && exec 'git' '--version'") {
 		t.Fatalf("launch script did not cd and exec command:\n%#v", cmd.Args)
 	}
 	if strings.Contains(joined, "/var/run/docker.sock") {

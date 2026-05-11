@@ -25,11 +25,14 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Agent.HostWorktree != "/home/bayesartre/dev/agent-worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
 	}
-	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide" {
+	if p.Agent.SandboxWorktree != "/worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/home/bayesartre/dev/agent-worktrees/agent2/.devhome-agent2" {
+	if p.Agent.HostHome != "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent2/home" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
+	}
+	if p.Agent.SandboxHome != "/agent-state/dev-all-agent2/home" {
+		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
 	}
 	if p.Env["CODEX_HOME"] != filepath.Join(p.Agent.SandboxHome, ".codex") {
 		t.Fatalf("CODEX_HOME = %q", p.Env["CODEX_HOME"])
@@ -69,11 +72,67 @@ func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	if p.Agent.HostWorktree != "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
 	}
-	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" {
+	if p.Agent.SandboxWorktree != "/worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/home/bayesartre/dev/agent-worktrees/agent1/.devhome-agent1" {
+	if p.Agent.HostHome != "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent1/home" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
+	}
+}
+
+func TestBuildDevAllUsesConfiguredRoots(t *testing.T) {
+	p, err := BuildDevAll(BuildOptions{
+		Paths:                 compose.Paths{Root: "/repo/devkit"},
+		Project:               "dev-all",
+		Index:                 2,
+		Repo:                  "devkit",
+		WorktreeRoot:          "/tmp/worktrees",
+		StateRoot:             "/tmp/state",
+		WorktreeContainerRoot: "/native-worktrees",
+		StateContainerRoot:    "/native-state",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if p.Agent.HostWorktree != "/tmp/worktrees/agent2/devkit" {
+		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
+	}
+	if p.Agent.StateRoot != "/tmp/state/dev-all-agent2" {
+		t.Fatalf("state root = %q", p.Agent.StateRoot)
+	}
+	if p.Agent.SandboxWorktree != "/native-worktrees/agent2/devkit" {
+		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
+	}
+	if p.Agent.SandboxHome != "/native-state/dev-all-agent2/home" {
+		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
+	}
+}
+
+func TestBuildManifestIncludesEveryAgent(t *testing.T) {
+	manifest, err := BuildManifest(BuildOptions{
+		Paths:        compose.Paths{Root: "/repo/devkit"},
+		Project:      "dev-all",
+		Repo:         "devkit",
+		BaseBranch:   "main",
+		BranchPrefix: "native-agent",
+	}, 2)
+	if err != nil {
+		t.Fatalf("BuildManifest error: %v", err)
+	}
+	if manifest.Runtime != "native" || manifest.Count != 2 {
+		t.Fatalf("manifest = %#v", manifest)
+	}
+	if len(manifest.Agents) != 2 {
+		t.Fatalf("agents = %#v", manifest.Agents)
+	}
+	if manifest.Agents[0].HostWorktree != "/repo/agent-worktrees/agent1/devkit" {
+		t.Fatalf("agent1 worktree = %q", manifest.Agents[0].HostWorktree)
+	}
+	if manifest.Agents[0].StateRoot == manifest.Agents[1].StateRoot {
+		t.Fatalf("state roots should be distinct: %#v", manifest.Agents)
+	}
+	if manifest.BaseBranch != "main" || manifest.BranchPrefix != "native-agent" {
+		t.Fatalf("branch metadata = %#v", manifest)
 	}
 }
 
