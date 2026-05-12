@@ -23,11 +23,11 @@ Dev Kit — Base Kit Details
   - Use `--compose-project <name>` to target a non-default compose project (for example, when the overlay is running under a custom `-p`).
 - Or call the binary directly after build: `devkit/kit/bin/devctl -p <project> ...`.
   - Monorepo overlay: use `-p dev-all` to mount the entire dev root at `/workspaces/dev`.
-    - Change directory inside agent: `scripts/devctl -p dev-all exec-cd 1 ouroboros-ide bash`
-    - Or attach into a specific repo: `scripts/devctl -p dev-all attach-cd 1 dumb-onion-hax`
-    - Sync tmux windows to agent count: `scripts/devctl -p dev-all tmux-sync --count 3` (optionally `--service dev-agent`)
-    - Add a mixed window to same tmux: `scripts/devctl -p dev-all tmux-add-cd 2 dumb-onion-hax --session devkit:mixed --name doh-2` (optionally `--service dev-agent`)
-    - Apply a YAML layout: `scripts/devctl -p dev-all tmux-apply-layout --file tmux.yaml [--session NAME]`
+    - Change directory inside agent: `kit/scripts/devkit -p dev-all exec-cd 1 ouroboros-ide bash`
+    - Or attach into a specific repo: `kit/scripts/devkit -p dev-all attach-cd 1 dumb-onion-hax`
+    - Sync tmux windows to agent count: `kit/scripts/devkit -p dev-all tmux-sync --count 3`
+    - Add a mixed window to same tmux: `kit/scripts/devkit -p dev-all tmux-add-cd 2 dumb-onion-hax --session devkit:mixed --name doh-2`
+    - Apply a YAML layout: `kit/scripts/devkit -p dev-all tmux-apply-layout --file tmux.yaml [--session NAME]`
       - Layout example:
         session: devkit:mixed
         windows:
@@ -40,7 +40,7 @@ Dev Kit — Base Kit Details
             name: doh-2
             service: dev-agent
     - Orchestrate overlays + tmux from one file:
-      - `scripts/devctl layout-apply --file orchestration.yaml`
+      - `kit/scripts/devkit layout-apply --file orchestration.yaml`
       - `layout-apply` runs overlay `hooks.warm` automatically after startup.
       - See devkit/README.md for a full example.
   - Isolation plan: see `isolation.md` for worktrees + per‑agent HOME design.
@@ -53,7 +53,7 @@ Dev Kit — Base Kit Details
 - Native runtime smoke: `make native-runtime-smoke` from the repo root. On a
   minimal Nix shell, use
   `nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make native-runtime-smoke`.
-- Dry-run preview: append `--dry-run` to print `docker`/`tmux` commands without executing.
+- Dry-run preview: append `--dry-run` to print native bubblewrap/devkit commands for `dev-all` or Docker Compose commands for legacy overlays without executing.
   - Layout only: `devkit/kit/scripts/devkit --dry-run tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
   - Orchestration: `devkit/kit/scripts/devkit --dry-run layout-apply --file devkit/kit/examples/orchestration.yaml`
   - Generate orchestration from running containers: `devkit/kit/scripts/devkit layout-generate --service dev-agent --output /tmp/orchestration.yaml`
@@ -73,11 +73,11 @@ Dev Kit — Base Kit Details
 
 ## Overlay configuration keys
 
-- `workspace`: path to mount at `/workspace`. Relative paths resolve from the overlay directory and are cleaned to an absolute path before compose runs (`WORKSPACE_DIR`).
+- `workspace`: legacy Compose workspace mount path. Relative paths resolve from the overlay directory and are cleaned to an absolute path before Compose runs (`WORKSPACE_DIR`).
 - `env`: key/value pairs exported on the host unless already set, useful for defaults like `AWS_PROFILE` or feature flags shared across commands.
 - `env_files`: list of dotenv-style files (relative to the overlay directory) whose contents are exported unless the keys already exist in the host environment.
-- `service`: default compose service for CLI commands (`dev-agent` fallback).
-- `hooks.warm` / `hooks.maintain`: optional commands executed inside the container (`devkit warm|maintain`).
+- `service`: default legacy Compose service for non-`dev-all` CLI commands (`dev-agent` fallback).
+- `hooks.warm` / `hooks.maintain`: optional commands executed inside the runtime (`devkit warm|maintain`); for `dev-all`, they run through native `exec`.
   - Tip: the standard warm hook now installs a `python` shim backed by `python3`; reuse the pattern in new overlays so legacy scripts keep working.
 - `defaults.*`: overlay-specific defaults for agent counts and worktree automation (see `overlays/dev-all/devkit.yaml`).
 
@@ -87,7 +87,9 @@ Developers can maintain per-host defaults outside the repo via `~/.config/devkit
 
 - `overlay_paths`: additional directories the CLI searches (in order) when resolving overlays. Relative entries resolve from the config file directory (fallback to the repo root).
 - `env`: environment variables exported before commands run (skipped when already set in the host shell).
-- `cli.download_url`: URL to a prebuilt `devctl` binary. The wrapper scripts fall back to downloading this when `make` is unavailable.
+The canonical `kit/scripts/devkit` wrapper never downloads, builds, or falls
+back to another executable. If `kit/bin/devctl` is missing or not executable,
+build it explicitly with `make -C cli/devctl build`.
 
 Further reading
  - Mixed overlays + frontend notes: overlay-front-end-notes.md
@@ -159,6 +161,7 @@ Auto-readiness (`dev-all`):
 - Native `status` is lightweight by default and does not run repo checks; use `devctl -p dev-all status --ready` or `ensure-ready` for readiness/capacity checks.
 - Native `ensure-ready` starts or reuses the managed broker before checking runtime/repo readiness.
 - Runtime readiness controls capacity; repo readiness checks are visible and retryable without hiding launchable native agents.
+- Top-level `ensure-ready` and lifecycle readiness fail when repo checks fail unless `--skip-repo-checks` or `--skip-ready` was requested.
 - Manual invocation: `devctl -p dev-all ensure-ready [--count N] [--repo ouroboros-ide]`.
 - Escape hatch: append `--skip-ready` to lifecycle commands, or `--skip-broker` to `ensure-ready` when you intentionally want current-state-only broker checks.
 - Legacy Compose readiness remains available only for non-`dev-all` overlays.

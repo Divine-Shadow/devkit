@@ -36,9 +36,17 @@ However, new design should not preserve Compose abstractions merely to maintain
 compatibility. A git revert is acceptable if the system needs to be rebuilt, but
 we should avoid needlessly killing active sessions during the transition.
 
-## Repo State Observations
+## Historical Repo State Observations
 
-Devkit is currently Compose-first:
+Update on 2026-05-12: these observations describe the starting state that
+motivated the migration. The `dev-all` path now has a Nix flake shell, native
+bubblewrap plans, managed broker lifecycle, native top-level lifecycle/exec
+commands, runtime/repo readiness checks, app-level Spago/Netlify/Playwright
+evidence, fresh linked-source-worktree support, and native tmux/layout routing.
+The remaining Compose code is intentionally legacy for non-`dev-all` overlays
+unless called out in `nix/compose-surface-inventory.md`.
+
+At the start of the migration, devkit was Compose-first:
 
 - `cli/devctl/internal/compose/builder.go` builds Docker Compose file arguments
   from base files, profiles, overlays, and generated ingress fragments.
@@ -66,17 +74,18 @@ Useful target-state primitives already exist:
 - Runtime integration tests are organized under `cli/devctl/integration/runtime`
   and `testing/runtime`, but they currently depend on Docker/Compose.
 
-Important gaps:
+Important starting gaps and current disposition:
 
-- There is no Nix runtime scaffold yet: no flake, NixOS module, WSL service
-  declaration, sandbox launcher, or native runtime package.
-- `devkit.yaml` has a `runtime` block, but it is image/version metadata rather
-  than a launch contract.
-- Readiness is mixed with repository warming. The `dev-all` warm hook can run
-  npm installs, Playwright browser installs, and SBT work, so capacity
-  restoration can still fail due to repository/tooling state.
-- Host-managed equivalents for DNS, proxy, ingress, and broker services have
-  not been introduced.
+- Nix runtime scaffold: closed for `dev-all` with root `flake.nix`,
+  `devctl native plan|exec`, and bubblewrap launch preparation.
+- Runtime metadata: closed for `dev-all`; `overlays/dev-all/devkit.yaml`
+  declares `runtime.flake: .#dev-all` and native state/worktree roots.
+- Readiness split: closed for `dev-all`; runtime capacity is separate
+  from repo readiness, while top-level `ensure-ready` and non-skipped lifecycle
+  readiness still fail on repo-check failures so app readiness is not hidden.
+- Host-managed services: broker is implemented and verified; proxy/DNS policy is
+  represented in native plans. Ingress/operator-attention remains the main
+  service evidence area before broader Compose retirement.
 
 ## Work Layers
 

@@ -63,6 +63,22 @@ func checkBranchAndUpstream(t *testing.T, path, wantBranch string) {
 	}
 }
 
+func checkGitdirForm(t *testing.T, path string, wantAbs bool) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(path, ".git"))
+	if err != nil {
+		t.Fatalf("read .git: %v", err)
+	}
+	content := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(content, "gitdir:") {
+		t.Fatalf("unexpected .git content: %q", content)
+	}
+	gitdir := strings.TrimSpace(strings.TrimPrefix(content, "gitdir:"))
+	if filepath.IsAbs(gitdir) != wantAbs {
+		t.Fatalf("%s: gitdir absolute = %v, want %v (%q)", path, filepath.IsAbs(gitdir), wantAbs, content)
+	}
+}
+
 // This test performs a real host-side worktree setup across two repos with two agents each
 // (agent1 in-place, agent2 as worktree), verifying branch names and upstreams.
 func TestSetup_TwoRepos_TwoAgents(t *testing.T) {
@@ -94,6 +110,7 @@ func TestSetup_TwoRepos_TwoAgents(t *testing.T) {
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "dumb-onion-hax"), "agent2")
 	checkBranchAndUpstream(t, filepath.Join(devRoot, "ouroboros-ide"), "agent1")
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), false)
 }
 
 func TestSetup_RemovesStaleWorktreeDirectories(t *testing.T) {
@@ -156,9 +173,47 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), true)
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), true)
 	if got := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 		t.Fatalf("primary checkout branch changed to %s", got)
 	}
+}
+
+func TestSetupNative_FromLinkedSourceWorktreeUsesAbsoluteGitdir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	primaryDevRoot := filepath.Join(root, "primary-dev")
+	sourceDevRoot := filepath.Join(root, "dev")
+	if err := os.MkdirAll(filepath.Join(sourceDevRoot, "devkit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(primaryDevRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	devkitRoot := filepath.Join(sourceDevRoot, "devkit")
+	makeRepoWithBare(t, root, primaryDevRoot, "ouroboros-ide")
+
+	sourceRepo := filepath.Join(sourceDevRoot, "ouroboros-ide-nix-readiness")
+	mustRun(t, "git", "-C", filepath.Join(primaryDevRoot, "ouroboros-ide"), "worktree", "add", "--detach", sourceRepo, "origin/main")
+
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide-nix-readiness",
+		Count:        1,
+		BaseBranch:   "main",
+		BranchPrefix: "nixready-agent",
+	}); err != nil {
+		t.Fatalf("native setup from source worktree failed: %v", err)
+	}
+
+	agentWorktree := filepath.Join(sourceDevRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide-nix-readiness")
+	checkBranchAndUpstream(t, agentWorktree, "nixready-agent1")
+	checkGitdirForm(t, agentWorktree, true)
+	checkGitdirForm(t, sourceRepo, true)
 }
 
 func TestSetupNative_ReusesStandaloneAgentCheckout(t *testing.T) {

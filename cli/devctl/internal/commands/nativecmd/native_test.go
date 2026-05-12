@@ -11,7 +11,9 @@ import (
 	"devkit/cli/devctl/internal/compose"
 	"devkit/cli/devctl/internal/config"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
+	"devkit/cli/devctl/internal/runtime/capacity"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/runtime/readiness"
 )
 
 func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
@@ -216,6 +218,30 @@ func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
 	}
 }
 
+func TestLifecycleBrokerConfigDerivesStateRootForExplicitSocket(t *testing.T) {
+	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	got := lifecycleBrokerConfig(ctx, config.OverlayConfig{}, lifecycleArgs{
+		brokerSocket: "/tmp/devkit-smoke/broker.sock",
+	})
+	if got.Socket != "/tmp/devkit-smoke/broker.sock" {
+		t.Fatalf("socket = %q", got.Socket)
+	}
+	if got.StateRoot != "/tmp/devkit-smoke" {
+		t.Fatalf("state root = %q", got.StateRoot)
+	}
+}
+
+func TestLifecycleBrokerConfigHonorsExplicitStateRootWithSocket(t *testing.T) {
+	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	got := lifecycleBrokerConfig(ctx, config.OverlayConfig{}, lifecycleArgs{
+		brokerSocket:    "/tmp/devkit-smoke/broker.sock",
+		brokerStateRoot: "/tmp/devkit-state",
+	})
+	if got.StateRoot != "/tmp/devkit-state" {
+		t.Fatalf("state root = %q", got.StateRoot)
+	}
+}
+
 func TestApplyNativeConfigDefaultsUsesOverlayBrokerSocket(t *testing.T) {
 	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
 	opts := nativeplan.BuildOptions{}
@@ -295,6 +321,59 @@ func TestLifecycleEnsureReadyBrokerPropagatesSocketToPlanOptions(t *testing.T) {
 	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{}, lifecycleArgs{}, "ouroboros-ide", brokerCfg)
 	if opts.BrokerEndpoint != "/tmp/running.sock" {
 		t.Fatalf("broker endpoint = %q", opts.BrokerEndpoint)
+	}
+}
+
+func TestLifecycleBrokerConfigWithStatusSocketPreservesEmptyStatusSocket(t *testing.T) {
+	initial := runtimebroker.Config{Socket: "/tmp/configured.sock"}
+	got := lifecycleBrokerConfigWithStatusSocket(initial, runtimebroker.Status{Running: true})
+	if got.Socket != initial.Socket {
+		t.Fatalf("socket = %q", got.Socket)
+	}
+}
+
+func TestLifecycleBrokerConfigWithStatusSocketUsesRunningSocket(t *testing.T) {
+	got := lifecycleBrokerConfigWithStatusSocket(
+		runtimebroker.Config{Socket: "/tmp/configured.sock"},
+		runtimebroker.Status{Running: true, Socket: "/tmp/running.sock"},
+	)
+	if got.Socket != "/tmp/running.sock" {
+		t.Fatalf("socket = %q", got.Socket)
+	}
+}
+
+func TestLifecycleReadinessErrorRequiresRepoReadinessByDefault(t *testing.T) {
+	err := lifecycleReadinessError(capacity.Summary{
+		Total:             1,
+		RuntimeReady:      1,
+		CapacityAvailable: 1,
+		RepoReady:         0,
+		Agents: []capacity.Agent{{
+			Index:             1,
+			RuntimeReady:      true,
+			CapacityAvailable: true,
+			RepoReady:         false,
+			Checks: []readiness.Check{{
+				Name:  "frontend-netlify-dev-server",
+				Phase: readiness.PhaseRepo,
+				OK:    false,
+			}},
+		}},
+	}, lifecycleArgs{})
+	if err == nil || err.Error() != "native repo readiness is not fully available" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLifecycleReadinessErrorAllowsSkippedRepoChecks(t *testing.T) {
+	err := lifecycleReadinessError(capacity.Summary{
+		Total:             1,
+		RuntimeReady:      1,
+		CapacityAvailable: 1,
+		RepoReady:         0,
+	}, lifecycleArgs{skipRepoChecks: true})
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
 }
 

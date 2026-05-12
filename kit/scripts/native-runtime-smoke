@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
 DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
 DEVKIT_BIN="$DEVKIT_ROOT/kit/bin/devctl"
 
@@ -83,6 +84,13 @@ grep_required "Docker Compose is retired for dev-all" "$smoke_dir/dev-all-compos
 if grep -q "docker compose" "$smoke_dir/dev-all-compose.err" "$smoke_dir/dev-all-compose.out"; then
   fail "dev-all compose rejection emitted a docker compose command"
 fi
+
+step "native plan git metadata binds"
+"$DEVKIT" -p dev-all native plan --repo "$REPO" --index 1 \
+  --broker-endpoint "$sock" --format json \
+  | tee "$smoke_dir/plan.json"
+grep_required '"target": "/workspaces/dev"' "$smoke_dir/plan.json"
+grep_required "\"target\": \"$DEV_ROOT\"" "$smoke_dir/plan.json"
 
 cat >"$smoke_dir/broker-policy.sh" <<'EOF'
 set -euo pipefail
@@ -196,6 +204,7 @@ grep_required "native-broker-policy-ok" "$smoke_dir/exec.txt"
 step "runtime-only readiness"
 "$DEVKIT" -p dev-all ensure-ready --repo "$REPO" --count 1 \
   --flake "$DEV_ALL_FLAKE" --broker-socket "$sock" \
+  --broker-state-root "$state" \
   --skip-repo-checks --format json \
   | tee "$smoke_dir/ensure-ready.json"
 grep_required '"capacity_available": 1' "$smoke_dir/ensure-ready.json"
@@ -214,7 +223,7 @@ grep_required '"capacity_available": 1' "$smoke_dir/capacity.json"
 
 step "Spago and Playwright"
 nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
-  "purs --version && spago --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
+  "purs --version && spago --version && deno --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
   | tee "$smoke_dir/dev-all-tools.txt"
 grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
 
@@ -229,9 +238,10 @@ fi
 
 step "Spago and Netlify"
 nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --command bash -lc \
-  "spago --version && netlify --version" \
+  "spago --version && netlify --version && deno --version" \
   | tee "$smoke_dir/static-tools.txt"
 grep_required "netlify-cli/" "$smoke_dir/static-tools.txt"
+grep_required "deno " "$smoke_dir/static-tools.txt"
 
 step "native down"
 "$DEVKIT" -p dev-all down --repo "$REPO" --count 1 \

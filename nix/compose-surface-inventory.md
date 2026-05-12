@@ -30,8 +30,14 @@ non-`dev-all` overlays until those overlays receive native replacements.
 | Legacy lifecycle helpers in `cli/devctl/main.go` | Legacy quarantine | Compose helpers remain for non-`dev-all`; `useLegacyTopLevelForProject` prevents dev-all fallback and layout guards reject dev-all mixed layouts. |
 | `layout-apply` and `tmux-apply-layout` | Native replacement / rejected for dev-all | Pure `dev-all` layouts use native tmux/window commands. Legacy layouts that explicitly reference `dev-all` are rejected. |
 | `tmux-sync`, `tmux-add-cd`, `wt-open --plain`, `worktrees-tmux` | Native replacement | `dev-all` commands build top-level native `devkit exec` invocations and no longer infer `dev-all` by Docker inspection or pass Compose project names. |
+| `wt-release`, worktree branch/status/sync helpers, repo config/push helpers | Native replacement / legacy quarantine | `dev-all` uses host native worktree roots and native exec where an agent shell is needed. Non-`dev-all` helpers remain legacy. |
 | `hosts` command | Rejected for dev-all | Container `/etc/hosts` mutation is Compose/container-specific. `dev-all` now fails before reading overlay config. |
+| `allow` and `preflight` | Legacy quarantine / runtime-neutral | Allowlist and host preflight helpers are not a `dev-all` Compose execution path. They still serve legacy proxy/DNS files used by non-`dev-all` Compose overlays. |
 | `hooks`, `warm`, `maintain`, `check-net`, `check-codex`, `check-sts` | Native replacement / legacy quarantine | `dev-all` goes through native exec. Non-`dev-all` can still use legacy Compose implementations. |
+| `verify`, `verify-all`, `image-matrix`, `layout-validate`, `layout-generate` | Native replacement / rejected for dev-all / legacy quarantine | `dev-all` verification routes through native checks or refuses Compose-only diagnostics. Image matrix and legacy layout generation remain for historical overlays. |
+| `tmux-bell-*` and tmux notification helpers | Runtime-neutral | These operate on local tmux state and are not Docker/Compose execution paths. |
+| Credential pool surfaces | Legacy quarantine | `kit/compose.pool.yml` remains non-`dev-all` legacy behavior. Native Codex auth seeding uses per-agent native HOME state instead of the Compose pool mount. |
+| Ingress/operator-attention metadata | Partial native evidence | `overlays/dev-all/devkit.yaml` carries route/listener metadata, but this slice does not yet prove host-managed ingress or operator-attention lifecycle. This is a retirement blocker for that surface only. |
 | `doctor-runtime` and other Compose-only diagnostics | Rejected for dev-all | These commands refuse `dev-all` and point users to native readiness/capacity. |
 | `overlays/dev-all/compose.override.yml` | Historical artifact | Kept as migration history/image pairing reference. The CLI no longer allows it to be executed through `-p dev-all compose`. |
 | `overlays/dev-all/devkit.yaml` runtime metadata | Native replacement | Declares `runtime.flake: .#dev-all` instead of `runtime.image`; the image reference survives only in the historical Compose file. |
@@ -43,16 +49,36 @@ non-`dev-all` overlays until those overlays receive native replacements.
 | Runtime tools: PureScript, Spago, Netlify, Playwright | Native replacement | Provided by the `dev-all` flake/devShell and verified by overlay readiness. Hooks do not install these tools or Playwright browsers at runtime. |
 | Repo-local shebangs such as `#!/usr/bin/env node` | Native replacement | Bubblewrap launches add `/usr/bin/env`, `/bin/sh`, and `/bin/bash` symlinks into the blank-root sandbox so lockfile-installed tools can execute. |
 
+## Readiness Matrix
+
+| Surface | `dev-all` status | Evidence | Retirement blocker |
+| --- | --- | --- | --- |
+| Wrapper/build | Native canonical | `kit/scripts/devkit`, native smoke | none |
+| Lifecycle | Native | `up/down/status/logs/scale` smokes | none |
+| Exec/attach | Native bubblewrap | native exec broker/socket smoke | none |
+| Readiness/capacity | Native split | full readiness plus `native capacity` split | heavyweight repo checks must stay explicit |
+| Spago/PureScript | Native/app readiness | flake tool pins plus frontend repo checks | none after green full readiness |
+| Netlify/dev server | Native/app readiness | `frontend-netlify-dev-server` check starts and curls `netlify dev` | none after green full readiness |
+| Playwright/browser | Native/app readiness | runtime and frontend Chromium checks | broader local-backend e2e remains optional app coverage |
+| Brokered OCI | Native broker | Redis denied, Postgres allowed | broader service policy only if new test dependencies are needed |
+| Tmux/layout/worktrees | Native for `dev-all` | dry-run/runtime parity list plus linked-source-worktree readiness | none for current `dev-all` paths |
+| Ingress/operator attention | Partial | config exists | host-managed smoke evidence missing |
+| Compose command namespace | Rejected for `dev-all` | smoke and unit tests | none |
+| Non-`dev-all` overlays | Legacy Compose | inventory only | native replacements not built |
+
 ## Verification Hooks
 
 - `cli/devctl/integration/native_defaults_dryrun_test.go` covers native
   top-level dispatch, non-`dev-all` legacy fallback, `dev-all compose`
   rejection, and legacy layout rejection.
+- `cli/devctl/internal/worktrees/worktrees_integration_test.go` covers native
+  dedicated worktree setup, absolute gitdir metadata, and the case where the
+  source repo is itself a linked Git worktree.
 - `cli/devctl/internal/commands/hosts/hosts_test.go` covers `dev-all` host
   mutation rejection.
 - `kit/scripts/native-runtime-smoke` checks the canonical wrapper failure mode,
-  `dev-all compose` rejection, broker policy, runtime-only readiness, and
-  PureScript/Spago/Netlify/Playwright availability.
+  `dev-all compose` rejection, native plan Git metadata binds, broker policy,
+  runtime-only readiness, and PureScript/Spago/Netlify/Playwright availability.
 - Full readiness is the final integration gate:
 
 ```bash

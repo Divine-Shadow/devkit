@@ -283,7 +283,10 @@
             pinnedGo
             pinnedMgbaHeadless
             pinnedNpmTools
-          ]) ++ [ pkgsPlaywright.playwright-test ];
+          ]) ++ [
+            pkgsPlaywright.deno
+            pkgsPlaywright.playwright-test
+          ];
 
           mkShell =
             name: packages: extraHook:
@@ -346,7 +349,10 @@
             purescript
             pinnedCodex
             pinnedNpmTools
-          ]) ++ [ pkgsPlaywright.playwright-test ]) ''
+          ]) ++ [
+            pkgsPlaywright.deno
+            pkgsPlaywright.playwright-test
+          ]) ''
             export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
           '';
 

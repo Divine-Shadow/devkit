@@ -166,6 +166,7 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 		Launcher:            launcher,
 		Binds: []Bind{
 			{Source: paths.DevRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
+			{Source: paths.DevRoot, Target: paths.DevRoot, Mode: "rw", Required: true},
 			{Source: paths.HostWorktreeRoot, Target: paths.SandboxWorktreeRoot, Mode: "rw", Required: false},
 			{Source: paths.HostStateRoot, Target: paths.SandboxStateRoot, Mode: "rw", Required: true},
 			{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},

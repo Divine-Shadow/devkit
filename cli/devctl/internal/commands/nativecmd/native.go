@@ -478,10 +478,7 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 	if err := printLifecycleStatus(status, parsed.format); err != nil {
 		return err
 	}
-	if summary.CapacityAvailable != summary.Total {
-		return fmt.Errorf("native capacity is not fully available")
-	}
-	return nil
+	return lifecycleReadinessError(summary, parsed)
 }
 
 type lifecycleBrokerStarter func(context.Context, runtimebroker.Config, bool) (runtimebroker.Status, error)
@@ -491,10 +488,25 @@ func lifecycleEnsureReadyBroker(ctx *cmdregistry.Context, parsed lifecycleArgs, 
 		return brokerCfg, nil, nil
 	}
 	status, err := start(context.Background(), brokerCfg, ctx.DryRun)
+	brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, status)
+	return brokerCfg, &status, err
+}
+
+func lifecycleBrokerConfigWithStatusSocket(brokerCfg runtimebroker.Config, status runtimebroker.Status) runtimebroker.Config {
 	if strings.TrimSpace(status.Socket) != "" {
 		brokerCfg.Socket = status.Socket
 	}
-	return brokerCfg, &status, err
+	return brokerCfg
+}
+
+func lifecycleReadinessError(summary capacity.Summary, parsed lifecycleArgs) error {
+	if summary.CapacityAvailable != summary.Total {
+		return fmt.Errorf("native capacity is not fully available")
+	}
+	if !parsed.skipRepoChecks && summary.RepoReady != summary.Total {
+		return fmt.Errorf("native repo readiness is not fully available")
+	}
+	return nil
 }
 
 func handleTopExec(ctx *cmdregistry.Context) error {
@@ -686,6 +698,9 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 	}
 	if strings.TrimSpace(parsed.brokerSocket) != "" {
 		brokerCfg.Socket = resolveNativeRoot(ctx.Paths.Root, parsed.brokerSocket)
+		if strings.TrimSpace(parsed.brokerStateRoot) == "" {
+			brokerCfg.StateRoot = filepath.Dir(brokerCfg.Socket)
+		}
 	}
 	if len(parsed.brokerAllowImage) > 0 {
 		brokerCfg.AllowedImages = append([]string{}, parsed.brokerAllowImage...)
@@ -782,6 +797,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 		if err != nil {
 			return err
 		}
+		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
 		status.Broker = &brokerStatus
 	}
 	parsed.baseBranch = baseBranch
@@ -833,9 +849,9 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 			return err
 		}
 		status.Capacity = &summary
-		if summary.CapacityAvailable != summary.Total {
+		if err := lifecycleReadinessError(summary, parsed); err != nil {
 			printLifecycleStatus(status, parsed.format)
-			return fmt.Errorf("native capacity is not fully available")
+			return err
 		}
 	}
 	if ctx.DryRun && !parsed.skipReady {
@@ -883,6 +899,7 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 	}
 	status := lifecycleStatus{Command: "status", Runtime: "native", Repo: repo, Count: count, Broker: &brokerStatus}
 	if lifecycleStatusRunsReadiness(parsed) {
+		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
 		planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
 		if err == nil {

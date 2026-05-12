@@ -38,6 +38,10 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
   Existing symlinked agent1 layouts are projected to their mounted
   `/workspaces/dev/<repo>` target so native `exec` can keep in-flight sessions
   working while dedicated worktrees are repaired.
+  Native plans also bind the host dev root at its original host path. Native
+  setup writes absolute `.git` gitdir metadata, which keeps Git operations
+  working inside bubblewrap even when the source repo passed to devkit is
+  itself a linked worktree.
   `native prepare` and lifecycle `up` write a JSON manifest under the native
   host state root for downstream tmux/layout/session orchestration.
 - `tmux-sync`, `tmux-add-cd`, `tmux-apply-layout`, `layout-apply`,
@@ -50,7 +54,8 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
 - `check-net`, `check-codex`, `check-sts`, `warm`, and `maintain` route
   `dev-all` diagnostics/hooks through native `devkit exec`.
 - `overlays/dev-all/devkit.yaml` defines explicit native repo readiness checks
-  for git reachability, frontend warm/install, frontend typecheck, frontend
+  for git reachability, frontend warm/install, frontend Playwright, Netlify
+  dev-server boot, PureScript bridge generation, frontend typecheck, frontend
   tests, and the core SBT compile check.
 - `overlays/dev-all/devkit.yaml` declares `runtime.flake: .#dev-all` instead
   of a container image as the canonical runtime artifact.
@@ -115,6 +120,9 @@ kit/scripts/devkit -p dev-all --dry-run verify
 kit/scripts/devkit -p dev-all --dry-run ssh-test
 kit/scripts/devkit -p dev-all --dry-run repo-config-https ouroboros-ide --index 2
 kit/scripts/devkit -p dev-all --dry-run doctor-runtime
+kit/scripts/devkit -p dev-all up --repo ouroboros-ide-nix-readiness --count 1 --branch-prefix nixready-agent --flake .#dev-all --skip-ready --format json
+kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide-nix-readiness --flake .#dev-all -- bash -lc 'GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null && purs --version >/dev/null && spago --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null && playwright --version >/dev/null'
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide-nix-readiness --count 1 --branch-prefix nixready-agent --flake .#dev-all --format json
 ```
 
 Managed broker lifecycle smoke:
@@ -191,6 +199,7 @@ Observed key versions:
 - Go: `go1.22.4`.
 - Spago: `0.93.45`.
 - Netlify CLI: `netlify-cli/26.0.1`.
+- Deno: `2.7.13`.
 - Playwright CLI: `Version 1.58.2`.
 - Terraform: `v1.9.8`.
 - Packer: `v1.11.2`.
@@ -201,7 +210,13 @@ Observed key versions:
 - Frontend-local Playwright smoke output from `ouroboros-ide/frontend`:
   `frontend-playwright-ok`.
 - Runtime readiness checks include `broker-socket`, `purescript-spago-netlify`, and
-  `playwright-browser`.
+  `playwright-browser`; the Netlify runtime check also validates Nix-provided
+  Deno so `netlify dev` does not download an Edge Functions runtime into agent
+  state.
+- Repo readiness checks include frontend dependency warmup, a real Netlify
+  dev-server boot/curl smoke, frontend Playwright browser launch, frontend
+  PureScript bridge generation, frontend typecheck/test, and the core SBT
+  compile check.
 - Readiness split smoke: `runtime_ready: true`, `repo_ready: false`, and
   `capacity_available: true` when `--repo-check 'exit 7'` fails.
 - Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-smoke.<id>/broker.sock`,
@@ -213,15 +228,24 @@ Observed key versions:
   `down`.
 - Cold native `ensure-ready` starts or reuses the managed broker before checking
   `broker-socket`; `--skip-broker` keeps the current-state-only path.
+- Lifecycle `--broker-socket` without `--broker-state-root` derives state from
+  the socket directory, so temporary socket-only smokes do not accidentally
+  reuse the default managed broker state.
 - Native capacity smoke output: `runtime_ready: 1`, `repo_ready: 0`, and
   `capacity_available: 1` when the repo check exits non-zero.
 - Native symlink compatibility smoke output: agent1 host worktree remains
   `/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide`, while the
   sandbox worktree resolves to `/workspaces/dev/ouroboros-ide`.
+- Native linked-source-worktree smoke output: a clean
+  `ouroboros-ide-nix-readiness` source worktree produced agent gitdir metadata
+  rooted at `/home/bayesartre/dev/ouroboros-ide/.git/worktrees/...`, and
+  `git ls-remote`, Spago, Netlify, Deno, and Playwright all succeeded through
+  top-level `exec`.
 - Full no-skip `ensure-ready` evidence is recorded in
   `nix/full-readiness-evidence.md`: native runtime, broker, Git, frontend warm,
-  Playwright, frontend typecheck, frontend tests, and the `ouroboros-ide`
-  `core-check` SBT compile pass.
+  Playwright, Netlify dev-server boot, PureScript bridge generation, frontend
+  typecheck, frontend tests, and the `ouroboros-ide` `core-check` SBT compile
+  pass.
 
 ## Completed Parity
 
@@ -243,11 +267,20 @@ Observed key versions:
   `/usr/bin/env`, `/bin/sh`, and `/bin/bash` into the Nix system profile so
   repo-local scripts and Node package bins can execute inside the blank-root
   sandbox.
+- Native bubblewrap launches bind the dev root at both `/workspaces/dev` and
+  the host dev-root path. The duplicate bind is intentional: `/workspaces/dev`
+  is the stable sandbox workspace, while the host-path bind keeps Git worktree
+  metadata valid for source repos and nested agent worktrees created from
+  existing linked worktrees.
 - Native readiness now reports runtime readiness separately from repo readiness;
   capacity availability follows runtime readiness only. Runtime readiness now
   proves prepared native state, broker socket liveness, required tool
   availability, Spago/Netlify command availability, and a real Playwright
   Chromium launch.
+- Top-level `ensure-ready` and lifecycle readiness now fail when repo readiness
+  fails unless `--skip-repo-checks` or `--skip-ready` is requested. The lower
+  level `native capacity` command still preserves the runtime-capacity split for
+  recovery diagnostics.
 - Native broker lifecycle, worktree fanout, and capacity reporting are available
   through the canonical `kit/scripts/devkit` entrypoint.
 - The default `dev-all` lifecycle and simple agent entry commands now route to
@@ -281,11 +314,15 @@ Observed key versions:
   `ensure-ready` when repository checks are expected to run to completion.
 - `ensure-ready --skip-broker` is current-state-only; without `--skip-broker`,
   `ensure-ready` manages the broker before checking readiness.
+- Passing only lifecycle `--broker-socket` creates/reuses broker state in that
+  socket's directory. Pass `--broker-state-root` when the state location should
+  be somewhere else.
 - Native `status` is intentionally lightweight by default. Use
   `status --ready` when capacity/readiness should be computed as part of a
   status call.
 - A failed repo check does not remove native capacity. The runtime/repo split is
-  visible in `native capacity` and top-level `ensure-ready` JSON output.
+  visible in `native capacity` and top-level `ensure-ready` JSON output, but
+  top-level app readiness exits non-zero on repo failures by default.
 
 ## Host Capability Requirements
 
@@ -297,6 +334,9 @@ Observed key versions:
   `unix://<dev-root>/.devkit/native-broker/broker.sock`. Tests can override it
   with `--broker-endpoint` or lifecycle `--broker-socket` for temporary broker
   instances.
+- Native Git operations assume the dev root is mounted at both `/workspaces/dev`
+  and its host path inside bubblewrap. This preserves host-valid Git worktree
+  metadata without rewriting `.git` files to sandbox-only paths.
 
 ## Native Runtime Boundary
 
@@ -310,9 +350,10 @@ readiness checks. `status --ready`, `ensure-ready`, and `native capacity` are th
 readiness/capacity surfaces.
 
 Native `exec` uses bubblewrap with a blank root, binds `/nix/store`,
-`/nix/var/nix`, the dev workspace, per-agent HOME, managed resolver config, and
-the optional broker socket. It sets `DOCKER_HOST` to the broker endpoint and
-does not bind `/var/run/docker.sock`.
+`/nix/var/nix`, the dev workspace at `/workspaces/dev` and at the host dev-root
+path, per-agent HOME, managed resolver config, and the optional broker socket.
+It sets `DOCKER_HOST` to the broker endpoint and does not bind
+`/var/run/docker.sock`.
 
 Docker Compose is retired for `dev-all`: `kit/scripts/devkit -p dev-all compose
 <command>` fails before Docker is invoked. Non-`dev-all` overlays keep their

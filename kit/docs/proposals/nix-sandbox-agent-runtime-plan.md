@@ -253,10 +253,13 @@ The first implementation slice is now present:
 - Verification evidence and remaining parity gaps live in
   `nix/runtime-parity.md`.
 
-Next central work should move tmux/layout/exec/readiness call sites from Docker
-exec command construction to the native runtime model. Next per-overlay work
-should close the npm-version gaps for Spago and Netlify or intentionally pin
-them in a generated npm dependency expression.
+Current remaining central work is no longer the initial tmux/layout/exec
+migration for `dev-all`; those paths now route through native lifecycle and
+native exec. App-level readiness evidence now covers Spago/PureScript, Netlify
+dev-server boot, Playwright browser/test readiness, broker lifecycle policy, and
+fresh linked-source-worktree operation. The remaining readiness work is
+ingress/operator-attention behavior plus native replacements for any
+non-`dev-all` Compose overlays that are still needed.
 
 ## Operation Checkpoint
 

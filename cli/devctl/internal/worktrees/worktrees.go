@@ -26,8 +26,9 @@ func run(dry bool, name string, args ...string) error {
 	return nil
 }
 
-// rewriteGitdir writes a .git file pointing to a relative gitdir for container correctness.
-func rewriteGitdir(wt string) {
+// rewriteGitdir writes a .git file pointing to a gitdir form suitable for the
+// runtime that will mount the worktree.
+func rewriteGitdir(wt string, relative bool) {
 	if info, err := os.Stat(filepath.Join(wt, ".git")); err == nil && info.IsDir() {
 		return
 	}
@@ -39,11 +40,17 @@ func rewriteGitdir(wt string) {
 	if gitdir == "" {
 		return
 	}
-	rel, err := filepath.Rel(wt, gitdir)
-	if err != nil {
-		return
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Clean(filepath.Join(wt, gitdir))
 	}
-	_ = os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+rel+"\n"), 0644)
+	if relative {
+		rel, err := filepath.Rel(wt, gitdir)
+		if err != nil {
+			return
+		}
+		gitdir = rel
+	}
+	_ = os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0644)
 }
 
 // cleanWorktreePath removes the target directory when it is clearly stale:
@@ -216,7 +223,7 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 			}
 		}
 		if !dry {
-			rewriteGitdir(wt)
+			rewriteGitdir(wt, true)
 		}
 		if err := run(dry, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, bi)...); err != nil {
 			return err
@@ -305,6 +312,7 @@ func SetupNative(opts NativeOptions) error {
 				return err
 			} else if ok {
 				_ = run(false, "env", envGit("-C", wt, "config", "worktree.useRelativePaths", "false")...)
+				rewriteGitdir(wt, false)
 				continue
 			}
 			if err := cleanWorktreePath(repoWorktreesDir, wt); err != nil {
@@ -325,7 +333,7 @@ func SetupNative(opts NativeOptions) error {
 			}
 		}
 		if !opts.DryRun {
-			rewriteGitdir(wt)
+			rewriteGitdir(wt, false)
 		}
 		if err := run(opts.DryRun, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
 			return err

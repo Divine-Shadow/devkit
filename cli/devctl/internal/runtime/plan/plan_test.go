@@ -47,9 +47,24 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.DirectDockerSocket {
 		t.Fatalf("native plan must not expose direct Docker socket")
 	}
+	if !hasBind(p.Binds, "/home/bayesartre/dev", "/workspaces/dev") {
+		t.Fatalf("native plan must mount dev root at /workspaces/dev: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, "/home/bayesartre/dev", "/home/bayesartre/dev") {
+		t.Fatalf("native plan must mount dev root at its host path for git metadata: %#v", p.Binds)
+	}
 	if len(p.LauncherArgs) == 0 || p.LauncherArgs[0] != "bwrap" {
 		t.Fatalf("launcher args = %#v", p.LauncherArgs)
 	}
+}
+
+func hasBind(binds []Bind, source, target string) bool {
+	for _, bind := range binds {
+		if bind.Source == source && bind.Target == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
