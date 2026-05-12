@@ -2,13 +2,16 @@
 
 ## Summary
 
-The `dev-all` default runtime is Nix-native. Canonical user entry remains
-`kit/scripts/devkit`, which execs the compiled `kit/bin/devctl` binary.
+Flake-backed overlays now have Nix-native top-level lifecycle and exec paths.
+Canonical user entry remains `kit/scripts/devkit`, which execs the compiled
+`kit/bin/devctl` binary.
 
-Default `dev-all` lifecycle and entry commands are native:
+Default lifecycle and entry commands are native for overlays with
+`runtime.flake`:
 `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
 `ensure-ready`. Docker Compose is retired for `dev-all`; the `compose`
-namespace now fails before invoking Docker.
+namespace now fails before invoking Docker for that overlay and remains an
+explicit legacy surface elsewhere.
 
 ## Review Commits
 
@@ -63,8 +66,9 @@ cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command fla
 - `dev-all` Compose is retired, including the explicit `compose` namespace.
 - Unreachable default Compose branches for `scale` and `ensure-ready` were
   removed from `main.go`; those names are owned by the native command registry.
-- Non-`dev-all` overlays keep their legacy Compose command surface until they
-  receive native replacements.
+- Non-`dev-all` overlays with `runtime.flake` now use native top-level
+  lifecycle and exec dispatch. Helper surfaces that are still Compose-specific
+  remain explicit legacy paths.
 - Legacy Compose diagnostics that cannot support native `dev-all` refuse that
   project instead of falling back.
 

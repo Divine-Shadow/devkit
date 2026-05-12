@@ -81,13 +81,27 @@ func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
 	}
 }
 
-func TestBuildDevAllRejectsOtherProjects(t *testing.T) {
-	_, err := BuildDevAll(BuildOptions{
+func TestBuildNativeSupportsOtherProjects(t *testing.T) {
+	p, err := Build(BuildOptions{
 		Paths:   compose.Paths{Root: "/repo/devkit"},
 		Project: "codex",
+		Repo:    "ouroboros-ide",
+		Flake:   ".#codex",
 	})
-	if err == nil {
-		t.Fatalf("expected error")
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	if p.Agent.ID.Project != "codex" {
+		t.Fatalf("project = %q", p.Agent.ID.Project)
+	}
+	if p.Flake != ".#codex" {
+		t.Fatalf("flake = %q", p.Flake)
+	}
+	if p.Agent.StateRoot != "/repo/.devkit/native-agents/codex-agent1" {
+		t.Fatalf("state root = %q", p.Agent.StateRoot)
+	}
+	if !hasBind(p.Binds, "/repo/agent-worktrees/agent1/ouroboros-ide", "/workspace") {
+		t.Fatalf("native plan must mount agent worktree at /workspace: %#v", p.Binds)
 	}
 }
 

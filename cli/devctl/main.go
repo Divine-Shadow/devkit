@@ -951,12 +951,12 @@ func usage() {
 Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
-  up, down, restart, status [--ready], logs   (native runtime for dev-all)
+  up, down, restart, status [--ready], logs   (native for overlays with runtime.flake)
   compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for dev-all)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
   ensure-ready [--count N] [--repo REPO] [--broker-socket PATH] [--skip-broker]
-  exec <n> <cmd...>, attach <n>              (native runtime for dev-all)
+  exec <n> <cmd...>, attach <n>              (native for overlays with runtime.flake)
   codex-auth reseed <n> [--service NAME]
   codex-auth reseed-all [indexes...] [--service NAME]
   allow <domain>, warm, maintain, check-net, check-codex, check-sts
@@ -1131,10 +1131,16 @@ func main() {
 			}
 		}
 	}
-	files, err := compose.Files(paths, project, profile)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	cmd := args[0]
+	sub := args[1:]
+	var files []string
+	if commandNeedsComposeFiles(cmd, project, overlayCfg) {
+		var err error
+		files, err = compose.Files(paths, project, profile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 	}
 
 	// Preflight: choose a non-overlapping internal subnet and DNS IP if not explicitly set
@@ -1151,8 +1157,6 @@ func main() {
 		_ = os.Setenv("DEVKIT_NO_TMUX", "1")
 	}
 
-	cmd := args[0]
-	sub := args[1:]
 	// Read optional credential pool config from env (defaults preserve host behavior)
 	pconf := poolcfg.ReadPoolConfig()
 	registry := cmdregistry.New()
@@ -1218,7 +1222,7 @@ func main() {
 		}
 	}
 	if handler, ok := registry.Lookup(cmd); ok {
-		if useLegacyTopLevelForProject(cmd, project) {
+		if useLegacyTopLevelForProject(cmd, project, overlayCfg) {
 			// Let the legacy switch below handle non-dev-all top-level aliases.
 		} else if cmd == "compose" {
 			runComposeCommand(sub)
@@ -3243,8 +3247,26 @@ exit 0`, home, home, home, home, home)
 
 func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(2) }
 
-func useLegacyTopLevelForProject(cmd, project string) bool {
-	if strings.TrimSpace(project) == "dev-all" {
+func commandNeedsComposeFiles(cmd, project string, cfg config.OverlayConfig) bool {
+	switch cmd {
+	case "native":
+		return false
+	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach", "warm", "maintain":
+		return !nativeRuntimeConfigured(project, cfg)
+	default:
+		return true
+	}
+}
+
+func nativeRuntimeConfigured(project string, cfg config.OverlayConfig) bool {
+	if strings.TrimSpace(project) == "" {
+		return false
+	}
+	return config.HasRuntimeFlake(cfg)
+}
+
+func useLegacyTopLevelForProject(cmd, project string, cfg config.OverlayConfig) bool {
+	if nativeRuntimeConfigured(project, cfg) {
 		return false
 	}
 	switch cmd {

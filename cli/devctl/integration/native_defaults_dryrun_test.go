@@ -40,6 +40,8 @@ func nativeDefaultsRoot(t *testing.T) string {
 defaults:
   repo: ouroboros-ide
   agents: 2
+runtime:
+  flake: .#dev-all
 native:
   worktree_root: ../agent-worktrees
   state_root: ../.devkit/native-agents
@@ -47,6 +49,42 @@ native:
   state_container_root: /agent-state
 hooks:
   warm: echo warm-native
+`)
+	return root
+}
+
+func flakeOverlayRoot(t *testing.T, project, repo, flake string) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(p, s string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseCompose := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3.18\n"
+	write(filepath.Join(root, "kit/compose.yml"), baseCompose)
+	write(filepath.Join(root, "kit/compose.dns.yml"), baseCompose)
+	write(filepath.Join(root, "overlays", project, "devkit.yaml"), `
+workspace: ../../definitely-missing-workspace
+defaults:
+  repo: `+repo+`
+  agents: 1
+  base_branch: main
+  branch_prefix: agent
+runtime:
+  flake: `+flake+`
+hooks:
+  warm: echo warm-native
+  maintain: echo maintain-native
+native:
+  worktree_root: ../agent-worktrees
+  state_root: ../.devkit/native-agents
+  worktree_container_root: /worktrees
+  state_container_root: /agent-state
 `)
 	return root
 }
@@ -129,7 +167,7 @@ func TestNonDevAllTopLevelAliasesUseLegacyComposeDryRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v failed: %v\n%s", args, err, out)
 		}
-		if strings.Contains(out, "native lifecycle currently supports") || strings.Contains(out, "bwrap") {
+		if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
 			t.Fatalf("%v unexpectedly used native path:\n%s", args, out)
 		}
 		if !strings.Contains(out, "+ docker compose") {
@@ -146,11 +184,67 @@ func TestNonDevAllTopLevelExecUsesLegacyComposeDryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("legacy exec failed: %v\n%s", err, out)
 	}
-	if strings.Contains(out, "native lifecycle currently supports") || strings.Contains(out, "bwrap") {
+	if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
 		t.Fatalf("legacy exec unexpectedly used native path:\n%s", out)
 	}
 	if !strings.Contains(out, "+ docker compose") {
 		t.Fatalf("legacy exec did not use Compose:\n%s", out)
+	}
+}
+
+func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	overlays := []struct {
+		project string
+		repo    string
+		flake   string
+	}{
+		{project: "_template", repo: "your-repo-name", flake: ".#template-agent"},
+		{project: "ouroboros-static-front-end", repo: "ouroboros-static-front-end", flake: ".#ouroboros-static-front-end"},
+		{project: "ouroboros-terraform", repo: "ouroboros-terraform", flake: ".#ouroboros-terraform"},
+		{project: "pokeemerald", repo: "pokeemerald", flake: ".#pokeemerald"},
+	}
+	commands := [][]string{
+		{"up"},
+		{"status"},
+		{"logs", "--tail", "1"},
+		{"down"},
+		{"scale", "1"},
+		{"ensure-ready"},
+		{"exec", "1", "--", "echo", "hi"},
+		{"attach", "1"},
+		{"warm"},
+		{"maintain"},
+	}
+	for _, overlay := range overlays {
+		t.Run(overlay.project, func(t *testing.T) {
+			root := flakeOverlayRoot(t, overlay.project, overlay.repo, overlay.flake)
+			for _, args := range commands {
+				out, err := runProjectDryRun(t, bin, root, overlay.project, args...)
+				if err != nil {
+					t.Fatalf("%s %v failed: %v\n%s", overlay.project, args, err, out)
+				}
+				assertNoDockerCommand(t, out)
+				if strings.Contains(out, "workspace directory") {
+					t.Fatalf("%s %v still required Compose workspace validation:\n%s", overlay.project, args, out)
+				}
+				switch args[0] {
+				case "exec", "attach":
+					if !strings.Contains(out, "bwrap") || !strings.Contains(out, overlay.flake) {
+						t.Fatalf("%s %v missing native sandbox command:\n%s", overlay.project, args, out)
+					}
+				case "warm", "maintain":
+					want := " -p " + overlay.project + " exec 1 --repo " + overlay.repo + " -- bash -lc"
+					if !strings.Contains(out, want) {
+						t.Fatalf("%s %v missing native hook exec %q:\n%s", overlay.project, args, want, out)
+					}
+				default:
+					if !strings.Contains(out, "runtime: native") {
+						t.Fatalf("%s %v missing native lifecycle status:\n%s", overlay.project, args, out)
+					}
+				}
+			}
+		})
 	}
 }
 

@@ -185,6 +185,32 @@ func TestLifecyclePlanOptionsUsesOverlayNativeRoots(t *testing.T) {
 	}
 }
 
+func TestLifecyclePlanOptionsUsesOverlayRuntimeFlake(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "pokeemerald",
+		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		Runtime: config.Runtime{Flake: ".#pokeemerald"},
+	}, lifecycleArgs{}, "pokeemerald", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.Flake != ".#pokeemerald" {
+		t.Fatalf("flake = %q", opts.Flake)
+	}
+}
+
+func TestLifecyclePlanOptionsCLIFlakeOverridesOverlayRuntimeFlake(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "pokeemerald",
+		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		Runtime: config.Runtime{Flake: ".#pokeemerald"},
+	}, lifecycleArgs{flake: ".#custom"}, "pokeemerald", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.Flake != ".#custom" {
+		t.Fatalf("flake = %q", opts.Flake)
+	}
+}
+
 func TestLifecyclePlanOptionsCLIOverridesOverlayNativeRoots(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
@@ -339,6 +365,49 @@ func TestLifecycleBrokerConfigWithStatusSocketUsesRunningSocket(t *testing.T) {
 	)
 	if got.Socket != "/tmp/running.sock" {
 		t.Fatalf("socket = %q", got.Socket)
+	}
+}
+
+func TestEnsureNativeLifecycleProjectAcceptsRuntimeFlakeOverlay(t *testing.T) {
+	tmp := t.TempDir()
+	overlay := filepath.Join(tmp, "overlays", "pokeemerald")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		t.Fatalf("mkdir overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "devkit.yaml"), []byte(`
+runtime:
+  flake: .#pokeemerald
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	ctx := &cmdregistry.Context{
+		Project: "pokeemerald",
+		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+	}
+	if err := ensureNativeLifecycleProject(ctx); err != nil {
+		t.Fatalf("ensureNativeLifecycleProject: %v", err)
+	}
+}
+
+func TestEnsureNativeLifecycleProjectRejectsOverlayWithoutRuntimeFlake(t *testing.T) {
+	tmp := t.TempDir()
+	overlay := filepath.Join(tmp, "overlays", "legacy")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		t.Fatalf("mkdir overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "devkit.yaml"), []byte(`service: dev-agent`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	ctx := &cmdregistry.Context{
+		Project: "legacy",
+		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+	}
+	err := ensureNativeLifecycleProject(ctx)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if got := err.Error(); got != "native lifecycle requires runtime.flake for -p legacy; use 'devctl -p legacy compose <command>' for legacy Compose overlays" {
+		t.Fatalf("err = %q", got)
 	}
 }
 

@@ -1,28 +1,28 @@
 # Proposal: Nix-Native Agent Runtime With Brokered Test Containers
 
-## Status: Implemented For `dev-all`
+## Status: Implemented For Flake-Backed Overlays
 
 This proposal is now historical context plus design rationale. The active
-`dev-all` control plane is Nix-native through the canonical
+flake-backed overlay control plane is Nix-native through the canonical
 `kit/scripts/devkit` entrypoint and compiled `kit/bin/devctl` binary.
 
 Implemented command surface:
 
-- `devkit -p dev-all up|down|restart|status|logs`
-- `devkit -p dev-all scale N`
-- `devkit -p dev-all exec <index> ...`
-- `devkit -p dev-all attach <index>`
-- `devkit -p dev-all ensure-ready`
-- `devkit -p dev-all native plan|prepare|exec|readiness|capacity`
-- `devkit -p dev-all broker start|status|stop`
+- `devkit -p <flake-backed-overlay> up|down|restart|status|logs`
+- `devkit -p <flake-backed-overlay> scale N`
+- `devkit -p <flake-backed-overlay> exec <index> ...`
+- `devkit -p <flake-backed-overlay> attach <index>`
+- `devkit -p <flake-backed-overlay> ensure-ready`
+- `devkit -p <flake-backed-overlay> native plan|prepare|exec|readiness|capacity`
+- `devkit -p <flake-backed-overlay> broker start|status|stop`
 
 The native runtime launches agents with bubblewrap, Nix flakes, per-agent
 HOME/Codex/XDG state, managed DNS/proxy environment, and brokered Docker access.
 Native plans set `DOCKER_HOST` to the broker socket and do not bind
 `/var/run/docker.sock` into the agent sandbox. Compose is no longer an implicit
-fallback for `dev-all`; the `devkit -p dev-all compose <command>` namespace is
-retired, and non-`dev-all` overlays keep their legacy Compose surface until they
-receive native replacements.
+fallback for overlays that declare `runtime.flake`; the
+`devkit -p dev-all compose <command>` namespace is retired, and explicit
+Compose remains only for historical or unsupported helper surfaces.
 
 The implementation evidence, smoke commands, operational caveats, and parity
 status live in `nix/runtime-parity.md`. The review handoff for the current

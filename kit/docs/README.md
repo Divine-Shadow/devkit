@@ -14,8 +14,8 @@ Dev Kit — Base Kit Details
   - `envoy`: starts Envoy HTTP proxy and SNI TCP forward proxy.
   - `pool`: mounts a read‑only Codex credential pool into the agent (opt‑in).
 - Helper:
-- `devkit/kit/scripts/devkit -p dev-all up|down|status|exec|logs` now uses the Nix-native runtime.
-- `devkit/kit/scripts/devkit -p <project> compose up|down|status|exec|logs` is the legacy Docker Compose path for historical overlays.
+- `devkit/kit/scripts/devkit -p <project> up|down|status|exec|logs` uses the Nix-native runtime when that overlay declares `runtime.flake`.
+- `devkit/kit/scripts/devkit -p <project> compose up|down|status|exec|logs` is the explicit legacy Docker Compose path for historical or unsupported overlay surfaces.
   - `compose` is rejected for `-p dev-all`; use native lifecycle, readiness, and exec commands instead.
   - Legacy `compose up` performs a best-effort cleanup of any lingering proxy/DNS containers for the target compose project before recreating the stack.
   - After the stack is healthy, each running `dev-agent` automatically receives a proxy-aware SSH config plus copies of your host keys (`~/.ssh/id_ed25519` / `id_rsa` / `known_hosts` when present) and a locked `core.sshCommand` pointing at that config. Fresh containers can immediately `git pull` via `ssh.github.com:443` without running `ssh-setup` manually; if you need to reseed later (or provide an alternate key path) you can still invoke `ssh-setup`.
@@ -56,7 +56,7 @@ Dev Kit — Base Kit Details
 - Overlay runtime smoke: `make overlay-runtime-smoke` from the repo root proves
   every `overlays/*/devkit.yaml` `runtime.flake` target has its expected core
   tools.
-- Dry-run preview: append `--dry-run` to print native bubblewrap/devkit commands for `dev-all` or Docker Compose commands for legacy overlays without executing.
+- Dry-run preview: append `--dry-run` to print native bubblewrap/devkit commands for flake-backed overlays or Docker Compose commands for legacy overlays without executing.
   - Layout only: `devkit/kit/scripts/devkit --dry-run tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
   - Orchestration: `devkit/kit/scripts/devkit --dry-run layout-apply --file devkit/kit/examples/orchestration.yaml`
   - Generate orchestration from running containers: `devkit/kit/scripts/devkit layout-generate --service dev-agent --output /tmp/orchestration.yaml`
@@ -80,7 +80,7 @@ Dev Kit — Base Kit Details
 - `env`: key/value pairs exported on the host unless already set, useful for defaults like `AWS_PROFILE` or feature flags shared across commands.
 - `env_files`: list of dotenv-style files (relative to the overlay directory) whose contents are exported unless the keys already exist in the host environment.
 - `service`: default legacy Compose service for non-`dev-all` CLI commands (`dev-agent` fallback).
-- `hooks.warm` / `hooks.maintain`: optional commands executed inside the runtime (`devkit warm|maintain`); for `dev-all`, they run through native `exec`.
+- `hooks.warm` / `hooks.maintain`: optional commands executed inside the runtime (`devkit warm|maintain`); for overlays with `runtime.flake`, they run through native `exec`.
   - Tip: the standard warm hook now installs a `python` shim backed by `python3`; reuse the pattern in new overlays so legacy scripts keep working.
 - `defaults.*`: overlay-specific defaults for agent counts and worktree automation (see `overlays/dev-all/devkit.yaml`).
 

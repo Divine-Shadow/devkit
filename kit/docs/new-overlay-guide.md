@@ -7,13 +7,13 @@ This guide walks you through creating a new overlay under `devkit/overlays/<your
 
 Manual steps if not using the template:
 - overlays/<name>/devkit.yaml
-  - Required: `workspace: ../../<your-repo-folder>` — the CLI resolves it to an absolute `WORKSPACE_DIR` before compose runs.
+  - Required: `workspace: ../../<your-repo-folder>` — the CLI resolves it to an absolute `WORKSPACE_DIR` before explicit legacy Compose runs. Native lifecycle uses `defaults.repo` and the native worktree/state roots.
   - Recommended: `service: <service-name>` to set the default service for CLI exec/attach/ssh/repo commands.
   - Recommended: `defaults:` block describing the repo name (`defaults.repo`), desired agent count (`defaults.agents`), and branch metadata (`defaults.base_branch`, `defaults.branch_prefix`) so runtime-config helpers work without extra flags.
   - Required: `runtime.flake: .#<overlay-name>` plus `runtime.codex_version` and `runtime.core_check`. `_template` uses `.#template-agent`.
   - Optional: `env:` to provide host defaults (e.g., `AWS_PROFILE`) that users can still override.
   - Optional: `env_files:` pointing at dotenv-style files (paths relative to the overlay directory) to prepopulate env vars without committing secrets.
-  - Optional hooks: `warm`, `maintain` (run inside container via `devkit warm|maintain`).
+  - Optional hooks: `warm`, `maintain` (run inside the configured runtime via `devkit warm|maintain`; flake-backed overlays use native `exec`).
     - Best practice: drop in the python shim so tools that still call `python` work without edits:
       ````
       warm: |

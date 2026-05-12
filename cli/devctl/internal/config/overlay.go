@@ -151,6 +151,11 @@ func ReadAll(overlays []string, project string) (OverlayConfig, string, error) {
 	return out, "", nil
 }
 
+// HasRuntimeFlake reports whether an overlay declares a native Nix runtime.
+func HasRuntimeFlake(cfg OverlayConfig) bool {
+	return strings.TrimSpace(cfg.Runtime.Flake) != ""
+}
+
 // ResolveWorkspace returns the absolute workspace path for an overlay configuration.
 // If no workspace is configured, it returns an empty string.
 func ResolveWorkspace(cfg OverlayConfig, overlayDir string, root string) string {

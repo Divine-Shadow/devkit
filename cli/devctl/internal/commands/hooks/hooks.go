@@ -20,25 +20,32 @@ func handleHook(ctx *cmdregistry.Context, warm bool) error {
 	if project == "" {
 		return fmt.Errorf("-p <project> is required")
 	}
-	hooks, _ := config.ReadHooks(ctx.Paths.OverlayPaths, project)
-	script := hooks.Maintain
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project)
+	if err != nil {
+		return err
+	}
+	script := cfg.Hooks.Maintain
 	label := "maintain"
 	if warm {
-		script = hooks.Warm
+		script = cfg.Hooks.Warm
 		label = "warm"
 	}
 	if strings.TrimSpace(script) == "" {
 		fmt.Printf("No %s hook defined\n", label)
 		return nil
 	}
-	if project == "dev-all" {
+	if config.HasRuntimeFlake(cfg) {
 		exe := strings.TrimSpace(ctx.Exe)
 		if exe == "" {
 			exe = "devkit"
 		}
-		repo := "ouroboros-ide"
-		if cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project); err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
-			repo = strings.TrimSpace(cfg.Defaults.Repo)
+		repo := strings.TrimSpace(cfg.Defaults.Repo)
+		if repo == "" {
+			if project == "dev-all" {
+				repo = "ouroboros-ide"
+			} else {
+				repo = project
+			}
 		}
 		runner.Host(ctx.DryRun, exe, "-p", project, "exec", "1", "--repo", repo, "--", "bash", "-lc", script)
 		return nil

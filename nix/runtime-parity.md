@@ -37,9 +37,10 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
 - `devctl native prepare` and `devctl native capacity`: prepare dedicated
   worktrees/state and report capacity from native readiness.
 - Top-level `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`,
-  `attach`, and `ensure-ready` target the native runtime for `dev-all`;
-  `devctl compose ...` is rejected for `dev-all` and remains a legacy Docker
-  Compose path only for non-`dev-all` overlays.
+  `attach`, and `ensure-ready` target the native runtime for overlays that
+  declare `runtime.flake`; `devctl compose ...` is rejected for `dev-all` and
+  remains an explicit legacy Docker Compose path for unsupported helper
+  surfaces and overlays without a native flake runtime.
 - Native agent plans now use `/worktrees/agentN/<repo>` for every agent,
   including agent 1, and keep HOME/Codex/XDG state under `/agent-state`.
   Existing symlinked agent1 layouts are projected to their mounted
@@ -58,8 +59,9 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
   `worktrees-branch`, `worktrees-status`, and `worktrees-sync` now use native
   lifecycle/worktree orchestration for `dev-all`; legacy Compose behavior
   remains only for non-`dev-all` overlays pending quarantine.
-- `check-net`, `check-codex`, `check-sts`, `warm`, and `maintain` route
-  `dev-all` diagnostics/hooks through native `devkit exec`.
+- `warm` and `maintain` route flake-backed overlay hooks through native
+  `devkit exec`; `check-net`, `check-codex`, and `check-sts` keep their
+  existing native `dev-all` diagnostics branch.
 - `overlays/dev-all/devkit.yaml` defines explicit native repo readiness checks
   for git reachability, frontend warm/install, frontend Playwright, Netlify
   dev-server boot, PureScript bridge generation, frontend typecheck, frontend
@@ -338,9 +340,10 @@ Observed key versions:
 - A failed repo check does not remove native capacity. The runtime/repo split is
   visible in `native capacity` and top-level `ensure-ready` JSON output, but
   top-level app readiness exits non-zero on repo failures by default.
-- Non-`dev-all` overlays now have Nix flake tool runtimes, but their top-level
-  lifecycle and exec surfaces still use legacy Compose unless a future native
-  lifecycle slice extends the native dispatcher beyond `dev-all`.
+- Non-`dev-all` overlays with `runtime.flake` now use native top-level
+  lifecycle and exec dispatch. Remaining gaps are helper-specific legacy
+  surfaces such as mixed-layout Compose orchestration and app-specific
+  readiness depth outside `dev-all`.
 
 ## Host Capability Requirements
 
@@ -358,7 +361,7 @@ Observed key versions:
 
 ## Native Runtime Boundary
 
-For `-p dev-all`, top-level lifecycle and entry commands are native:
+For overlays with `runtime.flake`, top-level lifecycle and entry commands are native:
 `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
 `ensure-ready`. They run through the canonical `kit/scripts/devkit` wrapper and
 the compiled `kit/bin/devctl` binary.

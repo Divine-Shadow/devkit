@@ -641,8 +641,12 @@ func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
 	if project == "" {
 		return fmt.Errorf("-p <project> is required")
 	}
-	if project != "dev-all" {
-		return fmt.Errorf("native lifecycle currently supports -p dev-all only; use 'devctl -p %s compose <command>' for legacy Compose overlays", project)
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project)
+	if err != nil {
+		return err
+	}
+	if !config.HasRuntimeFlake(cfg) {
+		return fmt.Errorf("native lifecycle requires runtime.flake for -p %s; use 'devctl -p %s compose <command>' for legacy Compose overlays", project, project)
 	}
 	return nil
 }
@@ -657,7 +661,7 @@ func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.O
 		repo = strings.TrimSpace(cfg.Defaults.Repo)
 	}
 	if repo == "" {
-		repo = "ouroboros-ide"
+		repo = defaultRepoForProject(ctx.Project)
 	}
 	count := parsed.count
 	if count < 1 {
@@ -716,7 +720,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		Paths:                 ctx.Paths,
 		Project:               ctx.Project,
 		Repo:                  repo,
-		Flake:                 strings.TrimSpace(parsed.flake),
+		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
 		Launcher:              "bubblewrap",
 		WorktreeRoot:          resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
 		StateRoot:             resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
@@ -732,6 +736,12 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) {
 	if strings.TrimSpace(opts.Repo) == "" {
 		opts.Repo = strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	if strings.TrimSpace(opts.Repo) == "" {
+		opts.Repo = defaultRepoForProject(ctx.Project)
+	}
+	if strings.TrimSpace(opts.Flake) == "" {
+		opts.Flake = strings.TrimSpace(cfg.Runtime.Flake)
 	}
 	if strings.TrimSpace(opts.WorktreeRoot) == "" {
 		opts.WorktreeRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.WorktreeRoot)
@@ -763,6 +773,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func defaultRepoForProject(project string) string {
+	project = strings.TrimSpace(project)
+	if project == "" || project == "dev-all" {
+		return "ouroboros-ide"
+	}
+	return project
 }
 
 func resolveNativeRoot(devkitRoot, value string) string {
@@ -1094,7 +1112,7 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 		repo = strings.TrimSpace(cfg.Defaults.Repo)
 	}
 	if repo == "" {
-		repo = "ouroboros-ide"
+		repo = defaultRepoForProject(ctx.Project)
 	}
 	count := parsed.count
 	if count < 1 {
@@ -1348,7 +1366,7 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 		repo = strings.TrimSpace(cfg.Defaults.Repo)
 	}
 	if repo == "" {
-		repo = "ouroboros-ide"
+		repo = defaultRepoForProject(ctx.Project)
 	}
 	parsed.opts.Repo = repo
 	parsed.opts.BaseBranch = parsed.baseBranch

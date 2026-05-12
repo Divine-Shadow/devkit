@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -74,13 +73,10 @@ type BuildOptions struct {
 	DedicatedWorktree     bool
 }
 
-func BuildDevAll(opts BuildOptions) (Plan, error) {
+func Build(opts BuildOptions) (Plan, error) {
 	project := strings.TrimSpace(opts.Project)
 	if project == "" {
 		project = "dev-all"
-	}
-	if project != "dev-all" {
-		return Plan{}, fmt.Errorf("native plan currently supports dev-all only, got %s", project)
 	}
 	index := opts.Index
 	if index < 1 {
@@ -88,7 +84,7 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	}
 	repo := strings.TrimSpace(opts.Repo)
 	if repo == "" {
-		repo = "ouroboros-ide"
+		repo = defaultRepo(project)
 	}
 	paths, err := agent.ResolvePaths(agent.PathConfig{
 		DevkitRoot:            opts.Paths.Root,
@@ -109,7 +105,7 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	}
 	flake := strings.TrimSpace(opts.Flake)
 	if flake == "" {
-		flake = ".#dev-all"
+		flake = ".#" + project
 	}
 	launcher := strings.TrimSpace(opts.Launcher)
 	if launcher == "" {
@@ -167,6 +163,7 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 		Binds: []Bind{
 			{Source: paths.DevRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
 			{Source: paths.DevRoot, Target: paths.DevRoot, Mode: "rw", Required: true},
+			{Source: paths.HostWorktree, Target: "/workspace", Mode: "rw", Required: true},
 			{Source: paths.HostWorktreeRoot, Target: paths.SandboxWorktreeRoot, Mode: "rw", Required: false},
 			{Source: paths.HostStateRoot, Target: paths.SandboxStateRoot, Mode: "rw", Required: true},
 			{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
@@ -197,6 +194,20 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	}
 	p.LauncherArgs = launcherArgs(p)
 	return p, nil
+}
+
+func BuildDevAll(opts BuildOptions) (Plan, error) {
+	return Build(opts)
+}
+
+func defaultRepo(project string) string {
+	if strings.TrimSpace(project) == "dev-all" {
+		return "ouroboros-ide"
+	}
+	if strings.TrimSpace(project) != "" {
+		return strings.TrimSpace(project)
+	}
+	return "ouroboros-ide"
 }
 
 func sandboxPathForHostWorktree(paths agent.Paths) (string, bool) {
