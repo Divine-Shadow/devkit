@@ -25,7 +25,8 @@ fallback for `dev-all`; legacy Compose workflows must be requested explicitly vi
 legacy Compose surface until they receive native replacements.
 
 The implementation evidence, smoke commands, operational caveats, and parity
-status live in `nix/runtime-parity.md`.
+status live in `nix/runtime-parity.md`. The review handoff for the current
+branch lives in `kit/docs/native-runtime-review-handoff.md`.
 
 ## Context
 

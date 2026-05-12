@@ -63,6 +63,7 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
 All commands require explicit flakes on this host:
 
 ```bash
+nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make native-runtime-smoke
 nix --extra-experimental-features 'nix-command flakes' flake check
 nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths .#postgres-broker
 nix --extra-experimental-features 'nix-command flakes' develop .#runtime-test-agent --command bash -lc 'git --version && ssh -V && curl --version | head -1'
@@ -125,7 +126,7 @@ kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 1 \
   --broker-socket "$sock" --broker-state-root "$state" \
   --allow-image postgres:latest --allow-pulls --skip-ready --format json
 kit/scripts/devkit -p dev-all status --repo ouroboros-ide --count 1 \
-  --broker-socket "$sock" --broker-state-root "$state" --skip-ready --format json
+  --broker-socket "$sock" --broker-state-root "$state" --format json
 kit/scripts/devkit -p dev-all logs --broker-socket "$sock" \
   --broker-state-root "$state" --tail 20 --format json
 kit/scripts/devkit -p dev-all scale 2 --repo ouroboros-ide \
@@ -197,8 +198,9 @@ Observed key versions:
   `redis_create_http=403`, `postgres_create_http=201`, and
   `native-broker-policy-ok`.
 - Managed broker lifecycle smoke output: `running: true` after native `up`,
-  broker log lines from `logs`, native `scale` to two agents, and
-  `running: false` after native `down`.
+  lightweight native `status` without a capacity block, broker log lines from
+  `logs`, native `scale` to two agents, and `running: false` after native
+  `down`.
 - Native capacity smoke output: `runtime_ready: 1`, `repo_ready: 0`, and
   `capacity_available: 1` when the repo check exits non-zero.
 - Native symlink compatibility smoke output: agent1 host worktree remains
@@ -248,6 +250,9 @@ Observed key versions:
   checks include frontend install/typecheck/test and SBT compile. Use
   `--skip-ready` for capacity restoration and bounded lifecycle smoke; use
   `ensure-ready` when repository checks are expected to run to completion.
+- Native `status` is intentionally lightweight by default. Use
+  `status --ready` when capacity/readiness should be computed as part of a
+  status call.
 - A failed repo check does not remove native capacity. The runtime/repo split is
   visible in `native capacity` and top-level `ensure-ready` JSON output.
 
@@ -270,6 +275,10 @@ For `-p dev-all`, top-level lifecycle and entry commands are native:
 `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
 `ensure-ready`. They run through the canonical `kit/scripts/devkit` wrapper and
 the compiled `kit/bin/devctl` binary.
+
+`status` reports broker/runtime state by default and does not launch repo
+readiness checks. `status --ready`, `ensure-ready`, and `native capacity` are the
+readiness/capacity surfaces.
 
 Native `exec` uses bubblewrap with a blank root, binds `/nix/store`,
 `/nix/var/nix`, the dev workspace, per-agent HOME, managed resolver config, and

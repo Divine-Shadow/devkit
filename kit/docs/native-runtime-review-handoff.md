@@ -1,0 +1,89 @@
+# Native Runtime Review Handoff
+
+## Summary
+
+The `dev-all` default runtime is Nix-native. Canonical user entry remains
+`kit/scripts/devkit`, which execs the compiled `kit/bin/devctl` binary.
+
+Default `dev-all` lifecycle and entry commands are native:
+`up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
+`ensure-ready`. Docker Compose is explicit legacy only through
+`kit/scripts/devkit -p dev-all compose <command>`.
+
+## Review Commits
+
+- `60104d0 test: cover native dev-all default helpers`
+- `b54dd00 fix: support symlinked native worktrees`
+- `f16d01f docs: record native runtime stabilization`
+- `a23e313 feat: add native runtime smoke target`
+
+## Repeatable Validation
+
+Primary smoke:
+
+```bash
+nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make native-runtime-smoke
+```
+
+The smoke covers:
+
+- native `up`, lightweight `status`, `logs`, `scale`, and `down`
+- dry-run `attach`
+- real native `exec`
+- broker policy deny for Redis and allow/create/delete for Postgres
+- runtime-only `ensure-ready`
+- repo-failure capacity preservation
+- Spago, Playwright, and Netlify availability
+
+Merge gate:
+
+```bash
+nix --extra-experimental-features 'nix-command flakes' flake check
+cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 go test -count=1 ./...
+cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 go test -count=1 ./...
+```
+
+## Behavioral Notes
+
+- `status` is lightweight by default. Use `status --ready`, `ensure-ready`, or
+  `native capacity` when readiness/capacity checks should run.
+- `up`, `restart`, and `scale` still run readiness unless `--skip-ready` is
+  supplied.
+- Repository readiness is intentionally separate from runtime capacity. Repo
+  check failure is visible and retryable, but it does not hide launchable native
+  agent capacity.
+- Existing symlinked `agent1` worktrees are supported by projecting the resolved
+  target into the mounted `/workspaces/dev/<repo>` path. New preparation should
+  still create dedicated native worktrees.
+
+## Legacy Compose Boundary
+
+- `dev-all` Compose is only reachable via the explicit `compose` namespace.
+- Unreachable default Compose branches for `scale` and `ensure-ready` were
+  removed from `main.go`; those names are owned by the native command registry.
+- Non-`dev-all` overlays keep their legacy Compose command surface until they
+  receive native replacements.
+- Legacy Compose diagnostics that cannot support native `dev-all` refuse that
+  project instead of falling back.
+
+## Operational Requirements
+
+- Host Nix with flakes enabled.
+- `bubblewrap` available for native agent execution.
+- Host Docker daemon reachable at `/var/run/docker.sock` for broker-backed
+  test-container smokes. The socket is consumed by the broker and is not mounted
+  into native agents.
+- `postgres:latest` must be present or pullable for the broker allow-path smoke.
+- The default broker socket is `/run/devkit/test-container-broker.sock`;
+  repeatable smokes use a temporary socket/state root to avoid host ownership
+  assumptions.
+
+## Rollback
+
+The migration is split into coherent commits. To back out only the review
+readiness layer, revert `a23e313`. To back out the symlink compatibility fix,
+revert `b54dd00`. To return before the broader native default transition, revert
+the native runtime commits in reverse order from the branch tip.
+
+Do not change `kit/scripts/devkit` as part of rollback unless the wrapper
+contract itself is explicitly reopened.

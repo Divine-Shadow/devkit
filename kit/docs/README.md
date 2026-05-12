@@ -49,6 +49,9 @@ Dev Kit — Base Kit Details
 
 - Build Go CLI: `cd devkit/cli/devctl && make build` (outputs `devkit/kit/bin/devctl`).
 - Unit tests: `cd devkit/cli/devctl && go test ./...`.
+- Native runtime smoke: `make native-runtime-smoke` from the repo root. On a
+  minimal Nix shell, use
+  `nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make native-runtime-smoke`.
 - Dry-run preview: append `--dry-run` to print `docker`/`tmux` commands without executing.
   - Layout only: `devkit/kit/scripts/devkit --dry-run tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
   - Orchestration: `devkit/kit/scripts/devkit --dry-run layout-apply --file devkit/kit/examples/orchestration.yaml`
@@ -154,6 +157,7 @@ Image pairing and rebuild note:
 
 Auto-readiness (`dev-all`):
 - Native lifecycle commands `up`, `restart`, and `scale` automatically run readiness for `dev-all`.
+- Native `status` is lightweight by default and does not run repo checks; use `devctl -p dev-all status --ready` or `ensure-ready` for readiness/capacity checks.
 - Runtime readiness controls capacity; repo readiness checks are visible and retryable without hiding launchable native agents.
 - Manual invocation: `devctl -p dev-all ensure-ready [--count N] [--repo ouroboros-ide]`.
 - Escape hatch: append `--skip-ready` to lifecycle commands.
