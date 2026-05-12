@@ -3,6 +3,7 @@ package nativecmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -595,7 +596,7 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return runCommandPreservingExit(cmd)
 }
 
 func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
@@ -1176,7 +1177,8 @@ func handleExec(ctx *cmdregistry.Context) error {
 	if p.Launcher != "bubblewrap" {
 		return fmt.Errorf("native exec currently supports --launcher bubblewrap only")
 	}
-	if !parsed.dryRun {
+	dryRun := ctx.DryRun || parsed.dryRun
+	if !dryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
 		}
@@ -1185,7 +1187,7 @@ func handleExec(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	if parsed.dryRun {
+	if dryRun {
 		fmt.Fprintln(os.Stdout, launch.ShellString(cmdSpec))
 		return nil
 	}
@@ -1197,7 +1199,29 @@ func handleExec(ctx *cmdregistry.Context) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return runCommandPreservingExit(cmd)
+}
+
+func runCommandPreservingExit(cmd *exec.Cmd) error {
+	err := cmd.Run()
+	if code, ok := exitCodeFromError(err); ok {
+		os.Exit(code)
+	}
+	return err
+}
+
+func exitCodeFromError(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		code := exitErr.ExitCode()
+		if code >= 0 {
+			return code, true
+		}
+	}
+	return 0, false
 }
 
 func handleReadiness(ctx *cmdregistry.Context) error {

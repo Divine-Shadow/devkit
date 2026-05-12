@@ -1178,38 +1178,145 @@ func main() {
 		Pool:           pconf,
 		Exe:            exe,
 	}
-	if handler, ok := registry.Lookup(cmd); ok {
-		if cmd == "compose" && len(sub) > 0 && sub[0] == "up" {
-			pname := composeProjectName(ctx.Project)
-			composecmd.CleanupSharedInfra(ctx.DryRun, pname, ctx.Files)
-			if err := handler(ctx); err != nil {
+	runComposeCommand := func(composeArgs []string) {
+		handler, ok := registry.Lookup("compose")
+		if !ok {
+			die("compose command is not registered")
+		}
+		next := *ctx
+		next.Args = append([]string{}, composeArgs...)
+		if len(composeArgs) > 0 && composeArgs[0] == "up" {
+			pname := composeProjectName(next.Project)
+			composecmd.CleanupSharedInfra(next.DryRun, pname, next.Files)
+			if err := handler(&next); err != nil {
 				die(err.Error())
 			}
-			if !hasArgFlag(sub, "--skip-ready") {
-				if err := ensureProjectReady(ctx, pname, "", 0, false); err != nil {
+			if !hasArgFlag(composeArgs, "--skip-ready") {
+				if err := ensureProjectReady(&next, pname, "", 0, false); err != nil {
 					die(err.Error())
 				}
 			}
 			return
 		}
-		if cmd == "compose" && len(sub) > 0 && sub[0] == "restart" {
-			pname := composeProjectName(ctx.Project)
-			if err := handler(ctx); err != nil {
+		if len(composeArgs) > 0 && composeArgs[0] == "restart" {
+			pname := composeProjectName(next.Project)
+			if err := handler(&next); err != nil {
 				die(err.Error())
 			}
-			if !hasArgFlag(sub, "--skip-ready") {
-				if err := ensureProjectReady(ctx, pname, "", 0, false); err != nil {
+			if !hasArgFlag(composeArgs, "--skip-ready") {
+				if err := ensureProjectReady(&next, pname, "", 0, false); err != nil {
 					die(err.Error())
 				}
 			}
 			return
 		}
-		if err := handler(ctx); err != nil {
+		if err := handler(&next); err != nil {
 			die(err.Error())
 		}
-		return
+	}
+	if handler, ok := registry.Lookup(cmd); ok {
+		if useLegacyTopLevelForProject(cmd, project) {
+			// Let the legacy switch below handle non-dev-all top-level aliases.
+		} else if cmd == "compose" {
+			runComposeCommand(sub)
+			return
+		} else {
+			if err := handler(ctx); err != nil {
+				die(err.Error())
+			}
+			return
+		}
 	}
 	switch cmd {
+	case "up", "down", "restart", "status", "logs":
+		mustProject(project)
+		runComposeCommand(append([]string{cmd}, sub...))
+	case "scale":
+		mustProject(project)
+		n := "1"
+		doTmuxSync := false
+		skipReady := false
+		sessName := ""
+		namePrefix := "agent-"
+		cdPath := ""
+		// parse: scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]]
+		if len(sub) > 0 {
+			n = sub[0]
+		}
+		service := "dev-agent"
+		for i := 1; i < len(sub); i++ {
+			switch sub[i] {
+			case "--tmux-sync":
+				doTmuxSync = true
+			case "--skip-ready":
+				skipReady = true
+			case "--session":
+				if i+1 < len(sub) {
+					sessName = sub[i+1]
+					i++
+				}
+			case "--name-prefix":
+				if i+1 < len(sub) {
+					namePrefix = sub[i+1]
+					i++
+				}
+			case "--cd":
+				if i+1 < len(sub) {
+					cdPath = sub[i+1]
+					i++
+				}
+			case "--service":
+				if i+1 < len(sub) {
+					service = sub[i+1]
+					i++
+				}
+			}
+		}
+		desired := mustAtoi(n)
+		composeProject := composeProjectName(project)
+		containers := listComposeServiceContainers(composeProject, service)
+		remove, remaining, maxIndex := planScaleContainers(containers, desired)
+		if len(remove) > 0 {
+			runner.Host(dryRun, "docker", append([]string{"rm", "-f"}, remove...)...)
+		}
+		needsCompose := needsComposeAfterScalePlan(remove, remaining, maxIndex, desired)
+		if needsCompose {
+			runner.Compose(dryRun, files, "up", "-d", "--no-recreate", "--scale", service+"="+n)
+		}
+		if !skipReady && needsCompose {
+			if err := ensureProjectReady(ctx, composeProject, service, desired, false); err != nil {
+				die(err.Error())
+			}
+		}
+		if doTmuxSync && !skipTmux() {
+			// Best effort: if tmux present, sync windows up to N
+			doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, mustAtoi(n), service)
+		}
+	case "ensure-ready":
+		mustProject(project)
+		svc := ""
+		count := 0
+		for i := 0; i < len(sub); i++ {
+			switch sub[i] {
+			case "--count":
+				if i+1 < len(sub) {
+					count = mustAtoi(sub[i+1])
+					i++
+				} else {
+					die("--count requires a value")
+				}
+			case "--service":
+				if i+1 < len(sub) {
+					svc = strings.TrimSpace(sub[i+1])
+					i++
+				} else {
+					die("--service requires a value")
+				}
+			}
+		}
+		if err := ensureProjectReady(ctx, composeProjectName(project), svc, count, true); err != nil {
+			die(err.Error())
+		}
 	case "layout-apply":
 		layoutPath := ""
 		doAttach := false
@@ -3129,6 +3236,19 @@ exit 0`, home, home, home, home, home)
 }
 
 func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(2) }
+
+func useLegacyTopLevelForProject(cmd, project string) bool {
+	if strings.TrimSpace(project) == "dev-all" {
+		return false
+	}
+	switch cmd {
+	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach":
+		return true
+	default:
+		return false
+	}
+}
+
 func mustProject(p string) {
 	if strings.TrimSpace(p) == "" {
 		die("-p <project> is required")

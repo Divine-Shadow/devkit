@@ -2,6 +2,7 @@ package nativecmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -193,6 +194,18 @@ func TestParseTopExecArgs(t *testing.T) {
 	}
 	if len(parsed.command) != 2 || parsed.command[0] != "git" || parsed.command[1] != "status" {
 		t.Fatalf("command = %#v", parsed.command)
+	}
+}
+
+func TestExitCodeFromError(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 7")
+	err := cmd.Run()
+	code, ok := exitCodeFromError(err)
+	if !ok || code != 7 {
+		t.Fatalf("exitCodeFromError = %d, %t; err=%v", code, ok, err)
+	}
+	if code, ok := exitCodeFromError(nil); ok || code != 0 {
+		t.Fatalf("nil exitCodeFromError = %d, %t", code, ok)
 	}
 }
 
