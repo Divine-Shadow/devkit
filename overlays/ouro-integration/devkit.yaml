@@ -8,7 +8,8 @@ defaults:
   branch_prefix: agent
 
 runtime:
-  image: local/dev-agent:ouro-integration
+  canonical: false
+  flake: .#ouro-integration
   codex_version: 0.130.0
   core_check: |
     (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)

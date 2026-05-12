@@ -9,23 +9,24 @@ runtime to refresh.
 
 ## Canonical Pairings
 
-Run `devkit/kit/scripts/devkit image-matrix` for the machine-readable view. The
-command name is historical; native overlays can declare `runtime.flake` instead
-of `runtime.image`.
+Run `devkit/kit/scripts/devkit image-matrix --all` for the machine-readable
+view. The command name is historical; runtime metadata now uses
+`runtime.flake`.
 
 | Repo | Canonical overlay | Service | Runtime | Core build check |
 | --- | --- | --- | --- | --- |
 | `ouroboros-ide` | `dev-all` | `dev-agent` | `.#dev-all` | `bash scripts/sbt2 "Compile / compile"` |
-| `ouroboros-static-front-end` | `ouroboros-static-front-end` | `frontend` | `local/dev-agent:ouroboros-static-front-end` | `npm run build` |
-| `ouroboros-terraform` | `ouroboros-terraform` | `dev-agent` | `local/dev-agent:ouroboros-terraform` | `terraform fmt -check -recursive` |
-| `pokeemerald` | `pokeemerald` | `dev-agent` | `local/dev-agent:pokeemerald` | `make modern` |
+| `dumb-onion-hax` | `dumb-onion-hax` | `dev-agent` | `.#dumb-onion-hax` | `sbt compile` |
+| `ouroboros-static-front-end` | `ouroboros-static-front-end` | `frontend` | `.#ouroboros-static-front-end` | `npm run build` |
+| `ouroboros-terraform` | `ouroboros-terraform` | `dev-agent` | `.#ouroboros-terraform` | `terraform fmt -check -recursive` |
+| `pokeemerald` | `pokeemerald` | `dev-agent` | `.#pokeemerald` | `make modern` |
 
 Each listed runtime is expected to carry the current Codex CLI version declared
 in the overlay `runtime.codex_version`. On May 9, 2026 that value is `0.130.0`.
 Verify local runtimes with:
 
 ```bash
-devkit/kit/scripts/devkit image-matrix --check
+devkit/kit/scripts/devkit image-matrix --all --check
 ```
 
 Use `--all` when you need to include legacy/non-canonical overlays. The
@@ -34,20 +35,17 @@ Use `--all` when you need to include legacy/non-canonical overlays. The
 
 ## Refresh Rule
 
-Refresh native `dev-all` by updating the flake inputs/packages and rebuilding
-the CLI:
+Refresh native runtimes by updating the overlay `runtime.nix` or root flake
+inputs/packages and rebuilding the CLI:
 
 ```bash
 make -C devkit/cli/devctl build
 devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 --flake .#dev-all
 ```
 
-Refresh legacy Compose images by the repo-specific image tag and Dockerfile
-declared by that non-`dev-all` overlay.
-
-Then recreate only the non-`dev-all` containers that use that image. If a stack
-name contains `codex8`, confirm the mounted repo and image first; the stack name
-alone is not evidence.
+Legacy Compose image tags may still appear in `compose.override.yml` files for
+historical non-`dev-all` operation, but they are no longer the authoritative
+runtime pairing metadata.
 
 ## Build Evidence
 

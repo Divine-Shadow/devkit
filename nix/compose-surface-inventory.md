@@ -40,13 +40,13 @@ non-`dev-all` overlays until those overlays receive native replacements.
 | Ingress/operator-attention metadata | Partial native evidence | `overlays/dev-all/devkit.yaml` carries route/listener metadata, but this slice does not yet prove host-managed ingress or operator-attention lifecycle. This is a retirement blocker for that surface only. |
 | `doctor-runtime` and other Compose-only diagnostics | Rejected for dev-all | These commands refuse `dev-all` and point users to native readiness/capacity. |
 | `overlays/dev-all/compose.override.yml` | Historical artifact | Kept as migration history/image pairing reference. The CLI no longer allows it to be executed through `-p dev-all compose`. |
-| `overlays/dev-all/devkit.yaml` runtime metadata | Native replacement | Declares `runtime.flake: .#dev-all` instead of `runtime.image`; the image reference survives only in the historical Compose file. |
-| `overlays/codex`, `overlays/ouroboros-static-front-end`, `_template`, and other overlay `compose.override.yml` files | Legacy quarantine | Still describe non-`dev-all` legacy overlay stacks. |
+| `overlays/*/devkit.yaml` runtime metadata | Native replacement | Every overlay declares `runtime.flake`; `runtime.image` is no longer authoritative runtime metadata. |
+| `overlays/codex`, `overlays/ouroboros-static-front-end`, `_template`, and other overlay `compose.override.yml` files | Legacy quarantine | Still describe non-`dev-all` legacy lifecycle stacks. Their tool runtimes are Nix flake outputs, but top-level lifecycle dispatch still falls through to Compose except for `dev-all`. |
 | `kit/compose.yml`, `kit/compose.dns.yml`, `kit/compose.hardened.yml`, `kit/compose.envoy.yml`, `kit/compose.pool.yml` | Legacy quarantine | Shared Compose base files for non-`dev-all` overlays and historical integration tests. |
 | `cli/devctl/internal/testutil` Compose fixtures and integration tests | Legacy quarantine | Test infrastructure for legacy overlays. Native regression tests separately assert that `dev-all` does not emit Compose commands. |
 | Postgres broker Docker API | Native replacement | Native agents receive `DOCKER_HOST=unix://<broker socket>`. This is brokered Docker API access, not Docker Compose, and `/var/run/docker.sock` is not mounted. |
 | Tinyproxy/proxy environment | Native replacement / legacy quarantine | Native plans no longer default `HTTP_PROXY` or `HTTPS_PROXY` to a Compose-era proxy. Explicit proxy configuration is still honored. |
-| Runtime tools: PureScript, Spago, Netlify, Playwright | Native replacement | Provided by the `dev-all` flake/devShell and verified by overlay readiness. Hooks do not install these tools or Playwright browsers at runtime. |
+| Runtime tools: PureScript, Spago, Netlify, Playwright, Terraform, Packer, ARM embedded tools | Native replacement | Provided by per-overlay flake/devShell outputs and verified by overlay runtime smokes. Hooks should not install these CLIs or Playwright browsers at runtime. |
 | Repo-local shebangs such as `#!/usr/bin/env node` | Native replacement | Bubblewrap launches add `/usr/bin/env`, `/bin/sh`, and `/bin/bash` symlinks into the blank-root sandbox so lockfile-installed tools can execute. |
 
 ## Readiness Matrix
@@ -64,7 +64,7 @@ non-`dev-all` overlays until those overlays receive native replacements.
 | Tmux/layout/worktrees | Native for `dev-all` | dry-run/runtime parity list plus linked-source-worktree readiness | none for current `dev-all` paths |
 | Ingress/operator attention | Partial | config exists | host-managed smoke evidence missing |
 | Compose command namespace | Rejected for `dev-all` | smoke and unit tests | none |
-| Non-`dev-all` overlays | Legacy Compose | inventory only | native replacements not built |
+| Non-`dev-all` overlays | Native tool flakes, legacy lifecycle | per-overlay `runtime.flake` and `overlay-runtime-smoke` | native lifecycle/exec/down not implemented outside `dev-all` |
 
 ## Verification Hooks
 
@@ -79,6 +79,8 @@ non-`dev-all` overlays until those overlays receive native replacements.
 - `kit/scripts/native-runtime-smoke` checks the canonical wrapper failure mode,
   `dev-all compose` rejection, native plan Git metadata binds, broker policy,
   runtime-only readiness, and PureScript/Spago/Netlify/Playwright availability.
+- `kit/scripts/overlay-runtime-smoke` checks every overlay's Nix flake runtime
+  tools without starting Compose.
 - Full readiness is the final integration gate:
 
 ```bash

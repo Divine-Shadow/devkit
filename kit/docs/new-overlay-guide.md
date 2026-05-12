@@ -10,6 +10,7 @@ Manual steps if not using the template:
   - Required: `workspace: ../../<your-repo-folder>` — the CLI resolves it to an absolute `WORKSPACE_DIR` before compose runs.
   - Recommended: `service: <service-name>` to set the default service for CLI exec/attach/ssh/repo commands.
   - Recommended: `defaults:` block describing the repo name (`defaults.repo`), desired agent count (`defaults.agents`), and branch metadata (`defaults.base_branch`, `defaults.branch_prefix`) so runtime-config helpers work without extra flags.
+  - Required: `runtime.flake: .#<overlay-name>` plus `runtime.codex_version` and `runtime.core_check`. `_template` uses `.#template-agent`.
   - Optional: `env:` to provide host defaults (e.g., `AWS_PROFILE`) that users can still override.
   - Optional: `env_files:` pointing at dotenv-style files (paths relative to the overlay directory) to prepopulate env vars without committing secrets.
   - Optional hooks: `warm`, `maintain` (run inside container via `devkit warm|maintain`).
@@ -23,6 +24,9 @@ Manual steps if not using the template:
         fi
         # your existing warm steps (npm install, sbt update, ...)
       ````
+
+- overlays/<name>/runtime.nix
+  - Define the Nix shell backing `runtime.flake`. Keep the root `flake.nix` as the umbrella entrypoint and import this file from there.
 
 - overlays/<name>/compose.override.yml
   - Define your overlay service (e.g., `frontend`) and join it to the internal network.
@@ -76,6 +80,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ```
 workspace: ../../<your-repo-folder>
 service: frontend
+runtime:
+  flake: .#<name>
+  codex_version: 0.130.0
+  core_check: npm run build
 env:
   AWS_PROFILE: dev
 env_files:
@@ -85,6 +93,7 @@ hooks:
   maintain: npm run build
 ```
 - `service:` ensures CLI commands like `ssh-setup`, `repo-push-ssh`, `exec`, and `attach` target the right container.
+- `runtime.flake` is the authoritative runtime pairing. Compose image tags in `compose.override.yml` are legacy lifecycle metadata only.
 
 4) Networking gotchas
 - Your overlay service must join `dev-internal` to resolve `tinyproxy` and DNS sidecar names.
@@ -121,6 +130,8 @@ Quoting pitfalls (important)
 
 8) Quick checklist
 - [ ] `devkit.yaml` created with `workspace` and `service`.
+- [ ] `devkit.yaml` declares `runtime.flake`, `runtime.codex_version`, and `runtime.core_check`.
+- [ ] `runtime.nix` exists and is exported by the root `flake.nix`.
 - [ ] Compose override uses correct `build.context` path, mounts `${WORKSPACE_DIR}` into `/workspace`, and joins `dev-internal`.
 - [ ] Dockerfile installs `netcat-openbsd` (for SSH proxy).
 - [ ] Container stays up (keepalive command) so tmux/exec can attach.

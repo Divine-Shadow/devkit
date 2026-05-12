@@ -1,7 +1,6 @@
 package imagematrix
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -72,7 +71,10 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 			return nil, err
 		}
 		for _, dir := range dirs {
-			if !dir.IsDir() || strings.HasPrefix(dir.Name(), "_") {
+			if !dir.IsDir() {
+				continue
+			}
+			if strings.HasPrefix(dir.Name(), "_") && !includeAll {
 				continue
 			}
 			overlay := dir.Name()
@@ -80,9 +82,12 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 			if err != nil {
 				return nil, err
 			}
+			if cfgDir == "" {
+				continue
+			}
 			image := strings.TrimSpace(cfg.Runtime.Image)
 			flake := strings.TrimSpace(cfg.Runtime.Flake)
-			if image == "" && flake == "" {
+			if image == "" && flake == "" && !includeAll {
 				continue
 			}
 			canonical := true
@@ -138,8 +143,16 @@ func Check(entries []Entry, dryRun bool) error {
 		if e.Repo == "" {
 			problems = append(problems, fmt.Sprintf("%s: runtime repo/defaults.repo is empty", e.Overlay))
 		}
-		if e.Image == "" && e.Flake == "" {
-			problems = append(problems, fmt.Sprintf("%s: runtime.image or runtime.flake is empty", e.Overlay))
+		if e.Flake == "" {
+			problems = append(problems, fmt.Sprintf("%s: runtime.flake is empty", e.Overlay))
+		}
+		if e.Image != "" {
+			problems = append(problems, fmt.Sprintf("%s: runtime.image is legacy; declare runtime.flake instead", e.Overlay))
+		}
+		if e.Flake != "" {
+			if expected := expectedFlake(e.Overlay); expected != "" && e.Flake != expected {
+				problems = append(problems, fmt.Sprintf("%s: runtime.flake %s does not match expected %s", e.Overlay, e.Flake, expected))
+			}
 		}
 		if e.CodexVersion == "" {
 			problems = append(problems, fmt.Sprintf("%s: runtime.codex_version is empty", e.Overlay))
@@ -147,17 +160,14 @@ func Check(entries []Entry, dryRun bool) error {
 		if e.CoreCheck == "" {
 			problems = append(problems, fmt.Sprintf("%s: runtime.core_check is empty", e.Overlay))
 		}
-		if prev, ok := seenRepo[e.Repo]; ok {
+		if prev, ok := seenRepo[e.Repo]; ok && e.Canonical {
 			problems = append(problems, fmt.Sprintf("%s: repo %s is already paired by overlay %s", e.Overlay, e.Repo, prev))
-		} else if e.Repo != "" {
+		} else if e.Repo != "" && e.Canonical {
 			seenRepo[e.Repo] = e.Overlay
 		}
-		if e.Image != "" && e.ComposePath != "" {
-			data, err := os.ReadFile(e.ComposePath)
-			if err != nil {
-				problems = append(problems, fmt.Sprintf("%s: read compose override: %v", e.Overlay, err))
-			} else if !bytes.Contains(data, []byte("image: "+e.Image)) {
-				problems = append(problems, fmt.Sprintf("%s: compose override does not declare image: %s", e.Overlay, e.Image))
+		if e.ComposePath != "" {
+			if _, err := os.Stat(e.ComposePath); err != nil && !os.IsNotExist(err) {
+				problems = append(problems, fmt.Sprintf("%s: stat compose override: %v", e.Overlay, err))
 			}
 		}
 		if e.Image != "" && e.CodexVersion != "" {
@@ -191,6 +201,13 @@ func runtimeArtifact(e Entry) string {
 		return e.Flake
 	}
 	return e.Image
+}
+
+func expectedFlake(overlay string) string {
+	if overlay == "_template" {
+		return ".#template-agent"
+	}
+	return ".#" + overlay
 }
 
 func imageCodexVersion(image string) (string, error) {

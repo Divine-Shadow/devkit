@@ -53,6 +53,9 @@ Dev Kit — Base Kit Details
 - Native runtime smoke: `make native-runtime-smoke` from the repo root. On a
   minimal Nix shell, use
   `nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make native-runtime-smoke`.
+- Overlay runtime smoke: `make overlay-runtime-smoke` from the repo root proves
+  every `overlays/*/devkit.yaml` `runtime.flake` target has its expected core
+  tools.
 - Dry-run preview: append `--dry-run` to print native bubblewrap/devkit commands for `dev-all` or Docker Compose commands for legacy overlays without executing.
   - Layout only: `devkit/kit/scripts/devkit --dry-run tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
   - Orchestration: `devkit/kit/scripts/devkit --dry-run layout-apply --file devkit/kit/examples/orchestration.yaml`
@@ -147,9 +150,9 @@ Worktrees workflow (dev-all overlay):
 - Open tmux across worktrees: `devctl -p dev-all worktrees-tmux <repo> <count>`.
 
 Runtime pairing and refresh note:
-- Repo-to-runtime pairings are declared in overlay `runtime:` metadata and summarized in `kit/docs/repo-container-image-pairings.md`.
+- Repo-to-runtime pairings are declared in overlay `runtime.flake` metadata and summarized by `kit/scripts/devkit image-matrix --all`.
 - Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only.
-- Verify the local image/Codex matrix with `scripts/devkit image-matrix --check`.
+- Verify the overlay runtime matrix with `scripts/devkit image-matrix --all --check`.
 - `dev-all` no longer has an executable Compose runtime path. `overlays/dev-all/compose.override.yml` remains historical inventory only.
 - Refresh native agents through Nix/devkit instead of rebuilding a Docker agent image:
   - `make -C cli/devctl build`

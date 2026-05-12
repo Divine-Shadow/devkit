@@ -6,7 +6,7 @@ defaults:
   base_branch: main
   branch_prefix: agent
 runtime:
-  image: local/dev-agent:ouroboros-terraform
+  flake: .#ouroboros-terraform
   codex_version: 0.130.0
   core_check: terraform fmt -check -recursive
   notes: AWS/HashiCorp runtime for Terraform maintenance.

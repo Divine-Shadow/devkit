@@ -35,9 +35,9 @@ type Runtime struct {
 	// Canonical marks this overlay as the one supported repo/container pairing
 	// for Defaults.Repo. Legacy build shims can set this false.
 	Canonical *bool `yaml:"canonical"`
-	// Image is the stable repo-specific image reference operators should target.
+	// Image is legacy Compose metadata; native runtime metadata should use Flake.
 	Image string `yaml:"image"`
-	// Flake is the native Nix runtime surface for overlays without a container image.
+	// Flake is the native Nix runtime surface for this overlay.
 	Flake string `yaml:"flake"`
 	// CodexVersion is the expected `codex --version` semantic version.
 	CodexVersion string `yaml:"codex_version"`

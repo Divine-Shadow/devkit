@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
+
+overlays=(
+  _template
+  codex
+  dev-all
+  dumb-onion-hax
+  ouro-integration
+  ouroboros-static-front-end
+  ouroboros-terraform
+  pokeemerald
+)
+
+flake_for() {
+  case "$1" in
+    _template) printf '%s\n' template-agent ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
+smoke_for() {
+  case "$1" in
+    _template)
+      printf '%s\n' 'codex --version && git --version && uv --version && python3 --version'
+      ;;
+    codex)
+      printf '%s\n' 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
+      ;;
+    dev-all)
+      printf '%s\n' 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+      ;;
+    dumb-onion-hax)
+      printf '%s\n' 'codex --version && command -v sbt java aws python3 >/dev/null'
+      ;;
+    ouro-integration)
+      printf '%s\n' 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
+      ;;
+    ouroboros-static-front-end)
+      printf '%s\n' 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
+      ;;
+    ouroboros-terraform)
+      printf '%s\n' 'codex --version && terraform version | head -1 && packer version && aws --version'
+      ;;
+    pokeemerald)
+      printf '%s\n' 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+run_overlay() {
+  local overlay="$1"
+  local flake smoke
+  flake="$(flake_for "$overlay")"
+  smoke="$(smoke_for "$overlay")" || {
+    echo "unknown overlay runtime smoke: $overlay" >&2
+    return 2
+  }
+  printf '\n== %s (%s) ==\n' "$overlay" ".#$flake"
+  (
+    cd "$DEVKIT_ROOT"
+    nix "${NIX_FLAGS[@]}" develop ".#$flake" --command bash -lc "$smoke"
+  )
+}
+
+if [ "$#" -gt 0 ]; then
+  for overlay in "$@"; do
+    run_overlay "$overlay"
+  done
+else
+  for overlay in "${overlays[@]}"; do
+    run_overlay "$overlay"
+  done
+fi
+
+printf '\noverlay-runtime-smoke: ok\n'

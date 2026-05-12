@@ -1,17 +1,20 @@
 # Devkit Nix Runtime Shells
 
 This directory tracks the Nix-first replacement surface for long-lived devkit
-agent containers. The root `flake.nix` exposes development shells that mirror
-the current Dockerfile families closely enough for migration smoke testing.
+agent containers. The root `flake.nix` remains the umbrella entrypoint, while
+each overlay owns its shell definition in `overlays/<overlay>/runtime.nix`.
 
 Current shell targets:
 
 - `template-agent`: baseline shell for new overlays.
-- `ouroboros-dev-agent`: Nix shell for the external Ouroboros Codex agent image.
-- `dev-all`: alias for `ouroboros-dev-agent`.
-- `codex`: alias for `ouroboros-dev-agent`.
+- `ouroboros-dev-agent`: compatibility alias for the external Ouroboros Codex
+  agent image family.
+- `dev-all`: canonical multi-worktree Ouroboros shell.
+- `codex`: single-checkout Ouroboros shell.
+- `dumb-onion-hax`: Scala/SBT shell for the dumb-onion-hax repo.
 - `ouroboros-terraform`: Ouroboros agent plus Terraform and Packer.
-- `ouro-integration`: alias for `ouroboros-terraform`.
+- `ouro-integration`: integration shell with Terraform/Packer plus the
+  Ouroboros agent toolchain.
 - `pokeemerald`: Ouroboros agent plus ARM embedded toolchain.
 - `ouroboros-static-front-end`: Node/static frontend shell.
 - `runtime-test-agent`: lightweight integration-test shell.
@@ -25,8 +28,30 @@ nix --extra-experimental-features 'nix-command flakes' flake check
 nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'git --version && sbt --version'
 ```
 
+Overlay smoke commands:
+
+```bash
+nix --extra-experimental-features 'nix-command flakes' develop .#template-agent --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
+nix --extra-experimental-features 'nix-command flakes' develop .#codex --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+nix --extra-experimental-features 'nix-command flakes' develop .#dumb-onion-hax --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop .#ouro-integration --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-static-front-end --command bash -lc 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
+nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-terraform --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version'
+nix --extra-experimental-features 'nix-command flakes' develop .#pokeemerald --command bash -lc 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
+```
+
+Run them together with:
+
+```bash
+kit/scripts/overlay-runtime-smoke
+```
+
 Every shell conversion must be verified against
 `kit/docs/proposals/nix-runtime-verification-contract.md`.
+`nix flake check` also runs `nix/validate-overlay-runtimes.py`, which requires
+each overlay `devkit.yaml` to declare the expected `runtime.flake` and have a
+matching `overlays/<overlay>/runtime.nix`.
 
 Current smoke evidence and known parity gaps are tracked in
 `nix/runtime-parity.md`.

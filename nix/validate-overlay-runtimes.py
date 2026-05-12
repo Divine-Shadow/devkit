@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+
+EXPECTED_FLAKES = {
+    "_template": ".#template-agent",
+}
+
+
+def expected_flake(overlay: str) -> str:
+    return EXPECTED_FLAKES.get(overlay, f".#{overlay}")
+
+
+def clean_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def parse_top_level_mapping(text: str, section_name: str) -> dict[str, str]:
+    section = None
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        stripped = raw_line.strip()
+        if indent == 0 and stripped.endswith(":"):
+            section = stripped[:-1]
+            continue
+        if section != section_name or indent == 0 or ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        values[key.strip()] = clean_scalar(value)
+    return values
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: validate-overlay-runtimes.py <overlays-dir>", file=sys.stderr)
+        return 2
+
+    overlays_dir = Path(sys.argv[1])
+    problems = []
+    entries = []
+
+    for devkit_yaml in sorted(overlays_dir.glob("*/devkit.yaml")):
+        overlay = devkit_yaml.parent.name
+        runtime = parse_top_level_mapping(devkit_yaml.read_text(), "runtime")
+        flake = runtime.get("flake", "").strip()
+        image = runtime.get("image", "").strip()
+        core_check = runtime.get("core_check", "").strip()
+        codex_version = runtime.get("codex_version", "").strip()
+        runtime_nix = devkit_yaml.parent / "runtime.nix"
+        expected = expected_flake(overlay)
+
+        if not flake:
+            problems.append(f"{overlay}: runtime.flake is required")
+        elif flake != expected:
+            problems.append(f"{overlay}: runtime.flake {flake!r} does not match expected {expected!r}")
+        if image:
+            problems.append(f"{overlay}: runtime.image is legacy metadata; use runtime.flake")
+        if not runtime_nix.exists():
+            problems.append(f"{overlay}: missing per-overlay runtime.nix")
+        if not core_check:
+            problems.append(f"{overlay}: runtime.core_check is required")
+        if not codex_version:
+            problems.append(f"{overlay}: runtime.codex_version is required")
+
+        entries.append(
+            {
+                "overlay": overlay,
+                "flake": flake,
+                "runtime_nix": str(runtime_nix.relative_to(overlays_dir.parent)),
+                "core_check": core_check,
+                "codex_version": codex_version,
+            }
+        )
+
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1
+
+    print(json.dumps({"overlays": entries}, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

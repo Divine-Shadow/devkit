@@ -306,55 +306,49 @@
                 export NO_PROXY=''${NO_PROXY:-localhost,127.0.0.1}
               '' + extraHook;
             };
+
+          runtimeArgs = {
+            inherit mkShell pkgs pkgsPlaywright;
+            packages = {
+              inherit
+                pinnedCodex
+                pinnedDockerCli
+                pinnedGo
+                pinnedMgbaHeadless
+                pinnedNpmTools
+                pinnedPacker
+                pinnedTerraform
+                ;
+            };
+            toolsets = {
+              inherit commonAgentTools ouroborosAgentTools;
+            };
+          };
+
+          templateAgent = import ./overlays/_template/runtime.nix runtimeArgs;
+          codex = import ./overlays/codex/runtime.nix runtimeArgs;
+          devAll = import ./overlays/dev-all/runtime.nix runtimeArgs;
+          dumbOnionHax = import ./overlays/dumb-onion-hax/runtime.nix runtimeArgs;
+          ouroIntegration = import ./overlays/ouro-integration/runtime.nix runtimeArgs;
+          ouroborosStaticFrontEnd = import ./overlays/ouroboros-static-front-end/runtime.nix runtimeArgs;
+          ouroborosTerraform = import ./overlays/ouroboros-terraform/runtime.nix runtimeArgs;
+          pokeemerald = import ./overlays/pokeemerald/runtime.nix runtimeArgs;
         in
         {
-          default = self.devShells.${pkgs.system}.dev-all;
+          default = devAll;
 
-          template-agent = mkShell "template-agent" commonAgentTools "";
+          _template = templateAgent;
+          template-agent = templateAgent;
 
-          ouroboros-dev-agent = mkShell "ouroboros-dev-agent" ouroborosAgentTools ''
-            export JAVA_HOME=${pkgs.jdk21}
-            export GOROOT=${pinnedGo}
-            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
-            export PATH=${pkgs.jdk21}/bin:$PATH
-          '';
+          ouroboros-dev-agent = codex;
 
-          dev-all = self.devShells.${pkgs.system}.ouroboros-dev-agent;
-
-          codex = self.devShells.${pkgs.system}.ouroboros-dev-agent;
-
-          ouroboros-terraform = mkShell "ouroboros-terraform" (ouroborosAgentTools ++ (with pkgs; [
-            pinnedPacker
-            pinnedTerraform
-          ])) ''
-            export JAVA_HOME=${pkgs.jdk21}
-            export GOROOT=${pinnedGo}
-            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
-            export PATH=${pkgs.jdk21}/bin:$PATH
-          '';
-
-          ouro-integration = self.devShells.${pkgs.system}.ouroboros-terraform;
-
-          pokeemerald = mkShell "pokeemerald" (ouroborosAgentTools ++ (with pkgs; [
-            gcc-arm-embedded
-          ])) ''
-            export JAVA_HOME=${pkgs.jdk21}
-            export GOROOT=${pinnedGo}
-            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
-            export PATH=${pkgs.jdk21}/bin:$PATH
-          '';
-
-          ouroboros-static-front-end = mkShell "ouroboros-static-front-end" (commonAgentTools ++ (with pkgs; [
-            nodejs_20
-            purescript
-            pinnedCodex
-            pinnedNpmTools
-          ]) ++ [
-            pkgsPlaywright.deno
-            pkgsPlaywright.playwright-test
-          ]) ''
-            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
-          '';
+          dev-all = devAll;
+          codex = codex;
+          dumb-onion-hax = dumbOnionHax;
+          ouro-integration = ouroIntegration;
+          ouroboros-static-front-end = ouroborosStaticFrontEnd;
+          ouroboros-terraform = ouroborosTerraform;
+          pokeemerald = pokeemerald;
 
           runtime-test-agent = mkShell "runtime-test-agent" (with pkgs; [
             bashInteractive
@@ -405,6 +399,13 @@
             - tool parity against the source Dockerfile
             - brokered OCI access check where applicable
             EOF
+          '';
+
+          overlay-runtime-metadata = pkgs.runCommand "devkit-overlay-runtime-metadata" {
+            nativeBuildInputs = [ pkgs.python3 ];
+          } ''
+            mkdir -p "$out"
+            python3 ${./nix/validate-overlay-runtimes.py} ${./overlays} > "$out/overlay-runtimes.json"
           '';
         }
       );

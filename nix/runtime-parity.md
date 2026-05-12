@@ -6,13 +6,20 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
 
 ## Implemented Artifacts
 
-- `flake.nix`: dev shells for the current container families and a Nix-built
-  `postgres-broker` package.
-- `devShells.x86_64-linux.dev-all`: replacement shell for the external
-  Ouroboros Codex agent image.
-- `devShells.x86_64-linux.ouroboros-terraform`: `dev-all` plus Terraform and
-  Packer pins.
-- `devShells.x86_64-linux.pokeemerald`: `dev-all` plus ARM embedded toolchain.
+- `flake.nix`: umbrella flake exposing one dev shell per overlay plus a
+  Nix-built `postgres-broker` package.
+- `overlays/*/runtime.nix`: per-overlay shell definitions for `dev-all`,
+  `codex`, `dumb-onion-hax`, `ouro-integration`,
+  `ouroboros-static-front-end`, `ouroboros-terraform`, `pokeemerald`, and
+  `_template`/`template-agent`.
+- `devShells.x86_64-linux.dev-all` and `codex`: replacement shells for the
+  external Ouroboros Codex agent image family.
+- `devShells.x86_64-linux.dumb-onion-hax`: Scala/SBT shell for the
+  `dumb-onion-hax` overlay.
+- `devShells.x86_64-linux.ouroboros-terraform` and `ouro-integration`:
+  Ouroboros agent tools plus Terraform and Packer pins.
+- `devShells.x86_64-linux.pokeemerald`: Ouroboros agent tools plus ARM
+  embedded toolchain.
 - `devShells.x86_64-linux.ouroboros-static-front-end`: static frontend shell.
 - `devShells.x86_64-linux.template-agent`, `runtime-test-agent`, and
   `tinyproxy`: replacements for lightweight support images.
@@ -57,8 +64,8 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
   for git reachability, frontend warm/install, frontend Playwright, Netlify
   dev-server boot, PureScript bridge generation, frontend typecheck, frontend
   tests, and the core SBT compile check.
-- `overlays/dev-all/devkit.yaml` declares `runtime.flake: .#dev-all` instead
-  of a container image as the canonical runtime artifact.
+- Every `overlays/*/devkit.yaml` declares `runtime.flake`; `runtime.image`
+  remains only in legacy Compose files, not in overlay runtime metadata.
 - Native launch preparation seeds Codex auth into per-agent native HOME state
   when host Codex auth is present.
 - `codex-auth`, `codex-test`, `codex-debug`, `exec-cd`, `attach-cd`,
@@ -72,7 +79,9 @@ All commands require explicit flakes on this host:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make native-runtime-smoke
+nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#gnumake nixpkgs#go -c make overlay-runtime-smoke
 nix --extra-experimental-features 'nix-command flakes' flake check
+kit/scripts/devkit image-matrix --all --check
 nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths .#postgres-broker
 nix --extra-experimental-features 'nix-command flakes' develop .#runtime-test-agent --command bash -lc 'git --version && ssh -V && curl --version | head -1'
 nix --extra-experimental-features 'nix-command flakes' develop .#template-agent --command bash -lc 'git --version && uv --version && python3 --version'
@@ -241,6 +250,12 @@ Observed key versions:
   rooted at `/home/bayesartre/dev/ouroboros-ide/.git/worktrees/...`, and
   `git ls-remote`, Spago, Netlify, Deno, and Playwright all succeeded through
   top-level `exec`.
+- Overlay runtime smoke output: `_template`/`template-agent`, `codex`,
+  `dev-all`, `dumb-onion-hax`, `ouro-integration`,
+  `ouroboros-static-front-end`, `ouroboros-terraform`, and `pokeemerald` all
+  entered their declared flakes and passed their tool-specific smoke commands.
+- Runtime matrix validation output: `kit/scripts/devkit image-matrix --all
+  --check` reported `image-matrix: OK`.
 - Full no-skip `ensure-ready` evidence is recorded in
   `nix/full-readiness-evidence.md`: native runtime, broker, Git, frontend warm,
   Playwright, Netlify dev-server boot, PureScript bridge generation, frontend
@@ -323,6 +338,9 @@ Observed key versions:
 - A failed repo check does not remove native capacity. The runtime/repo split is
   visible in `native capacity` and top-level `ensure-ready` JSON output, but
   top-level app readiness exits non-zero on repo failures by default.
+- Non-`dev-all` overlays now have Nix flake tool runtimes, but their top-level
+  lifecycle and exec surfaces still use legacy Compose unless a future native
+  lifecycle slice extends the native dispatcher beyond `dev-all`.
 
 ## Host Capability Requirements
 
@@ -356,5 +374,6 @@ It sets `DOCKER_HOST` to the broker endpoint and does not bind
 `/var/run/docker.sock`.
 
 Docker Compose is retired for `dev-all`: `kit/scripts/devkit -p dev-all compose
-<command>` fails before Docker is invoked. Non-`dev-all` overlays keep their
-legacy Compose surface until they receive native replacements.
+<command>` fails before Docker is invoked. Non-`dev-all` overlays now have
+declared Nix `runtime.flake` tool environments, but still keep their legacy
+Compose lifecycle surface until they receive native lifecycle replacements.
