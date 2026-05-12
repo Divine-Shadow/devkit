@@ -107,6 +107,40 @@ func TestGitIdentityForRepoCommandUsesIdentityValues(t *testing.T) {
 	}
 }
 
+func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "id_ed25519"), []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNativeSSHConfig(home, nil); err != nil {
+		t.Fatalf("write default config: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(sshDir, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "HostName github.com") || !strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+		t.Fatalf("default config missing github host/default key:\n%s", text)
+	}
+
+	if err := writeNativeSSHConfig(home, []string{"work_key"}); err != nil {
+		t.Fatalf("write custom config: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(sshDir, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(data)
+	if !strings.Contains(text, filepath.Join(home, ".ssh", "work_key")) || strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+		t.Fatalf("custom config did not use only custom key:\n%s", text)
+	}
+}
+
 func TestPlanScaleContainersShrinksHighestIndexes(t *testing.T) {
 	containers := []composeServiceContainer{
 		{Name: "devkit-ouro8-dev-agent-1", Index: 1},

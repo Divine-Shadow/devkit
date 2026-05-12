@@ -6,33 +6,31 @@ This guide shows how to run multiple isolated dev agents using Git worktrees and
 - You want N parallel agents, each with its own working copy and independent Codex/SSH state.
 - You want quick switching between branches without stepping on other agents.
 
-## One‑time setup (dev‑all overlay)
-1) Mount the whole dev root: `scripts/devkit -p dev-all up`
-2) Create N worktrees for a repo (e.g., 2 for `ouroboros-ide`):
-   - `scripts/devkit worktrees-init ouroboros-ide 2`
+## One-time setup (flake-backed overlays)
+1) Bring up the native overlay: `scripts/devkit -p <overlay> up`
+2) Create N worktrees for a repo:
+   - `scripts/devkit -p <overlay> worktrees-setup <repo> 2`
 3) Open tmux with N windows, one per worktree:
-   - `scripts/devkit -p dev-all worktrees-tmux ouroboros-ide 2`
-   - Auto‑runs `ssh-setup` for each agent.
+   - `scripts/devkit -p <overlay> worktrees-tmux <repo> 2`
    - Per window:
-     - Agent 1: `/workspaces/dev/ouroboros-ide`, `HOME=/workspaces/dev/ouroboros-ide/.devhome-agent1`
-     - Agent 2: `/workspaces/dev/agent-worktrees/agent2/ouroboros-ide`, `HOME=/workspaces/dev/agent-worktrees/agent2/.devhome-agent2`
+     - Agent 1: `/worktrees/agent1/<repo>`
+     - Agent 2: `/worktrees/agent2/<repo>`
 
 ## SSH (GitHub) notes
-- `ssh-setup` copies your host key and writes a proxy-aware SSH config (port 443 via tinyproxy).
-- `devctl up` now performs the same seeding automatically for every `dev-agent` as soon as the container starts (assuming your host has keys in `~/.ssh`). Run `ssh-setup` only when you need to reseed an already-running agent or pass an alternate key path.
-- It ensures an index-free HOME anchor `/workspace/.devhome` and runs `git config --global core.sshCommand 'ssh -F ~/.ssh/config'` so Git uses the proxy-aware SSH config automatically.
-- Test: `scripts/devkit ssh-test <index>`
+- For flake-backed overlays, `ssh-setup` seeds host SSH material into the native agent state home; native `exec` also seeds SSH before launching the sandbox.
+- For legacy Compose overlays, `ssh-setup` copies your host key and writes the proxy-aware container SSH config.
+- Test: `scripts/devkit -p <overlay> ssh-test <index>`
 
 ## Common workflows
 - Switch worktree branch:
-  - `scripts/devkit -p dev-all worktrees-branch ouroboros-ide 2 feature/my-branch`
+  - `scripts/devkit -p <overlay> worktrees-branch <repo> 2 feature/my-branch`
 - Status across worktrees:
-  - `scripts/devkit -p dev-all worktrees-status ouroboros-ide`
+  - `scripts/devkit -p <overlay> worktrees-status <repo>`
 - Sync:
-  - Pull: `scripts/devkit -p dev-all worktrees-sync ouroboros-ide --pull --all`
-  - Push: `scripts/devkit -p dev-all worktrees-sync ouroboros-ide --push --all`
-- Flip origin to SSH and push (codex overlay):
-  - `scripts/devkit repo-config-ssh . && scripts/devkit repo-push-ssh .`
+  - Pull: `scripts/devkit -p <overlay> worktrees-sync <repo> --pull --all`
+  - Push: `scripts/devkit -p <overlay> worktrees-sync <repo> --push --all`
+- Flip origin to SSH and push:
+  - `scripts/devkit -p <overlay> repo-config-ssh <repo> --index 1 && scripts/devkit -p <overlay> repo-push-ssh <repo> --index 1`
 
 ## Alternative: codex overlay (shared mount)
 - For quick starts without worktrees:
@@ -43,4 +41,4 @@ This guide shows how to run multiple isolated dev agents using Git worktrees and
 ## Caveats
 - Avoid running global Git maintenance (e.g., `git gc`) across worktrees concurrently.
 - sbt targets (`target/`) are shared per repo path; parallel builds can contend unless using isolated output dirs.
-- Ensure `ssh.github.com` remains in the allowlist; `ssh-setup` manages this idempotently.
+- Legacy Compose SSH over port 443 still depends on `ssh.github.com` in the allowlist; native host-worktree git commands use the host SSH path.

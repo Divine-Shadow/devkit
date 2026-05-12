@@ -193,8 +193,8 @@ func TestNonDevAllTopLevelAliasesUseLegacyComposeDryRun(t *testing.T) {
 		if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
 			t.Fatalf("%v unexpectedly used native path:\n%s", args, out)
 		}
-		if !strings.Contains(out, "+ docker compose") {
-			t.Fatalf("%v did not use legacy Compose:\n%s", args, out)
+		if !strings.Contains(out, "+ docker compose") && !strings.Contains(out, "+ docker exec") {
+			t.Fatalf("%v did not use legacy container workflow:\n%s", args, out)
 		}
 	}
 }
@@ -358,6 +358,69 @@ func TestFlakeBackedNonDevAllWTOpenAndWorktreeTmuxPlainUseNativeDryRun(t *testin
 		normalized := strings.ReplaceAll(out, "'", "")
 		if !strings.Contains(normalized, " -p "+project+" exec-cd 1") && !strings.Contains(normalized, " -p "+project+" exec 1 --repo "+repo) {
 			t.Fatalf("%v missing native project command:\n%s", args, out)
+		}
+	}
+}
+
+func TestFlakeBackedNonDevAllSSHAndRepoHelpersUseNativeDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	nativePathPart := filepath.Join(".devkit", "native-agents", project+"-agent1", "home")
+	worktreePathPart := filepath.Join("agent-worktrees", "agent1", repo)
+
+	tests := []struct {
+		name  string
+		args  []string
+		wants []string
+	}{
+		{name: "ssh-setup", args: []string{"ssh-setup", "--index", "1"}, wants: []string{"seed ssh", nativePathPart}},
+		{name: "ssh-test", args: []string{"ssh-test", "1"}, wants: []string{"ssh -T github.com", nativePathPart}},
+		{name: "repo-config-ssh", args: []string{"repo-config-ssh", repo, "--index", "1"}, wants: []string{worktreePathPart, "git remote set-url origin"}},
+		{name: "repo-config-https", args: []string{"repo-config-https", repo, "--index", "1"}, wants: []string{worktreePathPart, "git remote set-url origin"}},
+		{name: "repo-push-ssh", args: []string{"repo-push-ssh", repo, "--index", "1"}, wants: []string{worktreePathPart, "git push -u origin HEAD"}},
+		{name: "repo-push-https", args: []string{"repo-push-https", repo, "--index", "1"}, wants: []string{worktreePathPart, "git push -u origin HEAD"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runProjectDryRun(t, bin, root, project, tt.args...)
+			if err != nil {
+				t.Fatalf("%s failed: %v\n%s", tt.name, err, out)
+			}
+			assertNoDockerCommand(t, out)
+			if strings.Contains(out, "workspace directory") {
+				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
+			}
+			for _, want := range tt.wants {
+				if !strings.Contains(out, want) {
+					t.Fatalf("%s missing %q:\n%s", tt.name, want, out)
+				}
+			}
+		})
+	}
+}
+
+func TestLegacyNonFlakeSSHAndRepoHelpersUseComposeDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := legacyComposeRoot(t)
+
+	for _, args := range [][]string{
+		{"ssh-test", "1"},
+		{"repo-config-ssh", ".", "--index", "1"},
+		{"repo-config-https", ".", "--index", "1"},
+		{"repo-push-ssh", ".", "--index", "1"},
+		{"repo-push-https", ".", "--index", "1"},
+	} {
+		out, err := runProjectDryRun(t, bin, root, "codex", args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
+			t.Fatalf("%v unexpectedly used native path:\n%s", args, out)
+		}
+		if !strings.Contains(out, "+ docker compose") && !strings.Contains(out, "+ docker exec") {
+			t.Fatalf("%v did not use legacy container workflow:\n%s", args, out)
 		}
 	}
 }

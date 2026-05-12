@@ -66,7 +66,7 @@ Essentials (batteries-included paths):
 - Hard reset + open N agents (alias): `scripts/devkit reset 3` (same as `fresh-open 3`).
 - Scale agents without teardown: `scripts/devkit scale 4`.
 - Scale and sync tmux windows: `scripts/devkit scale 5 --tmux-sync`.
-- Per-agent SSH over 443: `scripts/devkit ssh-setup --index 1` then `ssh-test 1`.
+- Per-agent SSH: `scripts/devkit -p <overlay> ssh-setup --index 1` then `ssh-test 1`; flake-backed overlays seed native host state, legacy Compose overlays seed the container home.
 
 Tooling caches:
 - SBT now writes to each agent's anchored home (`/workspace/.devhome/.sbt` or `/workspaces/dev/.devhome/.sbt` under `dev-all`) via `SBT_GLOBAL_BASE`. Ivy (`/home/dev/.ivy2`) and coursier (`/home/dev/.cache/coursier`) remain shared volumes to reuse downloaded artifacts.
@@ -200,8 +200,8 @@ Declarative orchestration (new):
         name: emerald-2
 
 SSH (GitHub) quickstart:
-- One-time per agent: `scripts/devkit ssh-setup --index 1` then `scripts/devkit ssh-test 1`
-- Flip origin to SSH and push: `scripts/devkit repo-push-ssh .`
+- One-time per agent: `scripts/devkit -p <overlay> ssh-setup --index 1` then `scripts/devkit -p <overlay> ssh-test 1`
+- Flip origin to SSH and push from a native host worktree or legacy container repo: `scripts/devkit -p <overlay> repo-config-ssh <repo> --index 1` then `scripts/devkit -p <overlay> repo-push-ssh <repo> --index 1`
 
 Layout:
 - `kit/`: base Compose, proxy, DNS, scripts, and docs.

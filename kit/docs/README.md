@@ -202,12 +202,11 @@ This verifies hardened profiles and core tools are callable inside the agent.
 ## Git Over SSH (GitHub)
 
 - Allow + setup (per agent): `scripts/devkit ssh-setup [--index N] [--key ~/.ssh/id_ed25519]`
-  - Adds `ssh.github.com` to proxy/DNS allowlists (SSH over port 443).
-  - Copies your host SSH key and known_hosts into `/workspace/.devhome/.ssh`.
-  - Writes SSH config to tunnel via the proxy: `ProxyCommand nc -X connect -x tinyproxy:8888 %h %p`.
-  - Ensures index‑free HOME anchor `/workspace/.devhome` and sets `git config --global core.sshCommand 'ssh -F ~/.ssh/config'`.
+  - Flake-backed overlays seed host SSH material into the native agent state home under the overlay's native state root.
+  - Legacy Compose overlays copy your host SSH key and known_hosts into `/workspace/.devhome/.ssh` and write a proxy-aware SSH config for `ssh.github.com:443`.
+  - Legacy Compose setup also ensures the index-free HOME anchor `/workspace/.devhome` and sets `git config --global core.sshCommand 'ssh -F ~/.ssh/config'`.
 - Test: `scripts/devkit ssh-test N` (expects the GitHub banner).
-- Flip remote + push: `scripts/devkit repo-push-ssh <repo-path> [--index N]`.
+- Flip remote + push: `scripts/devkit repo-config-ssh <repo> [--index N]` then `scripts/devkit repo-push-ssh <repo> [--index N]`. Flake-backed overlays run these git commands against native host worktrees; legacy overlays run them inside the Compose agent.
   - For the codex overlay (single repo at `/workspace`), use `.` as `<repo-path>`.
   - For `dev-all`, pass relative path like `ouroboros-ide`.
 - tmux workflow: `scripts/devkit tmux-shells N` (auto-runs ssh-setup for each instance).

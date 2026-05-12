@@ -2780,6 +2780,11 @@ exit 0`, home, home, home, home, home)
 				}
 			}
 		}
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
+			seedNativeSSH(dryRun, paths, project, repo, mustAtoi(idx), keyfile)
+			break
+		}
 		hostKey := keyfile
 		if strings.TrimSpace(hostKey) == "" {
 			hostKey = filepath.Join(os.Getenv("HOME"), ".ssh", "id_ed25519")
@@ -2880,6 +2885,16 @@ exit 0`, home, home, home, home, home)
 		if len(sub) > 0 {
 			idx = sub[0]
 		}
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
+			resolved, err := nativeResolvedAgentPaths(paths, project, repo, mustAtoi(idx))
+			if err != nil {
+				die(err.Error())
+			}
+			cmd := "set -euo pipefail; HOME=" + shSingleQuote(resolved.HostHome) + "; cfg=\"$HOME/.ssh/config\"; if [ -s \"$cfg\" ]; then ssh -F \"$cfg\" -T github.com -o BatchMode=yes || true; else ssh -T github.com -o BatchMode=yes || true; fi"
+			runner.Host(dryRun, "bash", "-lc", cmd)
+			break
+		}
 		anchor := agentexec.AnchorHome(project)
 		{
 			script := fmt.Sprintf("set -e; export HOME=%q; cfg=\"$HOME/.ssh/config\"; ssh -F \"$cfg\" -T github.com -o BatchMode=yes || true", anchor)
@@ -2896,8 +2911,8 @@ exit 0`, home, home, home, home, home)
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
 		}
-		if project == "dev-all" {
-			repoName := nativeRepoForSubpath(paths, project, repo)
+		if isNativeRuntime {
+			repoName := nativeRepoForRepoArg(paths, project, repo)
 			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
 			cmd := "set -euo pipefail; cd " + shSingleQuote(path) + "; url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^https://github.com/([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to \"$newurl\"; git remote set-url origin \"$newurl\"; else echo \"Origin already SSH: $url\"; fi"
 			runner.Host(dryRun, "bash", "-lc", cmd)
@@ -2927,8 +2942,8 @@ exit 0`, home, home, home, home, home)
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
 		}
-		if project == "dev-all" {
-			repoName := nativeRepoForSubpath(paths, project, repo)
+		if isNativeRuntime {
+			repoName := nativeRepoForRepoArg(paths, project, repo)
 			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
 			cmd := "set -euo pipefail; cd " + shSingleQuote(path) + "; url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^git@github.com:([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=https://github.com/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting HTTPS origin to \"$newurl\"; git remote set-url origin \"$newurl\"; else echo \"Origin already HTTPS: $url\"; fi"
 			runner.Host(dryRun, "bash", "-lc", cmd)
@@ -2959,8 +2974,8 @@ exit 0`, home, home, home, home, home)
 				idx = sub[i+1]
 			}
 		}
-		if project == "dev-all" {
-			repoName := nativeRepoForSubpath(paths, project, repo)
+		if isNativeRuntime {
+			repoName := nativeRepoForRepoArg(paths, project, repo)
 			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
 			cmd := "set -euo pipefail; cd " + shSingleQuote(path) + "; cur=$(git rev-parse --abbrev-ref HEAD); url=$(git remote get-url origin 2>/dev/null || true); if [ -z \"$url\" ]; then echo 'No origin remote configured' >&2; exit 1; fi; if [[ \"$url\" =~ ^https://github.com/([^/]+)/([^/.]+)(\\.git)?$ ]]; then newurl=git@github.com:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}.git; echo Setting SSH origin to \"$newurl\"; git remote set-url origin \"$newurl\"; fi; echo Pushing branch \"$cur\" to origin...; git push -u origin HEAD"
 			runner.Host(dryRun, "bash", "-lc", cmd)
@@ -2992,8 +3007,8 @@ exit 0`, home, home, home, home, home)
 		if len(sub) >= 3 && sub[1] == "--index" {
 			idx = sub[2]
 		}
-		if project == "dev-all" {
-			repoName := nativeRepoForSubpath(paths, project, repo)
+		if isNativeRuntime {
+			repoName := nativeRepoForRepoArg(paths, project, repo)
 			path := nativeHostWorktree(paths, project, repoName, mustAtoi(idx))
 			runner.Host(dryRun, "bash", "-lc", "set -euo pipefail; cd "+shSingleQuote(path)+"; echo Pushing branch $(git rev-parse --abbrev-ref HEAD) to origin...; git push -u origin HEAD")
 			break
@@ -3237,6 +3252,8 @@ func commandNeedsComposeFiles(cmd, project string, cfg config.OverlayConfig) boo
 	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach", "warm", "maintain":
 		return !nativeRuntimeConfigured(project, cfg)
 	case "layout-apply", "layout-generate", "tmux-sync", "tmux-add-cd", "tmux-apply-layout", "wt-open", "exec-cd", "attach-cd", "check-net", "check-codex", "check-sts", "codex-test", "codex-debug", "doctor-runtime", "verify", "tmux-shells", "open", "fresh-open", "reset", "run", "worktrees-setup", "worktrees-branch", "worktrees-status", "worktrees-sync", "worktrees-tmux", "bootstrap":
+		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
+	case "ssh-setup", "ssh-test", "repo-config-ssh", "repo-config-https", "repo-push-ssh", "repo-push-https":
 		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
 	default:
 		return true
@@ -3578,6 +3595,104 @@ func seedNativeCodexAuth(dry bool, paths compose.Paths, project, repo string, in
 	}
 }
 
+func seedNativeSSH(dry bool, paths compose.Paths, project, repo string, index int, keyfile string) {
+	resolved, err := nativeResolvedAgentPaths(paths, project, repo, index)
+	if err != nil {
+		die(err.Error())
+	}
+	sshDir := filepath.Join(resolved.HostHome, ".ssh")
+	if dry {
+		fmt.Fprintf(os.Stderr, "+ seed ssh %s\n", sshDir)
+		if strings.TrimSpace(keyfile) != "" {
+			fmt.Fprintf(os.Stderr, "+ seed ssh key %s -> %s\n", keyfile, filepath.Join(sshDir, filepath.Base(keyfile)))
+		}
+		return
+	}
+	if strings.TrimSpace(keyfile) == "" {
+		if err := nativelaunch.SeedSSH(resolved.HostHome, true); err != nil {
+			die(err.Error())
+		}
+		if err := writeNativeSSHConfig(resolved.HostHome, nil); err != nil {
+			die(err.Error())
+		}
+		return
+	}
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		die(err.Error())
+	}
+	keyName := filepath.Base(keyfile)
+	if err := copyNativeSSHFile(keyfile, filepath.Join(sshDir, keyName), 0o600); err != nil {
+		die(err.Error())
+	}
+	if _, err := os.Stat(keyfile + ".pub"); err == nil {
+		if err := copyNativeSSHFile(keyfile+".pub", filepath.Join(sshDir, keyName+".pub"), 0o644); err != nil {
+			die(err.Error())
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		known := filepath.Join(home, ".ssh", "known_hosts")
+		if _, err := os.Stat(known); err == nil {
+			if err := copyNativeSSHFile(known, filepath.Join(sshDir, "known_hosts"), 0o644); err != nil {
+				die(err.Error())
+			}
+		}
+	}
+	if err := writeNativeSSHConfig(resolved.HostHome, []string{keyName}); err != nil {
+		die(err.Error())
+	}
+}
+
+func copyNativeSSHFile(src, dest string, mode os.FileMode) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", src, err)
+	}
+	if err := os.WriteFile(dest, data, mode); err != nil {
+		return fmt.Errorf("write %s: %w", dest, err)
+	}
+	return nil
+}
+
+func writeNativeSSHConfig(hostHome string, identityNames []string) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	sshDir := filepath.Join(hostHome, ".ssh")
+	if len(identityNames) == 0 {
+		for _, name := range []string{"id_ed25519", "id_rsa"} {
+			if _, err := os.Stat(filepath.Join(sshDir, name)); err == nil {
+				identityNames = append(identityNames, name)
+			}
+		}
+	}
+	if len(identityNames) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("Host github.com\n")
+	b.WriteString("  HostName github.com\n")
+	b.WriteString("  User git\n")
+	for _, name := range identityNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		b.WriteString("  IdentityFile " + filepath.Join(hostHome, ".ssh", name) + "\n")
+	}
+	b.WriteString("  IdentitiesOnly yes\n")
+	b.WriteString("  StrictHostKeyChecking accept-new\n")
+	b.WriteString("  UserKnownHostsFile " + filepath.Join(hostHome, ".ssh", "known_hosts") + "\n")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", sshDir, err)
+	}
+	target := filepath.Join(sshDir, "config")
+	if err := os.WriteFile(target, []byte(b.String()), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", target, err)
+	}
+	return nil
+}
+
 func nativeStateRoot(paths compose.Paths, project string) string {
 	cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
 	if err == nil {
@@ -3590,6 +3705,17 @@ func nativeStateRoot(paths compose.Paths, project string) string {
 		}
 	}
 	return filepath.Clean(filepath.Join(paths.Root, "..", ".devkit", "native-agents"))
+}
+
+func nativeRepoForRepoArg(paths compose.Paths, project, repoArg string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(repoArg))
+	if cleaned == "." || cleaned == "" {
+		return readDefaultRepo(project, paths)
+	}
+	if !strings.HasPrefix(cleaned, "/") && !strings.Contains(cleaned, string(filepath.Separator)) {
+		return cleaned
+	}
+	return nativeRepoForSubpath(paths, project, repoArg)
 }
 
 func nativeRepoForSubpath(paths compose.Paths, project, subpath string) string {
