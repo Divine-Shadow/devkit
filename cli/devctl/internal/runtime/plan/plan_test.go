@@ -2,6 +2,7 @@ package plan
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ func TestBuildDevAllRejectsOtherProjects(t *testing.T) {
 
 func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
-		Paths:             compose.Paths{Root: "/home/bayesartre/dev/devkit"},
+		Paths:             compose.Paths{Root: "/repo/devkit"},
 		Project:           "dev-all",
 		Index:             1,
 		Repo:              "ouroboros-ide",
@@ -69,14 +70,50 @@ func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll error: %v", err)
 	}
-	if p.Agent.HostWorktree != "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" {
+	if p.Agent.HostWorktree != "/repo/agent-worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
 	}
 	if p.Agent.SandboxWorktree != "/worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent1/home" {
+	if p.Agent.HostHome != "/repo/.devkit/native-agents/dev-all-agent1/home" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
+	}
+}
+
+func TestBuildDevAllProjectsSymlinkedWorktreeIntoMountedDevRoot(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-ide")
+	agentRoot := filepath.Join(devRoot, "agent-worktrees", "agent1")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../ouroboros-ide", filepath.Join(agentRoot, "ouroboros-ide")); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := BuildDevAll(BuildOptions{
+		Paths:   compose.Paths{Root: devkitRoot},
+		Project: "dev-all",
+		Index:   1,
+		Repo:    "ouroboros-ide",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if p.Agent.HostWorktree != filepath.Join(agentRoot, "ouroboros-ide") {
+		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
+	}
+	if p.Agent.SandboxWorktree != "/workspaces/dev/ouroboros-ide" {
+		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
 }
 

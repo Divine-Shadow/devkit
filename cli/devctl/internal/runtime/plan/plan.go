@@ -104,6 +104,9 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
+		paths.SandboxWorktree = sandboxWorktree
+	}
 	flake := strings.TrimSpace(opts.Flake)
 	if flake == "" {
 		flake = ".#dev-all"
@@ -194,6 +197,34 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 	}
 	p.LauncherArgs = launcherArgs(p)
 	return p, nil
+}
+
+func sandboxPathForHostWorktree(paths agent.Paths) (string, bool) {
+	hostWorktree := filepath.Clean(paths.HostWorktree)
+	resolved, err := filepath.EvalSymlinks(hostWorktree)
+	if err != nil {
+		return "", false
+	}
+	resolved = filepath.Clean(resolved)
+	if resolved == hostWorktree {
+		return "", false
+	}
+	if sandbox, ok := projectSandboxPath(resolved, paths.DevRoot, "/workspaces/dev"); ok {
+		return sandbox, true
+	}
+	if sandbox, ok := projectSandboxPath(resolved, paths.HostWorktreeRoot, paths.SandboxWorktreeRoot); ok {
+		return sandbox, true
+	}
+	return "", false
+}
+
+func projectSandboxPath(hostPath, hostRoot, sandboxRoot string) (string, bool) {
+	hostRoot = filepath.Clean(hostRoot)
+	rel, err := filepath.Rel(hostRoot, hostPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return "", false
+	}
+	return filepath.Join(sandboxRoot, rel), true
 }
 
 func launcherArgs(p Plan) []string {
