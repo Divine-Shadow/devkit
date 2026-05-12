@@ -31,7 +31,8 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
   worktrees/state and report capacity from native readiness.
 - Top-level `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`,
   `attach`, and `ensure-ready` target the native runtime for `dev-all`;
-  `devctl compose ...` is the explicit legacy Docker Compose path.
+  `devctl compose ...` is rejected for `dev-all` and remains a legacy Docker
+  Compose path only for non-`dev-all` overlays.
 - Native agent plans now use `/worktrees/agentN/<repo>` for every agent,
   including agent 1, and keep HOME/Codex/XDG state under `/agent-state`.
   Existing symlinked agent1 layouts are projected to their mounted
@@ -51,6 +52,8 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
 - `overlays/dev-all/devkit.yaml` defines explicit native repo readiness checks
   for git reachability, frontend warm/install, frontend typecheck, frontend
   tests, and the core SBT compile check.
+- `overlays/dev-all/devkit.yaml` declares `runtime.flake: .#dev-all` instead
+  of a container image as the canonical runtime artifact.
 - Native launch preparation seeds Codex auth into per-agent native HOME state
   when host Codex auth is present.
 - `codex-auth`, `codex-test`, `codex-debug`, `exec-cd`, `attach-cd`,
@@ -84,7 +87,7 @@ kit/scripts/devkit -p dev-all native prepare --repo ouroboros-ide --count 2 --dr
 kit/scripts/devkit -p dev-all --dry-run scale 2 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock --broker-state-root /tmp/devkit-scale-state --skip-ready --format json
 kit/scripts/devkit -p dev-all --dry-run exec 1 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock -- echo hi
 kit/scripts/devkit -p dev-all --dry-run attach 1 --repo ouroboros-ide --flake .#runtime-test-agent --broker-socket /tmp/devkit-scale.sock
-kit/scripts/devkit -p dev-all --dry-run compose exec --index 1 dev-agent echo hi
+kit/scripts/devkit -p dev-all --dry-run compose up
 kit/scripts/devkit -p dev-all native plan --repo ouroboros-ide --index 1 --format json
 kit/scripts/devkit -p dev-all --dry-run native prepare --repo ouroboros-ide --count 2 --format json
 kit/scripts/devkit -p dev-all --dry-run tmux-sync --count 2 --session devkit-native-smoke
@@ -193,7 +196,7 @@ Observed key versions:
 - Native Playwright smoke output: `native-bwrap-playwright-ok`.
 - Frontend-local Playwright smoke output from `ouroboros-ide/frontend`:
   `frontend-playwright-ok`.
-- Runtime readiness checks include `broker-socket`, `spago-netlify`, and
+- Runtime readiness checks include `broker-socket`, `purescript-spago-netlify`, and
   `playwright-browser`.
 - Readiness split smoke: `runtime_ready: true`, `repo_ready: false`, and
   `capacity_available: true` when `--repo-check 'exit 7'` fails.
@@ -209,6 +212,10 @@ Observed key versions:
 - Native symlink compatibility smoke output: agent1 host worktree remains
   `/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide`, while the
   sandbox worktree resolves to `/workspaces/dev/ouroboros-ide`.
+- Full no-skip `ensure-ready` evidence is recorded in
+  `nix/full-readiness-evidence.md`: native runtime, broker, Git, frontend warm,
+  Playwright, frontend typecheck, and frontend tests pass; the remaining blocker
+  is the `ouroboros-ide` `core-check` SBT compile.
 
 ## Completed Parity
 
@@ -226,6 +233,10 @@ Observed key versions:
   Ouroboros frontend lockfile's `@playwright/test` `1.58.1` package.
 - Native plans keep `DirectDockerSocket=false`, set `DOCKER_HOST` to the broker
   socket, and do not bind `/var/run/docker.sock`.
+- Native bubblewrap launches create minimal shebang compatibility symlinks for
+  `/usr/bin/env`, `/bin/sh`, and `/bin/bash` into the Nix system profile so
+  repo-local scripts and Node package bins can execute inside the blank-root
+  sandbox.
 - Native readiness now reports runtime readiness separately from repo readiness;
   capacity availability follows runtime readiness only. Runtime readiness now
   proves prepared native state, broker socket liveness, required tool
@@ -234,8 +245,8 @@ Observed key versions:
 - Native broker lifecycle, worktree fanout, and capacity reporting are available
   through the canonical `kit/scripts/devkit` entrypoint.
 - The default `dev-all` lifecycle and simple agent entry commands now route to
-  the native runtime. Compose remains available only through the explicit
-  `compose` namespace for historical workflows and unsupported overlays.
+  the native runtime. Compose is rejected for `dev-all` and remains available
+  only for non-`dev-all` historical workflows and unsupported overlays.
 - Native tmux/layout/session helpers use the same top-level `exec` path as
   manual attachment, so tmux windows inherit the native worktree, HOME/state,
   broker, and bubblewrap plan model.
@@ -247,7 +258,7 @@ Observed key versions:
   instead of being only hardcoded in legacy Compose readiness.
 - Legacy helper surfaces that still have Compose implementations either take a
   native `dev-all` branch first or refuse `dev-all`; Compose remains available
-  through the explicit `compose` namespace and non-`dev-all` legacy overlays.
+  only for non-`dev-all` legacy overlays.
 
 ## Intentionally Dropped Parity
 
@@ -297,7 +308,6 @@ Native `exec` uses bubblewrap with a blank root, binds `/nix/store`,
 the optional broker socket. It sets `DOCKER_HOST` to the broker endpoint and
 does not bind `/var/run/docker.sock`.
 
-Docker Compose is explicit legacy only for `dev-all`: use
-`kit/scripts/devkit -p dev-all compose <command>` when an old Compose workflow is
-intentionally required. Non-`dev-all` overlays keep their legacy Compose surface
-until they receive native replacements.
+Docker Compose is retired for `dev-all`: `kit/scripts/devkit -p dev-all compose
+<command>` fails before Docker is invoked. Non-`dev-all` overlays keep their
+legacy Compose surface until they receive native replacements.

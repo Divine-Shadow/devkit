@@ -37,6 +37,8 @@ type Runtime struct {
 	Canonical *bool `yaml:"canonical"`
 	// Image is the stable repo-specific image reference operators should target.
 	Image string `yaml:"image"`
+	// Flake is the native Nix runtime surface for overlays without a container image.
+	Flake string `yaml:"flake"`
 	// CodexVersion is the expected `codex --version` semantic version.
 	CodexVersion string `yaml:"codex_version"`
 	// CoreCheck documents the command used to prove the mounted repo still builds.

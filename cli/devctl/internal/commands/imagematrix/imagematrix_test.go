@@ -75,6 +75,33 @@ runtime:
 	}
 }
 
+func TestDiscoverIncludesNativeFlakeRuntime(t *testing.T) {
+	root := t.TempDir()
+	writeOverlay(t, root, "native", `
+service: dev-agent
+defaults:
+  repo: app
+runtime:
+  flake: .#dev-all
+  codex_version: 0.130.0
+  core_check: make test
+`)
+
+	entries, err := Discover([]string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries=%+v", entries)
+	}
+	if entries[0].Image != "" || entries[0].Flake != ".#dev-all" {
+		t.Fatalf("runtime entry=%+v", entries[0])
+	}
+	if err := Check(entries, true); err != nil {
+		t.Fatalf("native flake check failed: %v", err)
+	}
+}
+
 func writeOverlay(t *testing.T, root, name, yaml string) string {
 	t.Helper()
 	dir := filepath.Join(root, name)

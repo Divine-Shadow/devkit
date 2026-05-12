@@ -952,7 +952,7 @@ Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
   up, down, restart, status [--ready], logs   (native runtime for dev-all)
-  compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path)
+  compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for dev-all)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
   ensure-ready [--count N] [--repo REPO] [--broker-socket PATH]
@@ -989,7 +989,7 @@ Commands:
   worktrees-tmux <repo> <count> [--plain]    (dev-all)
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (dev-all)
-  image-matrix [--check] [--all]             (repo to image pairing report)
+  image-matrix [--check] [--all]             (repo to runtime pairing report)
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
   preflight                                  (host checks: docker, tmux, ssh keys, ~/.codex)
@@ -1179,6 +1179,9 @@ func main() {
 		Exe:            exe,
 	}
 	runComposeCommand := func(composeArgs []string) {
+		if err := composecmd.EnsureLegacyProject(project); err != nil {
+			die(err.Error())
+		}
 		handler, ok := registry.Lookup("compose")
 		if !ok {
 			die("compose command is not registered")
@@ -1392,6 +1395,9 @@ func main() {
 		}
 		if project == "dev-all" {
 			die("layout-apply for dev-all only supports native dev-all layouts; move Compose/mixed layouts behind explicit legacy Compose workflows")
+		}
+		if layoutReferencesProject(lf, "dev-all") {
+			die("legacy layout-apply cannot target dev-all; use a native dev-all layout with -p dev-all")
 		}
 		type overlayRun struct {
 			Project     string
@@ -3675,6 +3681,24 @@ func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {
 		}
 	}
 	return true
+}
+
+func layoutReferencesProject(lf layout.File, project string) bool {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return false
+	}
+	for _, ov := range lf.Overlays {
+		if strings.TrimSpace(ov.Project) == project {
+			return true
+		}
+	}
+	for _, w := range lf.Windows {
+		if strings.TrimSpace(w.Project) == project {
+			return true
+		}
+	}
+	return false
 }
 
 func layoutNativeRepoAndCount(paths compose.Paths, project string, lf layout.File) (string, int) {

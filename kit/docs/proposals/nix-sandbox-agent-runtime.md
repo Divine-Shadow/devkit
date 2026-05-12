@@ -20,9 +20,9 @@ The native runtime launches agents with bubblewrap, Nix flakes, per-agent
 HOME/Codex/XDG state, managed DNS/proxy environment, and brokered Docker access.
 Native plans set `DOCKER_HOST` to the broker socket and do not bind
 `/var/run/docker.sock` into the agent sandbox. Compose is no longer an implicit
-fallback for `dev-all`; legacy Compose workflows must be requested explicitly via
-`devkit -p dev-all compose <command>`, and non-`dev-all` overlays keep their
-legacy Compose surface until they receive native replacements.
+fallback for `dev-all`; the `devkit -p dev-all compose <command>` namespace is
+retired, and non-`dev-all` overlays keep their legacy Compose surface until they
+receive native replacements.
 
 The implementation evidence, smoke commands, operational caveats, and parity
 status live in `nix/runtime-parity.md`. The review handoff for the current

@@ -20,6 +20,9 @@ func handle(ctx *cmdregistry.Context) error {
 	if len(ctx.Args) == 0 {
 		return fmt.Errorf("Usage: compose up|down|restart|status|logs|exec|attach [args...]")
 	}
+	if err := EnsureLegacyProject(ctx.Project); err != nil {
+		return err
+	}
 	sub := ctx.Args[0]
 	next := *ctx
 	next.Args = append([]string{}, ctx.Args[1:]...)
@@ -41,6 +44,13 @@ func handle(ctx *cmdregistry.Context) error {
 	default:
 		return fmt.Errorf("unknown compose command %s", sub)
 	}
+}
+
+func EnsureLegacyProject(project string) error {
+	if strings.TrimSpace(project) == "dev-all" {
+		return fmt.Errorf("Docker Compose is retired for dev-all; use native lifecycle commands such as up, down, status, exec, attach, and ensure-ready")
+	}
+	return nil
 }
 
 func ensureProject(ctx *cmdregistry.Context) error {

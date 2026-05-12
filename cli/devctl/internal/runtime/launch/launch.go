@@ -48,6 +48,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
 		return err
 	}
+	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
+		return err
+	}
 	if err := ensureResolvConf(p.DNS.ResolvConf); err != nil {
 		return err
 	}
@@ -57,6 +60,57 @@ func Prepare(p nativeplan.Plan) error {
 		}
 		if _, err := os.Stat(bind.Source); err != nil {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
+		}
+	}
+	return nil
+}
+
+func SeedSSH(hostHome string, force bool) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(userHome) == "" {
+		return nil
+	}
+	srcDir := filepath.Join(userHome, ".ssh")
+	if st, err := os.Stat(srcDir); err != nil || !st.IsDir() {
+		return nil
+	}
+	targetDir := filepath.Join(hostHome, ".ssh")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", targetDir, err)
+	}
+	for _, file := range []string{
+		"id_ed25519",
+		"id_ed25519.pub",
+		"id_rsa",
+		"id_rsa.pub",
+		"known_hosts",
+	} {
+		src := filepath.Join(srcDir, file)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read SSH seed %s: %w", src, err)
+		}
+		target := filepath.Join(targetDir, file)
+		if !force {
+			if _, err := os.Stat(target); err == nil {
+				continue
+			} else if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("stat SSH seed target %s: %w", target, err)
+			}
+		}
+		mode := os.FileMode(0o600)
+		if strings.HasSuffix(file, ".pub") || file == "known_hosts" {
+			mode = 0o644
+		}
+		if err := os.WriteFile(target, data, mode); err != nil {
+			return fmt.Errorf("write SSH seed %s: %w", target, err)
 		}
 	}
 	return nil
@@ -121,6 +175,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	dirSet := map[string]bool{}
 	dirArgs := []string{}
 	bindArgs := []string{}
+	symlinkArgs := []string{}
 	var addDir func(string)
 	addDir = func(path string) {
 		path = filepath.Clean(path)
@@ -162,6 +217,10 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		}
 		return nil
 	}
+	addSymlink := func(target, linkPath string) {
+		addDir(filepath.Dir(linkPath))
+		symlinkArgs = append(symlinkArgs, "--symlink", target, linkPath)
+	}
 
 	if err := addBind("ro", "/nix/store", "/nix/store", true); err != nil {
 		return Command{}, err
@@ -189,9 +248,13 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	} else {
 		_ = addBind("ro", "/etc/resolv.conf", "/etc/resolv.conf", false)
 	}
+	addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
+	addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
+	addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
 
 	args = append(args, dirArgs...)
 	args = append(args, bindArgs...)
+	args = append(args, symlinkArgs...)
 
 	keys := make([]string, 0, len(p.Env))
 	for key := range p.Env {

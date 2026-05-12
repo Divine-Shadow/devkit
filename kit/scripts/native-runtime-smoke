@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+DEVKIT_BIN="$DEVKIT_ROOT/kit/bin/devctl"
 
 REPO="${DEVKIT_NATIVE_SMOKE_REPO:-ouroboros-ide}"
 RUNTIME_FLAKE="${DEVKIT_NATIVE_SMOKE_RUNTIME_FLAKE:-.#runtime-test-agent}"
@@ -50,14 +51,38 @@ smoke_dir="$(mktemp -d /tmp/devkit-native-smoke.XXXXXX)"
 sock="$smoke_dir/broker.sock"
 state="$smoke_dir/broker-state"
 smoke_id="devkit-native-smoke-$(date +%s)-$$"
+devctl_backup=""
 
 cleanup() {
   set +e
+  if [[ -n "$devctl_backup" && -f "$devctl_backup" ]]; then
+    mv -f "$devctl_backup" "$DEVKIT_BIN"
+  fi
   "$DEVKIT" -p dev-all broker stop --socket "$sock" --state-root "$state" --format json >/dev/null 2>&1
   docker rm -f $(docker ps -aq --filter "name=$smoke_id") >/dev/null 2>&1 || true
   rm -rf "$smoke_dir"
 }
 trap cleanup EXIT
+
+step "canonical wrapper missing binary"
+devctl_backup="$smoke_dir/devctl.backup"
+mv "$DEVKIT_BIN" "$devctl_backup"
+if "$DEVKIT" --version >"$smoke_dir/missing-wrapper.out" 2>"$smoke_dir/missing-wrapper.err"; then
+  fail "wrapper succeeded with missing devctl binary"
+fi
+grep_required "missing CLI binary" "$smoke_dir/missing-wrapper.err"
+grep_required "make -C" "$smoke_dir/missing-wrapper.err"
+mv "$devctl_backup" "$DEVKIT_BIN"
+devctl_backup=""
+
+step "dev-all compose retired"
+if "$DEVKIT" --dry-run -p dev-all compose up >"$smoke_dir/dev-all-compose.out" 2>"$smoke_dir/dev-all-compose.err"; then
+  fail "dev-all compose unexpectedly succeeded"
+fi
+grep_required "Docker Compose is retired for dev-all" "$smoke_dir/dev-all-compose.err"
+if grep -q "docker compose" "$smoke_dir/dev-all-compose.err" "$smoke_dir/dev-all-compose.out"; then
+  fail "dev-all compose rejection emitted a docker compose command"
+fi
 
 cat >"$smoke_dir/broker-policy.sh" <<'EOF'
 set -euo pipefail
@@ -175,7 +200,7 @@ step "runtime-only readiness"
   | tee "$smoke_dir/ensure-ready.json"
 grep_required '"capacity_available": 1' "$smoke_dir/ensure-ready.json"
 grep_required '"name": "broker-socket"' "$smoke_dir/ensure-ready.json"
-grep_required '"name": "spago-netlify"' "$smoke_dir/ensure-ready.json"
+grep_required '"name": "purescript-spago-netlify"' "$smoke_dir/ensure-ready.json"
 grep_required '"name": "playwright-browser"' "$smoke_dir/ensure-ready.json"
 
 step "repo-failure capacity"
@@ -189,7 +214,7 @@ grep_required '"capacity_available": 1' "$smoke_dir/capacity.json"
 
 step "Spago and Playwright"
 nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
-  "spago --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
+  "purs --version && spago --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
   | tee "$smoke_dir/dev-all-tools.txt"
 grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
 

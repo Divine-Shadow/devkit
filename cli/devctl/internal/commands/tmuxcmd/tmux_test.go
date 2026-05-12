@@ -209,7 +209,7 @@ func TestPlainTabArgsInfersDevAllForCodex8ComposeProject(t *testing.T) {
 		Paths:          cmdregistry.Context{}.Paths,
 	}
 	got := strings.Join(plainTabArgs(ctx, "5", ""), " ")
-	want := "/home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all --compose-project devkit-codex8 exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
+	want := "/home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
 	if got != want {
 		t.Fatalf("plainTabArgs mismatch:\n got: %q\nwant: %q", got, want)
 	}
@@ -260,7 +260,7 @@ func TestHandleWTOpenPlainIndexLaunchesSingleDirectExecTab(t *testing.T) {
 	if strings.Contains(line, "zsh -lic") {
 		t.Fatalf("plain index launch should not use nested zsh -lic: %q", line)
 	}
-	want := "new-tab --title agent-5 -- " + filepath.Join(dir, "wsl.exe") + " -d NixOS --exec /home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all --compose-project devkit-ouro8 exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
+	want := "new-tab --title agent-5 -- " + filepath.Join(dir, "wsl.exe") + " -d NixOS --exec /home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
 	if !strings.Contains(line, want) {
 		t.Fatalf("unexpected plain index wt launch:\n got: %q\nwant substring: %q", line, want)
 	}

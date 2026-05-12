@@ -297,8 +297,9 @@
                 export DOCKER_HOST=''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}
                 export PLAYWRIGHT_BROWSERS_PATH=''${PLAYWRIGHT_BROWSERS_PATH:-${pkgsPlaywright.playwright-driver.browsers}}
                 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=''${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}
-                export HTTP_PROXY=''${HTTP_PROXY:-http://127.0.0.1:8888}
-                export HTTPS_PROXY=''${HTTPS_PROXY:-$HTTP_PROXY}
+                if [ -n "''${HTTP_PROXY:-}" ] && [ -z "''${HTTPS_PROXY:-}" ]; then
+                  export HTTPS_PROXY="$HTTP_PROXY"
+                fi
                 export NO_PROXY=''${NO_PROXY:-localhost,127.0.0.1}
               '' + extraHook;
             };

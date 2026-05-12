@@ -82,7 +82,9 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"  worktree_root: ../agent-worktrees\n" +
 		"  state_root: ../.devkit/native-agents\n" +
 		"  worktree_container_root: /worktrees\n" +
-		"  state_container_root: /agent-state\n"
+		"  state_container_root: /agent-state\n" +
+		"runtime:\n" +
+		"  flake: .#dev-all\n"
 	if err := os.WriteFile(filepath.Join(over, "devkit.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +112,9 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if cfg.Native.WorktreeContainerRoot != "/worktrees" || cfg.Native.StateContainerRoot != "/agent-state" {
 		t.Fatalf("native container roots = %#v", cfg.Native)
+	}
+	if cfg.Runtime.Flake != ".#dev-all" {
+		t.Fatalf("runtime flake = %q", cfg.Runtime.Flake)
 	}
 }
 

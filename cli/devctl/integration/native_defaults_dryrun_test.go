@@ -154,6 +154,20 @@ func TestNonDevAllTopLevelExecUsesLegacyComposeDryRun(t *testing.T) {
 	}
 }
 
+func TestDevAllComposeNamespaceIsRetiredDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := nativeDefaultsRoot(t)
+
+	out, err := runNativeDefaultDryRun(t, bin, root, "compose", "up")
+	if err == nil {
+		t.Fatalf("dev-all compose unexpectedly succeeded:\n%s", out)
+	}
+	assertNoDockerCommand(t, out)
+	if !strings.Contains(out, "Docker Compose is retired for dev-all") {
+		t.Fatalf("unexpected dev-all compose error:\n%s", out)
+	}
+}
+
 func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	bwrapDir := fakeBwrapDir(t)
@@ -261,5 +275,30 @@ windows:
 	assertNoDockerCommand(t, out)
 	if !strings.Contains(out, "only supports native dev-all layouts") {
 		t.Fatalf("unexpected mixed-layout failure:\n%s", out)
+	}
+}
+
+func TestLegacyLayoutCannotTargetDevAllDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := legacyComposeRoot(t)
+	layout := filepath.Join(root, "legacy-devall-layout.yaml")
+	if err := os.WriteFile(layout, []byte(`
+session: legacy-devall
+windows:
+  - index: 1
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-ide
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runProjectDryRun(t, bin, root, "codex", "layout-apply", "--file", layout)
+	if err == nil {
+		t.Fatalf("legacy layout targeting dev-all unexpectedly succeeded:\n%s", out)
+	}
+	assertNoDockerCommand(t, out)
+	if !strings.Contains(out, "legacy layout-apply cannot target dev-all") {
+		t.Fatalf("unexpected legacy layout failure:\n%s", out)
 	}
 }

@@ -12,9 +12,9 @@ defaults:
   # Warm hook is required for readiness.
   require_warm: true
 runtime:
-  image: local/dev-agent:ouroboros-ide
+  flake: .#dev-all
   codex_version: 0.130.0
-  core_check: scripts/sbt2 "Compile / compile"
+  core_check: bash scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.
 readiness:
   runtime_checks:
@@ -23,8 +23,8 @@ readiness:
         for tool in git ssh curl docker go node npm spago netlify playwright; do
           command -v "$tool" >/dev/null
         done
-    - name: spago-netlify
-      command: spago --version >/dev/null && netlify --version >/dev/null
+    - name: purescript-spago-netlify
+      command: purs --version >/dev/null && spago --version >/dev/null && netlify --version >/dev/null
     - name: playwright-browser
       command: |
         node <<'NODE'
@@ -45,34 +45,36 @@ readiness:
         NODE
   repo_checks:
     - name: git-remote
-      command: git ls-remote --heads origin >/dev/null
+      command: GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null
     - name: frontend-warm
       command: |
         if [ -f frontend/package.json ]; then
           npm --prefix frontend ci --include=dev --ignore-scripts
+          ln -sf "$(command -v purs)" frontend/node_modules/.bin/purs
+          npm --prefix frontend rebuild better-sqlite3 --build-from-source
+          test -x frontend/node_modules/.bin/tsc
+          npm --prefix frontend ls @playwright/test global-agent --depth=0 >/dev/null
         fi
     - name: frontend-playwright-browser
       command: |
         test -f frontend/package.json
-        (
-          cd frontend
-          node <<'NODE'
-          const { chromium } = require("@playwright/test");
-          (async () => {
-            const browser = await chromium.launch({ headless: true });
-            const page = await browser.newPage();
-            await page.setContent("<title>frontend-playwright-ok</title>");
-            const title = await page.title();
-            await browser.close();
-            if (title !== "frontend-playwright-ok") {
-              throw new Error(`unexpected title: ${title}`);
-            }
-          })().catch((err) => {
-            console.error(err);
-            process.exit(1);
-          });
-          NODE
-        )
+        cd frontend
+        node <<'NODE'
+        const { chromium } = require("@playwright/test");
+        (async () => {
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage();
+          await page.setContent("<title>frontend-playwright-ok</title>");
+          const title = await page.title();
+          await browser.close();
+          if (title !== "frontend-playwright-ok") {
+            throw new Error(`unexpected title: ${title}`);
+          }
+        })().catch((err) => {
+          console.error(err);
+          process.exit(1);
+        });
+        NODE
     - name: frontend-typecheck
       command: |
         test -f frontend/package.json
@@ -82,7 +84,7 @@ readiness:
         test -f frontend/package.json
         npm --prefix frontend run test:raw
     - name: core-check
-      command: scripts/sbt2 "Compile / compile"
+      command: bash scripts/sbt2 "Compile / compile"
 broker:
   socket: /run/devkit/test-container-broker.sock
   upstream: unix:///var/run/docker.sock
@@ -326,24 +328,6 @@ hooks:
     mkdir -p /workspaces/dev/agent-worktrees/agent1
     if [ -d /workspaces/dev/ouroboros-ide ] && [ ! -e /workspaces/dev/agent-worktrees/agent1/ouroboros-ide ]; then
       ln -s ../../ouroboros-ide /workspaces/dev/agent-worktrees/agent1/ouroboros-ide
-    fi
-    if command -v npm >/dev/null 2>&1; then
-      for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
-        if [ -f "$repo/frontend/package.json" ]; then
-          npm --prefix "$repo/frontend" install --include=dev --no-package-lock
-          if [ ! -x "$repo/frontend/node_modules/.bin/tsc" ]; then
-            npm --prefix "$repo/frontend" install --include=dev --no-save --no-package-lock typescript
-          fi
-          if ! npm --prefix "$repo/frontend" ls @playwright/test >/dev/null 2>&1; then
-            npm --prefix "$repo/frontend" install --no-save --no-package-lock @playwright/test @vitest/browser-playwright
-          fi
-          # microsoft/playwright-cli is archived; canonical CLI is `npx playwright`.
-          if ! npm --prefix "$repo/frontend" ls playwright >/dev/null 2>&1; then
-            npm --prefix "$repo/frontend" install --no-save --no-package-lock playwright
-          fi
-          npm --prefix "$repo/frontend" exec playwright install chromium
-        fi
-      done
     fi
     if command -v sbt >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
       for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do

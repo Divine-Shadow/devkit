@@ -120,9 +120,6 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 		broker = "/run/devkit/test-container-broker.sock"
 	}
 	proxyURL := strings.TrimSpace(opts.Proxy)
-	if proxyURL == "" {
-		proxyURL = "http://127.0.0.1:8888"
-	}
 	resolvConf := strings.TrimSpace(opts.DNSResolvConf)
 	if resolvConf == "" {
 		resolvConf = filepath.Join(paths.HostAgentStateRoot, "resolv.conf")
@@ -135,12 +132,14 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 		"XDG_CACHE_HOME":               filepath.Join(paths.SandboxHome, ".cache"),
 		"XDG_CONFIG_HOME":              filepath.Join(paths.SandboxHome, ".config"),
 		"SBT_GLOBAL_BASE":              filepath.Join(paths.SandboxHome, ".sbt"),
-		"HTTP_PROXY":                   proxyURL,
-		"HTTPS_PROXY":                  proxyURL,
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
 		"DEVKIT_NATIVE_AGENT":          "1",
+	}
+	if proxyURL != "" {
+		env["HTTP_PROXY"] = proxyURL
+		env["HTTPS_PROXY"] = proxyURL
 	}
 
 	p := Plan{
@@ -248,6 +247,14 @@ func launcherArgs(p Plan) []string {
 				args = append(args, "--bind", bind.Source, bind.Target)
 			}
 		}
+		args = append(args,
+			"--dir", "/usr",
+			"--dir", "/usr/bin",
+			"--dir", "/bin",
+			"--symlink", "/run/current-system/sw/bin/env", "/usr/bin/env",
+			"--symlink", "/run/current-system/sw/bin/bash", "/bin/bash",
+			"--symlink", "/run/current-system/sw/bin/sh", "/bin/sh",
+		)
 		keys := make([]string, 0, len(p.Env))
 		for key := range p.Env {
 			keys = append(keys, key)

@@ -7,8 +7,8 @@ The `dev-all` default runtime is Nix-native. Canonical user entry remains
 
 Default `dev-all` lifecycle and entry commands are native:
 `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
-`ensure-ready`. Docker Compose is explicit legacy only through
-`kit/scripts/devkit -p dev-all compose <command>`.
+`ensure-ready`. Docker Compose is retired for `dev-all`; the `compose`
+namespace now fails before invoking Docker.
 
 ## Review Commits
 
@@ -58,7 +58,7 @@ cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command fla
 
 ## Legacy Compose Boundary
 
-- `dev-all` Compose is only reachable via the explicit `compose` namespace.
+- `dev-all` Compose is retired, including the explicit `compose` namespace.
 - Unreachable default Compose branches for `scale` and `ensure-ready` were
   removed from `main.go`; those names are owned by the native command registry.
 - Non-`dev-all` overlays keep their legacy Compose command surface until they

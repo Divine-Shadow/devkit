@@ -41,11 +41,28 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Env["DOCKER_HOST"] != "unix:///run/devkit/test-container-broker.sock" {
 		t.Fatalf("DOCKER_HOST = %q", p.Env["DOCKER_HOST"])
 	}
+	if p.Env["HTTP_PROXY"] != "" || p.Env["HTTPS_PROXY"] != "" {
+		t.Fatalf("native plan should not default to Compose-era proxy env: %#v", p.Env)
+	}
 	if p.DirectDockerSocket {
 		t.Fatalf("native plan must not expose direct Docker socket")
 	}
 	if len(p.LauncherArgs) == 0 || p.LauncherArgs[0] != "bwrap" {
 		t.Fatalf("launcher args = %#v", p.LauncherArgs)
+	}
+}
+
+func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
+	p, err := BuildDevAll(BuildOptions{
+		Paths:   compose.Paths{Root: "/repo/devkit"},
+		Project: "dev-all",
+		Proxy:   "http://127.0.0.1:8899",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if p.Env["HTTP_PROXY"] != "http://127.0.0.1:8899" || p.Env["HTTPS_PROXY"] != "http://127.0.0.1:8899" {
+		t.Fatalf("proxy env = %#v", p.Env)
 	}
 }
 

@@ -1,6 +1,7 @@
 package composecmd
 
 import (
+	"strings"
 	"testing"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -20,8 +21,18 @@ func TestRegisterUsesHistoricalComposeNamespace(t *testing.T) {
 }
 
 func TestHandleRejectsUnknownComposeCommand(t *testing.T) {
-	err := handle(&cmdregistry.Context{Project: "dev-all", Args: []string{"bogus"}})
+	err := handle(&cmdregistry.Context{Project: "codex", Args: []string{"bogus"}})
 	if err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestHandleRejectsDevAllCompose(t *testing.T) {
+	err := handle(&cmdregistry.Context{Project: "dev-all", Args: []string{"up"}})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if got := err.Error(); !strings.Contains(got, "retired for dev-all") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

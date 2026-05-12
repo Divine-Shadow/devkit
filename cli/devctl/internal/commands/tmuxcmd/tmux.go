@@ -202,6 +202,9 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 	if ctx.Project == "dev-all" {
 		return fmt.Errorf("tmux-apply-layout for dev-all only supports native dev-all layouts; use explicit legacy Compose workflows for mixed layouts")
 	}
+	if layoutReferencesProject(lf, "dev-all") {
+		return fmt.Errorf("legacy tmux-apply-layout cannot target dev-all; use a native dev-all layout with -p dev-all")
+	}
 	sessExists := hasTmuxSession(sessName)
 	tracker := newSeedTracker()
 	if tracker == nil {
@@ -358,6 +361,24 @@ func nativeLayoutEligible(defaultProject string, lf layout.File) bool {
 		}
 	}
 	return strings.TrimSpace(defaultProject) == "dev-all"
+}
+
+func layoutReferencesProject(lf layout.File, project string) bool {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return false
+	}
+	for _, ov := range lf.Overlays {
+		if strings.TrimSpace(ov.Project) == project {
+			return true
+		}
+	}
+	for _, w := range lf.Windows {
+		if strings.TrimSpace(w.Project) == project {
+			return true
+		}
+	}
+	return false
 }
 
 func nativeApplyLayout(ctx *cmdregistry.Context, lf layout.File, session string, attach bool) error {
@@ -824,7 +845,7 @@ func plainTabArgs(ctx *cmdregistry.Context, idx, cdPath string) []string {
 	if strings.TrimSpace(project) != "" {
 		args = append(args, "-p", project)
 	}
-	if strings.TrimSpace(ctx.ComposeProject) != "" {
+	if strings.TrimSpace(ctx.ComposeProject) != "" && project != "dev-all" {
 		args = append(args, "--compose-project", ctx.ComposeProject)
 	}
 	if dest != "" {
@@ -844,28 +865,7 @@ func defaultDevAllRepo(ctx *cmdregistry.Context) string {
 }
 
 var detectPlainProject = func(ctx *cmdregistry.Context) string {
-	project := strings.TrimSpace(ctx.Project)
-	if project == "" {
-		return project
-	}
-	if project == "dev-all" {
-		return project
-	}
-	composeProject := strings.TrimSpace(ctx.ComposeProject)
-	if composeProject == "" {
-		return project
-	}
-	containerName := agentexec.ResolveContainerName(composeProject, "dev-agent", 1)
-	if strings.TrimSpace(containerName) == "" {
-		return project
-	}
-	runCtx, cancel := execx.WithTimeout(10 * time.Second)
-	defer cancel()
-	out, res := execx.Capture(runCtx, "docker", "inspect", "--format", "{{range .Mounts}}{{println .Destination}}{{end}}", containerName)
-	if res.Code == 0 && strings.Contains(out, "/workspaces/dev") {
-		return "dev-all"
-	}
-	return project
+	return strings.TrimSpace(ctx.Project)
 }
 
 func tabSessionName(session, tabTitle string) string {

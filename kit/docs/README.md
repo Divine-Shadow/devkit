@@ -16,6 +16,7 @@ Dev Kit — Base Kit Details
 - Helper:
 - `devkit/kit/scripts/devkit -p dev-all up|down|status|exec|logs` now uses the Nix-native runtime.
 - `devkit/kit/scripts/devkit -p <project> compose up|down|status|exec|logs` is the legacy Docker Compose path for historical overlays.
+  - `compose` is rejected for `-p dev-all`; use native lifecycle, readiness, and exec commands instead.
   - Legacy `compose up` performs a best-effort cleanup of any lingering proxy/DNS containers for the target compose project before recreating the stack.
   - After the stack is healthy, each running `dev-agent` automatically receives a proxy-aware SSH config plus copies of your host keys (`~/.ssh/id_ed25519` / `id_rsa` / `known_hosts` when present) and a locked `core.sshCommand` pointing at that config. Fresh containers can immediately `git pull` via `ssh.github.com:443` without running `ssh-setup` manually; if you need to reseed later (or provide an alternate key path) you can still invoke `ssh-setup`.
   - The dev-agent entrypoint cleans up stale `.gitconfig.lock` files in devkit home mounts. If you need to tune how long a lock must sit before deletion, set `DEVKIT_GIT_LOCK_MAX_AGE_SECS` (default `5`).
@@ -136,24 +137,22 @@ Convenience commands (essentials):
 - Reset and open N agents (alias of `fresh-open`): `devctl -p <proj> reset [N]`.
 - Scale agents without teardown: `devctl -p <proj> scale N`.
  - Scale and sync tmux: `devctl -p <proj> scale N --tmux-sync [--session NAME] [--service NAME]`.
-- Open one plain Windows Terminal tab without tmux: `devctl -p dev-all --compose-project devkit-ouro8 wt-open --plain --index 5`.
+- Open one plain Windows Terminal tab without tmux: `devctl -p dev-all wt-open --plain --index 5`.
 
 Worktrees workflow (dev-all overlay):
 - Setup per-agent branches + worktrees that track `origin/<base>`: `devctl -p dev-all worktrees-setup <repo> <count> [--base agent] [--branch main]`.
 - Bootstrap using defaults from `overlays/dev-all/devkit.yaml`: `devctl -p dev-all bootstrap`.
 - Open tmux across worktrees: `devctl -p dev-all worktrees-tmux <repo> <count>`.
 
-Image pairing and rebuild note:
-- Repo-to-image pairings are declared in overlay `runtime:` metadata and summarized in `kit/docs/repo-container-image-pairings.md`.
+Runtime pairing and refresh note:
+- Repo-to-runtime pairings are declared in overlay `runtime:` metadata and summarized in `kit/docs/repo-container-image-pairings.md`.
 - Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only.
 - Verify the local image/Codex matrix with `scripts/devkit image-matrix --check`.
-- Rebuild `local/dev-agent:ouroboros-ide` when the Ouroboros image changes:
-  - `cd /home/bayesartre/dev && docker build -t local/dev-agent:ouroboros-ide -f ouroboros-ide/infra/docker/dev/codex-agent.Dockerfile --build-arg JDK_VERSION=21 ouroboros-ide`
-- Then recreate and resync the matching legacy Compose stack:
-  - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 compose down`
-  - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 compose up`
-  - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 compose up --scale dev-agent=8`
-  - `DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 tmux-sync --session devkit`
+- `dev-all` no longer has an executable Compose runtime path. `overlays/dev-all/compose.override.yml` remains historical inventory only.
+- Refresh native agents through Nix/devkit instead of rebuilding a Docker agent image:
+  - `make -C cli/devctl build`
+  - `kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 8`
+  - `kit/scripts/devkit -p dev-all tmux-sync --count 8 --session devkit`
 
 Auto-readiness (`dev-all`):
 - Native lifecycle commands `up`, `restart`, and `scale` automatically run readiness for `dev-all`.
@@ -161,7 +160,7 @@ Auto-readiness (`dev-all`):
 - Runtime readiness controls capacity; repo readiness checks are visible and retryable without hiding launchable native agents.
 - Manual invocation: `devctl -p dev-all ensure-ready [--count N] [--repo ouroboros-ide]`.
 - Escape hatch: append `--skip-ready` to lifecycle commands.
-- Legacy Compose readiness remains available through `devctl -p dev-all compose up|restart`.
+- Legacy Compose readiness remains available only for non-`dev-all` overlays.
 - Native Playwright, Spago, and Netlify tools are flake-provisioned; warm/readiness should not install those CLI packages or browser binaries at runtime.
 - Existing symlinked `agent1` compatibility paths are supported by native planning, but new native preparation should create dedicated agent worktrees.
 - Repository warm steps are readiness checks. They can be skipped during capacity recovery with `--skip-ready` and rerun later with `ensure-ready`.

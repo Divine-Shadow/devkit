@@ -1,6 +1,8 @@
 Overlay + Tmux Retrospective (Front‑End Overlay)
 
-Summary of what we changed, why it mattered, and how to operate the system reliably when mixing multiple overlays (dev-all + a Node frontend) under a shared compose project.
+Summary of what we changed, why it mattered, and how we operated the historical
+mixed Compose layout. `dev-all` is now native-only; this note remains useful for
+non-`dev-all` Compose overlays.
 
 What went wrong
 - Base image pull: The base compose (`kit/compose.yml`) defines a `dev-agent` with `image: devkit/dev-agent:base`. When bringing up the frontend overlay alone, Compose tried to pull this non-existent image. We fixed the overlay to either override or disable the base service.
@@ -45,7 +47,7 @@ Operational guidance
 - Avoid `:` in tmux session names in layouts. Use `devkit_...` style.
 - For overlays that don’t start a long‑lived server, add a keepalive command so tmux can attach (`sleep infinity` is a pragmatic default).
 - When adding an overlay with `build:`, make the build context relative to the kit compose file path, not the overlay file.
-- For mixed overlays under one compose project (e.g., dev-all + frontend), use `compose_project` in the layout to avoid network/port conflicts and to allow cross‑overlay window creation.
+- For mixed non-`dev-all` overlays under one compose project, use `compose_project` in the layout to avoid network/port conflicts and to allow cross-overlay window creation.
 - Ensure git identity ahead of time:
   - `export DEVKIT_GIT_USER_NAME="Your Name"`
   - `export DEVKIT_GIT_USER_EMAIL="you@example.com"`

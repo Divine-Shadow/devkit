@@ -171,7 +171,7 @@ func TestVerifyAllRuntime(t *testing.T) {
 		"COMPOSE_PROJECT_NAME": devAllProject,
 	}, "-p", "dev-all", "up")
 	if upDevAll.Err != nil {
-		t.Fatalf("dev-all compose up failed: %v\nstdout:\n%s\nstderr:\n%s", upDevAll.Err, upDevAll.Stdout, upDevAll.Stderr)
+		t.Fatalf("dev-all native up failed: %v\nstdout:\n%s\nstderr:\n%s", upDevAll.Err, upDevAll.Stdout, upDevAll.Stderr)
 	}
 
 	res := fx.RunDevkit(nil, "verify-all")

@@ -37,6 +37,9 @@ func handle(ctx *cmdregistry.Context) error {
 	if strings.TrimSpace(ctx.Project) == "" {
 		return fmt.Errorf("hosts requires -p <project>")
 	}
+	if strings.TrimSpace(ctx.Project) == "dev-all" {
+		return fmt.Errorf("hosts is a legacy Compose/container command for dev-all; native dev-all does not mutate agent /etc/hosts")
+	}
 	opts, err := parseOptions(ctx.Args)
 	if err != nil {
 		return err

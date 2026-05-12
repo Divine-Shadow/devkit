@@ -280,9 +280,8 @@ canonical `devkit` entrypoint:
 - Top-level `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`,
   `attach`, and `ensure-ready` now target the native runtime for `dev-all`.
 
-Compose is now an explicit legacy compatibility path via
-`devkit compose ...`. Native lifecycle support currently covers `dev-all`; other
-legacy overlays should be operated through `devkit compose ...` until they have
-native plan/lifecycle coverage. Remaining non-default Compose call sites are
-historical helper workflows such as layout/tmux generation and older worktree
-commands.
+Compose is now a legacy compatibility path only for non-`dev-all` overlays.
+Native lifecycle support currently covers `dev-all`; other legacy overlays
+should be operated through `devkit compose ...` until they have native
+plan/lifecycle coverage. Remaining non-default Compose call sites are historical
+helper workflows such as layout/tmux generation and older worktree commands.

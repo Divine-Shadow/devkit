@@ -79,18 +79,15 @@ Worktrees (isolated branches per agent, dev-all overlay):
   - Setup: `scripts/devkit -p dev-all worktrees-setup ouroboros-ide 3`
   - Open windows: `scripts/devkit -p dev-all worktrees-tmux ouroboros-ide 3`
 
-Image pairing and rebuild note:
-- Repo-to-image pairings live in each overlay's `runtime:` metadata and are summarized in `kit/docs/repo-container-image-pairings.md`.
+Runtime pairing and refresh note:
+- Repo-to-runtime pairings live in each overlay's `runtime:` metadata and are summarized in `kit/docs/repo-container-image-pairings.md`.
 - Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only; do not use them as image identity.
 - Verify the local matrix and Codex versions with `scripts/devkit image-matrix --check`.
-- `overlays/dev-all/compose.override.yml` pins `ouroboros-ide` agents to `image: local/dev-agent:ouroboros-ide` and does not build it.
-- Rebuild `local/dev-agent:ouroboros-ide` when Codex/Dockerfile args change:
-  - `cd /home/bayesartre/dev && docker build -t local/dev-agent:ouroboros-ide -f ouroboros-ide/infra/docker/dev/codex-agent.Dockerfile --build-arg JDK_VERSION=21 ouroboros-ide`
-- Then recreate the matching runtime stack so agents pick up the new image:
-  - `cd /home/bayesartre/dev && DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 down`
-  - `cd /home/bayesartre/dev && DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 up`
-  - `cd /home/bayesartre/dev && DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 scale 8`
-  - `cd /home/bayesartre/dev && DEVKIT_INTERNAL_SUBNET=172.30.40.0/24 DEVKIT_DNS_IP=172.30.40.53 scripts/devkit -p dev-all --compose-project devkit-ouro8 tmux-sync --session devkit`
+- `dev-all` is native-only. `overlays/dev-all/compose.override.yml` is historical inventory, not an executable runtime path.
+- Refresh native agents through Nix/devkit instead of rebuilding a Docker agent image:
+  - `cd /home/bayesartre/dev/devkit && make -C cli/devctl build`
+  - `cd /home/bayesartre/dev/devkit && kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 8`
+  - `cd /home/bayesartre/dev/devkit && kit/scripts/devkit -p dev-all tmux-sync --count 8 --session devkit`
 
 Auto-readiness (`dev-all`):
 - `up`, `restart`, and `scale` now run readiness automatically for `dev-all`:
@@ -99,15 +96,14 @@ Auto-readiness (`dev-all`):
   - validation (`git ls-remote`, frontend `tsc`, `@playwright/test`)
 - Run explicitly when needed: `scripts/devkit -p dev-all ensure-ready [--count N] [--service dev-agent]`
 - Agent auth/home state is per-agent for `dev-all`; readiness and reseed no longer share `/workspaces/dev/.devhome`.
-- Reseed one agent in place: `scripts/devkit -p dev-all --compose-project devkit-ouro8 codex-auth reseed 4`
+- Reseed one agent in place: `scripts/devkit -p dev-all codex-auth reseed 4`
 - Reseed all running agents, or an explicit subset, in place:
-  - `scripts/devkit -p dev-all --compose-project devkit-ouro8 codex-auth reseed-all`
-  - `scripts/devkit -p dev-all --compose-project devkit-ouro8 codex-auth reseed-all 2 3 4 5`
+  - `scripts/devkit -p dev-all codex-auth reseed-all`
+  - `scripts/devkit -p dev-all codex-auth reseed-all 2 3 4 5`
 - Bypass only for emergencies: append `--skip-ready` to `up`, `restart`, or `scale`.
-- Go is installed in the dev-agent image; warm no longer bootstraps Go from `go.dev`.
-- Warm ensures `@playwright/test` is installed and runs `playwright install chromium` in frontend repos.
+- Go, PureScript/Spago, Netlify, and Playwright are provided by the `dev-all` flake shell.
+- Readiness uses `npm ci --include=dev --ignore-scripts` for frontend dependencies and does not install CLI tools or Playwright browsers at runtime.
 - Warm also materializes `/workspaces/dev/agent-worktrees/agent1/<repo>` as a compatibility link to the root repo mount.
-- Warm also ensures the Playwright CLI package (`playwright`) is present, aligned with `microsoft/playwright-cli` deprecation to `npx playwright`.
 
 Tmux ergonomics (new):
 - Sync windows to running agents: `scripts/devkit tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH]`.
@@ -117,11 +113,11 @@ Tmux ergonomics (new):
   - Use the same `--session` across overlays to mix images in one tmux.
 - Windows Terminal tabs for an existing tmux session: `scripts/devkit wt-open [--session NAME]`.
 - Windows Terminal tabs without tmux: `scripts/devkit wt-open --plain [--index N|--count N] [--cd PATH]`.
-  - This attaches directly to running `dev-agent` containers and does not run `compose up`.
-  - Use it for an already-running stack when you want normal WT tabs instead of tmux-backed tabs.
+  - This attaches through native `dev-all exec` commands and does not run Compose.
+  - Use it for an already-running native runtime when you want normal WT tabs instead of tmux-backed tabs.
   - Use `--index N` to open only one agent tab, e.g. after scaling up.
   - For the default `devkit-ouro8` worktree stack, use `-p dev-all`.
-  - Example: `scripts/devkit -p dev-all --compose-project devkit-ouro8 wt-open --plain --index 5`
+  - Example: `scripts/devkit -p dev-all wt-open --plain --index 5`
 - Target a different service (non-default): append `--service <name>` to `tmux-sync`, `tmux-add-cd`, or `scale --tmux-sync`.
 - Apply a layout file (YAML): `scripts/devkit tmux-apply-layout --file tmux.yaml [--session NAME]`.
   - Example tmux.yaml:
@@ -132,11 +128,11 @@ Tmux ergonomics (new):
         name: ouro-1
         service: dev-agent
         # project: dev-all     # optional; defaults to current -p
-        # compose_project: devkit-ouro8   # optional; override compose project per window
       - index: 2
         path: dumb-onion-hax
         name: doh-2
         service: dev-agent
+  - Native `dev-all` layouts must contain only `dev-all` windows. Mixed legacy layouts cannot target `dev-all`.
 
 Declarative orchestration (new):
 - Bring up overlays and then attach tmux from a single YAML:
@@ -161,17 +157,6 @@ Declarative orchestration (new):
         count: 2
         profiles: dns
         compose_project: devkit-emerald
-      - project: dev-all
-        service: dev-agent
-        count: 3
-        profiles: dns
-        compose_project: devkit-devall
-        # Optional: prepare host git worktrees before windows (dev-all only)
-        worktrees:
-          repo: dumb-onion-hax
-          count: 3              # defaults to overlays.count when omitted
-          base_branch: main     # optional; falls back to overlays/dev-all/devkit.yaml
-          branch_prefix: agent  # optional; falls back to overlays/dev-all/devkit.yaml
     windows:
       - index: 1
         project: codex
@@ -203,17 +188,6 @@ Declarative orchestration (new):
         service: dev-agent
         path: /workspace
         name: doh-1
-      # Example: windows targeting dev-all agents after worktrees
-      - index: 1
-        project: dev-all
-        service: dev-agent
-        path: dumb-onion-hax
-        name: doh-wt-1
-      - index: 2
-        project: dev-all
-        service: dev-agent
-        path: agent-worktrees/agent2/dumb-onion-hax
-        name: doh-wt-2
       - index: 1
         project: pokeemerald
         service: dev-agent
@@ -248,7 +222,7 @@ Overlay reuse:
 - Keep the compiled kit in one checkout and point `DEVKIT_OVERLAYS_DIR` at your project-specific overlays (relative paths resolve against `DEVKIT_ROOT`; default is `<DEVKIT_ROOT>/overlays`).
 
 Retrospectives and contributor guidance:
-- Repo/container image pairings: `kit/docs/repo-container-image-pairings.md`
+- Repo/runtime pairings: `kit/docs/repo-container-image-pairings.md`
 - Reliability retrospective: `kit/docs/retrospective-ssh-git-anchor.md`
 - Codex logout revocation retrospective: `kit/docs/retrospective-codex-logout-revocation.md`
 - Contrib guideline (quoting + file writes): `kit/docs/contrib-quoting-and-file-writes.md`

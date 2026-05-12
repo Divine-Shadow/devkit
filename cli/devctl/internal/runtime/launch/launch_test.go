@@ -48,6 +48,8 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	joined := ShellString(cmd)
 	for _, want := range []string{
 		"'--bind' '" + devRoot + "' '/workspaces/dev'",
+		"'--symlink' '/run/current-system/sw/bin/env' '/usr/bin/env'",
+		"'--symlink' '/run/current-system/sw/bin/sh' '/bin/sh'",
 		"'--setenv' 'DOCKER_HOST' 'unix:///run/devkit/test-container-broker.sock'",
 		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' 'develop' '.#runtime-test-agent'",
 	} {
@@ -74,5 +76,41 @@ func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	}
 	if err := Prepare(p); err == nil {
 		t.Fatalf("expected missing worktree error")
+	}
+}
+
+func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
+	hostUserHome := t.TempDir()
+	srcSSH := filepath.Join(hostUserHome, ".ssh")
+	if err := os.MkdirAll(srcSSH, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"id_ed25519":     "private",
+		"id_ed25519.pub": "public",
+		"known_hosts":    "github.com key",
+	} {
+		if err := os.WriteFile(filepath.Join(srcSSH, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", hostUserHome)
+
+	nativeHome := filepath.Join(t.TempDir(), "native-home")
+	if err := SeedSSH(nativeHome, false); err != nil {
+		t.Fatalf("SeedSSH: %v", err)
+	}
+	for name, wantMode := range map[string]os.FileMode{
+		"id_ed25519":     0o600,
+		"id_ed25519.pub": 0o644,
+		"known_hosts":    0o644,
+	} {
+		info, err := os.Stat(filepath.Join(nativeHome, ".ssh", name))
+		if err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+		if got := info.Mode().Perm(); got != wantMode {
+			t.Fatalf("%s mode = %v, want %v", name, got, wantMode)
+		}
 	}
 }

@@ -14,12 +14,13 @@ import (
 	"devkit/cli/devctl/internal/config"
 )
 
-// Entry is one overlay's declared runtime image pairing.
+// Entry is one overlay's declared runtime pairing.
 type Entry struct {
 	Overlay      string
 	Repo         string
 	Service      string
 	Image        string
+	Flake        string
 	CodexVersion string
 	CoreCheck    string
 	Canonical    bool
@@ -50,7 +51,7 @@ func handle(ctx *cmdregistry.Context) error {
 		return err
 	}
 	if len(entries) == 0 {
-		return fmt.Errorf("no runtime image pairings declared")
+		return fmt.Errorf("no runtime pairings declared")
 	}
 	Print(entries)
 	if check {
@@ -59,7 +60,7 @@ func handle(ctx *cmdregistry.Context) error {
 	return nil
 }
 
-// Discover reads overlay devkit.yaml files and returns runtime image entries.
+// Discover reads overlay devkit.yaml files and returns runtime entries.
 func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 	var entries []Entry
 	for _, root := range overlayRoots {
@@ -80,7 +81,8 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				return nil, err
 			}
 			image := strings.TrimSpace(cfg.Runtime.Image)
-			if image == "" {
+			flake := strings.TrimSpace(cfg.Runtime.Flake)
+			if image == "" && flake == "" {
 				continue
 			}
 			canonical := true
@@ -100,6 +102,7 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				Repo:         repo,
 				Service:      service,
 				Image:        image,
+				Flake:        flake,
 				CodexVersion: strings.TrimSpace(cfg.Runtime.CodexVersion),
 				CoreCheck:    strings.TrimSpace(cfg.Runtime.CoreCheck),
 				Canonical:    canonical,
@@ -120,14 +123,14 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 // Print writes a compact operator-facing matrix to stdout.
 func Print(entries []Entry) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "REPO\tOVERLAY\tSERVICE\tIMAGE\tCODEX\tCORE CHECK")
+	fmt.Fprintln(w, "REPO\tOVERLAY\tSERVICE\tRUNTIME\tCODEX\tCORE CHECK")
 	for _, e := range entries {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Overlay, e.Service, e.Image, e.CodexVersion, e.CoreCheck)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Repo, e.Overlay, e.Service, runtimeArtifact(e), e.CodexVersion, e.CoreCheck)
 	}
 	_ = w.Flush()
 }
 
-// Check verifies the matrix is internally consistent and images carry Codex.
+// Check verifies the matrix is internally consistent and runtimes carry Codex.
 func Check(entries []Entry, dryRun bool) error {
 	var problems []string
 	seenRepo := map[string]string{}
@@ -135,8 +138,8 @@ func Check(entries []Entry, dryRun bool) error {
 		if e.Repo == "" {
 			problems = append(problems, fmt.Sprintf("%s: runtime repo/defaults.repo is empty", e.Overlay))
 		}
-		if e.Image == "" {
-			problems = append(problems, fmt.Sprintf("%s: runtime.image is empty", e.Overlay))
+		if e.Image == "" && e.Flake == "" {
+			problems = append(problems, fmt.Sprintf("%s: runtime.image or runtime.flake is empty", e.Overlay))
 		}
 		if e.CodexVersion == "" {
 			problems = append(problems, fmt.Sprintf("%s: runtime.codex_version is empty", e.Overlay))
@@ -149,7 +152,7 @@ func Check(entries []Entry, dryRun bool) error {
 		} else if e.Repo != "" {
 			seenRepo[e.Repo] = e.Overlay
 		}
-		if e.ComposePath != "" {
+		if e.Image != "" && e.ComposePath != "" {
 			data, err := os.ReadFile(e.ComposePath)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("%s: read compose override: %v", e.Overlay, err))
@@ -166,6 +169,15 @@ func Check(entries []Entry, dryRun bool) error {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version %s, want %s", e.Overlay, e.Image, got, e.CodexVersion))
 			}
 		}
+		if e.Flake != "" && e.CodexVersion != "" {
+			if dryRun {
+				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --command bash -lc 'codex --version'\n", e.Flake)
+			} else if got, err := flakeCodexVersion(e.Flake); err != nil {
+				problems = append(problems, fmt.Sprintf("%s: %s codex version check failed: %v", e.Overlay, e.Flake, err))
+			} else if got != e.CodexVersion {
+				problems = append(problems, fmt.Sprintf("%s: %s codex version %s, want %s", e.Overlay, e.Flake, got, e.CodexVersion))
+			}
+		}
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("image matrix check failed:\n- %s", strings.Join(problems, "\n- "))
@@ -174,8 +186,28 @@ func Check(entries []Entry, dryRun bool) error {
 	return nil
 }
 
+func runtimeArtifact(e Entry) string {
+	if e.Flake != "" {
+		return e.Flake
+	}
+	return e.Image
+}
+
 func imageCodexVersion(image string) (string, error) {
 	cmd := exec.Command("docker", "run", "--rm", "--entrypoint", "bash", image, "-lc", "/usr/local/bin/codex --version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty codex version output")
+	}
+	return strings.TrimPrefix(fields[len(fields)-1], "v"), nil
+}
+
+func flakeCodexVersion(flake string) (string, error) {
+	cmd := exec.Command("nix", "--extra-experimental-features", "nix-command flakes", "develop", flake, "--command", "bash", "-lc", "codex --version")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
