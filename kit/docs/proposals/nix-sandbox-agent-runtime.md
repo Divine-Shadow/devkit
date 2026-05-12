@@ -1,5 +1,32 @@
 # Proposal: Nix-Native Agent Runtime With Brokered Test Containers
 
+## Status: Implemented For `dev-all`
+
+This proposal is now historical context plus design rationale. The active
+`dev-all` control plane is Nix-native through the canonical
+`kit/scripts/devkit` entrypoint and compiled `kit/bin/devctl` binary.
+
+Implemented command surface:
+
+- `devkit -p dev-all up|down|restart|status|logs`
+- `devkit -p dev-all scale N`
+- `devkit -p dev-all exec <index> ...`
+- `devkit -p dev-all attach <index>`
+- `devkit -p dev-all ensure-ready`
+- `devkit -p dev-all native plan|prepare|exec|readiness|capacity`
+- `devkit -p dev-all broker start|status|stop`
+
+The native runtime launches agents with bubblewrap, Nix flakes, per-agent
+HOME/Codex/XDG state, managed DNS/proxy environment, and brokered Docker access.
+Native plans set `DOCKER_HOST` to the broker socket and do not bind
+`/var/run/docker.sock` into the agent sandbox. Compose is no longer an implicit
+fallback for `dev-all`; legacy Compose workflows must be requested explicitly via
+`devkit -p dev-all compose <command>`, and non-`dev-all` overlays keep their
+legacy Compose surface until they receive native replacements.
+
+The implementation evidence, smoke commands, operational caveats, and parity
+status live in `nix/runtime-parity.md`.
+
 ## Context
 
 The current `ouro8` development layout uses Docker Compose to run every long-lived
@@ -81,7 +108,7 @@ The current Docker-centered design has several costs:
 - Warm hooks are heavyweight and can block capacity restoration even when the host
   runtime is otherwise healthy.
 
-## Candidate Direction
+## Candidate Direction Implemented By `dev-all`
 
 Move long-lived agents to a Nix-native sandbox runtime and keep Docker or Podman
 behind a narrow broker for test-only containers.
@@ -153,7 +180,7 @@ This broker can initially wrap Docker because the Docker ecosystem remains valua
 for Testcontainers-like workflows. The key design boundary is that agents ask for
 services; they do not control the daemon.
 
-## Implementation Plan
+## Historical Implementation Plan
 
 ### Phase 0: Stabilize Current WSL Runtime
 
@@ -198,7 +225,7 @@ services; they do not control the daemon.
   explicitly require a container image.
 - Remove direct Docker socket access from standard agent shells.
 
-## Open Questions
+## Remaining Design Questions
 
 - Which sandbox launcher should be canonical: direct `bubblewrap`, `systemd-run`, or
   a small devkit-owned helper that combines filesystem and network setup?
@@ -226,7 +253,7 @@ services; they do not control the daemon.
 - Capacity restoration is not blocked by repository compile failures unrelated to
   the host runtime.
 
-## Suggested First Task For An Implementation Agent
+## Historical First Task
 
 Create a small prototype command, separate from the existing Compose path, that starts
 one `dev-all` agent as a Nix-provisioned sandbox on NixOS WSL. It should bind the

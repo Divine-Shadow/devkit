@@ -959,7 +959,7 @@ Commands:
   exec <n> <cmd...>, attach <n>              (native runtime for dev-all)
   codex-auth reseed <n> [--service NAME]
   codex-auth reseed-all [indexes...] [--service NAME]
-  allow <domain>, warm, maintain, check-net
+  allow <domain>, warm, maintain, check-net, check-codex, check-sts
   hosts [print|apply|check] [--target host|agents|all] [--index N] [--all-agents]
   proxy {tinyproxy|envoy}
   tmux-shells [N] [--plain], open [N] [--plain], fresh-open [N] [--plain]

@@ -601,7 +601,7 @@ func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
 		return fmt.Errorf("-p <project> is required")
 	}
 	if project != "dev-all" {
-		return fmt.Errorf("native lifecycle currently supports -p dev-all only; use 'compose %s' for legacy Compose overlays", project)
+		return fmt.Errorf("native lifecycle currently supports -p dev-all only; use 'devctl -p %s compose <command>' for legacy Compose overlays", project)
 	}
 	return nil
 }

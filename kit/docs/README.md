@@ -158,9 +158,9 @@ Auto-readiness (`dev-all`):
 - Manual invocation: `devctl -p dev-all ensure-ready [--count N] [--repo ouroboros-ide]`.
 - Escape hatch: append `--skip-ready` to lifecycle commands.
 - Legacy Compose readiness remains available through `devctl -p dev-all compose up|restart`.
-- Warm ensures frontend Playwright browser binaries are present (`playwright install chromium`).
-- Warm creates an `agent1` compatibility path under `agent-worktrees` pointing at the root repo mount.
-- Warm ensures the Playwright CLI package (`playwright`) is available (the archived `microsoft/playwright-cli` flow now maps to `npx playwright`).
+- Native Playwright, Spago, and Netlify tools are flake-provisioned; warm/readiness should not install those CLI packages or browser binaries at runtime.
+- Existing symlinked `agent1` compatibility paths are supported by native planning, but new native preparation should create dedicated agent worktrees.
+- Repository warm steps are readiness checks. They can be skipped during capacity recovery with `--skip-ready` and rerun later with `ensure-ready`.
 
 Convenience targets to validate the codex overlay end‑to‑end:
 

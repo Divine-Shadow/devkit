@@ -1,7 +1,7 @@
 # Nix Runtime Parity Evidence
 
-This file records the first concrete Nix-native implementation slice for the
-Compose retirement work. It follows
+This file records the implemented Nix-native `dev-all` runtime and the evidence
+used to keep it reviewable while retiring implicit Compose paths. It follows
 `kit/docs/proposals/nix-runtime-verification-contract.md`.
 
 ## Implemented Artifacts
@@ -34,6 +34,9 @@ Compose retirement work. It follows
   `devctl compose ...` is the explicit legacy Docker Compose path.
 - Native agent plans now use `/worktrees/agentN/<repo>` for every agent,
   including agent 1, and keep HOME/Codex/XDG state under `/agent-state`.
+  Existing symlinked agent1 layouts are projected to their mounted
+  `/workspaces/dev/<repo>` target so native `exec` can keep in-flight sessions
+  working while dedicated worktrees are repaired.
   `native prepare` and lifecycle `up` write a JSON manifest under the native
   host state root for downstream tmux/layout/session orchestration.
 - `tmux-sync`, `tmux-add-cd`, `tmux-apply-layout`, `layout-apply`,
@@ -80,6 +83,7 @@ kit/scripts/devkit -p dev-all native prepare --repo ouroboros-ide --count 2 --dr
 kit/scripts/devkit -p dev-all native capacity --repo devkit --count 1 --flake .#runtime-test-agent --repo-check 'exit 7' --format json
 kit/scripts/devkit -p dev-all --dry-run scale 2 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock --broker-state-root /tmp/devkit-scale-state --skip-ready --format json
 kit/scripts/devkit -p dev-all --dry-run exec 1 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock -- echo hi
+kit/scripts/devkit -p dev-all --dry-run attach 1 --repo ouroboros-ide --flake .#runtime-test-agent --broker-socket /tmp/devkit-scale.sock
 kit/scripts/devkit -p dev-all --dry-run compose exec --index 1 dev-agent echo hi
 kit/scripts/devkit -p dev-all native plan --repo ouroboros-ide --index 1 --format json
 kit/scripts/devkit -p dev-all --dry-run native prepare --repo ouroboros-ide --count 2 --format json
@@ -110,35 +114,67 @@ kit/scripts/devkit -p dev-all --dry-run repo-config-https ouroboros-ide --index 
 kit/scripts/devkit -p dev-all --dry-run doctor-runtime
 ```
 
-Broker smoke command, run with the broker process left open in one terminal and
-the native smoke in another:
+Managed broker lifecycle smoke:
 
 ```bash
-sock=$(mktemp -u /tmp/devkit-native-broker.XXXXXX.sock)
-cd brokers/postgres-broker
-BROKER_LISTEN="unix://$sock" BROKER_UPSTREAM="unix:///var/run/docker.sock" BROKER_ALLOWED_IMAGES="postgres:latest" BROKER_ALLOW_PULLS=true \
-  nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 go run .
+smoke_dir=$(mktemp -d /tmp/devkit-native-smoke.XXXXXX)
+sock="$smoke_dir/broker.sock"
+state="$smoke_dir/broker-state"
+
+kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 1 \
+  --broker-socket "$sock" --broker-state-root "$state" \
+  --allow-image postgres:latest --allow-pulls --skip-ready --format json
+kit/scripts/devkit -p dev-all status --repo ouroboros-ide --count 1 \
+  --broker-socket "$sock" --broker-state-root "$state" --skip-ready --format json
+kit/scripts/devkit -p dev-all logs --broker-socket "$sock" \
+  --broker-state-root "$state" --tail 20 --format json
+kit/scripts/devkit -p dev-all scale 2 --repo ouroboros-ide \
+  --broker-socket "$sock" --broker-state-root "$state" \
+  --allow-image postgres:latest --allow-pulls --skip-ready --format json
+kit/scripts/devkit -p dev-all --dry-run attach 1 --repo ouroboros-ide \
+  --flake .#runtime-test-agent --broker-socket "$sock"
 ```
 
 ```bash
-sock=/tmp/devkit-native-broker.<id>.sock
-
-cd cli/devctl
-nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit \
-  go run . -p dev-all native exec --repo devkit --flake .#runtime-test-agent --broker-endpoint "$sock" -- bash -lc '
+kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide \
+  --flake .#runtime-test-agent --broker-socket "$sock" -- bash -lc '
     set -euo pipefail
+    sock='"$sock"'
     echo "DOCKER_HOST=$DOCKER_HOST"
     test "${DEVKIT_NATIVE_AGENT:-}" = 1
-    test "$DOCKER_HOST" = "unix://'"$sock"'"
-    test -S "'"$sock"'"
+    test "$DOCKER_HOST" = "unix://$sock"
+    test -S "$sock"
     test ! -e /var/run/docker.sock
-    curl --unix-socket "'"$sock"'" -fsS http://docker/_ping | grep -qx OK
-    code=$(curl -sS -o /tmp/redis-create.out -w "%{http_code}" --unix-socket "'"$sock"'" -H "Content-Type: application/json" -d "{\"Image\":\"redis:7\"}" "http://docker/v1.45/containers/create?name=devkit-native-smoke-redis")
-    echo "redis_create_http=$code"
-    test "$code" = 403
+    curl --unix-socket "$sock" -fsS http://docker/_ping | grep -qx OK
+    redis_code=$(curl -sS -o /tmp/redis-create.out -w "%{http_code}" \
+      --unix-socket "$sock" -H "Content-Type: application/json" \
+      -d "{\"Image\":\"redis:7\",\"HostConfig\":{}}" \
+      "http://docker/v1.45/containers/create?name=devkit-native-smoke-redis")
+    echo "redis_create_http=$redis_code"
+    test "$redis_code" = 403
     grep -qi forbidden /tmp/redis-create.out
-    echo native-broker-smoke-ok
+    pg_name=devkit-native-smoke-postgres-$RANDOM
+    pg_code=$(curl -sS -o /tmp/postgres-create.out -w "%{http_code}" \
+      --unix-socket "$sock" -H "Content-Type: application/json" \
+      -d "{\"Image\":\"postgres:latest\",\"Env\":[\"POSTGRES_PASSWORD=devkit\"],\"HostConfig\":{}}" \
+      "http://docker/v1.45/containers/create?name=$pg_name")
+    echo "postgres_create_http=$pg_code"
+    test "$pg_code" = 201
+    pg_id=$(sed -n "s/.*\"Id\":\"\\([^\"]*\\)\".*/\\1/p" /tmp/postgres-create.out)
+    test -n "$pg_id"
+    curl -sS --unix-socket "$sock" -X DELETE \
+      "http://docker/v1.45/containers/$pg_id?force=true" >/dev/null
+    echo native-broker-policy-ok
   '
+
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
+  --flake .#runtime-test-agent --broker-socket "$sock" \
+  --skip-repo-checks --format json
+kit/scripts/devkit -p dev-all native capacity --repo ouroboros-ide --count 1 \
+  --flake .#runtime-test-agent --broker-endpoint "$sock" \
+  --repo-check 'exit 7' --format json
+kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 1 \
+  --broker-socket "$sock" --broker-state-root "$state" --format json
 ```
 
 Observed key versions:
@@ -157,13 +193,17 @@ Observed key versions:
 - Native Playwright smoke output: `native-bwrap-playwright-ok`.
 - Readiness split smoke: `runtime_ready: true`, `repo_ready: false`, and
   `capacity_available: true` when `--repo-check 'exit 7'` fails.
-- Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-broker.<id>.sock`,
-  `redis_create_http=403`, and `native-broker-smoke-ok`.
-- Managed broker lifecycle smoke output: `running: true` after
-  `broker start`, `canonical-managed-broker-ok` from a native agent using the
-  managed broker socket, and `running: false` after `broker stop`.
+- Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-smoke.<id>/broker.sock`,
+  `redis_create_http=403`, `postgres_create_http=201`, and
+  `native-broker-policy-ok`.
+- Managed broker lifecycle smoke output: `running: true` after native `up`,
+  broker log lines from `logs`, native `scale` to two agents, and
+  `running: false` after native `down`.
 - Native capacity smoke output: `runtime_ready: 1`, `repo_ready: 0`, and
   `capacity_available: 1` when the repo check exits non-zero.
+- Native symlink compatibility smoke output: agent1 host worktree remains
+  `/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide`, while the
+  sandbox worktree resolves to `/workspaces/dev/ouroboros-ide`.
 
 ## Completed Parity
 
@@ -200,12 +240,16 @@ Observed key versions:
 - `claude-code` is no longer a Nix runtime parity blocker. Nix shells and the
   static frontend Dockerfile do not install or validate the Claude CLI.
 
-## Known Parity Gaps
+## Known Parity Gaps And Caveats
 
-- npm itself reports `10.8.2`; Docker updates npm to latest at image build time.
-- Broker coverage is still a smoke, not full test-container lifecycle parity.
-  The current evidence proves native agent reachability, direct socket absence,
-  and policy rejection of a disallowed image through the broker.
+- npm itself reports `10.8.2`; Docker previously updated npm to latest at image
+  build time.
+- Default `dev-all` readiness is intentionally heavyweight because overlay repo
+  checks include frontend install/typecheck/test and SBT compile. Use
+  `--skip-ready` for capacity restoration and bounded lifecycle smoke; use
+  `ensure-ready` when repository checks are expected to run to completion.
+- A failed repo check does not remove native capacity. The runtime/repo split is
+  visible in `native capacity` and top-level `ensure-ready` JSON output.
 
 ## Host Capability Requirements
 
@@ -222,10 +266,17 @@ Observed key versions:
 
 ## Native Runtime Boundary
 
-`native exec` uses bubblewrap with a blank root, binds `/nix/store`,
+For `-p dev-all`, top-level lifecycle and entry commands are native:
+`up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
+`ensure-ready`. They run through the canonical `kit/scripts/devkit` wrapper and
+the compiled `kit/bin/devctl` binary.
+
+Native `exec` uses bubblewrap with a blank root, binds `/nix/store`,
 `/nix/var/nix`, the dev workspace, per-agent HOME, managed resolver config, and
 the optional broker socket. It sets `DOCKER_HOST` to the broker endpoint and
 does not bind `/var/run/docker.sock`.
 
-The command is intentionally additive. Existing Compose commands remain present
-for currently running agents while the native control-plane replacement grows.
+Docker Compose is explicit legacy only for `dev-all`: use
+`kit/scripts/devkit -p dev-all compose <command>` when an old Compose workflow is
+intentionally required. Non-`dev-all` overlays keep their legacy Compose surface
+until they receive native replacements.
