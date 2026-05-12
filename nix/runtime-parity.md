@@ -172,7 +172,11 @@ kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide \
 
 kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
   --flake .#dev-all --broker-socket "$sock" \
+  --broker-state-root "$state" \
   --skip-repo-checks --format json
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
+  --flake .#dev-all --broker-socket "$sock" \
+  --skip-broker --skip-repo-checks --format json
 kit/scripts/devkit -p dev-all native capacity --repo ouroboros-ide --count 1 \
   --flake .#dev-all --broker-endpoint "$sock" \
   --repo-check 'exit 7' --format json
@@ -207,6 +211,8 @@ Observed key versions:
   lightweight native `status` without a capacity block, broker log lines from
   `logs`, native `scale` to two agents, and `running: false` after native
   `down`.
+- Cold native `ensure-ready` starts or reuses the managed broker before checking
+  `broker-socket`; `--skip-broker` keeps the current-state-only path.
 - Native capacity smoke output: `runtime_ready: 1`, `repo_ready: 0`, and
   `capacity_available: 1` when the repo check exits non-zero.
 - Native symlink compatibility smoke output: agent1 host worktree remains
@@ -214,8 +220,8 @@ Observed key versions:
   sandbox worktree resolves to `/workspaces/dev/ouroboros-ide`.
 - Full no-skip `ensure-ready` evidence is recorded in
   `nix/full-readiness-evidence.md`: native runtime, broker, Git, frontend warm,
-  Playwright, frontend typecheck, and frontend tests pass; the remaining blocker
-  is the `ouroboros-ide` `core-check` SBT compile.
+  Playwright, frontend typecheck, frontend tests, and the `ouroboros-ide`
+  `core-check` SBT compile pass.
 
 ## Completed Parity
 
@@ -273,6 +279,8 @@ Observed key versions:
   checks include frontend install/typecheck/test and SBT compile. Use
   `--skip-ready` for capacity restoration and bounded lifecycle smoke; use
   `ensure-ready` when repository checks are expected to run to completion.
+- `ensure-ready --skip-broker` is current-state-only; without `--skip-broker`,
+  `ensure-ready` manages the broker before checking readiness.
 - Native `status` is intentionally lightweight by default. Use
   `status --ready` when capacity/readiness should be computed as part of a
   status call.
@@ -285,12 +293,10 @@ Observed key versions:
   `/var/run/docker.sock`. That socket is consumed by the broker process on the
   host and is not mounted into the native agent sandbox.
 - Native bubblewrap execution requires `bwrap` and host Nix flakes support.
-- The default broker endpoint remains
-  `unix:///run/devkit/test-container-broker.sock`; tests can override it with
-  `--broker-endpoint` for temporary broker instances.
-- On this host, the current user cannot create `/run/devkit`, so lifecycle
-  verification used a temporary socket override. Production use of the default
-  path requires a host-created `/run/devkit` directory with suitable ownership.
+- The `dev-all` broker endpoint defaults under the managed devkit state root:
+  `unix://<dev-root>/.devkit/native-broker/broker.sock`. Tests can override it
+  with `--broker-endpoint` or lifecycle `--broker-socket` for temporary broker
+  instances.
 
 ## Native Runtime Boundary
 

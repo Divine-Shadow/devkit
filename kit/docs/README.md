@@ -157,9 +157,10 @@ Runtime pairing and refresh note:
 Auto-readiness (`dev-all`):
 - Native lifecycle commands `up`, `restart`, and `scale` automatically run readiness for `dev-all`.
 - Native `status` is lightweight by default and does not run repo checks; use `devctl -p dev-all status --ready` or `ensure-ready` for readiness/capacity checks.
+- Native `ensure-ready` starts or reuses the managed broker before checking runtime/repo readiness.
 - Runtime readiness controls capacity; repo readiness checks are visible and retryable without hiding launchable native agents.
 - Manual invocation: `devctl -p dev-all ensure-ready [--count N] [--repo ouroboros-ide]`.
-- Escape hatch: append `--skip-ready` to lifecycle commands.
+- Escape hatch: append `--skip-ready` to lifecycle commands, or `--skip-broker` to `ensure-ready` when you intentionally want current-state-only broker checks.
 - Legacy Compose readiness remains available only for non-`dev-all` overlays.
 - Native Playwright, Spago, and Netlify tools are flake-provisioned; warm/readiness should not install those CLI packages or browser binaries at runtime.
 - Existing symlinked `agent1` compatibility paths are supported by native planning, but new native preparation should create dedicated agent worktrees.

@@ -265,9 +265,9 @@ canonical `devkit` entrypoint:
 
 - `devkit broker start|status|stop` manages the host-side test-container broker
   process and records PID/state/log files under the native runtime state root.
-  The configured default endpoint is `/run/devkit/test-container-broker.sock`;
-  hosts that do not allow the current user to create `/run/devkit` must create
-  that directory out of band or pass `--socket` for a writable endpoint.
+  The configured `dev-all` endpoint defaults under the managed devkit state root:
+  `<dev-root>/.devkit/native-broker/broker.sock`; pass `--socket` only when a
+  temporary or explicitly shared endpoint is needed.
 - `devkit native prepare` creates dedicated native worktrees for every agent,
   including agent 1, and prepares separate per-agent HOME/state directories.
   It defaults to `native-agent<N>` branch names so it does not collide with

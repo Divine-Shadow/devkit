@@ -955,7 +955,7 @@ Commands:
   compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for dev-all)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
-  ensure-ready [--count N] [--repo REPO] [--broker-socket PATH]
+  ensure-ready [--count N] [--repo REPO] [--broker-socket PATH] [--skip-broker]
   exec <n> <cmd...>, attach <n>              (native runtime for dev-all)
   codex-auth reseed <n> [--service NAME]
   codex-auth reseed-all [indexes...] [--service NAME]

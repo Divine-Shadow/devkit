@@ -5,35 +5,38 @@ Date: 2026-05-12
 Command shape:
 
 ```bash
-smoke_dir=$(mktemp -d /tmp/devkit-full-ready.XXXXXX)
-sock="$smoke_dir/broker.sock"
-state="$smoke_dir/broker-state"
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
+  --flake .#dev-all \
+  --format json
+
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
+  --flake .#dev-all \
+  --skip-broker \
+  --format json
+
+kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 1 \
+  --format json
 
 kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 1 \
   --flake .#dev-all \
-  --broker-socket "$sock" \
-  --broker-state-root "$state" \
-  --allow-image postgres:latest \
-  --allow-pulls \
   --skip-ready \
   --format json
 
 kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
   --flake .#dev-all \
-  --broker-socket "$sock" \
   --format json
 
 kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 1 \
-  --broker-socket "$sock" \
-  --broker-state-root "$state" \
   --format json
 ```
 
 ## Result
 
+- Cold `ensure-ready` exit code: `0`.
+- `ensure-ready --skip-broker` exit code: `0`.
 - `up --skip-ready` exit code: `0`.
-- `ensure-ready` exit code: `0`.
-- `down` exit code: `0`.
+- `ensure-ready` after `up --skip-ready` exit code: `0`.
+- `down` exit code: `0` for both cleanup calls.
 - Native runtime: `runtime_ready: 1/1`.
 - Launchable capacity: `capacity_available: 1/1`.
 - Repo readiness: `repo_ready: 1/1`.
@@ -88,7 +91,8 @@ Result: exit code `0`, `[success] elapsed time: 245 s (0:04:05.0), cache 77%,
 
 ## Operational Caveat
 
-Running cold `ensure-ready` without a running broker correctly reports
-`runtime_ready: 0/1`, `capacity_available: 0/1`, and a failing `broker-socket`
-check. Use `up` or `up --skip-ready` first when a no-skip readiness pass should
-include brokered Testcontainers capacity.
+`ensure-ready` starts or reuses the managed broker by default. Use
+`--skip-broker` only when intentionally checking current broker state without
+starting it first. A stopped-broker probe with `--skip-broker --skip-repo-checks`
+returned exit code `2`, reported `broker-socket` as false, and left broker
+status at `running: false`.

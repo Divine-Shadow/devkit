@@ -47,6 +47,8 @@ cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command fla
 
 - `status` is lightweight by default. Use `status --ready`, `ensure-ready`, or
   `native capacity` when readiness/capacity checks should run.
+- `ensure-ready` starts or reuses the managed broker before capacity checks;
+  `--skip-broker` preserves the current-state-only broker check path.
 - `up`, `restart`, and `scale` still run readiness unless `--skip-ready` is
   supplied.
 - Repository readiness is intentionally separate from runtime capacity. Repo
@@ -74,9 +76,9 @@ cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command fla
   test-container smokes. The socket is consumed by the broker and is not mounted
   into native agents.
 - `postgres:latest` must be present or pullable for the broker allow-path smoke.
-- The default broker socket is `/run/devkit/test-container-broker.sock`;
-  repeatable smokes use a temporary socket/state root to avoid host ownership
-  assumptions.
+- The `dev-all` broker socket defaults under the managed devkit state root:
+  `<dev-root>/.devkit/native-broker/broker.sock`. Repeatable smokes can still
+  use a temporary socket/state root.
 
 ## Rollback
 

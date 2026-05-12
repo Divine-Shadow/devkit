@@ -1,6 +1,7 @@
 package nativecmd
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"devkit/cli/devctl/internal/compose"
 	"devkit/cli/devctl/internal/config"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
+	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
 func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
@@ -202,6 +204,97 @@ func TestLifecyclePlanOptionsCLIOverridesOverlayNativeRoots(t *testing.T) {
 	}
 	if opts.WorktreeContainerRoot != "/wt" || opts.StateContainerRoot != "/state" {
 		t.Fatalf("container roots = %q %q", opts.WorktreeContainerRoot, opts.StateContainerRoot)
+	}
+}
+
+func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
+	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	cfg := config.OverlayConfig{Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"}}
+	got := lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{})
+	if got.Socket != "/home/me/dev/.devkit/native-broker/broker.sock" {
+		t.Fatalf("socket = %q", got.Socket)
+	}
+}
+
+func TestApplyNativeConfigDefaultsUsesOverlayBrokerSocket(t *testing.T) {
+	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	opts := nativeplan.BuildOptions{}
+	applyNativeConfigDefaults(ctx, config.OverlayConfig{
+		Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"},
+	}, &opts)
+	if opts.BrokerEndpoint != "/home/me/dev/.devkit/native-broker/broker.sock" {
+		t.Fatalf("broker endpoint = %q", opts.BrokerEndpoint)
+	}
+}
+
+func TestLifecycleEnsureReadyBrokerStartsAndPropagatesReusedSocket(t *testing.T) {
+	ctx := &cmdregistry.Context{DryRun: true}
+	initial := runtimebroker.Config{
+		Socket:        "/tmp/requested-broker.sock",
+		StateRoot:     "/tmp/requested-state",
+		AllowedImages: []string{"postgres:15"},
+		AllowPulls:    true,
+	}
+	called := false
+	gotCfg, status, err := lifecycleEnsureReadyBroker(ctx, lifecycleArgs{}, initial, func(_ context.Context, cfg runtimebroker.Config, dryRun bool) (runtimebroker.Status, error) {
+		called = true
+		if cfg.Socket != initial.Socket || cfg.StateRoot != initial.StateRoot {
+			t.Fatalf("start cfg = %#v", cfg)
+		}
+		if len(cfg.AllowedImages) != 1 || cfg.AllowedImages[0] != "postgres:15" || !cfg.AllowPulls {
+			t.Fatalf("broker policy cfg = %#v", cfg)
+		}
+		if !dryRun {
+			t.Fatalf("expected dry-run broker start")
+		}
+		return runtimebroker.Status{Running: true, Socket: "/tmp/reused-broker.sock"}, nil
+	})
+	if err != nil {
+		t.Fatalf("lifecycleEnsureReadyBroker: %v", err)
+	}
+	if !called {
+		t.Fatalf("expected broker start")
+	}
+	if status == nil || !status.Running || status.Socket != "/tmp/reused-broker.sock" {
+		t.Fatalf("status = %#v", status)
+	}
+	if gotCfg.Socket != "/tmp/reused-broker.sock" {
+		t.Fatalf("propagated socket = %q", gotCfg.Socket)
+	}
+}
+
+func TestLifecycleEnsureReadyBrokerSkipBrokerPreservesCurrentStateOnly(t *testing.T) {
+	ctx := &cmdregistry.Context{}
+	initial := runtimebroker.Config{Socket: "/tmp/current-state.sock"}
+	gotCfg, status, err := lifecycleEnsureReadyBroker(ctx, lifecycleArgs{skipBroker: true}, initial, func(context.Context, runtimebroker.Config, bool) (runtimebroker.Status, error) {
+		t.Fatalf("broker start should not run with --skip-broker")
+		return runtimebroker.Status{}, nil
+	})
+	if err != nil {
+		t.Fatalf("lifecycleEnsureReadyBroker: %v", err)
+	}
+	if status != nil {
+		t.Fatalf("status = %#v", status)
+	}
+	if gotCfg.Socket != initial.Socket {
+		t.Fatalf("socket = %q", gotCfg.Socket)
+	}
+}
+
+func TestLifecycleEnsureReadyBrokerPropagatesSocketToPlanOptions(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+	}
+	brokerCfg, _, err := lifecycleEnsureReadyBroker(ctx, lifecycleArgs{}, runtimebroker.Config{Socket: "/tmp/requested.sock"}, func(context.Context, runtimebroker.Config, bool) (runtimebroker.Status, error) {
+		return runtimebroker.Status{Running: true, Socket: "/tmp/running.sock"}, nil
+	})
+	if err != nil {
+		t.Fatalf("lifecycleEnsureReadyBroker: %v", err)
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{}, lifecycleArgs{}, "ouroboros-ide", brokerCfg)
+	if opts.BrokerEndpoint != "/tmp/running.sock" {
+		t.Fatalf("broker endpoint = %q", opts.BrokerEndpoint)
 	}
 }
 

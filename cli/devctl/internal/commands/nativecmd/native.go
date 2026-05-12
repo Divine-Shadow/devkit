@@ -457,12 +457,24 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 		return err
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
+	status := lifecycleStatus{Command: "ensure-ready", Runtime: "native", Repo: repo, Count: count}
+	brokerCfg, brokerStatus, err := lifecycleEnsureReadyBroker(ctx, parsed, brokerCfg, runtimebroker.Start)
+	if err != nil {
+		return err
+	}
+	if brokerStatus != nil {
+		status.Broker = brokerStatus
+	}
 	opts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
+	if ctx.DryRun {
+		status.Message = "dry run: broker action was planned; readiness was not launched"
+		return printLifecycleStatus(status, parsed.format)
+	}
 	summary, err := lifecycleCapacity(ctx, parsed, opts, count)
 	if err != nil {
 		return err
 	}
-	status := lifecycleStatus{Command: "ensure-ready", Runtime: "native", Repo: repo, Count: count, Capacity: &summary}
+	status.Capacity = &summary
 	if err := printLifecycleStatus(status, parsed.format); err != nil {
 		return err
 	}
@@ -470,6 +482,19 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 		return fmt.Errorf("native capacity is not fully available")
 	}
 	return nil
+}
+
+type lifecycleBrokerStarter func(context.Context, runtimebroker.Config, bool) (runtimebroker.Status, error)
+
+func lifecycleEnsureReadyBroker(ctx *cmdregistry.Context, parsed lifecycleArgs, brokerCfg runtimebroker.Config, start lifecycleBrokerStarter) (runtimebroker.Config, *runtimebroker.Status, error) {
+	if parsed.skipBroker {
+		return brokerCfg, nil, nil
+	}
+	status, err := start(context.Background(), brokerCfg, ctx.DryRun)
+	if strings.TrimSpace(status.Socket) != "" {
+		brokerCfg.Socket = status.Socket
+	}
+	return brokerCfg, &status, err
 }
 
 func handleTopExec(ctx *cmdregistry.Context) error {
@@ -649,7 +674,7 @@ func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.O
 func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs) runtimebroker.Config {
 	brokerCfg := runtimebroker.Config{
 		DevkitRoot:    ctx.Paths.Root,
-		Socket:        strings.TrimSpace(cfg.Broker.Socket),
+		Socket:        resolveNativeRoot(ctx.Paths.Root, strings.TrimSpace(cfg.Broker.Socket)),
 		Upstream:      strings.TrimSpace(cfg.Broker.Upstream),
 		AllowedImages: append([]string{}, cfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(cfg.Broker.LogLevel),
@@ -660,7 +685,7 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 		brokerCfg.AllowPulls = *cfg.Broker.AllowPulls
 	}
 	if strings.TrimSpace(parsed.brokerSocket) != "" {
-		brokerCfg.Socket = parsed.brokerSocket
+		brokerCfg.Socket = resolveNativeRoot(ctx.Paths.Root, parsed.brokerSocket)
 	}
 	if len(parsed.brokerAllowImage) > 0 {
 		brokerCfg.AllowedImages = append([]string{}, parsed.brokerAllowImage...)
@@ -704,6 +729,9 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	}
 	if strings.TrimSpace(opts.StateContainerRoot) == "" {
 		opts.StateContainerRoot = strings.TrimSpace(cfg.Native.StateContainerRoot)
+	}
+	if strings.TrimSpace(opts.BrokerEndpoint) == "" {
+		opts.BrokerEndpoint = resolveNativeRoot(ctx.Paths.Root, cfg.Broker.Socket)
 	}
 	if strings.TrimSpace(opts.BaseBranch) == "" {
 		opts.BaseBranch = strings.TrimSpace(cfg.Defaults.BaseBranch)

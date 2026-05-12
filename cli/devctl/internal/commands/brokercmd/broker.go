@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -53,7 +54,7 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 	}
 	cfg := runtimebroker.Config{
 		DevkitRoot:    ctx.Paths.Root,
-		Socket:        strings.TrimSpace(overlayCfg.Broker.Socket),
+		Socket:        resolveBrokerPath(ctx.Paths.Root, overlayCfg.Broker.Socket),
 		Upstream:      strings.TrimSpace(overlayCfg.Broker.Upstream),
 		AllowedImages: append([]string{}, overlayCfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(overlayCfg.Broker.LogLevel),
@@ -69,7 +70,7 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--socket requires a value")
 			}
-			parsed.cfg.Socket = ctx.Args[i+1]
+			parsed.cfg.Socket = resolveBrokerPath(ctx.Paths.Root, ctx.Args[i+1])
 			i++
 		case "--upstream":
 			if i+1 >= len(ctx.Args) {
@@ -120,6 +121,14 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 	}
 	parsed.cfg = runtimebroker.Normalize(parsed.cfg)
 	return parsed, nil
+}
+
+func resolveBrokerPath(devkitRoot, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Clean(filepath.Join(devkitRoot, value))
 }
 
 func printStatus(status runtimebroker.Status, format string) error {

@@ -70,3 +70,41 @@ func TestParseCLIAllowedImagesOverrideOverlay(t *testing.T) {
 		t.Fatalf("socket = %q", parsed.cfg.Socket)
 	}
 }
+
+func TestParseResolvesRelativeOverlayAndCLISockets(t *testing.T) {
+	tmp := t.TempDir()
+	overlay := filepath.Join(tmp, "overlays", "dev-all")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		t.Fatalf("mkdir overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "devkit.yaml"), []byte(`
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	root := filepath.Join(tmp, "devkit")
+	parsed, err := parse(&cmdregistry.Context{
+		Project: "dev-all",
+		Args:    []string{"status"},
+		Paths:   compose.Paths{Root: root, OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+	})
+	if err != nil {
+		t.Fatalf("parse overlay: %v", err)
+	}
+	if want := filepath.Join(tmp, ".devkit", "native-broker", "broker.sock"); parsed.cfg.Socket != want {
+		t.Fatalf("overlay socket = %q, want %q", parsed.cfg.Socket, want)
+	}
+
+	parsed, err = parse(&cmdregistry.Context{
+		Project: "dev-all",
+		Args:    []string{"status", "--socket", "../custom.sock"},
+		Paths:   compose.Paths{Root: root, OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+	})
+	if err != nil {
+		t.Fatalf("parse CLI: %v", err)
+	}
+	if want := filepath.Join(tmp, "custom.sock"); parsed.cfg.Socket != want {
+		t.Fatalf("cli socket = %q, want %q", parsed.cfg.Socket, want)
+	}
+}

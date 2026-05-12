@@ -86,7 +86,7 @@ readiness:
     - name: core-check
       command: bash scripts/sbt2 "Compile / compile"
 broker:
-  socket: /run/devkit/test-container-broker.sock
+  socket: ../.devkit/native-broker/broker.sock
   upstream: unix:///var/run/docker.sock
   allowed_images:
     - postgres:latest
