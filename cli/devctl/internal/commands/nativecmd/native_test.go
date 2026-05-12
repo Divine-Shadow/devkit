@@ -89,6 +89,7 @@ func TestParseLifecycleArgs(t *testing.T) {
 		"--broker-state-root", "/tmp/broker-state",
 		"--allow-image", "postgres:15",
 		"--no-allow-pulls",
+		"--ready",
 		"--skip-repo-checks",
 		"--format", "json",
 	}})
@@ -107,8 +108,20 @@ func TestParseLifecycleArgs(t *testing.T) {
 	if parsed.brokerAllowPulls == nil || *parsed.brokerAllowPulls != allowPulls {
 		t.Fatalf("allow pulls = %#v", parsed.brokerAllowPulls)
 	}
-	if !parsed.skipRepoChecks || parsed.format != "json" {
+	if !parsed.ready || !parsed.skipRepoChecks || parsed.format != "json" {
 		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestLifecycleStatusRequiresExplicitReadiness(t *testing.T) {
+	if lifecycleStatusRunsReadiness(lifecycleArgs{}) {
+		t.Fatalf("status should be lightweight by default")
+	}
+	if !lifecycleStatusRunsReadiness(lifecycleArgs{ready: true}) {
+		t.Fatalf("status --ready should run readiness")
+	}
+	if lifecycleStatusRunsReadiness(lifecycleArgs{ready: true, skipReady: true}) {
+		t.Fatalf("--skip-ready should override --ready")
 	}
 }
 

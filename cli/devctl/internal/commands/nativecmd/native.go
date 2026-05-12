@@ -91,6 +91,7 @@ type lifecycleArgs struct {
 	skipBroker              bool
 	skipPrepare             bool
 	skipReady               bool
+	ready                   bool
 	skipRepoChecks          bool
 	tailLines               int
 }
@@ -352,6 +353,8 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 			parsed.skipPrepare = true
 		case "--skip-ready":
 			parsed.skipReady = true
+		case "--ready":
+			parsed.ready = true
 		case "--skip-repo-checks":
 			parsed.skipRepoChecks = true
 		case "--tail":
@@ -850,7 +853,7 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 		return err
 	}
 	status := lifecycleStatus{Command: "status", Runtime: "native", Repo: repo, Count: count, Broker: &brokerStatus}
-	if !parsed.skipReady {
+	if lifecycleStatusRunsReadiness(parsed) {
 		planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
 		if err == nil {
@@ -860,6 +863,10 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 		}
 	}
 	return printLifecycleStatus(status, parsed.format)
+}
+
+func lifecycleStatusRunsReadiness(parsed lifecycleArgs) bool {
+	return parsed.ready && !parsed.skipReady
 }
 
 func lifecycleLogs(ctx *cmdregistry.Context, parsed lifecycleArgs) error {

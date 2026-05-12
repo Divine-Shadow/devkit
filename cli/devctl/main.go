@@ -951,7 +951,7 @@ func usage() {
 Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
-  up, down, restart, status, logs             (native runtime for dev-all)
+  up, down, restart, status [--ready], logs   (native runtime for dev-all)
   compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
@@ -1210,92 +1210,6 @@ func main() {
 		return
 	}
 	switch cmd {
-	case "scale":
-		mustProject(project)
-		n := "1"
-		doTmuxSync := false
-		skipReady := false
-		sessName := ""
-		namePrefix := "agent-"
-		cdPath := ""
-		// parse: scale N [--tmux-sync [--session NAME] [--name-prefix PFX] [--cd PATH] [--service NAME]]
-		if len(sub) > 0 {
-			n = sub[0]
-		}
-		service := "dev-agent"
-		for i := 1; i < len(sub); i++ {
-			switch sub[i] {
-			case "--tmux-sync":
-				doTmuxSync = true
-			case "--skip-ready":
-				skipReady = true
-			case "--session":
-				if i+1 < len(sub) {
-					sessName = sub[i+1]
-					i++
-				}
-			case "--name-prefix":
-				if i+1 < len(sub) {
-					namePrefix = sub[i+1]
-					i++
-				}
-			case "--cd":
-				if i+1 < len(sub) {
-					cdPath = sub[i+1]
-					i++
-				}
-			case "--service":
-				if i+1 < len(sub) {
-					service = sub[i+1]
-					i++
-				}
-			}
-		}
-		desired := mustAtoi(n)
-		composeProject := composeProjectName(project)
-		containers := listComposeServiceContainers(composeProject, service)
-		remove, remaining, maxIndex := planScaleContainers(containers, desired)
-		if len(remove) > 0 {
-			runner.Host(dryRun, "docker", append([]string{"rm", "-f"}, remove...)...)
-		}
-		needsCompose := needsComposeAfterScalePlan(remove, remaining, maxIndex, desired)
-		if needsCompose {
-			runner.Compose(dryRun, files, "up", "-d", "--no-recreate", "--scale", service+"="+n)
-		}
-		if !skipReady && needsCompose {
-			if err := ensureProjectReady(ctx, composeProject, service, desired, false); err != nil {
-				die(err.Error())
-			}
-		}
-		if doTmuxSync && !skipTmux() {
-			// Best effort: if tmux present, sync windows up to N
-			doSyncTmux(dryRun, paths, project, files, sessName, namePrefix, cdPath, mustAtoi(n), service)
-		}
-	case "ensure-ready":
-		mustProject(project)
-		svc := ""
-		count := 0
-		for i := 0; i < len(sub); i++ {
-			switch sub[i] {
-			case "--count":
-				if i+1 < len(sub) {
-					count = mustAtoi(sub[i+1])
-					i++
-				} else {
-					die("--count requires a value")
-				}
-			case "--service":
-				if i+1 < len(sub) {
-					svc = strings.TrimSpace(sub[i+1])
-					i++
-				} else {
-					die("--service requires a value")
-				}
-			}
-		}
-		if err := ensureProjectReady(ctx, composeProjectName(project), svc, count, true); err != nil {
-			die(err.Error())
-		}
 	case "layout-apply":
 		layoutPath := ""
 		doAttach := false

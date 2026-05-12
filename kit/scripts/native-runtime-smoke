@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+
+REPO="${DEVKIT_NATIVE_SMOKE_REPO:-ouroboros-ide}"
+RUNTIME_FLAKE="${DEVKIT_NATIVE_SMOKE_RUNTIME_FLAKE:-.#runtime-test-agent}"
+DEV_ALL_FLAKE="${DEVKIT_NATIVE_SMOKE_DEV_ALL_FLAKE:-.#dev-all}"
+STATIC_FRONTEND_FLAKE="${DEVKIT_NATIVE_SMOKE_STATIC_FRONTEND_FLAKE:-.#ouroboros-static-front-end}"
+ALLOWED_IMAGE="${DEVKIT_NATIVE_SMOKE_ALLOWED_IMAGE:-postgres:latest}"
+DISALLOWED_IMAGE="${DEVKIT_NATIVE_SMOKE_DISALLOWED_IMAGE:-redis:7}"
+SCALE_COUNT="${DEVKIT_NATIVE_SMOKE_SCALE_COUNT:-2}"
+NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
+
+fail() {
+  echo "native-runtime-smoke: $*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n== %s ==\n' "$*"
+}
+
+require_host_docker() {
+  command -v docker >/dev/null 2>&1 || fail "docker CLI not found"
+  [[ -S /var/run/docker.sock ]] || fail "/var/run/docker.sock is not a socket"
+  docker info >/dev/null || fail "docker daemon is not reachable"
+}
+
+ensure_allowed_image() {
+  if docker image inspect "$ALLOWED_IMAGE" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "native-runtime-smoke: pulling missing $ALLOWED_IMAGE" >&2
+  docker pull "$ALLOWED_IMAGE" >/dev/null || fail "failed to pull $ALLOWED_IMAGE"
+}
+
+grep_required() {
+  local pattern="$1"
+  local file="$2"
+  grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+require_host_docker
+ensure_allowed_image
+
+smoke_dir="$(mktemp -d /tmp/devkit-native-smoke.XXXXXX)"
+sock="$smoke_dir/broker.sock"
+state="$smoke_dir/broker-state"
+smoke_id="devkit-native-smoke-$(date +%s)-$$"
+
+cleanup() {
+  set +e
+  "$DEVKIT" -p dev-all broker stop --socket "$sock" --state-root "$state" --format json >/dev/null 2>&1
+  docker rm -f $(docker ps -aq --filter "name=$smoke_id") >/dev/null 2>&1 || true
+  rm -rf "$smoke_dir"
+}
+trap cleanup EXIT
+
+cat >"$smoke_dir/broker-policy.sh" <<'EOF'
+set -euo pipefail
+
+sock="$DEVKIT_NATIVE_SMOKE_SOCK"
+allowed="$DEVKIT_NATIVE_SMOKE_ALLOWED_IMAGE"
+disallowed="$DEVKIT_NATIVE_SMOKE_DISALLOWED_IMAGE"
+smoke_id="$DEVKIT_NATIVE_SMOKE_ID"
+
+echo "DOCKER_HOST=${DOCKER_HOST:-}"
+test "${DEVKIT_NATIVE_AGENT:-}" = 1
+test "${DOCKER_HOST:-}" = "unix://$sock"
+test -S "$sock"
+test ! -e /var/run/docker.sock
+curl --unix-socket "$sock" -fsS http://docker/_ping | grep -qx OK
+
+redis_payload="$(printf '{"Image":"%s","HostConfig":{}}' "$disallowed")"
+redis_code="$(
+  curl -sS -o /tmp/redis-create.out -w "%{http_code}" \
+    --unix-socket "$sock" \
+    -H "Content-Type: application/json" \
+    -d "$redis_payload" \
+    "http://docker/v1.45/containers/create?name=${smoke_id}-redis"
+)"
+echo "redis_create_http=$redis_code"
+test "$redis_code" = 403
+grep -qi forbidden /tmp/redis-create.out
+
+pg_payload="$(printf '{"Image":"%s","Env":["POSTGRES_PASSWORD=devkit"],"HostConfig":{}}' "$allowed")"
+pg_code="$(
+  curl -sS -o /tmp/postgres-create.out -w "%{http_code}" \
+    --unix-socket "$sock" \
+    -H "Content-Type: application/json" \
+    -d "$pg_payload" \
+    "http://docker/v1.45/containers/create?name=${smoke_id}-postgres"
+)"
+echo "postgres_create_http=$pg_code"
+test "$pg_code" = 201
+pg_id="$(sed -n 's/.*"Id":"\([^"]*\)".*/\1/p' /tmp/postgres-create.out)"
+test -n "$pg_id"
+curl -sS --unix-socket "$sock" -X DELETE "http://docker/v1.45/containers/$pg_id?force=true" >/dev/null
+
+echo native-broker-policy-ok
+EOF
+
+cat >"$smoke_dir/playwright-smoke.js" <<'EOF'
+const { chromium } = require("@playwright/test");
+
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.setContent("<title>native-playwright-ok</title>");
+  console.log(await page.title());
+  await browser.close();
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+EOF
+
+step "native up"
+"$DEVKIT" -p dev-all up --repo "$REPO" --count 1 \
+  --broker-socket "$sock" --broker-state-root "$state" \
+  --allow-image "$ALLOWED_IMAGE" --allow-pulls --skip-ready --format json \
+  | tee "$smoke_dir/up.json"
+grep_required '"runtime": "native"' "$smoke_dir/up.json"
+grep_required '"running": true' "$smoke_dir/up.json"
+
+step "native status"
+"$DEVKIT" -p dev-all status --repo "$REPO" --count 1 \
+  --broker-socket "$sock" --broker-state-root "$state" --format json \
+  | tee "$smoke_dir/status.json"
+grep_required '"command": "status"' "$smoke_dir/status.json"
+if grep -q '"capacity"' "$smoke_dir/status.json"; then
+  fail "status ran readiness by default; use status --ready for capacity checks"
+fi
+
+step "native logs"
+"$DEVKIT" -p dev-all logs \
+  --broker-socket "$sock" --broker-state-root "$state" --tail 20 --format json \
+  | tee "$smoke_dir/logs.json"
+grep_required '"command": "logs"' "$smoke_dir/logs.json"
+
+step "native scale"
+"$DEVKIT" -p dev-all scale "$SCALE_COUNT" --repo "$REPO" \
+  --broker-socket "$sock" --broker-state-root "$state" \
+  --allow-image "$ALLOWED_IMAGE" --allow-pulls --skip-ready --format json \
+  | tee "$smoke_dir/scale.json"
+grep_required "\"count\": $SCALE_COUNT" "$smoke_dir/scale.json"
+
+step "native attach dry-run"
+"$DEVKIT" -p dev-all --dry-run attach 1 --repo "$REPO" \
+  --flake "$RUNTIME_FLAKE" --broker-socket "$sock" \
+  | tee "$smoke_dir/attach.txt"
+grep_required "bwrap" "$smoke_dir/attach.txt"
+grep_required "DOCKER_HOST" "$smoke_dir/attach.txt"
+
+step "brokered native exec"
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$RUNTIME_FLAKE" \
+  --broker-socket "$sock" -- \
+  env "DEVKIT_NATIVE_SMOKE_SOCK=$sock" \
+    "DEVKIT_NATIVE_SMOKE_ALLOWED_IMAGE=$ALLOWED_IMAGE" \
+    "DEVKIT_NATIVE_SMOKE_DISALLOWED_IMAGE=$DISALLOWED_IMAGE" \
+    "DEVKIT_NATIVE_SMOKE_ID=$smoke_id" \
+    bash -s <"$smoke_dir/broker-policy.sh" \
+  | tee "$smoke_dir/exec.txt"
+grep_required "redis_create_http=403" "$smoke_dir/exec.txt"
+grep_required "postgres_create_http=201" "$smoke_dir/exec.txt"
+grep_required "native-broker-policy-ok" "$smoke_dir/exec.txt"
+
+step "runtime-only readiness"
+"$DEVKIT" -p dev-all ensure-ready --repo "$REPO" --count 1 \
+  --flake "$RUNTIME_FLAKE" --broker-socket "$sock" \
+  --skip-repo-checks --format json \
+  | tee "$smoke_dir/ensure-ready.json"
+grep_required '"capacity_available": 1' "$smoke_dir/ensure-ready.json"
+
+step "repo-failure capacity"
+"$DEVKIT" -p dev-all native capacity --repo "$REPO" --count 1 \
+  --flake "$RUNTIME_FLAKE" --broker-endpoint "$sock" \
+  --repo-check 'exit 7' --format json \
+  | tee "$smoke_dir/capacity.json"
+grep_required '"runtime_ready": 1' "$smoke_dir/capacity.json"
+grep_required '"repo_ready": 0' "$smoke_dir/capacity.json"
+grep_required '"capacity_available": 1' "$smoke_dir/capacity.json"
+
+step "Spago and Playwright"
+nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
+  "spago --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
+  | tee "$smoke_dir/dev-all-tools.txt"
+grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
+
+step "Spago and Netlify"
+nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --command bash -lc \
+  "spago --version && netlify --version" \
+  | tee "$smoke_dir/static-tools.txt"
+grep_required "netlify-cli/" "$smoke_dir/static-tools.txt"
+
+step "native down"
+"$DEVKIT" -p dev-all down --repo "$REPO" --count 1 \
+  --broker-socket "$sock" --broker-state-root "$state" --format json \
+  | tee "$smoke_dir/down.json"
+grep_required '"running": false' "$smoke_dir/down.json"
+
+echo
+echo "native-runtime-smoke: ok"
