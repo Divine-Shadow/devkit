@@ -919,7 +919,7 @@ func lifecycleCapacity(ctx *cmdregistry.Context, parsed lifecycleArgs, opts nati
 		repoCheck:      parsed.repoCheck,
 		skipRepoChecks: parsed.skipRepoChecks,
 	}
-	repoChecks, err := repoChecksFor(ctx, planArgs)
+	runtimeChecks, repoChecks, err := readinessChecksFor(ctx, planArgs)
 	if err != nil {
 		return capacity.Summary{}, err
 	}
@@ -931,7 +931,7 @@ func lifecycleCapacity(ctx *cmdregistry.Context, parsed lifecycleArgs, opts nati
 		if err != nil {
 			return capacity.Summary{}, err
 		}
-		reports[i] = runReadinessReport(p, repoChecks)
+		reports[i] = runReadinessReport(p, runtimeChecks, repoChecks)
 	}
 	return capacity.Build(reports), nil
 }
@@ -1240,11 +1240,11 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	repoChecks, err := repoChecksFor(ctx, parsed)
+	runtimeChecks, repoChecks, err := readinessChecksFor(ctx, parsed)
 	if err != nil {
 		return err
 	}
-	report := runReadinessReport(p, repoChecks)
+	report := runReadinessReport(p, runtimeChecks, repoChecks)
 	switch parsed.format {
 	case "", "json":
 		data, err := json.MarshalIndent(struct {
@@ -1309,7 +1309,7 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
 	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
-	repoChecks, err := repoChecksFor(ctx, parsed)
+	runtimeChecks, repoChecks, err := readinessChecksFor(ctx, parsed)
 	if err != nil {
 		return err
 	}
@@ -1322,7 +1322,7 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 		if err != nil {
 			return err
 		}
-		reports[i] = runReadinessReport(p, repoChecks)
+		reports[i] = runReadinessReport(p, runtimeChecks, repoChecks)
 	}
 	summary := capacity.Build(reports)
 	switch parsed.format {
@@ -1352,6 +1352,43 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 type repoCheck struct {
 	Name    string
 	Command string
+}
+
+type runtimeCheck struct {
+	Name    string
+	Command string
+}
+
+func readinessChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]runtimeCheck, []repoCheck, error) {
+	runtimeChecks, err := runtimeChecksFor(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	repoChecks, err := repoChecksFor(ctx, parsed)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runtimeChecks, repoChecks, nil
+}
+
+func runtimeChecksFor(ctx *cmdregistry.Context) ([]runtimeCheck, error) {
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]runtimeCheck, 0, len(cfg.Readiness.RuntimeChecks))
+	for i, check := range cfg.Readiness.RuntimeChecks {
+		command := strings.TrimSpace(check.Command)
+		if command == "" {
+			continue
+		}
+		name := strings.TrimSpace(check.Name)
+		if name == "" {
+			name = fmt.Sprintf("runtime-check-%d", i+1)
+		}
+		checks = append(checks, runtimeCheck{Name: name, Command: command})
+	}
+	return checks, nil
 }
 
 func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, error) {
@@ -1389,7 +1426,7 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 	return checks, nil
 }
 
-func runReadinessReport(p nativeplan.Plan, repoChecks []repoCheck) readiness.Report {
+func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChecks []repoCheck) readiness.Report {
 	var report readiness.Report
 	if err := launch.Prepare(p); err != nil {
 		report.AddRuntime("prepare-state", false, err.Error())
@@ -1412,6 +1449,22 @@ func runReadinessReport(p nativeplan.Plan, repoChecks []repoCheck) readiness.Rep
 	report.AddRuntime("sandbox-command", err == nil, detail(err, out))
 	if err != nil {
 		return report
+	}
+	brokerScript := strings.Join([]string{
+		`broker="${DOCKER_HOST#unix://}"`,
+		`test -n "$broker"`,
+		`test "$broker" != "$DOCKER_HOST"`,
+		`test -S "$broker"`,
+		`curl --unix-socket "$broker" -fsS http://docker/_ping | grep -qx OK`,
+	}, " && ")
+	out, err = runSandboxCommand(p, []string{"bash", "-lc", brokerScript})
+	report.AddRuntime("broker-socket", err == nil, detail(err, out))
+	for _, check := range runtimeChecks {
+		if strings.TrimSpace(check.Command) == "" {
+			continue
+		}
+		out, err = runSandboxCommand(p, []string{"bash", "-lc", check.Command})
+		report.AddRuntime(check.Name, err == nil, detail(err, out))
 	}
 	for _, check := range repoChecks {
 		if strings.TrimSpace(check.Command) == "" {

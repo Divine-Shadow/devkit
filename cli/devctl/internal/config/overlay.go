@@ -58,8 +58,14 @@ type RepoCheck struct {
 	Command string `yaml:"command"`
 }
 
+type RuntimeCheck struct {
+	Name    string `yaml:"name"`
+	Command string `yaml:"command"`
+}
+
 type Readiness struct {
-	RepoChecks []RepoCheck `yaml:"repo_checks"`
+	RuntimeChecks []RuntimeCheck `yaml:"runtime_checks"`
+	RepoChecks    []RepoCheck    `yaml:"repo_checks"`
 }
 
 type Native struct {

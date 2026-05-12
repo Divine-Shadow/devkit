@@ -17,14 +17,62 @@ runtime:
   core_check: scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.
 readiness:
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker go node npm spago netlify playwright; do
+          command -v "$tool" >/dev/null
+        done
+    - name: spago-netlify
+      command: spago --version >/dev/null && netlify --version >/dev/null
+    - name: playwright-browser
+      command: |
+        node <<'NODE'
+        const { chromium } = require("@playwright/test");
+        (async () => {
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage();
+          await page.setContent("<title>native-playwright-ok</title>");
+          const title = await page.title();
+          await browser.close();
+          if (title !== "native-playwright-ok") {
+            throw new Error(`unexpected title: ${title}`);
+          }
+        })().catch((err) => {
+          console.error(err);
+          process.exit(1);
+        });
+        NODE
   repo_checks:
     - name: git-remote
       command: git ls-remote --heads origin >/dev/null
     - name: frontend-warm
       command: |
         if [ -f frontend/package.json ]; then
-          npm --prefix frontend install --include=dev --no-package-lock
+          npm --prefix frontend ci --include=dev --ignore-scripts
         fi
+    - name: frontend-playwright-browser
+      command: |
+        test -f frontend/package.json
+        (
+          cd frontend
+          node <<'NODE'
+          const { chromium } = require("@playwright/test");
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+            await page.setContent("<title>frontend-playwright-ok</title>");
+            const title = await page.title();
+            await browser.close();
+            if (title !== "frontend-playwright-ok") {
+              throw new Error(`unexpected title: ${title}`);
+            }
+          })().catch((err) => {
+            console.error(err);
+            process.exit(1);
+          });
+          NODE
+        )
     - name: frontend-typecheck
       command: |
         test -f frontend/package.json

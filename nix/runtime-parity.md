@@ -69,19 +69,18 @@ nix --extra-experimental-features 'nix-command flakes' build --no-link --print-o
 nix --extra-experimental-features 'nix-command flakes' develop .#runtime-test-agent --command bash -lc 'git --version && ssh -V && curl --version | head -1'
 nix --extra-experimental-features 'nix-command flakes' develop .#template-agent --command bash -lc 'git --version && uv --version && python3 --version'
 nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'spago --version && codex --version && docker --version && go version && playwright --version'
+nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'npm --prefix ../ouroboros-ide/frontend ci --include=dev --ignore-scripts >/dev/null && cd ../ouroboros-ide/frontend && node -e '\''const { chromium } = require("@playwright/test"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent("<title>frontend-playwright-ok</title>"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'\'''
 nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'mgba-headless --help 2>&1 | grep -q -- --script'
 nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-terraform --command bash -lc 'terraform version | head -2 && packer version'
 nix --extra-experimental-features 'nix-command flakes' develop .#pokeemerald --command bash -lc 'arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1'
-nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-static-front-end --command bash -lc 'spago --version && netlify --version'
+nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-static-front-end --command bash -lc 'spago --version && netlify --version && playwright --version'
 nix --extra-experimental-features 'nix-command flakes' develop .#tinyproxy --command bash -lc 'tinyproxy -h 2>&1 | head -5; uv --version'
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 go test ./...
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#runtime-test-agent -- git --version
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- bash -lc 'spago --version && codex --version && docker --version && go version && playwright --version && mgba-headless --help 2>&1 | grep -q -- --script'
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- node -e 'const { chromium } = require("@playwright/test"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent("<title>native-bwrap-playwright-ok</title>"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'
-cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native readiness --repo devkit --flake .#runtime-test-agent --repo-check 'exit 7' --format json
 kit/scripts/devkit -p dev-all broker status --format json
 kit/scripts/devkit -p dev-all native prepare --repo ouroboros-ide --count 2 --dry-run --format json
-kit/scripts/devkit -p dev-all native capacity --repo devkit --count 1 --flake .#runtime-test-agent --repo-check 'exit 7' --format json
 kit/scripts/devkit -p dev-all --dry-run scale 2 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock --broker-state-root /tmp/devkit-scale-state --skip-ready --format json
 kit/scripts/devkit -p dev-all --dry-run exec 1 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock -- echo hi
 kit/scripts/devkit -p dev-all --dry-run attach 1 --repo ouroboros-ide --flake .#runtime-test-agent --broker-socket /tmp/devkit-scale.sock
@@ -169,10 +168,10 @@ kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide \
   '
 
 kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
-  --flake .#runtime-test-agent --broker-socket "$sock" \
+  --flake .#dev-all --broker-socket "$sock" \
   --skip-repo-checks --format json
 kit/scripts/devkit -p dev-all native capacity --repo ouroboros-ide --count 1 \
-  --flake .#runtime-test-agent --broker-endpoint "$sock" \
+  --flake .#dev-all --broker-endpoint "$sock" \
   --repo-check 'exit 7' --format json
 kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 1 \
   --broker-socket "$sock" --broker-state-root "$state" --format json
@@ -185,13 +184,17 @@ Observed key versions:
 - Go: `go1.22.4`.
 - Spago: `0.93.45`.
 - Netlify CLI: `netlify-cli/26.0.1`.
-- Playwright CLI: `Version 1.52.0`.
+- Playwright CLI: `Version 1.58.2`.
 - Terraform: `v1.9.8`.
 - Packer: `v1.11.2`.
 - mGBA: pinned `mgba-headless` build from commit
   `b19b557a78930ede7ee7f5dcbc880f9ff2533ffe` with `--script` support.
 - ARM toolchain smoke: `arm-none-eabi-gcc` and `arm-none-eabi-as` present.
 - Native Playwright smoke output: `native-bwrap-playwright-ok`.
+- Frontend-local Playwright smoke output from `ouroboros-ide/frontend`:
+  `frontend-playwright-ok`.
+- Runtime readiness checks include `broker-socket`, `spago-netlify`, and
+  `playwright-browser`.
 - Readiness split smoke: `runtime_ready: true`, `repo_ready: false`, and
   `capacity_available: true` when `--repo-check 'exit 7'` fails.
 - Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-smoke.<id>/broker.sock`,
@@ -212,13 +215,22 @@ Observed key versions:
 - `spago` and `netlify-cli` now come from lockfile-backed
   `nix/npm-tools/package-lock.json`; shell hooks do not install npm packages at
   runtime.
+- Frontend dependency warming uses `npm ci --include=dev --ignore-scripts` so
+  repo readiness follows `ouroboros-ide/frontend/package-lock.json` instead of
+  floating semver ranges during readiness checks.
 - Playwright uses Nix-provisioned `playwright-test` plus
-  `playwright-driver.browsers`. Native bubblewrap can launch Chromium without
-  an ad hoc browser install.
+  `playwright-driver.browsers` from the `nixpkgs-playwright` input. The
+  `dev-all` shell exports `PLAYWRIGHT_BROWSERS_PATH` and
+  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. The Playwright input is pinned to a
+  `1.58.2` nixpkgs revision that launches successfully with the current
+  Ouroboros frontend lockfile's `@playwright/test` `1.58.1` package.
 - Native plans keep `DirectDockerSocket=false`, set `DOCKER_HOST` to the broker
   socket, and do not bind `/var/run/docker.sock`.
 - Native readiness now reports runtime readiness separately from repo readiness;
-  capacity availability follows runtime readiness only.
+  capacity availability follows runtime readiness only. Runtime readiness now
+  proves prepared native state, broker socket liveness, required tool
+  availability, Spago/Netlify command availability, and a real Playwright
+  Chromium launch.
 - Native broker lifecycle, worktree fanout, and capacity reporting are available
   through the canonical `kit/scripts/devkit` entrypoint.
 - The default `dev-all` lifecycle and simple agent entry commands now route to

@@ -72,6 +72,9 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"    - postgres:latest\n" +
 		"  allow_pulls: true\n" +
 		"readiness:\n" +
+		"  runtime_checks:\n" +
+		"    - name: tools\n" +
+		"      command: command -v spago\n" +
 		"  repo_checks:\n" +
 		"    - name: typecheck\n" +
 		"      command: npm test\n" +
@@ -98,6 +101,9 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if len(cfg.Readiness.RepoChecks) != 1 || cfg.Readiness.RepoChecks[0].Name != "typecheck" || cfg.Readiness.RepoChecks[0].Command != "npm test" {
 		t.Fatalf("repo checks = %#v", cfg.Readiness.RepoChecks)
+	}
+	if len(cfg.Readiness.RuntimeChecks) != 1 || cfg.Readiness.RuntimeChecks[0].Name != "tools" || cfg.Readiness.RuntimeChecks[0].Command != "command -v spago" {
+		t.Fatalf("runtime checks = %#v", cfg.Readiness.RuntimeChecks)
 	}
 	if cfg.Native.WorktreeRoot != "../agent-worktrees" || cfg.Native.StateRoot != "../.devkit/native-agents" {
 		t.Fatalf("native roots = %#v", cfg.Native)

@@ -53,6 +53,37 @@ readiness:
 	}
 }
 
+func TestRuntimeChecksForUsesStructuredOverlayChecks(t *testing.T) {
+	tmp := t.TempDir()
+	overlay := filepath.Join(tmp, "overlays", "dev-all")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		t.Fatalf("mkdir overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlay, "devkit.yaml"), []byte(`
+readiness:
+  runtime_checks:
+    - name: tools
+      command: command -v spago
+    - command: command -v playwright
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+	}
+	checks, err := runtimeChecksFor(ctx)
+	if err != nil {
+		t.Fatalf("runtimeChecksFor: %v", err)
+	}
+	if len(checks) != 2 || checks[0].Name != "tools" || checks[0].Command != "command -v spago" {
+		t.Fatalf("checks = %#v", checks)
+	}
+	if checks[1].Name != "runtime-check-2" || checks[1].Command != "command -v playwright" {
+		t.Fatalf("defaulted check = %#v", checks[1])
+	}
+}
+
 func TestRepoChecksForFallsBackToWarmAndCoreCheck(t *testing.T) {
 	tmp := t.TempDir()
 	overlay := filepath.Join(tmp, "overlays", "dev-all")

@@ -3,10 +3,13 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # Keep Playwright browser revisions compatible with the current
+    # ouroboros-ide/frontend lockfile.
+    nixpkgs-playwright.url = "github:NixOS/nixpkgs/f86a612cb49b3ca434c9b87f2049797656a0138d";
   };
 
   outputs =
-    { self, nixpkgs, ... }:
+    { self, nixpkgs, nixpkgs-playwright, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -19,6 +22,10 @@
           f {
             inherit system;
             pkgs = import nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+            };
+            pkgsPlaywright = import nixpkgs-playwright {
               inherit system;
               config.allowUnfree = true;
             };
@@ -51,7 +58,7 @@
     in
     {
       devShells = forEachSystem (
-        { system, pkgs, ... }:
+        { system, pkgs, pkgsPlaywright, ... }:
         let
           details = systemDetails.${system};
           pinnedCodex = pkgs.stdenvNoCC.mkDerivation {
@@ -265,7 +272,6 @@
             minizip
             nodejs_20
             pkg-config
-            playwright-test
             purescript
             sbt
             sqlite
@@ -277,7 +283,7 @@
             pinnedGo
             pinnedMgbaHeadless
             pinnedNpmTools
-          ]);
+          ]) ++ [ pkgsPlaywright.playwright-test ];
 
           mkShell =
             name: packages: extraHook:
@@ -289,7 +295,8 @@
                 export GIT_SSL_CAINFO=$SSL_CERT_FILE
                 export TESTCONTAINERS_RYUK_DISABLED=true
                 export DOCKER_HOST=''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}
-                export PLAYWRIGHT_BROWSERS_PATH=''${PLAYWRIGHT_BROWSERS_PATH:-${pkgs.playwright-driver.browsers}}
+                export PLAYWRIGHT_BROWSERS_PATH=''${PLAYWRIGHT_BROWSERS_PATH:-${pkgsPlaywright.playwright-driver.browsers}}
+                export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=''${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}
                 export HTTP_PROXY=''${HTTP_PROXY:-http://127.0.0.1:8888}
                 export HTTPS_PROXY=''${HTTPS_PROXY:-$HTTP_PROXY}
                 export NO_PROXY=''${NO_PROXY:-localhost,127.0.0.1}
@@ -304,7 +311,7 @@
           ouroboros-dev-agent = mkShell "ouroboros-dev-agent" ouroborosAgentTools ''
             export JAVA_HOME=${pkgs.jdk21}
             export GOROOT=${pinnedGo}
-            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
+            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
             export PATH=${pkgs.jdk21}/bin:$PATH
           '';
 
@@ -318,7 +325,7 @@
           ])) ''
             export JAVA_HOME=${pkgs.jdk21}
             export GOROOT=${pinnedGo}
-            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
+            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
             export PATH=${pkgs.jdk21}/bin:$PATH
           '';
 
@@ -329,18 +336,17 @@
           ])) ''
             export JAVA_HOME=${pkgs.jdk21}
             export GOROOT=${pinnedGo}
-            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
+            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
             export PATH=${pkgs.jdk21}/bin:$PATH
           '';
 
           ouroboros-static-front-end = mkShell "ouroboros-static-front-end" (commonAgentTools ++ (with pkgs; [
             nodejs_20
-            playwright-test
             purescript
             pinnedCodex
             pinnedNpmTools
-          ])) ''
-            export NODE_PATH=${pkgs.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
+          ]) ++ [ pkgsPlaywright.playwright-test ]) ''
+            export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
           '';
 
           runtime-test-agent = mkShell "runtime-test-agent" (with pkgs; [

@@ -170,14 +170,17 @@ grep_required "native-broker-policy-ok" "$smoke_dir/exec.txt"
 
 step "runtime-only readiness"
 "$DEVKIT" -p dev-all ensure-ready --repo "$REPO" --count 1 \
-  --flake "$RUNTIME_FLAKE" --broker-socket "$sock" \
+  --flake "$DEV_ALL_FLAKE" --broker-socket "$sock" \
   --skip-repo-checks --format json \
   | tee "$smoke_dir/ensure-ready.json"
 grep_required '"capacity_available": 1' "$smoke_dir/ensure-ready.json"
+grep_required '"name": "broker-socket"' "$smoke_dir/ensure-ready.json"
+grep_required '"name": "spago-netlify"' "$smoke_dir/ensure-ready.json"
+grep_required '"name": "playwright-browser"' "$smoke_dir/ensure-ready.json"
 
 step "repo-failure capacity"
 "$DEVKIT" -p dev-all native capacity --repo "$REPO" --count 1 \
-  --flake "$RUNTIME_FLAKE" --broker-endpoint "$sock" \
+  --flake "$DEV_ALL_FLAKE" --broker-endpoint "$sock" \
   --repo-check 'exit 7' --format json \
   | tee "$smoke_dir/capacity.json"
 grep_required '"runtime_ready": 1' "$smoke_dir/capacity.json"
@@ -189,6 +192,15 @@ nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
   "spago --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
   | tee "$smoke_dir/dev-all-tools.txt"
 grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
+
+frontend_dir="$DEVKIT_ROOT/../$REPO/frontend"
+if [[ -f "$frontend_dir/package.json" ]]; then
+  step "frontend-local Playwright"
+  nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
+    "npm --prefix '$frontend_dir' ci --include=dev --ignore-scripts >/dev/null && cd '$frontend_dir' && node -e 'const { chromium } = require(\"@playwright/test\"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent(\"<title>frontend-playwright-ok</title>\"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'" \
+    | tee "$smoke_dir/frontend-playwright.txt"
+  grep_required "frontend-playwright-ok" "$smoke_dir/frontend-playwright.txt"
+fi
 
 step "Spago and Netlify"
 nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --command bash -lc \
