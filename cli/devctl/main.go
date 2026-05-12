@@ -952,7 +952,7 @@ Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
   up, down, restart, status [--ready], logs   (native for overlays with runtime.flake)
-  compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for dev-all)
+  compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for flake-backed overlays)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
   ensure-ready [--count N] [--repo REPO] [--broker-socket PATH] [--skip-broker]
@@ -982,13 +982,13 @@ Commands:
   repo-config-ssh <repo> [--index N], repo-push-ssh <repo> [--index N]
   repo-config-https <repo> [--index N], repo-push-https <repo> [--index N]
   worktrees-init <repo> <count> [--base agent] [--branch main]
-  worktrees-setup <repo> <count> [--base agent] [--branch main]  (dev-all)
-  worktrees-branch <repo> <index> <branch>   (dev-all)
-  worktrees-status <repo> [--all|--index N]  (dev-all)
-  worktrees-sync <repo> (--pull|--push) [--all|--index N]  (dev-all)
-  worktrees-tmux <repo> <count> [--plain]    (dev-all)
+  worktrees-setup <repo> <count> [--base agent] [--branch main]  (flake-backed overlays)
+  worktrees-branch <repo> <index> <branch>   (flake-backed overlays)
+  worktrees-status <repo> [--all|--index N]  (flake-backed overlays)
+  worktrees-sync <repo> (--pull|--push) [--all|--index N]  (flake-backed overlays)
+  worktrees-tmux <repo> <count> [--plain]    (flake-backed overlays)
   reset [N]                                  (alias: fresh-open)
-  bootstrap <repo> <count>                   (dev-all)
+  bootstrap <repo> <count>                   (flake-backed overlays)
   image-matrix [--check] [--all]             (repo to runtime pairing report)
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
@@ -1133,6 +1133,7 @@ func main() {
 	}
 	cmd := args[0]
 	sub := args[1:]
+	isNativeRuntime := strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, overlayCfg)
 	var files []string
 	if commandNeedsComposeFiles(cmd, project, overlayCfg) {
 		var err error
@@ -1342,9 +1343,9 @@ func main() {
 		if err != nil {
 			die(err.Error())
 		}
-		if layoutIsNativeDevAll(lf, project) {
+		if layoutIsNativeRuntime(paths, lf, project) {
 			repo, count := layoutNativeRepoAndCount(paths, project, lf)
-			runner.Host(dryRun, exe, "-p", "dev-all", "up", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			runner.Host(dryRun, exe, "-p", project, "up", "--repo", repo, "--count", fmt.Sprintf("%d", count))
 			if skipTmux() {
 				fmt.Fprintln(os.Stderr, "[layout] tmux skipped via DEVKIT_NO_TMUX")
 				break
@@ -1397,11 +1398,14 @@ func main() {
 			}
 			break
 		}
-		if project == "dev-all" {
-			die("layout-apply for dev-all only supports native dev-all layouts; move Compose/mixed layouts behind explicit legacy Compose workflows")
+		if isNativeRuntime {
+			die("layout-apply for flake-backed overlays only supports native single-overlay layouts; move Compose/mixed layouts behind explicit legacy Compose workflows")
 		}
 		if layoutReferencesProject(lf, "dev-all") {
 			die("legacy layout-apply cannot target dev-all; use a native dev-all layout with -p dev-all")
+		}
+		if ref, ok := layoutReferencesNativeRuntime(paths, lf, project); ok {
+			die(fmt.Sprintf("legacy layout-apply cannot target flake-backed overlay %s; use a native layout with -p %s", ref, ref))
 		}
 		type overlayRun struct {
 			Project     string
@@ -1836,20 +1840,13 @@ func main() {
 		if strings.TrimSpace(sessName) == "" {
 			sessName = defaultSessionName("mixed")
 		}
-		if project == "dev-all" {
-			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
-			repo := strings.TrimSpace(cfg.Defaults.Repo)
-			if repo == "" {
-				repo = "ouroboros-ide"
-			}
-			count := cfg.Defaults.Agents
-			if count < 1 {
-				count = 1
-			}
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
+			count := nativeDefaultAgentCount(paths, project, 1)
 			var b strings.Builder
 			fmt.Fprintf(&b, "session: %s\n\nwindows:\n", sessName)
 			for i := 1; i <= count; i++ {
-				fmt.Fprintf(&b, "  - index: %d\n    project: dev-all\n    service: dev-agent\n    path: %s\n    name: agent-%d\n", i, filepath.Join("/worktrees", fmt.Sprintf("agent%d", i), repo), i)
+				fmt.Fprintf(&b, "  - index: %d\n    project: %s\n    service: dev-agent\n    path: %s\n    name: agent-%d\n", i, project, filepath.Join("/worktrees", fmt.Sprintf("agent%d", i), repo), i)
 			}
 			yml := b.String()
 			if strings.TrimSpace(output) == "" {
@@ -2118,15 +2115,10 @@ func main() {
 				}
 			}
 		}
-		if project == "dev-all" && strings.TrimSpace(repo) == "" {
-			if cfg, _, err := config.ReadAll(paths.OverlayPaths, project); err == nil {
-				repo = cfg.Defaults.Repo
-			}
-		}
 		if strings.TrimSpace(repo) == "" {
-			repo = "ouroboros-ide"
+			repo = readDefaultRepo(project, paths)
 		}
-		if project == "dev-all" {
+		if isNativeRuntime {
 			script := "set -euo pipefail; if codex exec 'reply with: ok' 2>&1 | tr -d '\\r' | grep -m1 -x ok >/dev/null; then echo ok; else echo 'codex-test failed'; exit 1; fi"
 			nativeExecScriptCommand(dryRun, exe, project, repo, mustAtoi(idx), script)
 			break
@@ -2139,8 +2131,11 @@ func main() {
 		runner.Compose(dryRun, files, "exec", "--index", idx, "dev-agent", "bash", "-lc", script)
 	case "doctor-runtime":
 		mustProject(project)
-		if project == "dev-all" {
-			die("doctor-runtime is a legacy Compose diagnostic for dev-all; use native readiness or native capacity")
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
+			count := nativeDefaultAgentCount(paths, project, 1)
+			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			break
 		}
 		if os.Getenv("DEVKIT_ENABLE_RUNTIME_CONFIG") != "1" {
 			die("runtime config disabled; set DEVKIT_ENABLE_RUNTIME_CONFIG=1")
@@ -2182,16 +2177,9 @@ func main() {
 	case "verify":
 		// Verify SSH to GitHub, Codex basic exec, and worktrees status (when applicable)
 		mustProject(project)
-		if project == "dev-all" {
-			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
-			repo := strings.TrimSpace(cfg.Defaults.Repo)
-			if repo == "" {
-				repo = "ouroboros-ide"
-			}
-			count := cfg.Defaults.Agents
-			if count < 1 {
-				count = 1
-			}
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
+			count := nativeDefaultAgentCount(paths, project, 1)
 			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count))
 			fmt.Println("verify completed")
 			break
@@ -2244,8 +2232,11 @@ func main() {
 		if len(sub) > 0 {
 			idx = sub[0]
 		}
-		if project == "dev-all" {
+		if isNativeRuntime {
 			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			if project != "dev-all" {
+				repo = readDefaultRepo(project, paths)
+			}
 			script := `set -e
 echo "HOME=$HOME"; echo "CODEX_HOME=$CODEX_HOME"
 echo "-- locations --"
@@ -2283,8 +2274,8 @@ exit 0`, home, home, home, home, home)
 		default:
 			die("Usage: check-sts [envoy|tinyproxy]")
 		}
-		if project == "dev-all" {
-			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
 			script := strings.Join([]string{
 				"HTTPS_PROXY='" + px + "' HTTP_PROXY='" + px + "' curl -sSvo /dev/null -w '%{http_code}\\n' https://sts.amazonaws.com || true",
 				"HTTPS_PROXY='" + px + "' HTTP_PROXY='" + px + "' aws sts get-caller-identity || true",
@@ -2305,7 +2296,7 @@ exit 0`, home, home, home, home, home)
 		}
 		idx := sub[0]
 		subpath := sub[1]
-		if project == "dev-all" {
+		if isNativeRuntime {
 			repo := nativeRepoForSubpath(paths, project, subpath)
 			index := mustAtoi(idx)
 			dest := nativeSandboxDest(index, repo, subpath)
@@ -2388,7 +2379,7 @@ exit 0`, home, home, home, home, home)
 		}
 		idx := sub[0]
 		subpath := sub[1]
-		if project == "dev-all" {
+		if isNativeRuntime {
 			repo := nativeRepoForSubpath(paths, project, subpath)
 			index := mustAtoi(idx)
 			dest := nativeSandboxDest(index, repo, subpath)
@@ -2442,12 +2433,8 @@ exit 0`, home, home, home, home, home)
 			}
 			n = mustAtoi(arg)
 		}
-		if project == "dev-all" {
-			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
-			repo := strings.TrimSpace(cfg.Defaults.Repo)
-			if repo == "" {
-				repo = "ouroboros-ide"
-			}
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
 			sess := "devkit-shells"
 			if plain {
 				tabs := make([]wtutil.TabSpec, 0, n)
@@ -2516,12 +2503,8 @@ exit 0`, home, home, home, home, home)
 			}
 			n = mustAtoi(arg)
 		}
-		if project == "dev-all" {
-			cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
-			repo := strings.TrimSpace(cfg.Defaults.Repo)
-			if repo == "" {
-				repo = "ouroboros-ide"
-			}
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
 			sess := "devkit-open"
 			if plain {
 				tabs := make([]wtutil.TabSpec, 0, n)
@@ -2588,8 +2571,8 @@ exit 0`, home, home, home, home, home)
 			}
 			n = mustAtoi(arg)
 		}
-		if project == "dev-all" {
-			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
 			nativeLifecycleCommand(dryRun, exe, project, "down", repo, n)
 			if !skipTmux() {
 				killNativeAgentSessions(dryRun)
@@ -2694,8 +2677,8 @@ exit 0`, home, home, home, home, home)
 		if len(sub) > 0 {
 			n = mustAtoi(sub[0])
 		}
-		if project == "dev-all" {
-			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+		if isNativeRuntime {
+			repo := readDefaultRepo(project, paths)
 			nativeLifecycleCommand(dryRun, exe, project, "down", repo, n)
 			if !skipTmux() {
 				killNativeAgentSessions(dryRun)
@@ -3053,8 +3036,8 @@ exit 0`, home, home, home, home, home)
 	case "worktrees-setup":
 		// Create per-agent branches and worktrees rooted in the dev root (dev-all overlay pattern)
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for worktrees-setup")
+		if !isNativeRuntime {
+			die("worktrees-setup requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		if len(sub) < 2 {
 			die("Usage: worktrees-setup <repo> <count> [--base agent] [--branch main]")
@@ -3084,8 +3067,8 @@ exit 0`, home, home, home, home, home)
 	case "run":
 		// Idempotent end-to-end launcher: ensures worktrees, scales up, and opens tmux across N agents
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for run")
+		if !isNativeRuntime {
+			die("run requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		if len(sub) < 2 {
 			die("Usage: run <repo> <count>")
@@ -3103,8 +3086,8 @@ exit 0`, home, home, home, home, home)
 		openNativeAgentSession(dryRun, exe, project, repo, sess, n, false)
 	case "worktrees-branch":
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for worktrees-branch")
+		if !isNativeRuntime {
+			die("worktrees-branch requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		if len(sub) < 3 {
 			die("Usage: -p dev-all worktrees-branch <repo> <index> <branch>")
@@ -3116,8 +3099,8 @@ exit 0`, home, home, home, home, home)
 		runner.Host(dryRun, "git", "-C", path, "checkout", "-b", branch)
 	case "worktrees-status":
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for worktrees-status")
+		if !isNativeRuntime {
+			die("worktrees-status requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		if len(sub) < 1 {
 			die("Usage: -p dev-all worktrees-status <repo> [--all|--index N]")
@@ -3145,8 +3128,8 @@ exit 0`, home, home, home, home, home)
 		}
 	case "worktrees-sync":
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for worktrees-sync")
+		if !isNativeRuntime {
+			die("worktrees-sync requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		if len(sub) < 2 {
 			die("Usage: worktrees-sync <repo> (--pull|--push) [--all|--index N]")
@@ -3181,8 +3164,8 @@ exit 0`, home, home, home, home, home)
 		}
 	case "worktrees-tmux":
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for worktrees-tmux")
+		if !isNativeRuntime {
+			die("worktrees-tmux requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		if len(sub) < 2 {
 			die("Usage: -p dev-all worktrees-tmux <repo> <count> [--plain]")
@@ -3216,8 +3199,8 @@ exit 0`, home, home, home, home, home)
 	case "bootstrap":
 		// Opinionated: set up worktrees and open tmux with defaults if args omitted
 		mustProject(project)
-		if project != "dev-all" {
-			die("Use -p dev-all for bootstrap")
+		if !isNativeRuntime {
+			die("bootstrap requires a flake-backed overlay; use explicit Compose workflows for legacy projects")
 		}
 		var repo string
 		var n int
@@ -3249,10 +3232,12 @@ func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(2) }
 
 func commandNeedsComposeFiles(cmd, project string, cfg config.OverlayConfig) bool {
 	switch cmd {
-	case "native":
+	case "native", "proxy":
 		return false
 	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach", "warm", "maintain":
 		return !nativeRuntimeConfigured(project, cfg)
+	case "layout-apply", "layout-generate", "tmux-sync", "tmux-add-cd", "tmux-apply-layout", "wt-open", "exec-cd", "attach-cd", "check-net", "check-codex", "check-sts", "codex-test", "codex-debug", "doctor-runtime", "verify", "tmux-shells", "open", "fresh-open", "reset", "run", "worktrees-setup", "worktrees-branch", "worktrees-status", "worktrees-sync", "worktrees-tmux", "bootstrap":
+		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
 	default:
 		return true
 	}
@@ -3608,7 +3593,7 @@ func nativeStateRoot(paths compose.Paths, project string) string {
 }
 
 func nativeRepoForSubpath(paths compose.Paths, project, subpath string) string {
-	def := defaultDevAllRepoMain(paths.OverlayPaths)
+	def := readDefaultRepo(project, paths)
 	cleaned := filepath.Clean(strings.TrimSpace(subpath))
 	if cleaned == "." || cleaned == "" {
 		return def
@@ -3674,13 +3659,21 @@ func nativeSandboxDest(index int, repo, subpath string) string {
 	return cleaned
 }
 
-func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {
-	if strings.TrimSpace(defaultProject) != "dev-all" {
+func layoutIsNativeRuntime(paths compose.Paths, lf layout.File, defaultProject string) bool {
+	defaultProject = strings.TrimSpace(defaultProject)
+	if defaultProject == "" {
+		return false
+	}
+	defaultCfg, _, err := config.ReadAll(paths.OverlayPaths, defaultProject)
+	if err != nil || !config.HasRuntimeFlake(defaultCfg) {
 		return false
 	}
 	for _, ov := range lf.Overlays {
 		proj := strings.TrimSpace(ov.Project)
-		if proj != "" && proj != "dev-all" {
+		if proj == "" {
+			proj = defaultProject
+		}
+		if proj != defaultProject {
 			return false
 		}
 		if svc := strings.TrimSpace(ov.Service); svc != "" && svc != "dev-agent" {
@@ -3692,7 +3685,10 @@ func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {
 	}
 	for _, w := range lf.Windows {
 		proj := strings.TrimSpace(w.Project)
-		if proj != "" && proj != "dev-all" {
+		if proj == "" {
+			proj = defaultProject
+		}
+		if proj != defaultProject {
 			return false
 		}
 		if svc := strings.TrimSpace(w.Service); svc != "" && svc != "dev-agent" {
@@ -3703,6 +3699,35 @@ func layoutIsNativeDevAll(lf layout.File, defaultProject string) bool {
 		}
 	}
 	return true
+}
+
+func layoutReferencesNativeRuntime(paths compose.Paths, lf layout.File, defaultProject string) (string, bool) {
+	defaultProject = strings.TrimSpace(defaultProject)
+	check := func(project string) (string, bool) {
+		project = strings.TrimSpace(project)
+		if project == "" {
+			project = defaultProject
+		}
+		if project == "" {
+			return "", false
+		}
+		cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
+		if err != nil || !config.HasRuntimeFlake(cfg) {
+			return "", false
+		}
+		return project, true
+	}
+	for _, ov := range lf.Overlays {
+		if project, ok := check(ov.Project); ok {
+			return project, true
+		}
+	}
+	for _, w := range lf.Windows {
+		if project, ok := check(w.Project); ok {
+			return project, true
+		}
+	}
+	return "", false
 }
 
 func layoutReferencesProject(lf layout.File, project string) bool {
@@ -3746,7 +3771,7 @@ func layoutNativeRepoAndCount(paths compose.Paths, project string, lf layout.Fil
 		}
 	}
 	if repo == "" {
-		repo = "ouroboros-ide"
+		repo = readDefaultRepo(project, paths)
 	}
 	if count < 1 {
 		count = 1
@@ -3796,16 +3821,16 @@ func isDevAllRequireWarm(project string, paths compose.Paths) bool {
 }
 
 func readDefaultRepo(project string, paths compose.Paths) string {
-	repo := "ouroboros-ide"
-	if strings.TrimSpace(project) != "dev-all" {
-		return repo
-	}
+	project = strings.TrimSpace(project)
 	if cfg, _, err := config.ReadAll(paths.OverlayPaths, project); err == nil {
 		if strings.TrimSpace(cfg.Defaults.Repo) != "" {
-			repo = strings.TrimSpace(cfg.Defaults.Repo)
+			return strings.TrimSpace(cfg.Defaults.Repo)
 		}
 	}
-	return repo
+	if project == "dev-all" || project == "" {
+		return "ouroboros-ide"
+	}
+	return project
 }
 
 func agentHomeForProject(project, idx, repo string) string {

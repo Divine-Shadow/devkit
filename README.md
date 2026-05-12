@@ -72,12 +72,12 @@ Tooling caches:
 - SBT now writes to each agent's anchored home (`/workspace/.devhome/.sbt` or `/workspaces/dev/.devhome/.sbt` under `dev-all`) via `SBT_GLOBAL_BASE`. Ivy (`/home/dev/.ivy2`) and coursier (`/home/dev/.cache/coursier`) remain shared volumes to reuse downloaded artifacts.
 - Verify the setup end-to-end: `devkit/kit/tests/per-agent-sbt/run-smoke.sh` spins up two codex agents and checks that each container's `/home/dev/.sbt` resolves to its own anchor.
 
-Worktrees (isolated branches per agent, dev-all overlay):
-- Defaults live in `overlays/dev-all/devkit.yaml` (repo, agents, base_branch, branch_prefix).
-- Bootstrap end-to-end: `scripts/devkit -p dev-all bootstrap` (uses defaults) or `bootstrap ouroboros-ide 3`.
+Worktrees (isolated branches per agent, flake-backed overlays):
+- Defaults live in each overlay's `devkit.yaml` (`defaults.repo`, `defaults.agents`, `defaults.base_branch`, `defaults.branch_prefix`).
+- Bootstrap end-to-end: `scripts/devkit -p <overlay> bootstrap` (uses defaults) or `bootstrap <repo> 3`.
 - Create/verify manually:
-  - Setup: `scripts/devkit -p dev-all worktrees-setup ouroboros-ide 3`
-  - Open windows: `scripts/devkit -p dev-all worktrees-tmux ouroboros-ide 3`
+  - Setup: `scripts/devkit -p <overlay> worktrees-setup <repo> 3`
+  - Open windows: `scripts/devkit -p <overlay> worktrees-tmux <repo> 3`
 
 Runtime pairing and refresh note:
 - Repo-to-runtime pairings live in each overlay's `runtime:` metadata and are summarized in `kit/docs/repo-container-image-pairings.md`.
@@ -107,17 +107,17 @@ Auto-readiness (`dev-all`):
 
 Tmux ergonomics (new):
 - Sync windows to running agents: `scripts/devkit tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH]`.
-  - Defaults: session `devkit:<project>`, names `agent-<n>`, cd to `/workspace` (codex) or `/workspaces/dev[/agentN]` (dev-all).
+  - Defaults: session `devkit:<project>`, names `agent-<n>`, cd to the native `/worktrees/agentN/<repo>` mount for flake-backed overlays.
 - Add a single window at a path: `scripts/devkit tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]`.
   - Example (dev-all): `scripts/devkit -p dev-all tmux-add-cd 2 dumb-onion-hax --name doh-2`.
   - Use the same `--session` across overlays to mix images in one tmux.
 - Windows Terminal tabs for an existing tmux session: `scripts/devkit wt-open [--session NAME]`.
 - Windows Terminal tabs without tmux: `scripts/devkit wt-open --plain [--index N|--count N] [--cd PATH]`.
-  - This attaches through native `dev-all exec` commands and does not run Compose.
+  - This attaches through native exec commands for flake-backed overlays and does not run Compose.
   - Use it for an already-running native runtime when you want normal WT tabs instead of tmux-backed tabs.
   - Use `--index N` to open only one agent tab, e.g. after scaling up.
-  - For the default `devkit-ouro8` worktree stack, use `-p dev-all`.
-  - Example: `scripts/devkit -p dev-all wt-open --plain --index 5`
+  - For the default `devkit-ouro8` worktree stack, use `-p dev-all`; other flake-backed overlays use their own project name.
+  - Example: `scripts/devkit -p ouroboros-static-front-end wt-open --plain --index 1`
 - Target a different service (non-default): append `--service <name>` to `tmux-sync`, `tmux-add-cd`, or `scale --tmux-sync`.
 - Apply a layout file (YAML): `scripts/devkit tmux-apply-layout --file tmux.yaml [--session NAME]`.
   - Example tmux.yaml:

@@ -42,7 +42,7 @@ func handleCheckNet(ctx *cmdregistry.Context) error {
 		return fmt.Errorf("-p <project> is required")
 	}
 	script := "set -x; env | grep -E 'HTTP(S)?_PROXY|NO_PROXY'; curl -Is https://github.com | head -n1; (curl -Is https://example.com | head -n1 || true)"
-	if project == "dev-all" {
+	if nativeRuntimeConfigured(ctx) {
 		runNativeScript(ctx, script)
 		return nil
 	}
@@ -55,7 +55,7 @@ func handleCheckCodex(ctx *cmdregistry.Context) error {
 	if project == "" {
 		return fmt.Errorf("-p <project> is required")
 	}
-	if project == "dev-all" {
+	if nativeRuntimeConfigured(ctx) {
 		script := strings.Join([]string{
 			`echo "== Env vars =="`,
 			`env | grep -E '^HTTPS?_PROXY=|^NO_PROXY=' || true`,
@@ -81,15 +81,31 @@ func runNativeScript(ctx *cmdregistry.Context, script string) {
 	if exe == "" {
 		exe = "devkit"
 	}
-	runner.Host(ctx.DryRun, exe, "-p", "dev-all", "exec", "1", "--repo", nativeRepo(ctx), "--", "bash", "-lc", script)
+	runner.Host(ctx.DryRun, exe, "-p", strings.TrimSpace(ctx.Project), "exec", "1", "--repo", nativeRepo(ctx), "--", "bash", "-lc", script)
 }
 
 func nativeRepo(ctx *cmdregistry.Context) string {
-	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, "dev-all")
+	project := strings.TrimSpace(ctx.Project)
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project)
 	if err == nil {
 		if repo := strings.TrimSpace(cfg.Defaults.Repo); repo != "" {
 			return repo
 		}
 	}
+	if project != "" && project != "dev-all" {
+		return project
+	}
 	return "ouroboros-ide"
+}
+
+func nativeRuntimeConfigured(ctx *cmdregistry.Context) bool {
+	project := strings.TrimSpace(ctx.Project)
+	if project == "" {
+		return false
+	}
+	if project == "dev-all" {
+		return true
+	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project)
+	return err == nil && config.HasRuntimeFlake(cfg)
 }

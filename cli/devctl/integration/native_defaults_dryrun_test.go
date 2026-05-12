@@ -138,6 +138,11 @@ func runNativeDefaultDryRun(t *testing.T, bin, root string, args ...string) (str
 
 func runProjectDryRun(t *testing.T, bin, root, project string, args ...string) (string, error) {
 	t.Helper()
+	return runProjectDryRunWithEnv(t, bin, root, project, nil, args...)
+}
+
+func runProjectDryRunWithEnv(t *testing.T, bin, root, project string, extraEnv []string, args ...string) (string, error) {
+	t.Helper()
 	cmd := exec.Command(bin, append([]string{"--dry-run", "-p", project}, args...)...)
 	cmd.Env = append(os.Environ(),
 		"DEVKIT_ROOT="+root,
@@ -145,8 +150,26 @@ func runProjectDryRun(t *testing.T, bin, root, project string, args ...string) (
 		"DEVKIT_GIT_USER_NAME=Devkit Test",
 		"DEVKIT_GIT_USER_EMAIL=devkit-test@example.com",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func fakeWindowsTerminalEnv(t *testing.T) []string {
+	t.Helper()
+	dir := t.TempDir()
+	wt := filepath.Join(dir, "wt.exe")
+	wsl := filepath.Join(dir, "wsl.exe")
+	for _, path := range []string{wt, wsl} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return []string{
+		"DEVKIT_WT_PATH=" + wt,
+		"DEVKIT_WSL_PATH=" + wsl,
+		"DEVKIT_WSL_DISTRO=NixOS",
+	}
 }
 
 func assertNoDockerCommand(t *testing.T, output string) {
@@ -245,6 +268,97 @@ func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFlakeBackedNonDevAllHelperCommandsUseNativeDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	layoutPath := filepath.Join(root, "native-layout.yaml")
+	if err := os.WriteFile(layoutPath, []byte(`
+session: native-front
+overlays:
+  - project: ouroboros-static-front-end
+    count: 1
+windows:
+  - index: 1
+    project: ouroboros-static-front-end
+    service: dev-agent
+    path: .
+    name: agent-1
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "check-net", args: []string{"check-net"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "check-codex", args: []string{"check-codex"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "check-sts", args: []string{"check-sts", "tinyproxy"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "codex-test", args: []string{"codex-test"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "codex-debug", args: []string{"codex-debug"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
+		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
+		{name: "exec-cd", args: []string{"exec-cd", "1", ".", "echo", "hi"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "attach-cd", args: []string{"attach-cd", "1", "."}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "layout-apply", args: []string{"layout-apply", "--file", layoutPath}, want: " -p " + project + " up --repo " + repo + " --count 1"},
+		{name: "layout-generate", args: []string{"layout-generate"}, want: "project: " + project},
+		{name: "tmux-sync", args: []string{"tmux-sync", "--count", "1"}, want: " -p " + project + " exec 1 --repo " + repo},
+		{name: "tmux-add-cd", args: []string{"tmux-add-cd", "1", ".", "--session", "native-front", "--name", "agent-1"}, want: " -p " + project + " exec 1 --repo " + repo},
+		{name: "tmux-apply-layout", args: []string{"tmux-apply-layout", "--file", layoutPath}, want: " -p " + project + " exec 1 --repo " + repo},
+		{name: "worktrees-setup", args: []string{"worktrees-setup", repo, "1"}, want: "git -c core.sshCommand=ssh -C"},
+		{name: "run", args: []string{"run", repo, "1"}, want: " -p " + project + " up --repo " + repo + " --count 1"},
+		{name: "worktrees-branch", args: []string{"worktrees-branch", repo, "1", "agent-test"}, want: "git -C"},
+		{name: "worktrees-status", args: []string{"worktrees-status", repo, "--index", "1"}, want: "git -C"},
+		{name: "worktrees-sync", args: []string{"worktrees-sync", repo, "--pull", "--index", "1"}, want: "git -C"},
+		{name: "bootstrap", args: []string{"bootstrap"}, want: " -p " + project + " up --repo " + repo + " --count 1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runProjectDryRun(t, bin, root, project, tt.args...)
+			if err != nil {
+				t.Fatalf("%s failed: %v\n%s", tt.name, err, out)
+			}
+			assertNoDockerCommand(t, out)
+			if strings.Contains(out, "workspace directory") {
+				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
+			}
+			normalized := strings.ReplaceAll(out, "'", "")
+			if !strings.Contains(normalized, tt.want) {
+				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
+			}
+		})
+	}
+}
+
+func TestFlakeBackedNonDevAllWTOpenAndWorktreeTmuxPlainUseNativeDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	env := fakeWindowsTerminalEnv(t)
+
+	for _, args := range [][]string{
+		{"wt-open", "--plain", "--count", "1"},
+		{"worktrees-tmux", repo, "1", "--plain"},
+	} {
+		out, err := runProjectDryRunWithEnv(t, bin, root, project, env, args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		assertNoDockerCommand(t, out)
+		if strings.Contains(out, "--compose-project") {
+			t.Fatalf("%v leaked compose project into native WT launch:\n%s", args, out)
+		}
+		normalized := strings.ReplaceAll(out, "'", "")
+		if !strings.Contains(normalized, " -p "+project+" exec-cd 1") && !strings.Contains(normalized, " -p "+project+" exec 1 --repo "+repo) {
+			t.Fatalf("%v missing native project command:\n%s", args, out)
+		}
 	}
 }
 
@@ -367,7 +481,7 @@ windows:
 		t.Fatalf("mixed dev-all layout unexpectedly succeeded:\n%s", out)
 	}
 	assertNoDockerCommand(t, out)
-	if !strings.Contains(out, "only supports native dev-all layouts") {
+	if !strings.Contains(out, "only supports native single-overlay layouts") {
 		t.Fatalf("unexpected mixed-layout failure:\n%s", out)
 	}
 }

@@ -142,12 +142,12 @@ Convenience commands (essentials):
 - Reset and open N agents (alias of `fresh-open`): `devctl -p <proj> reset [N]`.
 - Scale agents without teardown: `devctl -p <proj> scale N`.
  - Scale and sync tmux: `devctl -p <proj> scale N --tmux-sync [--session NAME] [--service NAME]`.
-- Open one plain Windows Terminal tab without tmux: `devctl -p dev-all wt-open --plain --index 5`.
+- Open one plain Windows Terminal tab without tmux: `devctl -p <flake-backed-overlay> wt-open --plain --index 1`.
 
-Worktrees workflow (dev-all overlay):
-- Setup per-agent branches + worktrees that track `origin/<base>`: `devctl -p dev-all worktrees-setup <repo> <count> [--base agent] [--branch main]`.
-- Bootstrap using defaults from `overlays/dev-all/devkit.yaml`: `devctl -p dev-all bootstrap`.
-- Open tmux across worktrees: `devctl -p dev-all worktrees-tmux <repo> <count>`.
+Worktrees workflow (flake-backed overlays):
+- Setup per-agent branches + worktrees that track `origin/<base>`: `devctl -p <overlay> worktrees-setup <repo> <count> [--base agent] [--branch main]`.
+- Bootstrap using defaults from `overlays/<overlay>/devkit.yaml`: `devctl -p <overlay> bootstrap`.
+- Open tmux across worktrees: `devctl -p <overlay> worktrees-tmux <repo> <count>`.
 
 Runtime pairing and refresh note:
 - Repo-to-runtime pairings are declared in overlay `runtime.flake` metadata and summarized by `kit/scripts/devkit image-matrix --all`.

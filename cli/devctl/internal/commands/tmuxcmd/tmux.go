@@ -94,18 +94,18 @@ func handleSync(ctx *cmdregistry.Context) error {
 		}
 	}
 	if count <= 0 {
-		if ctx.Project == "dev-all" {
+		if nativeRuntimeConfigured(ctx) {
 			cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 			if err != nil {
 				return err
 			}
 			count = cfg.Defaults.Agents
 			if count <= 0 {
-				return fmt.Errorf("tmux-sync requires --count for native dev-all when defaults.agents is unset")
+				return fmt.Errorf("tmux-sync requires --count for native overlays when defaults.agents is unset")
 			}
 		}
 	}
-	if ctx.Project == "dev-all" {
+	if nativeRuntimeConfigured(ctx) {
 		return nativeSyncTmux(ctx, sessName, namePrefix, cdPath, count)
 	}
 	if count <= 0 {
@@ -152,7 +152,7 @@ func handleAddCD(ctx *cmdregistry.Context) error {
 	if sessName == "" {
 		sessName = defaultSessionName(ctx.Project)
 	}
-	if ctx.Project == "dev-all" {
+	if nativeRuntimeConfigured(ctx) {
 		return nativeEnsureTmuxSessionWithWindow(ctx, sessName, idx, subpath, winName)
 	}
 	ensureTmuxSessionWithWindow(ctx.DryRun, ctx.Paths, ctx.Project, ctx.Files, sessName, idx, subpath, winName, service)
@@ -196,11 +196,11 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 			sessName = defaultSessionName(ctx.Project)
 		}
 	}
-	if nativeLayoutEligible(ctx.Project, lf) {
+	if nativeLayoutEligible(ctx, lf) {
 		return nativeApplyLayout(ctx, lf, sessName, doAttach)
 	}
-	if ctx.Project == "dev-all" {
-		return fmt.Errorf("tmux-apply-layout for dev-all only supports native dev-all layouts; use explicit legacy Compose workflows for mixed layouts")
+	if nativeRuntimeConfigured(ctx) {
+		return fmt.Errorf("tmux-apply-layout for flake-backed overlays only supports native single-overlay layouts; use explicit legacy Compose workflows for mixed layouts")
 	}
 	if layoutReferencesProject(lf, "dev-all") {
 		return fmt.Errorf("legacy tmux-apply-layout cannot target dev-all; use a native dev-all layout with -p dev-all")
@@ -347,20 +347,39 @@ func nativeEnsureTmuxSessionWithWindow(ctx *cmdregistry.Context, session, idx, s
 	return nil
 }
 
-func nativeLayoutEligible(defaultProject string, lf layout.File) bool {
+func nativeLayoutEligible(ctx *cmdregistry.Context, lf layout.File) bool {
+	if !nativeRuntimeConfigured(ctx) {
+		return false
+	}
+	defaultProject := strings.TrimSpace(ctx.Project)
 	for _, w := range lf.Windows {
 		winProj := strings.TrimSpace(w.Project)
 		if winProj == "" {
 			winProj = defaultProject
 		}
-		if winProj != "dev-all" {
+		if winProj != defaultProject {
 			return false
 		}
 		if svc := strings.TrimSpace(w.Service); svc != "" && svc != "dev-agent" {
 			return false
 		}
 	}
-	return strings.TrimSpace(defaultProject) == "dev-all"
+	for _, ov := range lf.Overlays {
+		proj := strings.TrimSpace(ov.Project)
+		if proj == "" {
+			proj = defaultProject
+		}
+		if proj != defaultProject {
+			return false
+		}
+		if svc := strings.TrimSpace(ov.Service); svc != "" && svc != "dev-agent" {
+			return false
+		}
+		if strings.TrimSpace(ov.ComposeProject) != "" || strings.TrimSpace(ov.Profiles) != "" || ov.Build || ov.Network != nil || len(ov.Env) > 0 {
+			return false
+		}
+	}
+	return defaultProject != ""
 }
 
 func layoutReferencesProject(lf layout.File, project string) bool {
@@ -429,9 +448,17 @@ func nativeWindowCommand(ctx *cmdregistry.Context, idx, dest string) (string, er
 }
 
 func nativeRepo(ctx *cmdregistry.Context) string {
-	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	return nativeRepoForProject(ctx, ctx.Project)
+}
+
+func nativeRepoForProject(ctx *cmdregistry.Context, project string) string {
+	project = strings.TrimSpace(project)
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project)
 	if err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
 		return strings.TrimSpace(cfg.Defaults.Repo)
+	}
+	if project != "" && project != "dev-all" {
+		return project
 	}
 	return "ouroboros-ide"
 }
@@ -522,7 +549,11 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 			})
 		} else {
 			if count <= 0 {
-				count = len(listServiceNames(ctx.Files, service))
+				if nativeRuntimeConfigured(ctx) {
+					count = nativeDefaultAgentCount(ctx, 0)
+				} else {
+					count = len(listServiceNames(ctx.Files, service))
+				}
 				if count == 0 {
 					return fmt.Errorf("no running %s containers found; use up/scale first or provide --count", service)
 				}
@@ -829,9 +860,14 @@ func shellSingleQuote(value string) string {
 func plainTabArgs(ctx *cmdregistry.Context, idx, cdPath string) []string {
 	project := detectPlainProject(ctx)
 	dest := strings.TrimSpace(cdPath)
-	if dest == "" && project == "dev-all" {
-		repo := defaultDevAllRepo(ctx)
-		dest = pth.AgentRepoPath(project, idx, repo)
+	isNative := project == "dev-all" || nativeRuntimeConfiguredForProject(ctx, project)
+	if dest == "" {
+		if project == "dev-all" {
+			repo := nativeRepoForProject(ctx, project)
+			dest = pth.AgentRepoPath(project, idx, repo)
+		} else if isNative {
+			dest = "."
+		}
 	}
 	exe := strings.TrimSpace(ctx.Exe)
 	if exe == "" {
@@ -845,7 +881,7 @@ func plainTabArgs(ctx *cmdregistry.Context, idx, cdPath string) []string {
 	if strings.TrimSpace(project) != "" {
 		args = append(args, "-p", project)
 	}
-	if strings.TrimSpace(ctx.ComposeProject) != "" && project != "dev-all" {
+	if strings.TrimSpace(ctx.ComposeProject) != "" && !isNative {
 		args = append(args, "--compose-project", ctx.ComposeProject)
 	}
 	if dest != "" {
@@ -856,12 +892,31 @@ func plainTabArgs(ctx *cmdregistry.Context, idx, cdPath string) []string {
 	return args
 }
 
-func defaultDevAllRepo(ctx *cmdregistry.Context) string {
-	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, "dev-all")
-	if err == nil && strings.TrimSpace(cfg.Defaults.Repo) != "" {
-		return strings.TrimSpace(cfg.Defaults.Repo)
+func nativeRuntimeConfigured(ctx *cmdregistry.Context) bool {
+	return nativeRuntimeConfiguredForProject(ctx, ctx.Project)
+}
+
+func nativeRuntimeConfiguredForProject(ctx *cmdregistry.Context, project string) bool {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return false
 	}
-	return "ouroboros-ide"
+	if project == "dev-all" {
+		return true
+	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, project)
+	return err == nil && config.HasRuntimeFlake(cfg)
+}
+
+func nativeDefaultAgentCount(ctx *cmdregistry.Context, fallback int) int {
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err == nil && cfg.Defaults.Agents > 0 {
+		return cfg.Defaults.Agents
+	}
+	if fallback < 1 {
+		return 0
+	}
+	return fallback
 }
 
 var detectPlainProject = func(ctx *cmdregistry.Context) string {
