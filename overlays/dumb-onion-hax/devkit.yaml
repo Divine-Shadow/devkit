@@ -11,6 +11,7 @@ runtime:
   core_check: sbt compile
   notes: Scala/SBT runtime for dumb-onion-hax.
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

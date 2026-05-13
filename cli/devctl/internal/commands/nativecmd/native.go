@@ -69,6 +69,8 @@ type planArgs struct {
 	dedicatedWorktrees bool
 	skipRepoChecks     bool
 	repoCheck          string
+	readinessMode      string
+	readinessModeSet   bool
 	command            []string
 }
 
@@ -94,6 +96,8 @@ type lifecycleArgs struct {
 	skipReady               bool
 	ready                   bool
 	skipRepoChecks          bool
+	readinessMode           string
+	readinessModeSet        bool
 	tailLines               int
 }
 
@@ -109,7 +113,7 @@ type topExecArgs struct {
 	command                 []string
 }
 
-func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error) {
+func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMode bool) (planArgs, error) {
 	opts := nativeplan.BuildOptions{
 		Paths:             ctx.Paths,
 		Project:           ctx.Project,
@@ -127,11 +131,31 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error
 			parsed.command = append([]string{}, ctx.Args[i+1:]...)
 			return parsed, nil
 		case "--repo":
-			if i+1 >= len(ctx.Args) {
+			if i+1 < len(ctx.Args) && !strings.HasPrefix(ctx.Args[i+1], "--") {
+				parsed.opts.Repo = ctx.Args[i+1]
+				i++
+				break
+			}
+			if !allowReadinessMode {
 				return parsed, fmt.Errorf("--repo requires a value")
 			}
-			parsed.opts.Repo = ctx.Args[i+1]
-			i++
+			if err := setPlanReadinessMode(&parsed, "--repo", config.ReadinessModeRepo); err != nil {
+				return parsed, err
+			}
+		case "--repo-readiness", "--full":
+			if !allowReadinessMode {
+				return parsed, fmt.Errorf("%s is only valid for native readiness and native capacity", ctx.Args[i])
+			}
+			if err := setPlanReadinessMode(&parsed, ctx.Args[i], config.ReadinessModeRepo); err != nil {
+				return parsed, err
+			}
+		case "--runtime-only":
+			if !allowReadinessMode {
+				return parsed, fmt.Errorf("--runtime-only is only valid for native readiness and native capacity")
+			}
+			if err := setPlanReadinessMode(&parsed, "--runtime-only", config.ReadinessModeRuntimeOnly); err != nil {
+				return parsed, err
+			}
 		case "--index":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--index requires a value")
@@ -188,7 +212,13 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error
 			parsed.dedicatedWorktrees = true
 			parsed.opts.DedicatedWorktree = true
 		case "--skip-repo-checks":
-			parsed.skipRepoChecks = true
+			if allowReadinessMode {
+				if err := setPlanReadinessMode(&parsed, "--skip-repo-checks", config.ReadinessModeRuntimeOnly); err != nil {
+					return parsed, err
+				}
+			} else {
+				parsed.skipRepoChecks = true
+			}
 		case "--repo-check":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--repo-check requires a value")
@@ -241,7 +271,67 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool) (planArgs, error
 			return parsed, fmt.Errorf("unknown native arg %s", ctx.Args[i])
 		}
 	}
+	if allowReadinessMode {
+		if err := applyPlanReadinessMode(&parsed); err != nil {
+			return parsed, err
+		}
+	}
 	return parsed, nil
+}
+
+func setPlanReadinessMode(parsed *planArgs, flag string, mode string) error {
+	return setReadinessMode(&parsed.readinessMode, &parsed.readinessModeSet, flag, mode)
+}
+
+func setLifecycleReadinessMode(parsed *lifecycleArgs, flag string, mode string) error {
+	return setReadinessMode(&parsed.readinessMode, &parsed.readinessModeSet, flag, mode)
+}
+
+func setReadinessMode(current *string, set *bool, flag string, mode string) error {
+	normalized, ok := config.NormalizeReadinessMode(mode)
+	if !ok {
+		return fmt.Errorf("unknown readiness mode %q", mode)
+	}
+	if *set && *current != normalized {
+		return fmt.Errorf("%s conflicts with readiness mode %s", flag, *current)
+	}
+	*current = normalized
+	*set = true
+	return nil
+}
+
+func applyPlanReadinessMode(parsed *planArgs) error {
+	if strings.TrimSpace(parsed.repoCheck) != "" {
+		if parsed.readinessModeSet && parsed.readinessMode == config.ReadinessModeRuntimeOnly {
+			return fmt.Errorf("--repo-check conflicts with runtime-only readiness")
+		}
+		parsed.readinessMode = config.ReadinessModeRepo
+		parsed.readinessModeSet = true
+	}
+	if !parsed.readinessModeSet {
+		parsed.readinessMode = config.ReadinessModeRepo
+	}
+	parsed.skipRepoChecks = parsed.readinessMode == config.ReadinessModeRuntimeOnly
+	return nil
+}
+
+func applyLifecycleReadinessMode(parsed *lifecycleArgs, cfg config.OverlayConfig) error {
+	if strings.TrimSpace(parsed.repoCheck) != "" {
+		if parsed.readinessModeSet && parsed.readinessMode == config.ReadinessModeRuntimeOnly {
+			return fmt.Errorf("--repo-check conflicts with runtime-only readiness")
+		}
+		parsed.readinessMode = config.ReadinessModeRepo
+		parsed.readinessModeSet = true
+	}
+	if !parsed.readinessModeSet {
+		mode, ok := config.NormalizeReadinessMode(cfg.Readiness.DefaultMode)
+		if !ok {
+			return fmt.Errorf("readiness.default_mode must be runtime-only or repo")
+		}
+		parsed.readinessMode = mode
+	}
+	parsed.skipRepoChecks = parsed.readinessMode == config.ReadinessModeRuntimeOnly
+	return nil
 }
 
 func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
@@ -249,11 +339,22 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 	for i := 0; i < len(ctx.Args); i++ {
 		switch ctx.Args[i] {
 		case "--repo":
-			if i+1 >= len(ctx.Args) {
-				return parsed, fmt.Errorf("--repo requires a value")
+			if i+1 < len(ctx.Args) && !strings.HasPrefix(ctx.Args[i+1], "--") {
+				parsed.repo = ctx.Args[i+1]
+				i++
+				break
 			}
-			parsed.repo = ctx.Args[i+1]
-			i++
+			if err := setLifecycleReadinessMode(&parsed, "--repo", config.ReadinessModeRepo); err != nil {
+				return parsed, err
+			}
+		case "--repo-readiness", "--full":
+			if err := setLifecycleReadinessMode(&parsed, ctx.Args[i], config.ReadinessModeRepo); err != nil {
+				return parsed, err
+			}
+		case "--runtime-only":
+			if err := setLifecycleReadinessMode(&parsed, "--runtime-only", config.ReadinessModeRuntimeOnly); err != nil {
+				return parsed, err
+			}
 		case "--flake":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--flake requires a value")
@@ -357,7 +458,9 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 		case "--ready":
 			parsed.ready = true
 		case "--skip-repo-checks":
-			parsed.skipRepoChecks = true
+			if err := setLifecycleReadinessMode(&parsed, "--skip-repo-checks", config.ReadinessModeRuntimeOnly); err != nil {
+				return parsed, err
+			}
 		case "--tail":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--tail requires a value")
@@ -381,16 +484,17 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 }
 
 type lifecycleStatus struct {
-	Command      string                   `json:"command"`
-	Runtime      string                   `json:"runtime"`
-	Repo         string                   `json:"repo,omitempty"`
-	Count        int                      `json:"count,omitempty"`
-	Broker       *runtimebroker.Status    `json:"broker,omitempty"`
-	Capacity     *capacity.Summary        `json:"capacity,omitempty"`
-	Agents       []preparedLifecycleAgent `json:"agents,omitempty"`
-	ManifestPath string                   `json:"manifest_path,omitempty"`
-	LogPath      string                   `json:"log_path,omitempty"`
-	Message      string                   `json:"message,omitempty"`
+	Command       string                   `json:"command"`
+	Runtime       string                   `json:"runtime"`
+	Repo          string                   `json:"repo,omitempty"`
+	Count         int                      `json:"count,omitempty"`
+	ReadinessMode string                   `json:"readiness_mode,omitempty"`
+	Broker        *runtimebroker.Status    `json:"broker,omitempty"`
+	Capacity      *capacity.Summary        `json:"capacity,omitempty"`
+	Agents        []preparedLifecycleAgent `json:"agents,omitempty"`
+	ManifestPath  string                   `json:"manifest_path,omitempty"`
+	LogPath       string                   `json:"log_path,omitempty"`
+	Message       string                   `json:"message,omitempty"`
 }
 
 type preparedLifecycleAgent struct {
@@ -434,7 +538,7 @@ func handleLifecycle(ctx *cmdregistry.Context, command string) error {
 
 func handleLifecycleScale(ctx *cmdregistry.Context) error {
 	if len(ctx.Args) == 0 {
-		return fmt.Errorf("Usage: scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]")
+		return fmt.Errorf("Usage: scale N [--repo REPO] [--broker-socket PATH] [--runtime-only|--repo-readiness] [--skip-ready]")
 	}
 	if strings.HasPrefix(ctx.Args[0], "--") {
 		return fmt.Errorf("scale requires a count")
@@ -456,8 +560,11 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := applyLifecycleReadinessMode(&parsed, cfg); err != nil {
+		return err
+	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
-	status := lifecycleStatus{Command: "ensure-ready", Runtime: "native", Repo: repo, Count: count}
+	status := lifecycleStatus{Command: "ensure-ready", Runtime: "native", Repo: repo, Count: count, ReadinessMode: parsed.readinessMode}
 	brokerCfg, brokerStatus, err := lifecycleEnsureReadyBroker(ctx, parsed, brokerCfg, runtimebroker.Start)
 	if err != nil {
 		return err
@@ -808,8 +915,13 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 	if err != nil {
 		return err
 	}
+	if !parsed.skipReady {
+		if err := applyLifecycleReadinessMode(&parsed, cfg); err != nil {
+			return err
+		}
+	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
-	status := lifecycleStatus{Command: command, Runtime: "native", Repo: repo, Count: count}
+	status := lifecycleStatus{Command: command, Runtime: "native", Repo: repo, Count: count, ReadinessMode: parsed.readinessMode}
 	if !parsed.skipBroker {
 		brokerStatus, err := runtimebroker.Start(context.Background(), brokerCfg, ctx.DryRun)
 		if err != nil {
@@ -917,6 +1029,10 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 	}
 	status := lifecycleStatus{Command: "status", Runtime: "native", Repo: repo, Count: count, Broker: &brokerStatus}
 	if lifecycleStatusRunsReadiness(parsed) {
+		if err := applyLifecycleReadinessMode(&parsed, cfg); err != nil {
+			return err
+		}
+		status.ReadinessMode = parsed.readinessMode
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
 		planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
@@ -1010,6 +1126,9 @@ func printLifecycleStatus(status lifecycleStatus, format string) error {
 		if status.Count > 0 {
 			fmt.Fprintf(os.Stdout, "count: %d\n", status.Count)
 		}
+		if status.ReadinessMode != "" {
+			fmt.Fprintf(os.Stdout, "readiness_mode: %s\n", status.ReadinessMode)
+		}
 		if status.Broker != nil {
 			fmt.Fprintf(os.Stdout, "broker_running: %t\n", status.Broker.Running)
 			fmt.Fprintf(os.Stdout, "broker_socket: %s\n", status.Broker.Socket)
@@ -1055,7 +1174,7 @@ func tailLines(text string, count int) []string {
 }
 
 func handlePlan(ctx *cmdregistry.Context) error {
-	parsed, err := parsePlanArgs(ctx, false)
+	parsed, err := parsePlanArgs(ctx, false, false)
 	if err != nil {
 		return err
 	}
@@ -1096,7 +1215,7 @@ func handlePlan(ctx *cmdregistry.Context) error {
 }
 
 func handlePrepare(ctx *cmdregistry.Context) error {
-	parsed, err := parsePlanArgs(ctx, false)
+	parsed, err := parsePlanArgs(ctx, false, false)
 	if err != nil {
 		return err
 	}
@@ -1219,7 +1338,7 @@ func handleShell(ctx *cmdregistry.Context) error {
 }
 
 func handleExec(ctx *cmdregistry.Context) error {
-	parsed, err := parsePlanArgs(ctx, true)
+	parsed, err := parsePlanArgs(ctx, true, false)
 	if err != nil {
 		return err
 	}
@@ -1288,7 +1407,7 @@ func exitCodeFromError(err error) (int, bool) {
 }
 
 func handleReadiness(ctx *cmdregistry.Context) error {
-	parsed, err := parsePlanArgs(ctx, false)
+	parsed, err := parsePlanArgs(ctx, false, true)
 	if err != nil {
 		return err
 	}
@@ -1311,11 +1430,13 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	switch parsed.format {
 	case "", "json":
 		data, err := json.MarshalIndent(struct {
+			ReadinessMode     string            `json:"readiness_mode"`
 			RuntimeReady      bool              `json:"runtime_ready"`
 			RepoReady         bool              `json:"repo_ready"`
 			CapacityAvailable bool              `json:"capacity_available"`
 			Checks            []readiness.Check `json:"checks"`
 		}{
+			ReadinessMode:     parsed.readinessMode,
 			RuntimeReady:      report.RuntimeReady(),
 			RepoReady:         report.RepoReady(),
 			CapacityAvailable: report.CapacityAvailable(),
@@ -1326,6 +1447,7 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 		}
 		fmt.Fprintln(os.Stdout, string(data))
 	case "text":
+		fmt.Fprintf(os.Stdout, "readiness_mode: %s\n", parsed.readinessMode)
 		fmt.Fprintf(os.Stdout, "runtime_ready: %t\n", report.RuntimeReady())
 		fmt.Fprintf(os.Stdout, "repo_ready: %t\n", report.RepoReady())
 		fmt.Fprintf(os.Stdout, "capacity_available: %t\n", report.CapacityAvailable())
@@ -1342,11 +1464,14 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if !report.RuntimeReady() {
 		return fmt.Errorf("native runtime is not ready")
 	}
+	if !parsed.skipRepoChecks && !report.RepoReady() {
+		return fmt.Errorf("native repo readiness is not fully available")
+	}
 	return nil
 }
 
 func handleCapacity(ctx *cmdregistry.Context) error {
-	parsed, err := parsePlanArgs(ctx, false)
+	parsed, err := parsePlanArgs(ctx, false, true)
 	if err != nil {
 		return err
 	}

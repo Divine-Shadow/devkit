@@ -16,6 +16,7 @@ runtime:
     (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")
   notes: Integration runtime with the Ouroboros Scala toolchain plus Terraform/AWS tooling and dedicated integration worktrees mounted read-write.
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

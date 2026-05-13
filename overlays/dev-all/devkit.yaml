@@ -7,7 +7,7 @@ defaults:
   base_branch: main
   # Prefix for per-agent branch names (agent1, agent2, ...)
   branch_prefix: agent
-  # Run native runtime and repo readiness after up/restart/scale.
+  # Run native readiness after up/restart/scale.
   auto_ready: true
   # Warm hook is required for readiness.
   require_warm: true
@@ -17,6 +17,7 @@ runtime:
   core_check: bash scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

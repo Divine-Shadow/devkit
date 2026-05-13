@@ -42,6 +42,8 @@ defaults:
   agents: 2
 runtime:
   flake: .#dev-all
+readiness:
+  default_mode: runtime-only
 native:
   worktree_root: ../agent-worktrees
   state_root: ../.devkit/native-agents
@@ -77,6 +79,8 @@ defaults:
   branch_prefix: agent
 runtime:
   flake: `+flake+`
+readiness:
+  default_mode: runtime-only
 hooks:
   warm: echo warm-native
   maintain: echo maintain-native
@@ -304,8 +308,8 @@ windows:
 		{name: "creds", args: []string{"creds", "reseed-all"}, want: "seed codex auth"},
 		{name: "codex-test", args: []string{"codex-test"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "codex-debug", args: []string{"codex-debug"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
-		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
-		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
+		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1 --repo-readiness"},
+		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1 --runtime-only"},
 		{name: "exec-cd", args: []string{"exec-cd", "1", ".", "echo", "hi"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "attach-cd", args: []string{"attach-cd", "1", "."}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "layout-apply", args: []string{"layout-apply", "--file", layoutPath}, want: " -p " + project + " up --repo " + repo + " --count 1"},
@@ -385,9 +389,9 @@ func TestFlakeBackedReadinessCommandsAvoidComposeDryRun(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "ensure-ready", args: []string{"ensure-ready"}, want: "runtime: native"},
-		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
-		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
+		{name: "ensure-ready", args: []string{"ensure-ready"}, want: "readiness_mode: runtime-only"},
+		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1 --repo-readiness"},
+		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1 --runtime-only"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -403,6 +407,24 @@ func TestFlakeBackedReadinessCommandsAvoidComposeDryRun(t *testing.T) {
 				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
 			}
 		})
+	}
+}
+
+func TestFlakeBackedLifecycleUsesReadinessDefaultDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+
+	for _, args := range [][]string{{"up"}, {"scale", "1"}} {
+		out, err := runProjectDryRun(t, bin, root, project, args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		assertNoDockerCommand(t, out)
+		if !strings.Contains(out, "readiness_mode: runtime-only") {
+			t.Fatalf("%v did not use overlay readiness default:\n%s", args, out)
+		}
 	}
 }
 

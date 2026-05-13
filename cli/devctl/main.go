@@ -954,8 +954,8 @@ Commands:
   up, down, restart, status [--ready], logs   (native for overlays with runtime.flake)
   compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for flake-backed overlays)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
-  scale N [--repo REPO] [--broker-socket PATH] [--skip-ready]
-  ensure-ready [--count N] [--repo REPO] [--broker-socket PATH] [--skip-broker]
+  scale N [--repo REPO] [--broker-socket PATH] [--runtime-only|--repo-readiness] [--skip-ready]
+  ensure-ready [--count N] [--repo REPO] [--runtime-only|--repo-readiness] [--broker-socket PATH] [--skip-broker]
   exec <n> <cmd...>, attach <n>              (native for overlays with runtime.flake)
   codex-auth reseed <n> [--service NAME]
   codex-auth reseed-all [indexes...] [--service NAME]
@@ -973,8 +973,8 @@ Commands:
   native plan --repo REPO [--index N] [--flake REF] [--launcher bubblewrap|systemd-run] [--format text|json]
   native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX] [--format text|json]
   native exec --repo REPO [--index N] [--flake REF] [--dry-run] [-- COMMAND...]
-  native readiness --repo REPO [--index N] [--flake REF] [--repo-check CMD] [--format text|json]
-  native capacity --repo REPO [--count N] [--flake REF] [--format text|json]
+  native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
+  native capacity --repo REPO [--count N] [--flake REF] [--runtime-only|--repo-readiness] [--format text|json]
   layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]
@@ -2134,7 +2134,7 @@ func main() {
 		if isNativeRuntime {
 			repo := readDefaultRepo(project, paths)
 			count := nativeDefaultAgentCount(paths, project, 1)
-			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count), "--runtime-only")
 			break
 		}
 		if os.Getenv("DEVKIT_ENABLE_RUNTIME_CONFIG") != "1" {
@@ -2180,7 +2180,7 @@ func main() {
 		if isNativeRuntime {
 			repo := readDefaultRepo(project, paths)
 			count := nativeDefaultAgentCount(paths, project, 1)
-			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count), "--repo-readiness")
 			fmt.Println("verify completed")
 			break
 		}

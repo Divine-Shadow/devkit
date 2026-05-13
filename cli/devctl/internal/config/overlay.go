@@ -66,8 +66,27 @@ type RuntimeCheck struct {
 }
 
 type Readiness struct {
+	DefaultMode   string         `yaml:"default_mode"`
 	RuntimeChecks []RuntimeCheck `yaml:"runtime_checks"`
 	RepoChecks    []RepoCheck    `yaml:"repo_checks"`
+}
+
+const (
+	ReadinessModeRuntimeOnly = "runtime-only"
+	ReadinessModeRepo        = "repo"
+)
+
+func NormalizeReadinessMode(value string) (string, bool) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "":
+		return ReadinessModeRepo, true
+	case "runtime", "runtime-only", "runtime_only":
+		return ReadinessModeRuntimeOnly, true
+	case "repo", "repo-readiness", "full":
+		return ReadinessModeRepo, true
+	default:
+		return "", false
+	}
 }
 
 type Native struct {

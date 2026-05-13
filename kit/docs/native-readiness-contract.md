@@ -16,6 +16,12 @@ native flake and for explicit legacy Compose workflows.
   version, and overlay toolchain are present.
 - Repo checks prove repository-specific readiness. These checks may be slower or
   stateful and are intentionally separate from runtime capacity.
+- Every flake-backed overlay declares `readiness.default_mode`. The current
+  overlay contract sets that default to `runtime-only`, so lifecycle capacity
+  recovery does not run app builds or package-manager checks unless requested.
+- Use `--runtime-only` to force runtime checks and `--repo-readiness` or
+  `--full` to force repo checks. A bare trailing `--repo` is accepted as a
+  full-readiness alias when it is not followed by a repo name.
 - Explicit `compose ...` remains the legacy escape hatch for overlays that still
   need Compose semantics.
 
@@ -62,9 +68,13 @@ visible and named.
 
 Runtime checks should be fast and safe to run after native lifecycle commands.
 Repo checks may compile code, run package manager commands, start local dev
-servers, or validate cloud configuration. Use `--skip-repo-checks` when only
-runtime capacity is needed, and use `--skip-ready` on lifecycle commands when
-recovering capacity before repo validation is practical.
+servers, or validate cloud configuration. Lifecycle commands `up`, `restart`,
+and `scale` use overlay `readiness.default_mode`; the declared flake-backed
+default is `runtime-only`. Use `verify`, `ensure-ready --repo-readiness`, or
+`native readiness --repo-readiness` when app-level repo validation should be
+part of the gate. `--skip-repo-checks` remains as a compatibility alias for
+runtime-only readiness, and `--skip-ready` remains the capacity recovery escape
+hatch when readiness should not run at all.
 
 Broker policy create/delete smokes remain in `kit/scripts/native-runtime-smoke`;
 default readiness proves broker connectivity but does not create containers.
@@ -76,6 +86,7 @@ The readiness contract is covered by:
 - `go test -count=1 ./...`
 - `kit/scripts/devkit --dry-run -p <flake-overlay> verify`
 - `kit/scripts/devkit --dry-run -p <flake-overlay> doctor-runtime`
-- `kit/scripts/devkit --dry-run -p <flake-overlay> ensure-ready`
+- `kit/scripts/devkit --dry-run -p <flake-overlay> ensure-ready --runtime-only`
+- `kit/scripts/devkit --dry-run -p <flake-overlay> ensure-ready --repo-readiness`
 - `kit/scripts/devkit image-matrix --all --check`
 - `make overlay-runtime-smoke`

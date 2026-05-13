@@ -276,7 +276,8 @@ canonical `devkit` entrypoint:
   It defaults to `native-agent<N>` branch names so it does not collide with
   legacy Compose worktrees that may still have `agent<N>` checked out.
 - `devkit native readiness` can load repo checks from overlay config, falling
-  back to the existing warm hook and `runtime.core_check`.
+  back to the existing warm hook and `runtime.core_check`, and supports
+  `--runtime-only` versus `--repo-readiness` mode selection.
 - `devkit native capacity` reports runtime capacity separately from repo
   readiness, so repo check failures remain visible and retryable without hiding
   launchable agents.

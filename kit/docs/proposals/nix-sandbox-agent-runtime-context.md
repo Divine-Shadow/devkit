@@ -81,8 +81,10 @@ Important starting gaps and current disposition:
 - Runtime metadata: closed for `dev-all`; `overlays/dev-all/devkit.yaml`
   declares `runtime.flake: .#dev-all` and native state/worktree roots.
 - Readiness split: closed for `dev-all`; runtime capacity is separate
-  from repo readiness, while top-level `ensure-ready` and non-skipped lifecycle
-  readiness still fail on repo-check failures so app readiness is not hidden.
+  from repo readiness. Flake-backed overlays declare
+  `readiness.default_mode: runtime-only`; `verify` and explicit
+  `--repo-readiness` runs still fail on repo-check failures so app readiness is
+  not hidden.
 - Host-managed services: broker is implemented and verified; proxy/DNS policy is
   represented in native plans. Ingress/operator-attention remains the main
   service evidence area before broader Compose retirement.

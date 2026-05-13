@@ -11,6 +11,7 @@ runtime:
   core_check: make modern
   notes: GBA build workspace; current warm hook is intentionally no-op.
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

@@ -140,7 +140,7 @@ func TestParseLifecycleArgs(t *testing.T) {
 		"--allow-image", "postgres:15",
 		"--no-allow-pulls",
 		"--ready",
-		"--skip-repo-checks",
+		"--runtime-only",
 		"--format", "json",
 	}})
 	if err != nil {
@@ -158,8 +158,82 @@ func TestParseLifecycleArgs(t *testing.T) {
 	if parsed.brokerAllowPulls == nil || *parsed.brokerAllowPulls != allowPulls {
 		t.Fatalf("allow pulls = %#v", parsed.brokerAllowPulls)
 	}
-	if !parsed.ready || !parsed.skipRepoChecks || parsed.format != "json" {
+	if !parsed.ready || parsed.readinessMode != config.ReadinessModeRuntimeOnly || !parsed.readinessModeSet || parsed.format != "json" {
 		t.Fatalf("parsed = %#v", parsed)
+	}
+}
+
+func TestParsePlanReadinessModeFlags(t *testing.T) {
+	parsed, err := parsePlanArgs(&cmdregistry.Context{Args: []string{"readiness", "--runtime-only"}}, false, true)
+	if err != nil {
+		t.Fatalf("parsePlanArgs runtime-only: %v", err)
+	}
+	if parsed.readinessMode != config.ReadinessModeRuntimeOnly || !parsed.skipRepoChecks {
+		t.Fatalf("runtime-only parsed = %#v", parsed)
+	}
+	parsed, err = parsePlanArgs(&cmdregistry.Context{Args: []string{"readiness", "--repo", "ouroboros-ide", "--repo-readiness"}}, false, true)
+	if err != nil {
+		t.Fatalf("parsePlanArgs repo-readiness: %v", err)
+	}
+	if parsed.opts.Repo != "ouroboros-ide" || parsed.readinessMode != config.ReadinessModeRepo || parsed.skipRepoChecks {
+		t.Fatalf("repo-readiness parsed = %#v", parsed)
+	}
+	parsed, err = parsePlanArgs(&cmdregistry.Context{Args: []string{"readiness", "--repo"}}, false, true)
+	if err != nil {
+		t.Fatalf("parsePlanArgs bare repo mode: %v", err)
+	}
+	if parsed.readinessMode != config.ReadinessModeRepo || parsed.skipRepoChecks {
+		t.Fatalf("bare repo mode parsed = %#v", parsed)
+	}
+}
+
+func TestParseReadinessModeConflicts(t *testing.T) {
+	if _, err := parsePlanArgs(&cmdregistry.Context{Args: []string{"readiness", "--runtime-only", "--repo-readiness"}}, false, true); err == nil {
+		t.Fatalf("expected runtime-only/repo-readiness conflict")
+	}
+	if _, err := parsePlanArgs(&cmdregistry.Context{Args: []string{"readiness", "--runtime-only", "--repo-check", "echo ok"}}, false, true); err == nil {
+		t.Fatalf("expected runtime-only/repo-check conflict")
+	}
+	if _, err := parseLifecycleArgs(&cmdregistry.Context{Args: []string{"--runtime-only", "--repo-readiness"}}); err == nil {
+		t.Fatalf("expected lifecycle mode conflict")
+	}
+}
+
+func TestApplyLifecycleReadinessModeUsesOverlayDefault(t *testing.T) {
+	parsed := lifecycleArgs{}
+	if err := applyLifecycleReadinessMode(&parsed, config.OverlayConfig{
+		Readiness: config.Readiness{DefaultMode: config.ReadinessModeRuntimeOnly},
+	}); err != nil {
+		t.Fatalf("applyLifecycleReadinessMode: %v", err)
+	}
+	if parsed.readinessMode != config.ReadinessModeRuntimeOnly || !parsed.skipRepoChecks {
+		t.Fatalf("runtime default parsed = %#v", parsed)
+	}
+	parsed = lifecycleArgs{}
+	if err := applyLifecycleReadinessMode(&parsed, config.OverlayConfig{
+		Readiness: config.Readiness{DefaultMode: config.ReadinessModeRepo},
+	}); err != nil {
+		t.Fatalf("applyLifecycleReadinessMode repo: %v", err)
+	}
+	if parsed.readinessMode != config.ReadinessModeRepo || parsed.skipRepoChecks {
+		t.Fatalf("repo default parsed = %#v", parsed)
+	}
+}
+
+func TestApplyLifecycleReadinessModeRejectsInvalidDefault(t *testing.T) {
+	err := applyLifecycleReadinessMode(&lifecycleArgs{}, config.OverlayConfig{
+		Readiness: config.Readiness{DefaultMode: "sometimes"},
+	})
+	if err == nil || err.Error() != "readiness.default_mode must be runtime-only or repo" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestApplyLifecycleReadinessModeRejectsRepoCheckWithRuntimeOnly(t *testing.T) {
+	parsed := lifecycleArgs{repoCheck: "echo ok", readinessMode: config.ReadinessModeRuntimeOnly, readinessModeSet: true}
+	err := applyLifecycleReadinessMode(&parsed, config.OverlayConfig{})
+	if err == nil || err.Error() != "--repo-check conflicts with runtime-only readiness" {
+		t.Fatalf("err = %v", err)
 	}
 }
 

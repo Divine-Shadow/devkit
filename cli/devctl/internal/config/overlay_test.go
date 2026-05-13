@@ -72,6 +72,7 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"    - postgres:latest\n" +
 		"  allow_pulls: true\n" +
 		"readiness:\n" +
+		"  default_mode: runtime-only\n" +
 		"  runtime_checks:\n" +
 		"    - name: tools\n" +
 		"      command: command -v spago\n" +
@@ -103,6 +104,9 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if len(cfg.Readiness.RepoChecks) != 1 || cfg.Readiness.RepoChecks[0].Name != "typecheck" || cfg.Readiness.RepoChecks[0].Command != "npm test" {
 		t.Fatalf("repo checks = %#v", cfg.Readiness.RepoChecks)
+	}
+	if cfg.Readiness.DefaultMode != "runtime-only" {
+		t.Fatalf("default mode = %q", cfg.Readiness.DefaultMode)
 	}
 	if len(cfg.Readiness.RuntimeChecks) != 1 || cfg.Readiness.RuntimeChecks[0].Name != "tools" || cfg.Readiness.RuntimeChecks[0].Command != "command -v spago" {
 		t.Fatalf("runtime checks = %#v", cfg.Readiness.RuntimeChecks)

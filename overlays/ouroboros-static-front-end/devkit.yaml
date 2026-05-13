@@ -11,6 +11,7 @@ runtime:
   core_check: npm run build
   notes: Node/Gatsby image for the standalone static front end.
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

@@ -13,6 +13,7 @@ runtime:
   codex_version: 0.130.0
   core_check: scripts/sbt2 "Compile / compile"
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

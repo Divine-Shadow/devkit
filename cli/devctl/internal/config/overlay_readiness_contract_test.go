@@ -43,6 +43,9 @@ func TestFlakeBackedOverlaysDeclareReadinessContract(t *testing.T) {
 			if len(cfg.Readiness.RepoChecks) == 0 {
 				t.Fatalf("%s missing readiness.repo_checks", overlay)
 			}
+			if mode, ok := NormalizeReadinessMode(cfg.Readiness.DefaultMode); !ok || mode != ReadinessModeRuntimeOnly {
+				t.Fatalf("%s readiness.default_mode = %q", overlay, cfg.Readiness.DefaultMode)
+			}
 			if !hasRuntimeCheck(cfg, "required-tools") {
 				t.Fatalf("%s missing required-tools runtime check", overlay)
 			}

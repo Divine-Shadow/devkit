@@ -11,6 +11,7 @@ runtime:
   core_check: terraform fmt -check -recursive
   notes: AWS/HashiCorp runtime for Terraform maintenance.
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |

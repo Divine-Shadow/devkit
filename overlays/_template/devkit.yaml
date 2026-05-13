@@ -15,6 +15,7 @@ runtime:
   notes: Template Nix runtime for new overlays.
 
 readiness:
+  default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |
