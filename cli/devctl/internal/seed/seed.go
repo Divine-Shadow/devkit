@@ -117,7 +117,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
-			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
+			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
 			"'}' > \"$target/.zshrc\"",
 	}
 	if cfg.SeedCodex {
@@ -176,7 +176,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
-			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" /usr/local/bin/codex \"${extra[@]}\" \"$@\"' " +
+			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
 			"'}' > \"$home/.zshrc\"",
 	}
 	if seedCodex {
