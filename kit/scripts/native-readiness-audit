@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
+DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+
+REPO="${DEVKIT_NATIVE_READINESS_REPO:-ouroboros-ide}"
+DEV_ALL_FLAKE="${DEVKIT_NATIVE_READINESS_DEV_ALL_FLAKE:-./overlays/dev-all#default}"
+CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.3-codex-spark}"
+CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-replay with 'Ok'}"
+GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-/workspaces/dev/ouroboros-ide/tools/subagent-governance/subagent-governance.jar}"
+BACKEND_MAIN="${DEVKIT_NATIVE_READINESS_BACKEND_MAIN:-com.crib.bills.ouroboros.apps.StartWebServerInMemoryLocal}"
+
+fail() {
+  echo "native-readiness-audit: $*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n== %s ==\n' "$*"
+}
+
+grep_required() {
+  local pattern="$1"
+  local file="$2"
+  grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+wait_for_socket() {
+  local socket="$1"
+  local pid="$2"
+  local log="$3"
+  for _ in $(seq 1 50); do
+    [[ -S "$socket" ]] && return 0
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      cat "$log" >&2 || true
+      fail "process $pid exited before creating $socket"
+    fi
+    sleep 0.1
+  done
+  cat "$log" >&2 || true
+  fail "timed out waiting for $socket"
+}
+
+generated_zshrc_files() {
+  shopt -s nullglob
+  local files=(
+    "$DEV_ROOT"/.devhomes/*/.zshrc
+    "$DEV_ROOT"/agent-worktrees/*/.devhome*/.zshrc
+    "$DEV_ROOT"/agent-worktrees/*/.devhomes/*/.zshrc
+    "$DEV_ROOT"/.devkit/native-agents/*/home/.zshrc
+  )
+  ((${#files[@]} > 0)) || return 0
+  printf '%s\0' "${files[@]}"
+}
+
+repair_live_codex_wrappers() {
+  while IFS= read -r -d '' file; do
+    if grep -q "/usr/local/bin/codex" "$file"; then
+      sed -i 's#/usr/local/bin/codex#command codex#g' "$file"
+    fi
+    if grep -q "codexw" "$file"; then
+      sed -i \
+        -e 's#^alias codex=codexw$#unalias codex 2>/dev/null || true#' \
+        -e "s#^alias codex='codexw'\$#unalias codex 2>/dev/null || true#" \
+        -e 's#^alias codex="codexw"$#unalias codex 2>/dev/null || true#' \
+        "$file"
+    fi
+  done < <(generated_zshrc_files)
+  return 0
+}
+
+guard_native_shells() {
+  local source_guard_files=(
+    "$DEVKIT_ROOT/cli/devctl/internal/seed/seed.go"
+    "$DEVKIT_ROOT/cli/devctl/internal/agentexec/agentexec.go"
+    "$DEVKIT_ROOT/cli/devctl/internal/runtime/launch/launch.go"
+    "$DEVKIT_ROOT/cli/devctl/internal/commands/nativecmd/native.go"
+  )
+  if grep -nE '/usr/local/bin/codex|codexw' "${source_guard_files[@]}"; then
+    fail "native shell sources contain stale Codex image path assumptions"
+  fi
+
+  if generated_zshrc_files | xargs -0 -r grep -nE '/usr/local/bin/codex|codexw'; then
+    fail "live generated zshrc contains stale Codex image path assumptions"
+  fi
+  return 0
+}
+
+audit_dir="$(mktemp -d /tmp/devkit-native-readiness.XXXXXX)"
+broker_sock="$audit_dir/broker.sock"
+broker_state="$audit_dir/broker-state"
+egress_sock="$audit_dir/egress.sock"
+egress_log="$audit_dir/egress.log"
+egress_pid=""
+
+cleanup() {
+  set +e
+  if [[ -n "$egress_pid" ]]; then
+    kill "$egress_pid" >/dev/null 2>&1 || true
+  fi
+  "$DEVKIT" -p dev-all down --repo "$REPO" --count 2 \
+    --flake "$DEV_ALL_FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --format json >/dev/null 2>&1 || true
+  rm -rf "$audit_dir"
+}
+trap cleanup EXIT
+
+step "native generated shell static guard"
+repair_live_codex_wrappers
+guard_native_shells
+
+step "start native egress proxy"
+"$DEVKIT" -p dev-all native egress-proxy \
+  --socket "$egress_sock" \
+  --allowlist "$DEVKIT_ROOT/kit/proxy/allowlist.txt" \
+  >"$egress_log" 2>&1 &
+egress_pid=$!
+wait_for_socket "$egress_sock" "$egress_pid" "$egress_log"
+
+step "launch two native ouroboros agents"
+"$DEVKIT" -p dev-all up --repo "$REPO" --count 2 \
+  --flake "$DEV_ALL_FLAKE" \
+  --broker-socket "$broker_sock" \
+  --broker-state-root "$broker_state" \
+  --skip-ready --format json \
+  | tee "$audit_dir/up.json"
+grep_required '"runtime": "native"' "$audit_dir/up.json"
+grep_required '"count": 2' "$audit_dir/up.json"
+grep_required '"running": true' "$audit_dir/up.json"
+
+step "confirm two-agent native status"
+"$DEVKIT" -p dev-all status --repo "$REPO" --count 2 \
+  --flake "$DEV_ALL_FLAKE" \
+  --broker-socket "$broker_sock" \
+  --broker-state-root "$broker_state" \
+  --format json \
+  | tee "$audit_dir/status.json"
+grep_required '"command": "status"' "$audit_dir/status.json"
+grep_required '"count": 2' "$audit_dir/status.json"
+grep_required '"running": true' "$audit_dir/status.json"
+
+read -r -d '' egress_exec <<'EOF' || true
+set -euo pipefail
+test "${DEVKIT_NATIVE_AGENT:-}" = 1
+test "${HTTP_PROXY:-}" = "http://127.0.0.1:18888"
+test "${HTTPS_PROXY:-}" = "http://127.0.0.1:18888"
+
+allowed_connect="$(curl -k -sS -o /tmp/devkit-egress-allowed.out -w "%{http_connect}" --connect-timeout 10 --max-time 20 https://api.openai.com || true)"
+echo "allowed_connect=$allowed_connect"
+test "$allowed_connect" = 200
+
+blocked_connect="$(curl -k -sS -o /tmp/devkit-egress-blocked.out -w "%{http_connect}" --connect-timeout 10 --max-time 20 https://blocked.invalid || true)"
+echo "blocked_connect=$blocked_connect"
+test "$blocked_connect" = 403
+
+direct_status="$(
+  env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
+    curl -k -sS -o /tmp/devkit-egress-direct.out -w "%{http_code}" --connect-timeout 3 --max-time 6 https://blocked.invalid || true
+)"
+echo "direct_status=$direct_status"
+test "$direct_status" = 000
+
+echo "native-egress-policy-ok"
+EOF
+
+step "egress allow-list enforcement"
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
+  --broker-socket "$broker_sock" --proxy-socket "$egress_sock" -- \
+  bash -lc "$egress_exec" \
+  2>&1 | tee "$audit_dir/egress.txt"
+grep_required "allowed_connect=200" "$audit_dir/egress.txt"
+grep_required "blocked_connect=403" "$audit_dir/egress.txt"
+grep_required "direct_status=000" "$audit_dir/egress.txt"
+grep_required "native-egress-policy-ok" "$audit_dir/egress.txt"
+
+read -r -d '' governance_exec <<'EOF' || true
+set -euo pipefail
+idx="${DEVKIT_NATIVE_AUDIT_AGENT_INDEX:?}"
+port=$((17880 + idx))
+workspace_id="devkit-audit-agent${idx}"
+state_dir="/tmp/devkit-governance-audit-agent${idx}"
+attestation="/tmp/devkit-governance-audit-agent${idx}.attestation"
+repo_config="/tmp/devkit-missing-repo-config-agent${idx}.json"
+
+rm -rf "$state_dir"
+mkdir -p "$state_dir"
+printf 'devkit native readiness audit fallback for agent %s\n' "$idx" > "$attestation"
+
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_BIND=127.0.0.1
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_PORT="$port"
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL="http://127.0.0.1:${port}"
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR="$state_dir"
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_FALLBACK_ATTESTATION="$attestation"
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_FALLBACK_TTL_SECONDS=300
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_WARM_STABILITY_SECONDS=2
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_WARM_STABILITY_POLL_SECONDS=1
+export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:?}"
+export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:?}"
+export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH="$repo_config"
+export SUBAGENT_GOVERNANCE_WORKSPACE_ID="$workspace_id"
+export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS="$workspace_id"
+export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS="${workspace_id}=${PWD}"
+
+cleanup_governance() {
+  scripts/devops/governance-control-plane stop >/dev/null 2>&1 || true
+  rm -rf "$state_dir" "$attestation"
+}
+trap cleanup_governance EXIT
+
+test -s "$SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR"
+scripts/devops/governance-control-plane warm | tee "/tmp/devkit-governance-warm-agent${idx}.txt"
+scripts/devops/governance-mcp-stdio-smoke --json | tee "/tmp/devkit-governance-stdio-agent${idx}.json"
+grep -q '"ok": true' "/tmp/devkit-governance-stdio-agent${idx}.json"
+echo "governance_agent_${idx}_ok"
+EOF
+
+step "parallel governance warm"
+governance_pids=()
+for idx in 1 2; do
+  "$DEVKIT" -p dev-all exec "$idx" --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
+    --broker-socket "$broker_sock" --proxy-socket "$egress_sock" -- \
+    env "DEVKIT_NATIVE_AUDIT_AGENT_INDEX=$idx" \
+      "DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR=$GOVERNANCE_JAR" \
+      bash -lc "$governance_exec" \
+    >"$audit_dir/governance-agent${idx}.txt" 2>&1 &
+  governance_pids+=("$!")
+done
+for pid in "${governance_pids[@]}"; do
+  wait "$pid"
+done
+for idx in 1 2; do
+  cat "$audit_dir/governance-agent${idx}.txt"
+  grep_required "healthy+stable at http://127.0.0.1:$((17880 + idx))" "$audit_dir/governance-agent${idx}.txt"
+  grep_required "\"ok\": true" "$audit_dir/governance-agent${idx}.txt"
+  grep_required "governance_agent_${idx}_ok" "$audit_dir/governance-agent${idx}.txt"
+done
+
+read -r -d '' codex_exec <<'EOF' || true
+set -euo pipefail
+idx="${DEVKIT_NATIVE_AUDIT_AGENT_INDEX:?}"
+model="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-}"
+config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+mkdir -p "$(dirname "$config")"
+if [[ -n "$model" ]]; then
+  if [[ -f "$config" ]]; then
+    tmp="$(mktemp)"
+    awk -v model="$model" '
+      BEGIN { written = 0 }
+      /^model[[:space:]]*=/ {
+        if (!written) {
+          print "model = \"" model "\""
+          written = 1
+        }
+        next
+      }
+      { print }
+      END {
+        if (!written) {
+          print "model = \"" model "\""
+        }
+      }
+    ' "$config" > "$tmp"
+    mv "$tmp" "$config"
+  else
+    printf 'model = "%s"\n' "$model" > "$config"
+  fi
+fi
+
+zsh -ic 'type codex; codex --version'
+codex exec "replay with 'Ok'"
+echo "codex_agent_${idx}_ok"
+EOF
+
+step "exact Codex command on both agents"
+for idx in 1 2; do
+  "$DEVKIT" -p dev-all exec "$idx" --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
+    --broker-socket "$broker_sock" --proxy-socket "$egress_sock" -- \
+    env "DEVKIT_NATIVE_AUDIT_AGENT_INDEX=$idx" \
+      "DEVKIT_NATIVE_READINESS_CODEX_MODEL=$CODEX_MODEL" \
+      bash -lc "$codex_exec" \
+    2>&1 | tee "$audit_dir/codex-agent${idx}.txt"
+  grep_required "codex-cli 0.130.0" "$audit_dir/codex-agent${idx}.txt"
+  grep_required "model: $CODEX_MODEL" "$audit_dir/codex-agent${idx}.txt"
+  grep_required "codex_agent_${idx}_ok" "$audit_dir/codex-agent${idx}.txt"
+done
+
+read -r -d '' backend_build_exec <<'EOF' || true
+set -euo pipefail
+scripts/sbt2 "project backend" "assembly"
+jar="$(
+  find target/out/jvm -path '*/backend/backend-*.jar' -type f -printf '%T@ %p\n' \
+    | sort -n \
+    | tail -1 \
+    | cut -d' ' -f2-
+)"
+test -n "$jar"
+test -s "$jar"
+cp -f "$jar" target/devkit-backend.jar
+test -s target/devkit-backend.jar
+printf 'backend_jar=%s\n' "$jar"
+printf 'backend_jar_size=%s\n' "$(wc -c < target/devkit-backend.jar)"
+EOF
+
+step "assemble backend jar inside native sandbox"
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
+  --broker-socket "$broker_sock" -- \
+  bash -lc "$backend_build_exec" \
+  2>&1 | tee "$audit_dir/backend-build.txt"
+grep_required "backend_jar=" "$audit_dir/backend-build.txt"
+grep_required "backend_jar_size=" "$audit_dir/backend-build.txt"
+
+read -r -d '' backend_launch_exec <<'EOF' || true
+set -euo pipefail
+test -s target/devkit-backend.jar
+log="$(mktemp /tmp/devkit-backend-audit.XXXXXX.log)"
+pid=""
+cleanup_backend() {
+  if [[ -n "$pid" ]]; then
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$log"
+}
+trap cleanup_backend EXIT
+
+PAYMENT_PROVIDER=square-mock \
+OPEN_AI_API_KEY=placeholder-openai-key \
+PASSWORD_RESET_SENDER_EMAIL=noreply@example.test \
+PASSWORD_RESET_LINK_BASE_URL=http://127.0.0.1:8080/reset \
+PASSWORD_RESET_SES_REGION=us-east-2 \
+DOCUMENTS_S3_BUCKET=devkit-documents \
+DOCUMENTS_S3_REGION=us-east-2 \
+DEV_SEED_ACCOUNT=0 \
+LOCAL_TSEC_INSECURE_COOKIE=1 \
+java -cp target/devkit-backend.jar "${DEVKIT_NATIVE_READINESS_BACKEND_MAIN:?}" \
+  >"$log" 2>&1 &
+pid=$!
+
+for _ in $(seq 1 90); do
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    cat "$log" >&2 || true
+    exit 1
+  fi
+  code="$(curl -sS -o /tmp/devkit-backend-root.out -w "%{http_code}" --connect-timeout 1 --max-time 2 http://127.0.0.1:8080/ || true)"
+  if [[ "$code" = 404 ]]; then
+    echo "backend_http_root=$code"
+    echo "backend_jar_launch_ok"
+    exit 0
+  fi
+  sleep 1
+done
+
+cat "$log" >&2 || true
+echo "backend did not respond with expected HTTP 404 on /" >&2
+exit 1
+EOF
+
+step "launch backend jar inside native sandbox"
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
+  --broker-socket "$broker_sock" --proxy-socket "$egress_sock" -- \
+  env "DEVKIT_NATIVE_READINESS_BACKEND_MAIN=$BACKEND_MAIN" \
+    bash -lc "$backend_launch_exec" \
+  2>&1 | tee "$audit_dir/backend-launch.txt"
+grep_required "backend_http_root=404" "$audit_dir/backend-launch.txt"
+grep_required "backend_jar_launch_ok" "$audit_dir/backend-launch.txt"
+
+step "native down"
+"$DEVKIT" -p dev-all down --repo "$REPO" --count 2 \
+  --flake "$DEV_ALL_FLAKE" \
+  --broker-socket "$broker_sock" \
+  --broker-state-root "$broker_state" \
+  --format json \
+  | tee "$audit_dir/down.json"
+grep_required '"running": false' "$audit_dir/down.json"
+
+echo
+echo "native-readiness-audit: ok"

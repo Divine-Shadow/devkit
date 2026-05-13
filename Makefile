@@ -12,7 +12,7 @@ N          ?= 4
 # Compose file set with all profiles + overlay
 COMPOSE_ARGS := -f $(KIT)/compose.yml -f $(KIT)/compose.hardened.yml -f $(KIT)/compose.dns.yml -f $(KIT)/compose.envoy.yml -f $(OVERLAYS)/$(PROJECT)/compose.override.yml
 
-.PHONY: build-cli codex-fresh-open codex-verify codex-down codex-ci health run native-runtime-smoke overlay-runtime-smoke
+.PHONY: build-cli codex-fresh-open codex-verify codex-down codex-ci health run native-runtime-smoke native-readiness-audit overlay-runtime-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -65,6 +65,10 @@ run: build-cli
 native-runtime-smoke: build-cli
 	@echo "== Native runtime smoke (dev-all) =="
 	@kit/scripts/native-runtime-smoke
+
+native-readiness-audit: build-cli
+	@echo "== Native readiness audit (two-agent dev-all) =="
+	@kit/scripts/native-readiness-audit
 
 overlay-runtime-smoke:
 	@echo "== Overlay runtime smoke (Nix flakes) =="

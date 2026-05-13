@@ -156,6 +156,12 @@ Runtime pairing and refresh note:
 - `make native-runtime-smoke` verifies the canonical wrapper-to-sandbox path,
   including `_template` overlay-local native exec and `dev-all`
   Spago/Netlify/Playwright native exec.
+- `make native-readiness-audit` runs the slower two-agent native audit: it
+  launches two `ouroboros-ide` agents through `kit/scripts/devkit`, checks live
+  generated shell state for stale Codex image paths, verifies allow-listed
+  egress, warms independent governance control planes, runs the exact
+  `codex exec "replay with 'Ok'"` command on both agents, and assembles then
+  launches the backend jar. This target can spend Codex quota.
 - Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only.
 - Verify the overlay runtime matrix with `scripts/devkit image-matrix --all --check`.
 - `dev-all` no longer has an executable Compose runtime path. `overlays/dev-all/compose.override.yml` remains historical inventory only.
