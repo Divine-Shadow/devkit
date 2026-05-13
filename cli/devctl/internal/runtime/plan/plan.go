@@ -128,6 +128,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"XDG_CACHE_HOME":               filepath.Join(paths.SandboxHome, ".cache"),
 		"XDG_CONFIG_HOME":              filepath.Join(paths.SandboxHome, ".config"),
 		"SBT_GLOBAL_BASE":              filepath.Join(paths.SandboxHome, ".sbt"),
+		"TMPDIR":                       "/tmp",
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",

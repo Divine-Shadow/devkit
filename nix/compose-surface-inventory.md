@@ -80,7 +80,9 @@ commands and historical overlays.
   mutation rejection.
 - `kit/scripts/native-runtime-smoke` checks the canonical wrapper failure mode,
   `dev-all compose` rejection, native plan Git metadata binds, broker policy,
-  runtime-only readiness, and PureScript/Spago/Netlify/Playwright availability.
+  runtime-only readiness, `_template` overlay-local wrapper-to-sandbox exec,
+  and `dev-all` PureScript/Spago/Netlify/Playwright availability through
+  native exec.
 - `kit/scripts/overlay-runtime-smoke` checks every overlay's Nix flake runtime
   tools without starting Compose.
 - Full readiness is the final integration gate:

@@ -98,6 +98,8 @@ cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell ni
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#runtime-test-agent -- git --version
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- bash -lc 'spago --version && codex --version && docker --version && go version && playwright --version && mgba-headless --help 2>&1 | grep -q -- --script'
 cd cli/devctl && nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#go -c env CGO_ENABLED=0 DEVKIT_ROOT=/home/bayesartre/dev/devkit go run . -p dev-all native exec --repo devkit --flake .#dev-all -- node -e 'const { chromium } = require("@playwright/test"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent("<title>native-bwrap-playwright-ok</title>"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'
+kit/scripts/devkit -p _template exec 1 --repo ouroboros-ide -- bash -lc 'test "${DEVKIT_NIX_SHELL:-}" = template-agent && test "${DEVKIT_NATIVE_AGENT:-}" = 1 && codex --version && uv --version && python3 --version'
+kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide --flake .#dev-all -- bash -lc 'purs --version && spago --version && netlify --version && deno --version && playwright --version'
 kit/scripts/devkit -p dev-all broker status --format json
 kit/scripts/devkit -p dev-all native prepare --repo ouroboros-ide --count 2 --dry-run --format json
 kit/scripts/devkit -p dev-all --dry-run scale 2 --repo ouroboros-ide --broker-socket /tmp/devkit-scale.sock --broker-state-root /tmp/devkit-scale-state --skip-ready --format json
@@ -218,6 +220,10 @@ Observed key versions:
   `b19b557a78930ede7ee7f5dcbc880f9ff2533ffe` with `--script` support.
 - ARM toolchain smoke: `arm-none-eabi-gcc` and `arm-none-eabi-as` present.
 - Native Playwright smoke output: `native-bwrap-playwright-ok`.
+- Wrapper-to-sandbox `_template` native exec output: `shell=template-agent`,
+  with no Nix flake registry or certificate retry warnings.
+- Wrapper-to-sandbox `dev-all` native exec output: `netlify-cli/26.0.1` and
+  `native-exec-playwright-ok`.
 - Frontend-local Playwright smoke output from `ouroboros-ide/frontend`:
   `frontend-playwright-ok`.
 - Runtime readiness checks include `broker-socket`, `purescript-spago-netlify`, and

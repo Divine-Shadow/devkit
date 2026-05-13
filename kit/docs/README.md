@@ -153,6 +153,9 @@ Runtime pairing and refresh note:
 - Repo-to-runtime pairings are declared in overlay `runtime.flake` metadata and summarized by `kit/scripts/devkit image-matrix --all`.
 - Root flake refs such as `.#dev-all` remain the production CLI-facing compatibility surface. `_template` is the overlay-local `runtime.flake` canary using `./overlays/_template#default`; each flake-backed overlay also has `overlays/<overlay>/flake.nix`, so `nix develop ./overlays/<overlay>` enters the same runtime shell.
 - Native readiness expectations are documented in `kit/docs/native-readiness-contract.md`.
+- `make native-runtime-smoke` verifies the canonical wrapper-to-sandbox path,
+  including `_template` overlay-local native exec and `dev-all`
+  Spago/Netlify/Playwright native exec.
 - Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only.
 - Verify the overlay runtime matrix with `scripts/devkit image-matrix --all --check`.
 - `dev-all` no longer has an executable Compose runtime path. `overlays/dev-all/compose.override.yml` remains historical inventory only.

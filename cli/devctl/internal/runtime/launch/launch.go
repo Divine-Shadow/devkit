@@ -172,7 +172,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 	}
-	dirSet := map[string]bool{}
+	dirSet := map[string]bool{"/tmp": true}
 	dirArgs := []string{}
 	bindArgs := []string{}
 	symlinkArgs := []string{}
@@ -230,6 +230,9 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 	_ = addBind("ro", "/run/current-system", "/run/current-system", false)
 	_ = addBind("ro", "/etc/nix", "/etc/nix", false)
+	_ = addBind("ro", "/etc/static", "/etc/static", false)
+	_ = addBind("ro", "/etc/ssl", "/etc/ssl", false)
+	_ = addBind("ro", "/etc/pki", "/etc/pki", false)
 	_ = addBind("ro", "/etc/passwd", "/etc/passwd", false)
 	_ = addBind("ro", "/etc/group", "/etc/group", false)
 
