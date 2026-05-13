@@ -1,260 +1,61 @@
-Dev Kit — Reusable Containerized Dev Environment
+# Devkit
 
-This dev kit extracts the dual‑network, allowlisted egress development setup into a reusable package you can apply to any project in your `dev/` or `projects/` folder via small per‑project overlays.
+Devkit runs project agents through Nix flakes and the native devkit sandbox. The supported entrypoint is `kit/scripts/devkit`, which execs the compiled CLI at `kit/bin/devctl`.
 
-## Before You Begin
+## Requirements
 
-Make sure the base toolchain is available on your host before trying to launch the kit:
+- Nix with flakes enabled.
+- Bubblewrap for native sandbox launch.
+- Docker Engine only when a native overlay intentionally uses brokered Docker access, such as testcontainers through the devkit broker.
+- `tmux` for terminal sessions.
 
-- Docker Engine with the Compose plugin (or Docker Desktop) and permission to run containers.
-- Go 1.21+ and `make` to build the CLI binary.
-- `tmux` (optional but required for the tmux helpers to function).
-- SSH key and optional Codex auth material in your home directory (`~/.ssh/id_ed25519` / `~/.ssh/id_rsa`, `~/.codex/auth.json`).
+Build the CLI once:
 
-Run a quick compatibility check once the repo is cloned:
-
-```
-scripts/devkit preflight
+```bash
+make -C cli/devctl build
 ```
 
-The preflight command validates Docker/Compose, tmux, SSH keys, and Codex credentials and prints concrete follow-up steps for anything that is missing.
+Run commands through the wrapper:
 
-## Quick Start (codex overlay)
-
-- Build the CLI (one time): `cd devkit/cli/devctl && make build` (outputs `devkit/kit/bin/devctl`).
-- Verify the environment: `scripts/devkit preflight`.
-- Start the default stack: `scripts/devkit up` (defaults to `-p codex`).
-- Open a shell inside agent 0: `scripts/devkit exec 0 bash`.
-- Allow a new domain through the proxy: `scripts/devkit allow example.com`.
-- Sync ingress hostnames into host and agent `/etc/hosts`: `scripts/devkit -p codex hosts apply --target all --index 1`.
-- Opt into extra hardening: `scripts/devkit up --profile hardened,dns`.
-- Shut everything down: `scripts/devkit down`.
-
-Tip: both `scripts/devkit` and `devkit/kit/scripts/devkit` now build the Go CLI automatically if the binary is missing, so a fresh clone can jump straight to `scripts/devkit up`.
-
-### Overlay configuration helpers
-
-Overlay metadata in `overlays/<project>/devkit.yaml` can now set:
-
-- `workspace`: path (relative to the overlay by default) that the CLI resolves to an absolute `WORKSPACE_DIR` before compose runs.
-- `env`: key/value pairs exported on the host unless already set, making it easy to share defaults like `AWS_PROFILE` across repos.
-
-Compose overrides should prefer `${WORKSPACE_DIR}` when mounting the repo into `/workspace`; the template overlay has been updated to illustrate the pattern. You can also distribute per-host defaults (additional overlay search paths, environment variables, or CLI download URLs) via `~/.config/devkit/config.yaml`:
-
-```
-overlay_paths:
-  - /opt/devkit-overlays
-env:
-  DEVKIT_CLI_DOWNLOAD_URL: https://example.com/devctl-linux-amd64
-cli:
-  download_url: https://example.com/devctl-linux-amd64
+```bash
+kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 2
+kit/scripts/devkit -p dev-all status --repo ouroboros-ide --ready
+kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'codex --version'
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --runtime-only
+kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 2
 ```
 
-The CLI now searches overlay directories like `$PATH`: values from `DEVKIT_OVERLAYS_DIR`, then entries in the host config, and finally the repo-local `overlays/`. Overlay configs gained `env_files`, letting you point at dotenv-style files whose keys are exported unless already set in the host environment, on top of inline `env` values.
+If `kit/bin/devctl` is missing or not executable, the wrapper fails loudly and prints the build command. It does not silently choose another implementation.
 
-Credential pool (proposal, opt‑in):
-- For teams needing multiple Codex identities, see `kit/docs/proposals/codex-credential-pool.md`.
-- Summary: mount a read‑only pool of prepared Codex homes and seed agents from slots by index or per‑run shuffle. Defaults remain unchanged.
- - Usage (opt‑in):
-   - `export DEVKIT_CODEX_CRED_MODE=pool`
-   - `export DEVKIT_CODEX_POOL_DIR=/abs/path/to/pool`
-   - Optional: `export DEVKIT_CODEX_POOL_STRATEGY=shuffle DEVKIT_CODEX_POOL_SEED=123`
-   - Dry run: `scripts/devkit --dry-run fresh-open 2`
-   - Details: `kit/docs/README.md` and `kit/docs/testing/credential-pool.md`.
+## Runtime Model
 
-Essentials (batteries-included paths):
-- Hard reset + open N agents (alias): `scripts/devkit reset 3` (same as `fresh-open 3`).
-- Scale agents without teardown: `scripts/devkit scale 4`.
-- Scale and sync tmux windows: `scripts/devkit scale 5 --tmux-sync`.
-- Per-agent SSH: `scripts/devkit -p <overlay> ssh-setup --index 1` then `ssh-test 1`; flake-backed overlays seed native host state, legacy Compose overlays seed the container home.
+Each supported overlay declares `runtime.flake` in `overlays/<project>/devkit.yaml`. The root flake exposes compatible shells such as `.#dev-all`, and overlays also have local flakes so they can be inspected from their own directory.
 
-Tooling caches:
-- SBT now writes to each agent's anchored home (`/workspace/.devhome/.sbt` or `/workspaces/dev/.devhome/.sbt` under `dev-all`) via `SBT_GLOBAL_BASE`. Ivy (`/home/dev/.ivy2`) and coursier (`/home/dev/.cache/coursier`) remain shared volumes to reuse downloaded artifacts.
-- Verify the setup end-to-end: `devkit/kit/tests/per-agent-sbt/run-smoke.sh` spins up two codex agents and checks that each container's `/home/dev/.sbt` resolves to its own anchor.
+Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes Docker only through configured broker sockets.
 
-Worktrees (isolated branches per agent, flake-backed overlays):
-- Defaults live in each overlay's `devkit.yaml` (`defaults.repo`, `defaults.agents`, `defaults.base_branch`, `defaults.branch_prefix`).
-- Bootstrap end-to-end: `scripts/devkit -p <overlay> bootstrap` (uses defaults) or `bootstrap <repo> 3`.
-- Create/verify manually:
-  - Setup: `scripts/devkit -p <overlay> worktrees-setup <repo> 3`
-  - Open windows: `scripts/devkit -p <overlay> worktrees-tmux <repo> 3`
+## Common Commands
 
-Runtime pairing and refresh note:
-- Repo-to-runtime pairings live in each overlay's `runtime:` metadata and are summarized in `kit/docs/repo-container-image-pairings.md`.
-- Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only; do not use them as image identity.
-- Verify the local matrix and Codex versions with `scripts/devkit image-matrix --check`.
-- `dev-all` is native-only. `overlays/dev-all/compose.override.yml` is historical inventory, not an executable runtime path.
-- Refresh native agents through Nix/devkit instead of rebuilding a Docker agent image:
-  - `cd /home/bayesartre/dev/devkit && make -C cli/devctl build`
-  - `cd /home/bayesartre/dev/devkit && kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 8`
-  - `cd /home/bayesartre/dev/devkit && kit/scripts/devkit -p dev-all tmux-sync --count 8 --session devkit`
+- `up`, `down`, `restart`, `status`, `logs`: native lifecycle.
+- `scale`: resize a native agent set.
+- `exec`, `attach`: enter a native sandbox for an agent index.
+- `ensure-ready`: run runtime or repo readiness checks.
+- `native plan`: inspect the computed sandbox plan.
+- `image-matrix --all --check`: validate overlay-to-flake metadata.
+- `preflight`: check host prerequisites.
+- `verify-all`: run the supported verification flow for configured overlays.
 
-Auto-readiness (`dev-all`):
-- `up`, `restart`, and `scale` now run readiness automatically for `dev-all`:
-  - SSH/bootstrap for all running agents
-  - overlay `warm` hook
-  - validation (`git ls-remote`, frontend `tsc`, `@playwright/test`)
-- Run explicitly when needed: `scripts/devkit -p dev-all ensure-ready [--count N] [--service dev-agent]`
-- Agent auth/home state is per-agent for `dev-all`; readiness and reseed no longer share `/workspaces/dev/.devhome`.
-- Reseed one agent in place: `scripts/devkit -p dev-all codex-auth reseed 4`
-- Reseed all running agents, or an explicit subset, in place:
-  - `scripts/devkit -p dev-all codex-auth reseed-all`
-  - `scripts/devkit -p dev-all codex-auth reseed-all 2 3 4 5`
-- Bypass only for emergencies: append `--skip-ready` to `up`, `restart`, or `scale`.
-- Go, PureScript/Spago, Netlify, and Playwright are provided by the `dev-all` flake shell.
-- Readiness uses `npm ci --include=dev --ignore-scripts` for frontend dependencies and does not install CLI tools or Playwright browsers at runtime.
-- Warm also materializes `/workspaces/dev/agent-worktrees/agent1/<repo>` as a compatibility link to the root repo mount.
+## Verification
 
-Tmux ergonomics (new):
-- Sync windows to running agents: `scripts/devkit tmux-sync [--session NAME] [--count N] [--name-prefix PFX] [--cd PATH]`.
-  - Defaults: session `devkit:<project>`, names `agent-<n>`, cd to the native `/worktrees/agentN/<repo>` mount for flake-backed overlays.
-- Add a single window at a path: `scripts/devkit tmux-add-cd <index> <subpath> [--session NAME] [--name NAME]`.
-  - Example (dev-all): `scripts/devkit -p dev-all tmux-add-cd 2 dumb-onion-hax --name doh-2`.
-  - Use the same `--session` across overlays to mix images in one tmux.
-- Windows Terminal tabs for an existing tmux session: `scripts/devkit wt-open [--session NAME]`.
-- Windows Terminal tabs without tmux: `scripts/devkit wt-open --plain [--index N|--count N] [--cd PATH]`.
-  - This attaches through native exec commands for flake-backed overlays and does not run Compose.
-  - Use it for an already-running native runtime when you want normal WT tabs instead of tmux-backed tabs.
-  - Use `--index N` to open only one agent tab, e.g. after scaling up.
-  - For the default `devkit-ouro8` worktree stack, use `-p dev-all`; other flake-backed overlays use their own project name.
-  - Example: `scripts/devkit -p ouroboros-static-front-end wt-open --plain --index 1`
-- Target a different service (non-default): append `--service <name>` to `tmux-sync`, `tmux-add-cd`, or `scale --tmux-sync`.
-- Apply a layout file (YAML): `scripts/devkit tmux-apply-layout --file tmux.yaml [--session NAME]`.
-  - Example tmux.yaml:
-    session: devkit:mixed
-    windows:
-      - index: 1
-        path: ouroboros-ide
-        name: ouro-1
-        service: dev-agent
-        # project: dev-all     # optional; defaults to current -p
-      - index: 2
-        path: dumb-onion-hax
-        name: doh-2
-        service: dev-agent
-  - Native `dev-all` layouts must contain only `dev-all` windows. Mixed legacy layouts cannot target `dev-all`.
+The primary local gates are:
 
-Declarative orchestration (new):
-- Bring up overlays and then attach tmux from a single YAML:
-  - `scripts/devkit layout-apply --file orchestration.yaml`
-  - `layout-apply` now runs each overlay `hooks.warm` after startup so template applies are ready-to-use without manual warmup.
-  - Generate a YAML from running containers: `scripts/devkit layout-generate --service dev-agent --output orchestration.yaml`
-  - orchestration.yaml example:
-    session: devkit:mixed
-    overlays:
-      - project: codex
-        service: dev-agent
-        count: 5
-        profiles: dns,hardened
-        compose_project: devkit-codex
-      - project: dumb-onion-hax
-        service: dev-agent
-        count: 1
-        profiles: dns
-        compose_project: devkit-doh
-      - project: pokeemerald
-        service: dev-agent
-        count: 2
-        profiles: dns
-        compose_project: devkit-emerald
-    windows:
-      - index: 1
-        project: codex
-        service: dev-agent
-        path: /workspace
-        name: ouro-1
-      - index: 2
-        project: codex
-        service: dev-agent
-        path: /workspace
-        name: ouro-2
-      - index: 3
-        project: codex
-        service: dev-agent
-        path: /workspace
-        name: ouro-3
-      - index: 4
-        project: codex
-        service: dev-agent
-        path: /workspace
-        name: ouro-4
-      - index: 5
-        project: codex
-        service: dev-agent
-        path: /workspace
-        name: ouro-5
-      - index: 1
-        project: dumb-onion-hax
-        service: dev-agent
-        path: /workspace
-        name: doh-1
-      - index: 1
-        project: pokeemerald
-        service: dev-agent
-        path: /workspace
-        name: emerald-1
-      - index: 2
-        project: pokeemerald
-        service: dev-agent
-        path: /workspace
-        name: emerald-2
+```bash
+make -C cli/devctl build
+cd cli/devctl && go test -count=1 ./...
+nix flake check
+make overlay-runtime-smoke
+make native-runtime-smoke
+make native-readiness-audit
+make compose-retirement-guard
+```
 
-SSH (GitHub) quickstart:
-- One-time per agent: `scripts/devkit -p <overlay> ssh-setup --index 1` then `scripts/devkit -p <overlay> ssh-test 1`
-- Flip origin to SSH and push from a native host worktree or legacy container repo: `scripts/devkit -p <overlay> repo-config-ssh <repo> --index 1` then `scripts/devkit -p <overlay> repo-push-ssh <repo> --index 1`
-
-Layout:
-- `kit/`: base Compose, proxy, DNS, scripts, and docs.
-- `overlays/<project>/`: per‑project overrides (`compose.override.yml`, `devkit.yaml`).
-  - Optional: `service: <name>` sets the default service for CLI exec/attach/ssh/repo commands (defaults to `dev-agent`).
-
-Key design:
-- Dual networks: `dev-internal` (internal: true) for agents; `dev-egress` for internet‑facing proxy.
-- Proxy (Tinyproxy by default) is dual‑homed; agents only join `dev-internal` and must egress via proxy.
-- Optional DNS allowlist (dnsmasq) and hardened profile (read‑only root, resource limits).
-
-See `kit/docs/README.md` for more details.
-
-New overlay guide:
-- Step-by-step: `kit/docs/new-overlay-guide.md` (service selection, compose paths, networking, SSH/Git gotchas, and tmux tips.)
-
-Overlay reuse:
-- Keep the compiled kit in one checkout and point `DEVKIT_OVERLAYS_DIR` at your project-specific overlays (relative paths resolve against `DEVKIT_ROOT`; default is `<DEVKIT_ROOT>/overlays`).
-
-Retrospectives and contributor guidance:
-- Repo/runtime pairings: `kit/docs/repo-container-image-pairings.md`
-- Reliability retrospective: `kit/docs/retrospective-ssh-git-anchor.md`
-- Codex logout revocation retrospective: `kit/docs/retrospective-codex-logout-revocation.md`
-- Contrib guideline (quoting + file writes): `kit/docs/contrib-quoting-and-file-writes.md`
-
-
-Retrospective: Journey & Lessons
-- Summary of the migration, networking fixes, Codex seeding/env work, tests, and next steps.
-- See: `kit/docs/journey-retrospective.md`.
-
-Postgres test broker plan
-- Restricted Docker endpoint design for integration tests that require Postgres.
-- See: `kit/docs/postgres-broker-plan.md`.
-
-
-Proposal: Bash → Go CLI Migration
-- Rationale, scope, and plan to migrate `kit/scripts/devctl` to a typed CLI while keeping shell shims.
-- See: `kit/docs/proposals/devkit-cli-migration.md`.
-
-## Portability and Onboarding Updates
-
-Recent improvements:
-
-- Wrapper scripts now rely on POSIX-compatible path resolution, eliminating the GNU `readlink -f` dependency on macOS and other BSD systems.
-- Overlay configs populate `WORKSPACE_DIR`, honor optional `env_files`, and export defaults automatically, removing most hard-coded relative paths from compose overrides.
-- Overlay search paths behave like `$PATH`: set `DEVKIT_OVERLAYS_DIR` or host-level `overlay_paths` to layer multiple overlay repositories without editing this checkout.
-- Warm hooks now create a `python` shim backed by `python3`, so legacy tools that still call `python` keep working without patching every repo.
-- Wrapper entrypoints auto-build the `devctl` binary with `make`, or download a prebuilt binary when `DEVKIT_CLI_DOWNLOAD_URL` (or the host config `cli.download_url`) is set, so newcomers can launch the kit without a local Go toolchain.
-
-Next focus areas:
-
-- Add cross-platform smoke tests that exercise the wrapper scripts on macOS/Linux runners.
-- Provide `devctl doctor` diagnostics that bundle the preflight checks with workspace validation, reducing guesswork for first-time contributors.
-- Expand documentation with a troubleshooting matrix for common Docker/Compose startup failures.
-
-Contributions that help exercise these flows across operating systems are welcome; see the proposals in `kit/docs/` for discussion threads and status updates.
+Historical migration notes live under `documentation/archive/compose-retirement/`. They are retained for context and are not supported runtime documentation.

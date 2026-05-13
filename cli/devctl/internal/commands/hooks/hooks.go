@@ -34,22 +34,21 @@ func handleHook(ctx *cmdregistry.Context, warm bool) error {
 		fmt.Printf("No %s hook defined\n", label)
 		return nil
 	}
-	if config.HasRuntimeFlake(cfg) {
-		exe := strings.TrimSpace(ctx.Exe)
-		if exe == "" {
-			exe = "devkit"
-		}
-		repo := strings.TrimSpace(cfg.Defaults.Repo)
-		if repo == "" {
-			if project == "dev-all" {
-				repo = "ouroboros-ide"
-			} else {
-				repo = project
-			}
-		}
-		runner.Host(ctx.DryRun, exe, "-p", project, "exec", "1", "--repo", repo, "--", "bash", "-lc", script)
-		return nil
+	if !config.HasRuntimeFlake(cfg) {
+		return fmt.Errorf("%s hook requires an overlay with runtime.flake", label)
 	}
-	runner.Compose(ctx.DryRun, ctx.Files, "exec", "dev-agent", "bash", "-lc", script)
+	exe := strings.TrimSpace(ctx.Exe)
+	if exe == "" {
+		exe = "devkit"
+	}
+	repo := strings.TrimSpace(cfg.Defaults.Repo)
+	if repo == "" {
+		if project == "dev-all" {
+			repo = "ouroboros-ide"
+		} else {
+			repo = project
+		}
+	}
+	runner.Host(ctx.DryRun, exe, "-p", project, "exec", "1", "--repo", repo, "--", "bash", "-lc", script)
 	return nil
 }

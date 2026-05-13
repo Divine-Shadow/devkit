@@ -857,7 +857,7 @@ func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
 		return err
 	}
 	if !config.HasRuntimeFlake(cfg) {
-		return fmt.Errorf("native lifecycle requires runtime.flake for -p %s; use 'devctl -p %s compose <command>' for legacy Compose overlays", project, project)
+		return fmt.Errorf("native lifecycle requires runtime.flake for -p %s; add a flake-backed runtime before using lifecycle commands", project)
 	}
 	return nil
 }

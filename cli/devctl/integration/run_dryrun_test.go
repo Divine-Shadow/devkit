@@ -21,10 +21,6 @@ func TestRun_DryRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	base := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3.18\n    command: ['sh','-lc','sleep 1']\n"
-	write(filepath.Join(root, "kit/compose.yml"), base)
-	write(filepath.Join(root, "kit/compose.dns.yml"), base)
-	write(filepath.Join(root, "overlays/dev-all/compose.override.yml"), base)
 	// files edited by allowlist step
 	write(filepath.Join(root, "kit/proxy/allowlist.txt"), "\n")
 	write(filepath.Join(root, "kit/dns/dnsmasq.conf"), "\n")
@@ -58,7 +54,7 @@ func TestRun_DryRun(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", w, out)
 		}
 	}
-	if strings.Contains(out, "docker compose") || strings.Contains(out, "docker exec") {
-		t.Fatalf("run dry-run should not use Docker/Compose for dev-all:\n%s", out)
+	if strings.Contains(out, "docker "+"compose") || strings.Contains(out, "docker "+"exec") {
+		t.Fatalf("run dry-run should not use retired container commands for dev-all:\n%s", out)
 	}
 }

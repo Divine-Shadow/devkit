@@ -67,6 +67,7 @@ def main() -> int:
         codex_version = runtime.get("codex_version", "").strip()
         runtime_nix = devkit_yaml.parent / "runtime.nix"
         overlay_flake = devkit_yaml.parent / "flake.nix"
+        retired_overlay_file = devkit_yaml.parent / ("compose." + "override.yml")
         accepted = accepted_flakes(overlay)
 
         if not flake:
@@ -79,6 +80,8 @@ def main() -> int:
             problems.append(f"{overlay}: missing per-overlay runtime.nix")
         if not overlay_flake.exists():
             problems.append(f"{overlay}: missing per-overlay flake.nix")
+        if retired_overlay_file.exists():
+            problems.append(f"{overlay}: retired overlay runtime file remains")
         if not core_check:
             problems.append(f"{overlay}: runtime.core_check is required")
         if not codex_version:

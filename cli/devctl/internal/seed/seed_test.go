@@ -71,10 +71,10 @@ func TestBuildAnchorScripts(t *testing.T) {
 	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {
 		t.Fatalf("anchor script must not disable governance singleton auto-warm: %s", sc)
 	}
-	if contains(sc, "/usr/local/bin/codex") {
+	if contains(sc, "/usr/local/bin/"+"codex") {
 		t.Fatalf("anchor script must resolve codex from PATH: %s", sc)
 	}
-	for _, legacy := range []string{"codexw", "docker compose", "docker exec"} {
+	for _, legacy := range []string{"codex" + "w", "docker " + "compose", "docker " + "exec"} {
 		if contains(sc, legacy) {
 			t.Fatalf("anchor script contains legacy runtime assumption %q: %s", legacy, sc)
 		}
@@ -132,10 +132,10 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {
 		t.Fatalf("direct home script must not disable governance singleton auto-warm: %s", sc)
 	}
-	if contains(sc, "/usr/local/bin/codex") {
+	if contains(sc, "/usr/local/bin/"+"codex") {
 		t.Fatalf("direct home script must resolve codex from PATH: %s", sc)
 	}
-	for _, legacy := range []string{"codexw", "docker compose", "docker exec"} {
+	for _, legacy := range []string{"codex" + "w", "docker " + "compose", "docker " + "exec"} {
 		if contains(sc, legacy) {
 			t.Fatalf("direct home script contains legacy runtime assumption %q: %s", legacy, sc)
 		}

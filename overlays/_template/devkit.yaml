@@ -28,13 +28,13 @@ readiness:
     - name: core-check
       command: echo "replace runtime.core_check with your repo validation command"
 
-# Optional: environment exported on the host before running compose commands
+# Optional: environment exported before native commands
 env: {}
 
 # Optional: additional env files (relative paths resolve from this directory)
 env_files: []
 
-# Optional hooks executed inside the container
+# Optional hooks executed inside the native sandbox
 hooks:
   warm: ""
   maintain: ""

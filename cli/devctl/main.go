@@ -16,7 +16,6 @@ import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	allowcmd "devkit/cli/devctl/internal/commands/allow"
 	brokercmd "devkit/cli/devctl/internal/commands/brokercmd"
-	composecmd "devkit/cli/devctl/internal/commands/composecmd"
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
 	imagematrixcmd "devkit/cli/devctl/internal/commands/imagematrix"
@@ -952,7 +951,6 @@ Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
   up, down, restart, status [--ready], logs   (native for overlays with runtime.flake)
-  compose up|down|restart|status|logs|exec|attach (legacy Docker Compose path; not for flake-backed overlays)
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--runtime-only|--repo-readiness] [--skip-ready]
   ensure-ready [--count N] [--repo REPO] [--runtime-only|--repo-readiness] [--broker-socket PATH] [--skip-broker]
@@ -998,7 +996,6 @@ Commands:
 Flags:
   -p, --project   overlay project name (required for most)
   --profile       comma-separated: hardened,dns,envoy (default: dns)
-  --compose-project override compose project name for this invocation
   --tmux          force tmux integration even if DEVKIT_NO_TMUX=1
 
 Environment:
@@ -1009,7 +1006,6 @@ Environment:
 func main() {
 	var project string
 	var profile string
-	var composeProject string
 	var dryRun bool
 	var noTmux bool
 	var forceTmux bool
@@ -1037,12 +1033,8 @@ func main() {
 			profile = args[i+1]
 			i++
 		case "--compose-project":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "--compose-project requires value")
-				os.Exit(2)
-			}
-			composeProject = args[i+1]
-			i++
+			fmt.Fprintln(os.Stderr, "--compose-project is retired; native flakes do not use project-name overrides")
+			os.Exit(2)
 		case "--dry-run":
 			dryRun = true
 		case "--no-tmux":
@@ -1065,14 +1057,6 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	if strings.TrimSpace(composeProject) != "" {
-		composeProject = strings.TrimSpace(composeProject)
-		_ = os.Setenv("COMPOSE_PROJECT_NAME", composeProject)
-		if strings.TrimSpace(project) != "" {
-			_ = os.Setenv(composeProjectEnvKey(project), composeProject)
-		}
-	}
-
 	exe, _ := os.Executable()
 	paths, _ := compose.DetectPathsFromExe(exe)
 	hostCfg, hostCfgDir, hostErr := config.ReadHostConfig()
@@ -1093,13 +1077,6 @@ func main() {
 		}
 		_ = os.Setenv(key, val)
 	}
-	if strings.TrimSpace(composeProject) == "" {
-		if _, ok := os.LookupEnv("COMPOSE_PROJECT_NAME"); !ok {
-			if v := composeProjectOverride(project); v != "" {
-				_ = os.Setenv("COMPOSE_PROJECT_NAME", v)
-			}
-		}
-	}
 	if len(hostCfg.OverlayPaths) > 0 {
 		extra := resolveHostOverlayPaths(hostCfg.OverlayPaths, hostCfgDir, paths.Root)
 		paths.OverlayPaths = compose.MergeOverlayPaths(paths.OverlayPaths, extra...)
@@ -1117,37 +1094,14 @@ func main() {
 	if forceTmux {
 		_ = os.Unsetenv("DEVKIT_NO_TMUX")
 	}
-	if strings.TrimSpace(project) != "" {
-		resolvedComposeProject := resolveComposeProjectName(project, composeProject)
-		_ = os.Setenv("COMPOSE_PROJECT_NAME", resolvedComposeProject)
-		if (strings.TrimSpace(os.Getenv("DEVKIT_INTERNAL_SUBNET")) == "" || strings.TrimSpace(os.Getenv("DEVKIT_DNS_IP")) == "") &&
-			strings.TrimSpace(resolvedComposeProject) != "" {
-			if cidr, dns, ok := netutil.ExistingComposeNetwork(resolvedComposeProject); ok {
-				if strings.TrimSpace(os.Getenv("DEVKIT_INTERNAL_SUBNET")) == "" {
-					_ = os.Setenv("DEVKIT_INTERNAL_SUBNET", cidr)
-				}
-				if strings.TrimSpace(os.Getenv("DEVKIT_DNS_IP")) == "" {
-					_ = os.Setenv("DEVKIT_DNS_IP", dns)
-				}
-			}
-		}
-	}
 	cmd := args[0]
 	sub := args[1:]
 	isNativeRuntime := strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, overlayCfg)
 	var files []string
-	if commandNeedsComposeFiles(cmd, project, overlayCfg) {
-		var err error
-		files, err = compose.Files(paths, project, profile)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-	}
+	_ = files
 
 	// Preflight: choose a non-overlapping internal subnet and DNS IP if not explicitly set
 	cidr, dns := netutil.PickInternalSubnet()
-	// Export so docker compose can substitute in compose.dns.yml
 	_ = os.Setenv("DEVKIT_INTERNAL_SUBNET", cidr)
 	_ = os.Setenv("DEVKIT_DNS_IP", dns)
 	if os.Getenv("DEVKIT_DEBUG") == "1" {
@@ -1164,7 +1118,6 @@ func main() {
 	registry := cmdregistry.New()
 	allowcmd.Register(registry)
 	brokercmd.Register(registry)
-	composecmd.Register(registry)
 	hostscmd.Register(registry)
 	hookcmd.Register(registry)
 	networkcmd.Register(registry)
@@ -1184,62 +1137,20 @@ func main() {
 		Pool:           pconf,
 		Exe:            exe,
 	}
-	runComposeCommand := func(composeArgs []string) {
-		if err := composecmd.EnsureLegacyProject(project); err != nil {
-			die(err.Error())
-		}
-		handler, ok := registry.Lookup("compose")
-		if !ok {
-			die("compose command is not registered")
-		}
-		next := *ctx
-		next.Args = append([]string{}, composeArgs...)
-		if len(composeArgs) > 0 && composeArgs[0] == "up" {
-			pname := composeProjectName(next.Project)
-			composecmd.CleanupSharedInfra(next.DryRun, pname, next.Files)
-			if err := handler(&next); err != nil {
-				die(err.Error())
-			}
-			if !hasArgFlag(composeArgs, "--skip-ready") {
-				if err := ensureProjectReady(&next, pname, "", 0, false); err != nil {
-					die(err.Error())
-				}
-			}
-			return
-		}
-		if len(composeArgs) > 0 && composeArgs[0] == "restart" {
-			pname := composeProjectName(next.Project)
-			if err := handler(&next); err != nil {
-				die(err.Error())
-			}
-			if !hasArgFlag(composeArgs, "--skip-ready") {
-				if err := ensureProjectReady(&next, pname, "", 0, false); err != nil {
-					die(err.Error())
-				}
-			}
-			return
-		}
-		if err := handler(&next); err != nil {
-			die(err.Error())
-		}
-	}
 	if handler, ok := registry.Lookup(cmd); ok {
-		if useLegacyTopLevelForProject(cmd, project, overlayCfg) {
-			// Let the legacy switch below handle non-dev-all top-level aliases.
-		} else if cmd == "compose" {
-			runComposeCommand(sub)
-			return
-		} else {
-			if err := handler(ctx); err != nil {
-				die(err.Error())
-			}
-			return
+		if err := handler(ctx); err != nil {
+			die(err.Error())
 		}
+		return
+	}
+	if requiresRuntimeFlakeCommand(cmd) && !isNativeRuntime {
+		die(fmt.Sprintf("%s requires runtime.flake for -p %s", cmd, project))
 	}
 	switch cmd {
+	case "compose":
+		die("Compose runtime is retired; use native lifecycle commands backed by runtime.flake")
 	case "up", "down", "restart", "status", "logs":
-		mustProject(project)
-		runComposeCommand(append([]string{cmd}, sub...))
+		die("native lifecycle command was not registered")
 	case "scale":
 		mustProject(project)
 		n := "1"
@@ -1533,7 +1444,7 @@ func main() {
 				restoreProj()
 			}
 		}
-		// 0.5) Track which compose projects have been cleaned to avoid stale shared containers across overlays.
+		// 0.5) Track which retired project names have already hit cleanup gates.
 		cleanedProjects := map[string]bool{}
 		withNetwork := func(run overlayRun, fn func(cidr, dns string) error) error {
 			tried := map[string]bool{}
@@ -1556,7 +1467,6 @@ func main() {
 				if !isNetworkConflictErr(err) {
 					break
 				}
-				composecmd.CleanupSharedInfra(dryRun, run.ComposeProj, run.FileArgs)
 			}
 			if lastErr != nil {
 				return lastErr
@@ -1582,7 +1492,6 @@ func main() {
 			pname := run.ComposeProj
 			restoreProj := withComposeProject(pname)
 			if !cleanedProjects[pname] {
-				composecmd.CleanupSharedInfra(dryRun, pname, run.FileArgs)
 				cleanedProjects[pname] = true
 			}
 			err := withNetwork(run, func(cidr, dns string) error {
@@ -1599,7 +1508,6 @@ func main() {
 				}
 				prepareComposeProjectVolumes(dryRun, pname)
 				if !cleanedProjects[pname] {
-					composecmd.CleanupSharedInfra(dryRun, pname, run.FileArgs)
 					cleanedProjects[pname] = true
 				}
 				return nil
@@ -3247,23 +3155,20 @@ exit 0`, home, home, home, home, home)
 func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(2) }
 
 func commandNeedsComposeFiles(cmd, project string, cfg config.OverlayConfig) bool {
+	return false
+}
+
+func requiresRuntimeFlakeCommand(cmd string) bool {
 	switch cmd {
-	case "compose":
-		return strings.TrimSpace(project) != "dev-all"
-	case "native", "proxy":
-		return false
-	case "allow", "broker", "image-matrix", "layout-validate", "preflight", "verify-all", "worktrees-init", "wt-release", "tmux-bell-install", "tmux-bell-show-config", "tmux-notify-bell":
-		return false
-	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach", "warm", "maintain":
-		return !nativeRuntimeConfigured(project, cfg)
-	case "hosts":
-		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
-	case "layout-apply", "layout-generate", "tmux-sync", "tmux-add-cd", "tmux-apply-layout", "wt-open", "exec-cd", "attach-cd", "check-net", "check-codex", "check-sts", "codex-test", "codex-debug", "doctor-runtime", "verify", "tmux-shells", "open", "fresh-open", "reset", "run", "worktrees-setup", "worktrees-branch", "worktrees-status", "worktrees-sync", "worktrees-tmux", "bootstrap", "codex-auth", "creds":
-		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
-	case "ssh-setup", "ssh-test", "repo-config-ssh", "repo-config-https", "repo-push-ssh", "repo-push-https":
-		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
-	default:
+	case "codex-auth", "creds", "codex-debug", "codex-test", "doctor-runtime", "verify",
+		"check-sts", "exec-cd", "attach-cd", "tmux-shells", "open", "fresh-open",
+		"reset", "ssh-setup", "ssh-test", "repo-config-ssh", "repo-config-https",
+		"repo-push-ssh", "repo-push-https", "worktrees-setup", "run",
+		"worktrees-branch", "worktrees-status", "worktrees-sync", "worktrees-tmux",
+		"bootstrap":
 		return true
+	default:
+		return false
 	}
 }
 
@@ -3275,15 +3180,7 @@ func nativeRuntimeConfigured(project string, cfg config.OverlayConfig) bool {
 }
 
 func useLegacyTopLevelForProject(cmd, project string, cfg config.OverlayConfig) bool {
-	if nativeRuntimeConfigured(project, cfg) {
-		return false
-	}
-	switch cmd {
-	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach":
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 func mustProject(p string) {

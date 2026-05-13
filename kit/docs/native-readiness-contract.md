@@ -1,8 +1,7 @@
 # Native Readiness Contract
 
-Native readiness is the authoritative readiness path for every overlay with
-`runtime.flake`. Legacy Compose readiness remains only for overlays without a
-native flake and for explicit legacy Compose workflows.
+Native readiness is the authoritative readiness path for every supported
+overlay.
 
 ## Contract
 
@@ -10,8 +9,7 @@ native flake and for explicit legacy Compose workflows.
   `kit/bin/devctl`.
 - `verify`, `doctor-runtime`, and `ensure-ready` route flake-backed overlays
   through native lifecycle/readiness.
-- Native readiness runs inside the Nix sandbox through bubblewrap, not through
-  Docker Compose.
+- Native readiness runs inside the Nix sandbox through bubblewrap.
 - Runtime checks prove the sandbox, brokered Docker endpoint, declared Codex
   version, and overlay toolchain are present.
 - Repo checks prove repository-specific readiness. These checks may be slower or
@@ -22,8 +20,7 @@ native flake and for explicit legacy Compose workflows.
 - Use `--runtime-only` to force runtime checks and `--repo-readiness` or
   `--full` to force repo checks. A bare trailing `--repo` is accepted as a
   full-readiness alias when it is not followed by a repo name.
-- Explicit `compose ...` remains the legacy escape hatch for overlays that still
-  need Compose semantics.
+- The retired `compose` namespace is not a readiness path.
 
 ## Built-In Native Checks
 

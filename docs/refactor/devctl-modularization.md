@@ -5,9 +5,9 @@ smaller, testable packages. Each phase lands as its own change set to keep the
 CLI usable throughout the migration.
 
 ## Phase 1 – Shared runner helpers *(completed)*
-- Extracted host/docker helper functions into `internal/runner`.
-- `main.go` now delegates all direct host and compose invocations to that
-  package, shrinking its helper surface.
+- Extracted host helper functions into `internal/runner`.
+- `main.go` now delegates direct host invocations to that package, shrinking
+  its helper surface.
 
 ## Phase 2 – Command registry *(in progress)*
 - Introduced `internal/cmdregistry` with a lightweight registry and shared
@@ -27,7 +27,6 @@ CLI usable throughout the migration.
 | Package | Commands |
 | --- | --- |
 | `internal/commands/allow` | `allow` |
-| `internal/commands/composecmd` | `up`, `down`, `restart`, `status`, `logs` |
 | `internal/commands/network` | `proxy`, `check-net`, `check-codex` |
 | `internal/commands/hooks` | `warm`, `maintain` |
 | `internal/commands/tmuxcmd` | `tmux-sync`, `tmux-add-cd`, `tmux-apply-layout` |

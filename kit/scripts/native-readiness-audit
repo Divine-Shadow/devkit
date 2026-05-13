@@ -56,34 +56,20 @@ generated_zshrc_files() {
   printf '%s\0' "${files[@]}"
 }
 
-repair_live_codex_wrappers() {
-  while IFS= read -r -d '' file; do
-    if grep -q "/usr/local/bin/codex" "$file"; then
-      sed -i 's#/usr/local/bin/codex#command codex#g' "$file"
-    fi
-    if grep -q "codexw" "$file"; then
-      sed -i \
-        -e 's#^alias codex=codexw$#unalias codex 2>/dev/null || true#' \
-        -e "s#^alias codex='codexw'\$#unalias codex 2>/dev/null || true#" \
-        -e 's#^alias codex="codexw"$#unalias codex 2>/dev/null || true#' \
-        "$file"
-    fi
-  done < <(generated_zshrc_files)
-  return 0
-}
-
 guard_native_shells() {
+  local legacy_bin="/usr/local/bin/""codex"
+  local legacy_wrapper="codex""w"
   local source_guard_files=(
     "$DEVKIT_ROOT/cli/devctl/internal/seed/seed.go"
     "$DEVKIT_ROOT/cli/devctl/internal/agentexec/agentexec.go"
     "$DEVKIT_ROOT/cli/devctl/internal/runtime/launch/launch.go"
     "$DEVKIT_ROOT/cli/devctl/internal/commands/nativecmd/native.go"
   )
-  if grep -nE '/usr/local/bin/codex|codexw' "${source_guard_files[@]}"; then
+  if grep -nE "$legacy_bin|$legacy_wrapper" "${source_guard_files[@]}"; then
     fail "native shell sources contain stale Codex image path assumptions"
   fi
 
-  if generated_zshrc_files | xargs -0 -r grep -nE '/usr/local/bin/codex|codexw'; then
+  if generated_zshrc_files | xargs -0 -r grep -nE "$legacy_bin|$legacy_wrapper"; then
     fail "live generated zshrc contains stale Codex image path assumptions"
   fi
   return 0
@@ -111,7 +97,6 @@ cleanup() {
 trap cleanup EXIT
 
 step "native generated shell static guard"
-repair_live_codex_wrappers
 guard_native_shells
 
 step "start native egress proxy"

@@ -1,4 +1,4 @@
-// Package runner centralizes helpers that execute host and docker-compose commands.
+// Package runner centralizes helpers that execute host commands.
 //
 // These wrappers keep consistent timeout, dry-run logging, and exit-handling
 // semantics across the CLI. They were previously embedded in main.go, but moving

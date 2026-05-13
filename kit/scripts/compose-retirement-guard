@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${1:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
+
+pattern='docker[[:space:]]+compose|docker-compose|compose[.]override[.]yml|kit/compose[^[:space:]]*[.]yml|codexw|/usr/local/bin/codex'
+
+cd "$ROOT"
+
+if rg -n -i -e "$pattern" . \
+  --glob '!documentation/archive/**' \
+  --glob '!kit/scripts/compose-retirement-guard' \
+  --glob '!kit/bin/**' \
+  --glob '!result/**' \
+  --glob '!.agent/**'; then
+  echo "compose-retirement-guard: retired runtime references remain" >&2
+  exit 1
+fi
+
+echo "compose-retirement-guard: ok"

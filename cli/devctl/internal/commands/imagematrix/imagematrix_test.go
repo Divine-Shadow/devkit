@@ -48,7 +48,7 @@ runtime:
 
 func TestCheckRejectsDuplicateRepos(t *testing.T) {
 	root := t.TempDir()
-	a := writeOverlay(t, root, "a", `
+	writeOverlay(t, root, "a", `
 service: dev-agent
 defaults:
   repo: app
@@ -57,7 +57,7 @@ runtime:
   codex_version: 0.128.0
   core_check: make test
 `)
-	b := writeOverlay(t, root, "b", `
+	writeOverlay(t, root, "b", `
 service: dev-agent
 defaults:
   repo: app
@@ -68,8 +68,8 @@ runtime:
 `)
 
 	err := Check([]Entry{
-		{Overlay: "a", Repo: "app", Flake: ".#a", CodexVersion: "0.128.0", CoreCheck: "make test", ComposePath: a, FlakePath: filepath.Join(root, "a", "flake.nix"), Canonical: true},
-		{Overlay: "b", Repo: "app", Flake: ".#b", CodexVersion: "0.128.0", CoreCheck: "make test", ComposePath: b, FlakePath: filepath.Join(root, "b", "flake.nix"), Canonical: true},
+		{Overlay: "a", Repo: "app", Flake: ".#a", CodexVersion: "0.128.0", CoreCheck: "make test", FlakePath: filepath.Join(root, "a", "flake.nix"), Canonical: true},
+		{Overlay: "b", Repo: "app", Flake: ".#b", CodexVersion: "0.128.0", CoreCheck: "make test", FlakePath: filepath.Join(root, "b", "flake.nix"), Canonical: true},
 	}, true)
 	if err == nil {
 		t.Fatal("expected duplicate repo error")
@@ -227,16 +227,8 @@ func writeOverlay(t *testing.T, root, name, yaml string) string {
 	if err := os.WriteFile(filepath.Join(dir, "devkit.yaml"), []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	composePath := filepath.Join(dir, "compose.override.yml")
-	image := "local/dev-agent:" + name
-	if name == "primary" || name == "legacy" {
-		image = "local/dev-agent:app"
-	}
-	if err := os.WriteFile(composePath, []byte("services:\n  dev-agent:\n    image: "+image+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "flake.nix"), []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return composePath
+	return dir
 }

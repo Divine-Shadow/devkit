@@ -97,13 +97,14 @@ grep_required "make -C" "$smoke_dir/missing-wrapper.err"
 mv "$devctl_backup" "$DEVKIT_BIN"
 devctl_backup=""
 
-step "dev-all compose retired"
-if "$DEVKIT" --dry-run -p dev-all compose up >"$smoke_dir/dev-all-compose.out" 2>"$smoke_dir/dev-all-compose.err"; then
-  fail "dev-all compose unexpectedly succeeded"
+step "retired compose namespace"
+if "$DEVKIT" --dry-run -p dev-all compose up >"$smoke_dir/retired-runtime.out" 2>"$smoke_dir/retired-runtime.err"; then
+  fail "retired runtime namespace unexpectedly succeeded"
 fi
-grep_required "Docker Compose is retired for dev-all" "$smoke_dir/dev-all-compose.err"
-if grep -q "docker compose" "$smoke_dir/dev-all-compose.err" "$smoke_dir/dev-all-compose.out"; then
-  fail "dev-all compose rejection emitted a docker compose command"
+grep_required "Compose runtime is retired" "$smoke_dir/retired-runtime.err"
+retired_cmd="docker ""compose"
+if grep -q "$retired_cmd" "$smoke_dir/retired-runtime.err" "$smoke_dir/retired-runtime.out"; then
+  fail "retired runtime rejection emitted $retired_cmd"
 fi
 
 step "native plan git metadata binds"

@@ -3,9 +3,8 @@
 Status: Active operator guidance.
 
 Devkit treats Codex as a tool inside repo-specific runtimes, not as the runtime
-identity of a project. Compose project names such as `devkit-codex8` or
-`devkit-ouro8` are session names only; they must not be used to decide which
-runtime to refresh.
+identity of a project. Session names must not be used to decide which runtime
+to refresh.
 
 ## Canonical Pairings
 
@@ -33,9 +32,8 @@ Verify local runtimes with:
 devkit/kit/scripts/devkit image-matrix --all --check
 ```
 
-Use `--all` when you need to include legacy/non-canonical overlays. The
-`codex` overlay is a compatibility image-build/debug shim for
-`ouroboros-ide`; it is not a second runtime pairing for that repo.
+Use `--all` when you need to include non-canonical overlays. The `codex`
+overlay is not a second runtime pairing for `ouroboros-ide`.
 
 ## Refresh Rule
 
@@ -49,9 +47,7 @@ devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --no-write-lock-file --command true
 ```
 
-Legacy Compose image tags may still appear in `compose.override.yml` files for
-historical non-`dev-all` operation, but they are no longer the authoritative
-runtime pairing metadata.
+`runtime.flake` is the authoritative runtime pairing metadata.
 
 ## Build Evidence
 

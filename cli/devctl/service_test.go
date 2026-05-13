@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,23 +61,6 @@ func TestApplyOverlayEnvLoadsEnvFiles(t *testing.T) {
 	}
 	if got := os.Getenv("BAZ"); got != "existing" {
 		t.Fatalf("env map should not override existing BAZ, got %q", got)
-	}
-}
-
-func TestCodexComposePinsDockerHost(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
-	overridePath := filepath.Join(root, "overlays", "codex", "compose.override.yml")
-	data, err := os.ReadFile(overridePath)
-	if err != nil {
-		t.Fatalf("read codex override: %v", err)
-	}
-	want := []byte("DOCKER_HOST=unix:///broker-run/postgres-broker.sock")
-	if !bytes.Contains(data, want) {
-		t.Fatalf("codex compose override missing %q", string(want))
 	}
 }
 
@@ -186,37 +168,15 @@ func TestParseComposeServiceContainersIgnoresBadRows(t *testing.T) {
 	}
 }
 
-func TestCommandNeedsComposeFilesGuardrail(t *testing.T) {
+func TestCommandNeedsComposeFilesRetired(t *testing.T) {
 	nativeCfg := config.OverlayConfig{Runtime: config.Runtime{Flake: ".#native-agent"}}
 	legacyCfg := config.OverlayConfig{}
 
-	neverCompose := []string{
+	commands := []string{
 		"allow",
-		"broker",
-		"image-matrix",
-		"layout-validate",
-		"native",
-		"preflight",
-		"proxy",
-		"tmux-bell-install",
-		"tmux-bell-show-config",
-		"tmux-notify-bell",
-		"verify-all",
-		"worktrees-init",
-		"wt-release",
-	}
-	for _, cmd := range neverCompose {
-		if commandNeedsComposeFiles(cmd, "native-project", nativeCfg) {
-			t.Fatalf("%s unexpectedly requires Compose files for native overlays", cmd)
-		}
-		if commandNeedsComposeFiles(cmd, "legacy-project", legacyCfg) {
-			t.Fatalf("%s unexpectedly requires Compose files for legacy overlays", cmd)
-		}
-	}
-
-	nativeAware := []string{
 		"attach",
 		"bootstrap",
+		"broker",
 		"check-codex",
 		"check-net",
 		"check-sts",
@@ -261,21 +221,12 @@ func TestCommandNeedsComposeFilesGuardrail(t *testing.T) {
 		"worktrees-tmux",
 		"wt-open",
 	}
-	for _, cmd := range nativeAware {
+	for _, cmd := range commands {
 		if commandNeedsComposeFiles(cmd, "native-project", nativeCfg) {
-			t.Fatalf("%s unexpectedly requires Compose files for native overlays", cmd)
+			t.Fatalf("%s unexpectedly requires retired files for native overlays", cmd)
 		}
-	}
-	if commandNeedsComposeFiles("hosts", "dev-all", legacyCfg) {
-		t.Fatalf("hosts unexpectedly requires Compose files for dev-all")
-	}
-	if !commandNeedsComposeFiles("hosts", "legacy-project", legacyCfg) {
-		t.Fatalf("hosts should keep Compose files for legacy overlays")
-	}
-	if commandNeedsComposeFiles("compose", "dev-all", nativeCfg) {
-		t.Fatalf("retired dev-all compose namespace should not load Compose files before refusing")
-	}
-	if !commandNeedsComposeFiles("compose", "native-project", nativeCfg) {
-		t.Fatalf("explicit compose escape hatch should keep Compose file loading")
+		if commandNeedsComposeFiles(cmd, "legacy-project", legacyCfg) {
+			t.Fatalf("%s unexpectedly requires retired files for non-flake overlays", cmd)
+		}
 	}
 }

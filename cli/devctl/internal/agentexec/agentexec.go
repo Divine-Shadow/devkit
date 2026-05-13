@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"devkit/cli/devctl/internal/execx"
-	"devkit/cli/devctl/internal/seed"
 )
 
 const defaultService = "dev-agent"
@@ -164,109 +163,12 @@ func nativeRepoFromDest(dest string) string {
 	return ""
 }
 
-// BuildCommand returns a docker exec invocation that anchors HOME, optionally seeds Codex,
-// and opens an interactive bash shell at the requested destination.
 func BuildCommand(opts CommandOpts) (string, error) {
-	gitName := strings.TrimSpace(opts.GitName)
-	gitEmail := strings.TrimSpace(opts.GitEmail)
-	if gitName == "" || gitEmail == "" {
-		return "", fmt.Errorf("git identity not configured")
-	}
-
-	project := strings.TrimSpace(opts.Project)
-	service := strings.TrimSpace(opts.Service)
-	if service == "" {
-		service = defaultService
-	}
-
-	idx := strings.TrimSpace(opts.Index)
-	if idx == "" {
-		idx = "1"
-	}
-	idxInt, err := strconv.Atoi(idx)
-	if err != nil || idxInt < 1 {
-		idxInt = 1
-	}
-
-	composeProject := strings.TrimSpace(opts.ComposeProject)
-	if composeProject == "" {
-		composeProject = ComposeProjectName(project)
-	}
-
-	containerName := strings.TrimSpace(opts.ContainerName)
-	if containerName == "" {
-		containerName = ResolveContainerName(composeProject, service, idxInt)
-	}
-
-	shouldSeed := true
-	if opts.Tracker != nil {
-		shouldSeed = opts.Tracker.ShouldSeed(containerName)
-	}
-
-	anchor := AnchorHome(project)
-	base := AnchorBase(project)
-	scripts := seed.BuildAnchorScripts(seed.AnchorConfig{Anchor: anchor, Base: base, SeedCodex: shouldSeed})
-
-	var b strings.Builder
-	b.WriteString("set -e; ")
-	if joined := seed.JoinScripts(scripts); joined != "" {
-		b.WriteString(joined)
-		b.WriteString("; ")
-	}
-	fmt.Fprintf(&b, "export HOME=%q CODEX_HOME=%q CODEX_ROLLOUT_DIR=%q XDG_CACHE_HOME=%q XDG_CONFIG_HOME=%q SBT_GLOBAL_BASE=%q; ",
-		anchor,
-		filepath.Join(anchor, ".codex"),
-		filepath.Join(anchor, ".codex", "rollouts"),
-		filepath.Join(anchor, ".cache"),
-		filepath.Join(anchor, ".config"),
-		filepath.Join(anchor, ".sbt"),
-	)
-	fmt.Fprintf(&b, "git config --global user.name %s && git config --global user.email %s; ", shSingleQuote(gitName), shSingleQuote(gitEmail))
-	fmt.Fprintf(&b, "cd %q 2>/dev/null || true; if command -v zsh >/dev/null 2>&1; then exec zsh -i; fi; exec bash", opts.Dest)
-	shell := b.String()
-
-	script := shSingleQuote(shell)
-	if containerName != "" {
-		return "docker exec -it " + shSingleQuote(containerName) + " bash -lc " + script, nil
-	}
-
-	lookup := buildLookupLoop(opts.Files, service, idx, composeProject)
-	msg := "No container for service " + service + " yet."
-	if strings.TrimSpace(composeProject) != "" {
-		msg = "No container for " + composeProject + "/" + service + " yet."
-	}
-	return lookup + "if [ -z \"$name\" ]; then echo " + shSingleQuote(msg) + "; exec bash; fi; " +
-		"docker exec -it \"$name\" bash -lc " + script, nil
+	return "", fmt.Errorf("container-backed window commands are retired; use BuildNativeCommand")
 }
 
 func buildLookupLoop(fileArgs []string, service, idx, composeProject string) string {
-	clauses := make([]string, 0, 6)
-	if cp := strings.TrimSpace(composeProject); cp != "" {
-		clauses = append(clauses,
-			fmt.Sprintf("name=$(docker ps --filter label=com.docker.compose.project=%s --filter label=com.docker.compose.service=%s --format '{{.Names}}' | sed -n '%sp')", shSingleQuote(cp), shSingleQuote(service), idx),
-			fmt.Sprintf("name=$(docker ps --filter label=com.docker.compose.project=%s --filter label=com.docker.compose.service=%s --format '{{.Names}}' | sed -n '1p')", shSingleQuote(cp), shSingleQuote(service)),
-		)
-	}
-	if len(fileArgs) > 0 {
-		files := strings.Join(fileArgs, " ")
-		clauses = append(clauses,
-			fmt.Sprintf("name=$(docker compose %s ps --format '{{.Name}}' %s | sed -n '%sp')", files, shSingleQuote(service), idx),
-			fmt.Sprintf("name=$(docker compose %s ps --format '{{.Name}}' %s | sed -n '1p')", files, shSingleQuote(service)),
-		)
-	}
-	clauses = append(clauses,
-		fmt.Sprintf("name=$(docker ps --filter label=com.docker.compose.service=%s --format '{{.Names}}' | sed -n '%sp')", shSingleQuote(service), idx),
-		fmt.Sprintf("name=$(docker ps --filter label=com.docker.compose.service=%s --format '{{.Names}}' | sed -n '1p')", shSingleQuote(service)),
-	)
-
-	var loop strings.Builder
-	loop.WriteString("name=''; for i in $(seq 1 120); do ")
-	for _, clause := range clauses {
-		loop.WriteString(clause)
-		loop.WriteString("; if [ -n \"$name\" ]; then break; fi; ")
-	}
-	loop.WriteString("sleep 0.5; done; ")
-	return loop.String()
+	return ""
 }
 
 // ResolveContainerName returns the container name for the given compose project/service/index.

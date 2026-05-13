@@ -494,7 +494,7 @@ func TestEnsureNativeLifecycleProjectRejectsOverlayWithoutRuntimeFlake(t *testin
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if got := err.Error(); got != "native lifecycle requires runtime.flake for -p legacy; use 'devctl -p legacy compose <command>' for legacy Compose overlays" {
+	if got := err.Error(); got != "native lifecycle requires runtime.flake for -p legacy; add a flake-backed runtime before using lifecycle commands" {
 		t.Fatalf("err = %q", got)
 	}
 }

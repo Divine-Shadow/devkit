@@ -24,7 +24,6 @@ type Entry struct {
 	CoreCheck    string
 	Canonical    bool
 	ConfigPath   string
-	ComposePath  string
 	FlakePath    string
 }
 
@@ -113,7 +112,6 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				CoreCheck:    strings.TrimSpace(cfg.Runtime.CoreCheck),
 				Canonical:    canonical,
 				ConfigPath:   filepath.Join(cfgDir, "devkit.yaml"),
-				ComposePath:  filepath.Join(cfgDir, "compose.override.yml"),
 				FlakePath:    filepath.Join(cfgDir, "flake.nix"),
 			})
 		}
@@ -176,20 +174,6 @@ func Check(entries []Entry, dryRun bool) error {
 		} else if e.Repo != "" && e.Canonical {
 			seenRepo[e.Repo] = e.Overlay
 		}
-		if e.ComposePath != "" {
-			if _, err := os.Stat(e.ComposePath); err != nil && !os.IsNotExist(err) {
-				problems = append(problems, fmt.Sprintf("%s: stat compose override: %v", e.Overlay, err))
-			}
-		}
-		if e.Image != "" && e.CodexVersion != "" {
-			if dryRun {
-				fmt.Printf("[dry-run] docker run --rm --entrypoint bash %s -lc '/usr/local/bin/codex --version'\n", e.Image)
-			} else if got, err := imageCodexVersion(e.Image); err != nil {
-				problems = append(problems, fmt.Sprintf("%s: %s codex version check failed: %v", e.Overlay, e.Image, err))
-			} else if got != e.CodexVersion {
-				problems = append(problems, fmt.Sprintf("%s: %s codex version %s, want %s", e.Overlay, e.Image, got, e.CodexVersion))
-			}
-		}
 		if e.Flake != "" && e.CodexVersion != "" {
 			if dryRun {
 				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --no-write-lock-file --command bash -lc 'codex --version'\n", e.Flake)
@@ -240,19 +224,6 @@ func rootFlakeRef(overlay string) string {
 
 func overlayLocalFlakeRef(overlay string) string {
 	return "./overlays/" + overlay + "#default"
-}
-
-func imageCodexVersion(image string) (string, error) {
-	cmd := exec.Command("docker", "run", "--rm", "--entrypoint", "bash", image, "-lc", "/usr/local/bin/codex --version")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return "", fmt.Errorf("empty codex version output")
-	}
-	return strings.TrimPrefix(fields[len(fields)-1], "v"), nil
 }
 
 func flakeCodexVersion(flake string) (string, error) {

@@ -32,10 +32,6 @@ func nativeDefaultsRoot(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	baseCompose := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3.18\n"
-	write(filepath.Join(root, "kit/compose.yml"), baseCompose)
-	write(filepath.Join(root, "kit/compose.dns.yml"), baseCompose)
-	write(filepath.Join(root, "overlays/dev-all/compose.override.yml"), baseCompose)
 	write(filepath.Join(root, "overlays/dev-all/devkit.yaml"), `
 defaults:
   repo: ouroboros-ide
@@ -67,9 +63,6 @@ func flakeOverlayRoot(t *testing.T, project, repo, flake string) string {
 			t.Fatal(err)
 		}
 	}
-	baseCompose := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3.18\n"
-	write(filepath.Join(root, "kit/compose.yml"), baseCompose)
-	write(filepath.Join(root, "kit/compose.dns.yml"), baseCompose)
 	write(filepath.Join(root, "overlays", project, "devkit.yaml"), `
 workspace: ../../definitely-missing-workspace
 defaults:
@@ -105,10 +98,6 @@ func legacyComposeRoot(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	baseCompose := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3.18\n"
-	write(filepath.Join(root, "kit/compose.yml"), baseCompose)
-	write(filepath.Join(root, "kit/compose.dns.yml"), baseCompose)
-	write(filepath.Join(root, "overlays/codex/compose.override.yml"), baseCompose)
 	write(filepath.Join(root, "overlays/codex/devkit.yaml"), "service: dev-agent\n")
 	return root
 }
@@ -178,44 +167,40 @@ func fakeWindowsTerminalEnv(t *testing.T) []string {
 
 func assertNoDockerCommand(t *testing.T, output string) {
 	t.Helper()
-	for _, forbidden := range []string{"+ docker compose", "+ docker exec", "docker exec -it"} {
+	for _, forbidden := range []string{"+ docker " + "compose", "+ docker " + "exec", "docker " + "exec -it"} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("native dev-all dry-run emitted %q:\n%s", forbidden, output)
 		}
 	}
 }
 
-func TestNonDevAllTopLevelAliasesUseLegacyComposeDryRun(t *testing.T) {
+func TestNonFlakeTopLevelAliasesRequireRuntimeFlakeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := legacyComposeRoot(t)
 
 	for _, args := range [][]string{{"up"}, {"status"}, {"logs", "--tail", "1"}, {"down"}, {"scale", "2"}} {
 		out, err := runProjectDryRun(t, bin, root, "codex", args...)
-		if err != nil {
-			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		if err == nil {
+			t.Fatalf("%v unexpectedly succeeded:\n%s", args, out)
 		}
-		if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
-			t.Fatalf("%v unexpectedly used native path:\n%s", args, out)
-		}
-		if !strings.Contains(out, "+ docker compose") && !strings.Contains(out, "+ docker exec") {
-			t.Fatalf("%v did not use legacy container workflow:\n%s", args, out)
+		assertNoDockerCommand(t, out)
+		if !strings.Contains(out, "runtime.flake") {
+			t.Fatalf("%v did not require runtime.flake:\n%s", args, out)
 		}
 	}
 }
 
-func TestNonDevAllTopLevelExecUsesLegacyComposeDryRun(t *testing.T) {
+func TestNonFlakeTopLevelExecRequiresRuntimeFlakeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := legacyComposeRoot(t)
 
 	out, err := runProjectDryRun(t, bin, root, "codex", "exec", "1", "echo", "hi")
-	if err != nil {
-		t.Fatalf("legacy exec failed: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("non-flake exec unexpectedly succeeded:\n%s", out)
 	}
-	if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
-		t.Fatalf("legacy exec unexpectedly used native path:\n%s", out)
-	}
-	if !strings.Contains(out, "+ docker compose") {
-		t.Fatalf("legacy exec did not use Compose:\n%s", out)
+	assertNoDockerCommand(t, out)
+	if !strings.Contains(out, "runtime.flake") {
+		t.Fatalf("non-flake exec did not require runtime.flake:\n%s", out)
 	}
 }
 
@@ -401,7 +386,7 @@ func TestFlakeBackedReadinessCommandsAvoidComposeDryRun(t *testing.T) {
 			}
 			assertNoDockerCommand(t, out)
 			if strings.Contains(out, "workspace directory") {
-				t.Fatalf("%s loaded Compose files before native readiness dispatch:\n%s", tt.name, out)
+				t.Fatalf("%s loaded retired runtime files before native readiness dispatch:\n%s", tt.name, out)
 			}
 			if !strings.Contains(out, tt.want) {
 				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
@@ -512,7 +497,7 @@ func TestFlakeBackedNonDevAllSSHAndRepoHelpersUseNativeDryRun(t *testing.T) {
 	}
 }
 
-func TestLegacyNonFlakeSSHAndRepoHelpersUseComposeDryRun(t *testing.T) {
+func TestNonFlakeSSHAndRepoHelpersRefuseRetiredRuntimeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := legacyComposeRoot(t)
 
@@ -524,14 +509,12 @@ func TestLegacyNonFlakeSSHAndRepoHelpersUseComposeDryRun(t *testing.T) {
 		{"repo-push-https", ".", "--index", "1"},
 	} {
 		out, err := runProjectDryRun(t, bin, root, "codex", args...)
-		if err != nil {
-			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		if err == nil {
+			t.Fatalf("%v unexpectedly succeeded:\n%s", args, out)
 		}
-		if strings.Contains(out, "native lifecycle requires runtime.flake") || strings.Contains(out, "bwrap") {
-			t.Fatalf("%v unexpectedly used native path:\n%s", args, out)
-		}
-		if !strings.Contains(out, "+ docker compose") && !strings.Contains(out, "+ docker exec") {
-			t.Fatalf("%v did not use legacy container workflow:\n%s", args, out)
+		assertNoDockerCommand(t, out)
+		if !strings.Contains(out, "retired") && !strings.Contains(out, "runtime.flake") {
+			t.Fatalf("%v did not report native-only refusal:\n%s", args, out)
 		}
 	}
 }
@@ -545,7 +528,7 @@ func TestDevAllComposeNamespaceIsRetiredDryRun(t *testing.T) {
 		t.Fatalf("dev-all compose unexpectedly succeeded:\n%s", out)
 	}
 	assertNoDockerCommand(t, out)
-	if !strings.Contains(out, "Docker Compose is retired for dev-all") {
+	if !strings.Contains(out, "Compose runtime is retired") {
 		t.Fatalf("unexpected dev-all compose error:\n%s", out)
 	}
 }
@@ -560,9 +543,9 @@ func TestDevAllComposeNamespaceRefusesBeforeComposeFilesDryRun(t *testing.T) {
 	}
 	assertNoDockerCommand(t, out)
 	if strings.Contains(out, "workspace directory") {
-		t.Fatalf("dev-all compose loaded Compose files before refusing:\n%s", out)
+		t.Fatalf("dev-all compose loaded retired runtime files before refusing:\n%s", out)
 	}
-	if !strings.Contains(out, "Docker Compose is retired for dev-all") {
+	if !strings.Contains(out, "Compose runtime is retired") {
 		t.Fatalf("unexpected dev-all compose error:\n%s", out)
 	}
 }

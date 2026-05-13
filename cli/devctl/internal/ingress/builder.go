@@ -25,12 +25,12 @@ type renderedRoute struct {
 	keyPath  string
 }
 
-// Fragment represents a generated docker compose fragment that wires an ingress service.
+// Fragment represents a generated ingress fragment.
 type Fragment struct {
 	Path string
 }
 
-// BuildFragment renders the compose fragment for the provided ingress configuration.
+// BuildFragment renders the ingress fragment for the provided configuration.
 // When cfg is nil, it returns an empty Fragment and no error.
 func BuildFragment(project string, cfg *config.IngressConfig, overlayDir string, root string) (Fragment, error) {
 	var out Fragment

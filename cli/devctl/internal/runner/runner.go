@@ -9,78 +9,33 @@ import (
 	"devkit/cli/devctl/internal/execx"
 )
 
-// Compose runs `docker compose` with the provided -f arguments and subcommand.
-// When dry is true it only prints the command to stderr.
+func retiredRuntimeError() string {
+	return "Compose runtime is retired; use the native flake lifecycle through kit/scripts/devkit"
+}
+
 func Compose(dry bool, fileArgs []string, args ...string) {
-	ctx, cancel := execx.WithTimeout(10 * time.Minute)
-	defer cancel()
-	all := append([]string{"compose"}, append(fileArgs, args...)...)
 	if dry {
-		fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
-		return
+		fmt.Fprintln(os.Stderr, "+ "+retiredRuntimeError())
+	} else {
+		fmt.Fprintln(os.Stderr, retiredRuntimeError())
 	}
-	res := execx.RunCtx(ctx, "docker", all...)
-	if res.Code != 0 {
-		os.Exit(res.Code)
-	}
+	os.Exit(2)
 }
 
-// ComposeInteractive executes docker compose without a timeout for interactive usage.
 func ComposeInteractive(dry bool, fileArgs []string, args ...string) {
-	all := append([]string{"compose"}, append(fileArgs, args...)...)
-	if dry {
-		fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
-		return
-	}
-	res := execx.Run("docker", all...)
-	if res.Code != 0 {
-		os.Exit(res.Code)
-	}
+	Compose(dry, fileArgs, args...)
 }
 
-// ComposeInput runs docker compose with stdin content forwarded to the process.
 func ComposeInput(dry bool, fileArgs []string, input []byte, args ...string) {
-	ctx, cancel := execx.WithTimeout(10 * time.Minute)
-	defer cancel()
-	all := append([]string{"compose"}, append(fileArgs, args...)...)
-	if dry {
-		fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
-		return
-	}
-	res := execx.RunWithInput(ctx, input, "docker", all...)
-	if res.Code != 0 {
-		os.Exit(res.Code)
-	}
+	Compose(dry, fileArgs, args...)
 }
 
-// ComposeWithProject adds an explicit project name (-p) before running docker compose.
 func ComposeWithProject(dry bool, projectName string, fileArgs []string, args ...string) error {
-	ctx, cancel := execx.WithTimeout(10 * time.Minute)
-	defer cancel()
-	all := []string{"compose"}
-	if strings.TrimSpace(projectName) != "" {
-		all = append(all, "-p", projectName)
-	}
-	all = append(all, append(fileArgs, args...)...)
 	if dry {
-		fmt.Fprintln(os.Stderr, "+ docker "+strings.Join(all, " "))
+		fmt.Fprintln(os.Stderr, "+ "+retiredRuntimeError())
 		return nil
 	}
-	res, output := execx.RunCtxWithOutput(ctx, "docker", all...)
-	if res.Code != 0 {
-		msg := strings.TrimSpace(output)
-		if res.Err != nil {
-			if msg != "" {
-				return fmt.Errorf("%w: %s", res.Err, msg)
-			}
-			return res.Err
-		}
-		if msg != "" {
-			return fmt.Errorf("docker compose exited with code %d: %s", res.Code, msg)
-		}
-		return fmt.Errorf("docker compose exited with code %d", res.Code)
-	}
-	return nil
+	return fmt.Errorf(retiredRuntimeError())
 }
 
 // Host executes a host binary with a default 10 minute timeout.

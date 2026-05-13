@@ -8,12 +8,12 @@ Principles
 - Use `RunWithInput` (stdin) to write files; always pair with `chmod`.
 - Precede every write with `mkdir -p` of the target directory.
 - For config formats like ssh_config, write raw paths; do not use shell quotes (OpenSSH treats them literally).
-- Keep bash snippets minimal: compose small commands rather than large one‑liners.
+- Keep bash snippets minimal: combine small commands rather than large one-liners.
 
 Patterns
 - Write file safely (stdin + chmod):
   - `exec ... bash -lc "mkdir -p '<dir>' && cat > '<file>' && chmod 600 '<file>'"` with content provided via stdin.
-- Avoid compose `--index` for selection; resolve containers by `com.docker.compose.*` labels and `docker exec`.
+- Avoid runtime-specific index shortcuts; resolve native agents through the devkit command surface.
 - Generate config text in Go (e.g., `internal/sshcfg.BuildGitHubConfigFor`).
 
 Checklist for new flows
@@ -23,4 +23,3 @@ Checklist for new flows
 - [ ] No quotes in ssh_config paths; absolute or `~` as appropriate.
 - [ ] Global Git set under the effective HOME; repo‑local overrides cleared when necessary.
 - [ ] Validate inside the container: `ssh -F ~/.ssh/config -T github.com -o BatchMode=yes` and `git pull --ff-only`.
-

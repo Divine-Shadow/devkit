@@ -1,16 +1,11 @@
 # Legacy filename retained for compatibility. This layout now uses the
-# canonical ouro8 session and compose project.
+# canonical ouro8 native session.
 session: devkit_ouro8
 
 overlays:
   - project: dev-all
     service: dev-agent
     count: 8
-    profiles: dns
-    compose_project: devkit-ouro8
-    network:
-      subnet: 172.31.155.0/24
-      dns_ip: 172.31.155.3
     worktrees:
       repo: ouroboros-ide
       count: 8

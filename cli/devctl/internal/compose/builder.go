@@ -5,9 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"devkit/cli/devctl/internal/config"
-	"devkit/cli/devctl/internal/ingress"
 )
 
 type Paths struct {
@@ -35,107 +32,12 @@ func DetectPathsFromExe(exePath string) (Paths, error) {
 	return Paths{Root: root, Kit: kit, OverlayPaths: uniquePaths(overlays)}, nil
 }
 
-// Files builds docker compose -f arguments based on profiles and overlay presence.
 func Files(p Paths, project, profile string) ([]string, error) {
-	var args []string
-	base := filepath.Join(p.Kit, "compose.yml")
-	args = append(args, "-f", base)
-
-	var overlayCfg config.OverlayConfig
-	var overlayDir string
-	var cfgErr error
-	if project != "" {
-		overlayCfg, overlayDir, cfgErr = config.ReadAll(p.OverlayPaths, project)
-		if cfgErr != nil {
-			return nil, cfgErr
-		}
-		if ws := config.ResolveWorkspace(overlayCfg, overlayDir, p.Root); ws != "" {
-			if err := ensureWorkspaceWritable(ws); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	eff := strings.TrimSpace(profile)
-	if eff == "" {
-		eff = "dns" // default, matching current bash script
-	}
-	if eff != "" {
-		for _, part := range strings.Split(eff, ",") {
-			switch strings.TrimSpace(part) {
-			case "hardened":
-				args = append(args, "-f", filepath.Join(p.Kit, "compose.hardened.yml"))
-			case "dns":
-				args = append(args, "-f", filepath.Join(p.Kit, "compose.dns.yml"))
-			case "envoy":
-				args = append(args, "-f", filepath.Join(p.Kit, "compose.envoy.yml"))
-			case "pool":
-				args = append(args, "-f", filepath.Join(p.Kit, "compose.pool.yml"))
-			case "":
-				// skip
-			default:
-				return nil, fmt.Errorf("unknown profile: %s", part)
-			}
-		}
-	}
-
-	if project != "" {
-		if overlay := findOverlayFile(p.OverlayPaths, project, "compose.override.yml"); overlay != "" {
-			args = append(args, "-f", overlay)
-		}
-		if overlayCfg.Ingress != nil {
-			frag, err := ingress.BuildFragment(project, overlayCfg.Ingress, overlayDir, p.Root)
-			if err != nil {
-				return nil, err
-			}
-			if frag.Path != "" {
-				args = append(args, "-f", frag.Path)
-			}
-		}
-	}
-	return args, nil
+	return nil, fmt.Errorf("Compose file resolution is retired; configure runtime.flake for %s", strings.TrimSpace(project))
 }
 
-func ensureWorkspaceWritable(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("workspace directory %s does not exist", path)
-		}
-		return fmt.Errorf("workspace directory %s not accessible: %w", path, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("workspace directory %s is not a directory", path)
-	}
-	f, err := os.CreateTemp(path, ".devkit-workspace-check-*")
-	if err != nil {
-		return fmt.Errorf("workspace directory %s not writable: %w", path, err)
-	}
-	name := f.Name()
-	_ = f.Close()
-	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("workspace directory %s cleanup failed: %w", path, err)
-	}
-	return nil
-}
-
-func fileExists(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && !st.IsDir()
-}
-
-// AllProfilesFiles returns -f args including all profiles (hardened,dns,envoy) and overlay override if present.
 func AllProfilesFiles(p Paths, project string) []string {
-	args := []string{"-f", filepath.Join(p.Kit, "compose.yml")}
-	args = append(args, "-f", filepath.Join(p.Kit, "compose.hardened.yml"))
-	args = append(args, "-f", filepath.Join(p.Kit, "compose.dns.yml"))
-	args = append(args, "-f", filepath.Join(p.Kit, "compose.envoy.yml"))
-	if project != "" {
-		if overlay := findOverlayFile(p.OverlayPaths, project, "compose.override.yml"); overlay != "" {
-			args = append(args, "-f", overlay)
-		}
-	}
-	return args
+	return nil
 }
 
 func splitOverlayPaths(root, override string) []string {
@@ -168,16 +70,6 @@ func uniquePaths(paths []string) []string {
 		}
 	}
 	return result
-}
-
-func findOverlayFile(paths []string, project, name string) string {
-	for _, root := range paths {
-		candidate := filepath.Join(root, project, name)
-		if fileExists(candidate) {
-			return candidate
-		}
-	}
-	return ""
 }
 
 // FindOverlayDir returns the first directory containing the given overlay project.
