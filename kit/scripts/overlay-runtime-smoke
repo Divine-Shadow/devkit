@@ -17,11 +17,23 @@ overlays=(
   pokeemerald
 )
 
-flake_for() {
-  case "$1" in
-    _template) printf '%s\n' template-agent ;;
-    *) printf '%s\n' "$1" ;;
-  esac
+runtime_flake_for() {
+  local overlay="$1"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  awk '
+    /^[[:space:]]*runtime:[[:space:]]*$/ { in_runtime = 1; next }
+    /^[^[:space:]][^:]*:/ { if (in_runtime) exit }
+    in_runtime && /^[[:space:]]+flake:[[:space:]]*/ {
+      sub(/^[[:space:]]+flake:[[:space:]]*/, "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if (substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$yaml"
 }
 
 smoke_for() {
@@ -59,15 +71,19 @@ smoke_for() {
 run_overlay() {
   local overlay="$1"
   local flake smoke
-  flake="$(flake_for "$overlay")"
+  flake="$(runtime_flake_for "$overlay")"
+  if [ -z "$flake" ]; then
+    echo "missing runtime.flake for overlay runtime smoke: $overlay" >&2
+    return 2
+  fi
   smoke="$(smoke_for "$overlay")" || {
     echo "unknown overlay runtime smoke: $overlay" >&2
     return 2
   }
-  printf '\n== %s (%s) ==\n' "$overlay" ".#$flake"
+  printf '\n== %s (%s) ==\n' "$overlay" "$flake"
   (
     cd "$DEVKIT_ROOT"
-    nix "${NIX_FLAGS[@]}" develop ".#$flake" --command bash -lc \
+    nix "${NIX_FLAGS[@]}" develop "$flake" --no-write-lock-file --command bash -lc \
       "got=\"\$(codex --version | awk '{print \$NF}' | sed 's/^v//')\"; test \"\$got\" = '$EXPECTED_CODEX_VERSION'; $smoke"
   )
 }

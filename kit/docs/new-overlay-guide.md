@@ -10,7 +10,7 @@ Manual steps if not using the template:
   - Required: `workspace: ../../<your-repo-folder>` — the CLI resolves it to an absolute `WORKSPACE_DIR` before explicit legacy Compose runs. Native lifecycle uses `defaults.repo` and the native worktree/state roots.
   - Recommended: `service: <service-name>` to set the default service for CLI exec/attach/ssh/repo commands.
   - Recommended: `defaults:` block describing the repo name (`defaults.repo`), desired agent count (`defaults.agents`), and branch metadata (`defaults.base_branch`, `defaults.branch_prefix`) so runtime-config helpers work without extra flags.
-  - Required: `runtime.flake: .#<overlay-name>` plus `runtime.codex_version` and `runtime.core_check`. `_template` uses `.#template-agent`.
+  - Required: `runtime.flake` plus `runtime.codex_version` and `runtime.core_check`. Production overlays may keep root refs such as `.#<overlay-name>`; new overlays copied from `_template` use the overlay-local shape `./overlays/<name>#default`.
   - Optional: `env:` to provide host defaults (e.g., `AWS_PROFILE`) that users can still override.
   - Optional: `env_files:` pointing at dotenv-style files (paths relative to the overlay directory) to prepopulate env vars without committing secrets.
   - Optional hooks: `warm`, `maintain` (run inside the configured runtime via `devkit warm|maintain`; flake-backed overlays use native `exec`).
@@ -96,7 +96,7 @@ hooks:
   maintain: npm run build
 ```
 - `service:` ensures CLI commands like `ssh-setup`, `repo-push-ssh`, `exec`, and `attach` target the right container.
-- `runtime.flake` is the authoritative runtime pairing and remains a root-flake ref such as `.#<overlay-name>` for CLI compatibility. Compose image tags in `compose.override.yml` are legacy lifecycle metadata only.
+- `runtime.flake` is the authoritative runtime pairing. Root-flake refs such as `.#<overlay-name>` remain supported for CLI compatibility, and overlay-local refs such as `./overlays/<name>#default` are supported for canary/new-overlay flows. Compose image tags in `compose.override.yml` are legacy lifecycle metadata only.
 
 4) Networking gotchas
 - Your overlay service must join `dev-internal` to resolve `tinyproxy` and DNS sidecar names.

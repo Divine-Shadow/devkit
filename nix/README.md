@@ -2,7 +2,8 @@
 
 This directory tracks the Nix-first replacement surface for long-lived devkit
 agent containers. The root `flake.nix` remains the umbrella entrypoint, while
-each overlay owns its shell definition in `overlays/<overlay>/runtime.nix`.
+each overlay owns its shell definition in `overlays/<overlay>/runtime.nix` and
+a thin overlay-local flake at `overlays/<overlay>/flake.nix`.
 
 Current shell targets:
 
@@ -31,7 +32,7 @@ nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --comma
 Overlay smoke commands:
 
 ```bash
-nix --extra-experimental-features 'nix-command flakes' develop .#template-agent --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template#default --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
 nix --extra-experimental-features 'nix-command flakes' develop .#codex --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
 nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
 nix --extra-experimental-features 'nix-command flakes' develop .#dumb-onion-hax --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
@@ -50,8 +51,9 @@ kit/scripts/overlay-runtime-smoke
 Every shell conversion must be verified against
 `kit/docs/proposals/nix-runtime-verification-contract.md`.
 `nix flake check` also runs `nix/validate-overlay-runtimes.py`, which requires
-each overlay `devkit.yaml` to declare the expected `runtime.flake` and have a
-matching `overlays/<overlay>/runtime.nix`.
+each overlay `devkit.yaml` to declare an accepted `runtime.flake` and have
+matching `overlays/<overlay>/runtime.nix` and `overlays/<overlay>/flake.nix`
+files.
 
 Current smoke evidence and known parity gaps are tracked in
 `nix/runtime-parity.md`.

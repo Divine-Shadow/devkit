@@ -11,10 +11,11 @@ runtime to refresh.
 
 Run `devkit/kit/scripts/devkit image-matrix --all` for the machine-readable
 view. The command name is historical; runtime metadata now uses
-`runtime.flake`. The values in `runtime.flake` intentionally remain root-flake
-refs such as `.#dev-all` in this transition slice. Each flake-backed overlay
-also has an overlay-local `flake.nix`; use `nix develop ./overlays/<overlay>`
-when you want to enter that overlay directly.
+`runtime.flake`. Production overlays intentionally remain root-flake refs such
+as `.#dev-all` during this transition. `_template` is the overlay-local canary
+and uses `./overlays/_template#default`. Each flake-backed overlay also has an
+overlay-local `flake.nix`; use `nix develop ./overlays/<overlay>` when you want
+to enter that overlay directly.
 
 | Repo | Canonical overlay | Service | Runtime | Core build check |
 | --- | --- | --- | --- | --- |

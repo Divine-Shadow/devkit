@@ -266,7 +266,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
-	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--command")
+	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--no-write-lock-file", "--command")
 	args = append(args, shellCommand(p.Agent.SandboxWorktree, command)...)
 	return Command{Path: "bwrap", Args: args, Dir: p.DevkitHostRoot}, nil
 }

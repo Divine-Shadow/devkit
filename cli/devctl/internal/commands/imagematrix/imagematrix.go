@@ -152,8 +152,8 @@ func Check(entries []Entry, dryRun bool) error {
 			problems = append(problems, fmt.Sprintf("%s: runtime.image is legacy; declare runtime.flake instead", e.Overlay))
 		}
 		if e.Flake != "" {
-			if expected := expectedFlake(e.Overlay); expected != "" && e.Flake != expected {
-				problems = append(problems, fmt.Sprintf("%s: runtime.flake %s does not match expected %s", e.Overlay, e.Flake, expected))
+			if !flakeRefAccepted(e.Overlay, e.Flake) {
+				problems = append(problems, fmt.Sprintf("%s: runtime.flake %s is not an accepted ref (%s)", e.Overlay, e.Flake, strings.Join(acceptedFlakeRefs(e.Overlay), " or ")))
 			}
 			if strings.TrimSpace(e.FlakePath) == "" {
 				problems = append(problems, fmt.Sprintf("%s: overlay-local flake path is empty", e.Overlay))
@@ -192,7 +192,7 @@ func Check(entries []Entry, dryRun bool) error {
 		}
 		if e.Flake != "" && e.CodexVersion != "" {
 			if dryRun {
-				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --command bash -lc 'codex --version'\n", e.Flake)
+				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --no-write-lock-file --command bash -lc 'codex --version'\n", e.Flake)
 			} else if got, err := flakeCodexVersion(e.Flake); err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version check failed: %v", e.Overlay, e.Flake, err))
 			} else if got != e.CodexVersion {
@@ -214,11 +214,32 @@ func runtimeArtifact(e Entry) string {
 	return e.Image
 }
 
-func expectedFlake(overlay string) string {
+func acceptedFlakeRefs(overlay string) []string {
+	refs := []string{rootFlakeRef(overlay)}
+	if overlay == "_template" {
+		refs = append(refs, overlayLocalFlakeRef(overlay))
+	}
+	return refs
+}
+
+func flakeRefAccepted(overlay string, flake string) bool {
+	for _, accepted := range acceptedFlakeRefs(overlay) {
+		if flake == accepted {
+			return true
+		}
+	}
+	return false
+}
+
+func rootFlakeRef(overlay string) string {
 	if overlay == "_template" {
 		return ".#template-agent"
 	}
 	return ".#" + overlay
+}
+
+func overlayLocalFlakeRef(overlay string) string {
+	return "./overlays/" + overlay + "#default"
 }
 
 func imageCodexVersion(image string) (string, error) {
@@ -235,7 +256,7 @@ func imageCodexVersion(image string) (string, error) {
 }
 
 func flakeCodexVersion(flake string) (string, error) {
-	cmd := exec.Command("nix", "--extra-experimental-features", "nix-command flakes", "develop", flake, "--command", "bash", "-lc", "codex --version")
+	cmd := exec.Command("nix", "--extra-experimental-features", "nix-command flakes", "develop", flake, "--no-write-lock-file", "--command", "bash", "-lc", "codex --version")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

@@ -14,7 +14,8 @@ Devkit currently has one root `flake.nix` that defines every native runtime shel
 - [x] (2026-05-13T02:38:00Z) Added metadata validation so overlay flakes are checked structurally by root checks and `image-matrix --check`.
 - [x] (2026-05-13T02:38:00Z) Updated docs to describe root-compatible and overlay-local flake entrypoints.
 - [x] (2026-05-13T02:49:00Z) Ran the verification gate and recorded evidence.
-- [ ] Commit the completed slice.
+- [x] (2026-05-13T02:55:00Z) Committed the overlay-local flake scaffold as `76a84fe`.
+- [x] (2026-05-13T03:31:41Z) Proved overlay-local `runtime.flake` support with `_template` as canary while production overlays keep root refs.
 
 ## Surprises & Discoveries
 
@@ -26,6 +27,9 @@ Devkit currently has one root `flake.nix` that defines every native runtime shel
 
 - Observation: The existing CLI can keep using root refs while overlay-local flakes are introduced.
   Evidence: A subagent inspected native flake resolution and found `runtime.flake` is treated as an opaque string by native planning, while `image-matrix` and `nix/validate-overlay-runtimes.py` intentionally validate root-style refs.
+
+- Observation: `nix develop ./overlays/_template#default` is valid from the repo root, but writing locks must be disabled for read-only verification.
+  Evidence: A subagent syntax probe succeeded and created `overlays/_template/flake.lock`; the file was removed and subsequent checks used `--no-write-lock-file`.
 
 ## Decision Log
 
@@ -41,9 +45,15 @@ Devkit currently has one root `flake.nix` that defines every native runtime shel
   Rationale: The overlay-local flakes delegate to the root flake, so committing eight child lock files would duplicate and drift from the root lock graph. Verification uses `--no-write-lock-file` for overlay-local smoke commands.
   Date/Author: 2026-05-13 / Codex
 
+- Decision: Use `_template` as the canary for overlay-local `runtime.flake`.
+  Rationale: `_template` is non-production scaffolding, already has an overlay-local flake, and is included in `--all` validation without risking active `dev-all` agents.
+  Date/Author: 2026-05-13 / Codex
+
 ## Outcomes & Retrospective
 
-The implementation added thin overlay-local flakes for all flake-backed overlays while leaving `runtime.flake` values rooted at `.#...` for compatibility. Root flake checks, overlay runtime smoke, image-matrix validation, CLI dry-runs, and overlay-local `nix develop` checks all passed. No per-overlay lock files were generated or committed.
+The first implementation added thin overlay-local flakes for all flake-backed overlays while leaving `runtime.flake` values rooted at `.#...` for compatibility. Root flake checks, overlay runtime smoke, image-matrix validation, CLI dry-runs, and overlay-local `nix develop` checks all passed. No per-overlay lock files were generated or committed. The next canary phase makes `_template` use an overlay-local `runtime.flake` while keeping production overlays on root refs.
+
+The canary phase changed `_template` to `runtime.flake: "./overlays/_template#default"`, kept `dev-all` and production overlays on root refs, taught validation to accept only that canary overlay-local ref, and updated native Nix invocations that may touch overlay flakes to pass `--no-write-lock-file`.
 
 ## Context and Orientation
 
@@ -59,7 +69,7 @@ Second, extend the existing overlay runtime metadata validation so it verifies t
 
 Third, update documentation to show both root-compatible refs and overlay-local entrypoints, and explicitly state that `runtime.flake` remains root-compatible in this slice.
 
-Finally, run the verification gate from the repository root and record the observed evidence.
+For the canary phase, teach validation and smoke tooling to accept both root refs and overlay-local refs for the matching overlay, then change only `_template` to an overlay-local `runtime.flake`. Run the verification gate from the repository root and record the observed evidence.
 
 ## Concrete Steps
 
@@ -74,10 +84,11 @@ Run all commands from `/home/bayesartre/dev/devkit` unless a command says otherw
    `kit/scripts/devkit --dry-run -p <overlay> native plan --repo <repo> --flake .#<overlay-or-alias>`.
 7. Run representative overlay-local Nix smoke commands:
    `nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<overlay> --command true`.
+8. For the canary phase, run `nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template --no-write-lock-file --command true` and wrapper dry-runs for `_template`.
 
 ## Validation and Acceptance
 
-Acceptance requires all flake-backed overlays to contain `flake.nix`, root `nix flake check` to pass, the image matrix to remain OK, the runtime smoke target to pass, and representative dry-runs to prove the CLI still uses root-compatible refs. If CLI resolution code changes, run `go test -count=1 ./...`; if only Nix metadata and docs change, Go tests are optional under the autonomy contract.
+Acceptance requires all flake-backed overlays to contain `flake.nix`, root `nix flake check` to pass, the image matrix to remain OK, the runtime smoke target to pass, and representative dry-runs to prove the CLI still uses root-compatible refs. For the canary phase, `_template` must use an overlay-local `runtime.flake`, validation must accept it, `dev-all` must still use a root ref, and no overlay lock files should be created. If CLI resolution code changes, run `go test -count=1 ./...`.
 
 ## Idempotence and Recovery
 
@@ -118,6 +129,35 @@ Gate evidence:
     nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<overlay> --no-write-lock-file --command sh -c 'test "$DEVKIT_NIX_SHELL" = "$expected"'
     Result: exited 0 for all eight overlays. `find overlays -maxdepth 2 -name flake.lock -print` produced no output.
 
+Canary evidence:
+
+    nix --extra-experimental-features 'nix-command flakes' develop --command sh -c 'cd cli/devctl && go test -count=1 ./...'
+    Result: exited 0; all Go packages passed.
+
+    nix --extra-experimental-features 'nix-command flakes' develop --command make -C cli/devctl build
+    Result: exited 0; `kit/bin/devctl` was rebuilt.
+
+    nix --extra-experimental-features 'nix-command flakes' flake check
+    Result: exited 0; root metadata validation accepted `_template` as overlay-local canary and kept other overlays on root refs.
+
+    nix --extra-experimental-features 'nix-command flakes' develop --command make overlay-runtime-smoke
+    Result: exited 0 with `overlay-runtime-smoke: ok`; output showed `_template (./overlays/_template#default)` and `dev-all (.#dev-all)`.
+
+    kit/scripts/devkit image-matrix --all --check
+    Result: exited 0 with `image-matrix: OK`; `_template` reported `./overlays/_template#default`.
+
+    kit/scripts/devkit --dry-run -p dev-all native plan --repo ouroboros-ide
+    kit/scripts/devkit --dry-run -p dev-all ensure-ready --repo ouroboros-ide --runtime-only
+    Result: exited 0; `dev-all` still printed `flake: .#dev-all`.
+
+    kit/scripts/devkit --dry-run -p _template native plan --repo your-repo-name
+    kit/scripts/devkit --dry-run -p _template ensure-ready --repo your-repo-name --runtime-only
+    Result: exited 0; `_template` printed `flake: ./overlays/_template#default`.
+
+    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template --no-write-lock-file --command true
+    find overlays -maxdepth 2 -name flake.lock -print
+    Result: `nix develop` exited 0 and `find` produced no output.
+
 ## Interfaces and Dependencies
 
-The root flake remains the source of truth for tool pins and dev shell composition. Overlay-local flakes should depend on the root flake through a relative path input and delegate to root `devShells`. The CLI-facing `runtime.flake` values in `overlays/*/devkit.yaml` remain root-compatible for this slice.
+The root flake remains the source of truth for tool pins and dev shell composition. Overlay-local flakes should depend on the root flake through a relative path input and delegate to root `devShells`. Production CLI-facing `runtime.flake` values in `overlays/*/devkit.yaml` remain root-compatible in this slice; `_template` is the supported canary for the overlay-local `./overlays/_template#default` shape.

@@ -4,13 +4,24 @@ import sys
 from pathlib import Path
 
 
-EXPECTED_FLAKES = {
+ROOT_FLAKES = {
     "_template": ".#template-agent",
 }
 
 
-def expected_flake(overlay: str) -> str:
-    return EXPECTED_FLAKES.get(overlay, f".#{overlay}")
+def root_flake(overlay: str) -> str:
+    return ROOT_FLAKES.get(overlay, f".#{overlay}")
+
+
+def overlay_local_flake(overlay: str) -> str:
+    return f"./overlays/{overlay}#default"
+
+
+def accepted_flakes(overlay: str) -> list[str]:
+    refs = [root_flake(overlay)]
+    if overlay == "_template":
+        refs.append(overlay_local_flake(overlay))
+    return refs
 
 
 def clean_scalar(value: str) -> str:
@@ -56,12 +67,12 @@ def main() -> int:
         codex_version = runtime.get("codex_version", "").strip()
         runtime_nix = devkit_yaml.parent / "runtime.nix"
         overlay_flake = devkit_yaml.parent / "flake.nix"
-        expected = expected_flake(overlay)
+        accepted = accepted_flakes(overlay)
 
         if not flake:
             problems.append(f"{overlay}: runtime.flake is required")
-        elif flake != expected:
-            problems.append(f"{overlay}: runtime.flake {flake!r} does not match expected {expected!r}")
+        elif flake not in accepted:
+            problems.append(f"{overlay}: runtime.flake {flake!r} is not an accepted ref ({' or '.join(accepted)})")
         if image:
             problems.append(f"{overlay}: runtime.image is legacy metadata; use runtime.flake")
         if not runtime_nix.exists():

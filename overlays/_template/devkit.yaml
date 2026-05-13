@@ -9,7 +9,7 @@ defaults:
   branch_prefix: agent
 
 runtime:
-  flake: .#template-agent
+  flake: "./overlays/_template#default"
   codex_version: 0.130.0
   core_check: echo "replace runtime.core_check with your repo validation command"
   notes: Template Nix runtime for new overlays.

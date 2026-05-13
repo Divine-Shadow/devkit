@@ -106,6 +106,63 @@ runtime:
 	}
 }
 
+func TestCheckAcceptsOverlayLocalFlakeRef(t *testing.T) {
+	flakePath := filepath.Join(t.TempDir(), "flake.nix")
+	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Check([]Entry{{
+		Overlay:      "_template",
+		Repo:         "your-repo-name",
+		Flake:        "./overlays/_template#default",
+		CodexVersion: "0.130.0",
+		CoreCheck:    "echo ok",
+		FlakePath:    flakePath,
+		Canonical:    true,
+	}}, true)
+	if err != nil {
+		t.Fatalf("overlay-local flake ref rejected: %v", err)
+	}
+}
+
+func TestCheckRejectsWrongOverlayLocalFlakeRef(t *testing.T) {
+	flakePath := filepath.Join(t.TempDir(), "flake.nix")
+	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Check([]Entry{{
+		Overlay:      "_template",
+		Repo:         "your-repo-name",
+		Flake:        "./overlays/dev-all#default",
+		CodexVersion: "0.130.0",
+		CoreCheck:    "echo ok",
+		FlakePath:    flakePath,
+		Canonical:    true,
+	}}, true)
+	if err == nil || !strings.Contains(err.Error(), "is not an accepted ref") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCheckRejectsNonTemplateOverlayLocalFlakeRef(t *testing.T) {
+	flakePath := filepath.Join(t.TempDir(), "flake.nix")
+	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Check([]Entry{{
+		Overlay:      "pokeemerald",
+		Repo:         "pokeemerald",
+		Flake:        "./overlays/pokeemerald#default",
+		CodexVersion: "0.130.0",
+		CoreCheck:    "make modern",
+		FlakePath:    flakePath,
+		Canonical:    true,
+	}}, true)
+	if err == nil || !strings.Contains(err.Error(), "is not an accepted ref") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestDiscoverAllIncludesTemplateAndMissingRuntime(t *testing.T) {
 	root := t.TempDir()
 	writeOverlay(t, root, "_template", `

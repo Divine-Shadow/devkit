@@ -226,7 +226,7 @@ func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
 		repo    string
 		flake   string
 	}{
-		{project: "_template", repo: "your-repo-name", flake: ".#template-agent"},
+		{project: "_template", repo: "your-repo-name", flake: "./overlays/_template#default"},
 		{project: "ouroboros-static-front-end", repo: "ouroboros-static-front-end", flake: ".#ouroboros-static-front-end"},
 		{project: "ouroboros-terraform", repo: "ouroboros-terraform", flake: ".#ouroboros-terraform"},
 		{project: "pokeemerald", repo: "pokeemerald", flake: ".#pokeemerald"},
