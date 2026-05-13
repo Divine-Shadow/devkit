@@ -48,6 +48,9 @@ func handle(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	if config.HasRuntimeFlake(cfg) {
+		return fmt.Errorf("hosts is a legacy Compose/container command for flake-backed overlay %s; native overlays do not mutate agent /etc/hosts", ctx.Project)
+	}
 	if cfg.Ingress == nil || len(cfg.Ingress.Hosts) == 0 {
 		if opts.requireIngress {
 			return fmt.Errorf("overlay %s does not define ingress.hosts", ctx.Project)

@@ -185,3 +185,97 @@ func TestParseComposeServiceContainersIgnoresBadRows(t *testing.T) {
 		t.Fatalf("unexpected parsed container: %#v", got[0])
 	}
 }
+
+func TestCommandNeedsComposeFilesGuardrail(t *testing.T) {
+	nativeCfg := config.OverlayConfig{Runtime: config.Runtime{Flake: ".#native-agent"}}
+	legacyCfg := config.OverlayConfig{}
+
+	neverCompose := []string{
+		"allow",
+		"broker",
+		"image-matrix",
+		"layout-validate",
+		"native",
+		"preflight",
+		"proxy",
+		"tmux-bell-install",
+		"tmux-bell-show-config",
+		"tmux-notify-bell",
+		"verify-all",
+		"worktrees-init",
+		"wt-release",
+	}
+	for _, cmd := range neverCompose {
+		if commandNeedsComposeFiles(cmd, "native-project", nativeCfg) {
+			t.Fatalf("%s unexpectedly requires Compose files for native overlays", cmd)
+		}
+		if commandNeedsComposeFiles(cmd, "legacy-project", legacyCfg) {
+			t.Fatalf("%s unexpectedly requires Compose files for legacy overlays", cmd)
+		}
+	}
+
+	nativeAware := []string{
+		"attach",
+		"bootstrap",
+		"check-codex",
+		"check-net",
+		"check-sts",
+		"codex-auth",
+		"codex-debug",
+		"codex-test",
+		"creds",
+		"doctor-runtime",
+		"down",
+		"ensure-ready",
+		"exec",
+		"exec-cd",
+		"fresh-open",
+		"hosts",
+		"layout-apply",
+		"layout-generate",
+		"logs",
+		"maintain",
+		"open",
+		"repo-config-https",
+		"repo-config-ssh",
+		"repo-push-https",
+		"repo-push-ssh",
+		"reset",
+		"restart",
+		"run",
+		"scale",
+		"ssh-setup",
+		"ssh-test",
+		"status",
+		"tmux-add-cd",
+		"tmux-apply-layout",
+		"tmux-shells",
+		"tmux-sync",
+		"up",
+		"verify",
+		"warm",
+		"worktrees-branch",
+		"worktrees-setup",
+		"worktrees-status",
+		"worktrees-sync",
+		"worktrees-tmux",
+		"wt-open",
+	}
+	for _, cmd := range nativeAware {
+		if commandNeedsComposeFiles(cmd, "native-project", nativeCfg) {
+			t.Fatalf("%s unexpectedly requires Compose files for native overlays", cmd)
+		}
+	}
+	if commandNeedsComposeFiles("hosts", "dev-all", legacyCfg) {
+		t.Fatalf("hosts unexpectedly requires Compose files for dev-all")
+	}
+	if !commandNeedsComposeFiles("hosts", "legacy-project", legacyCfg) {
+		t.Fatalf("hosts should keep Compose files for legacy overlays")
+	}
+	if commandNeedsComposeFiles("compose", "dev-all", nativeCfg) {
+		t.Fatalf("retired dev-all compose namespace should not load Compose files before refusing")
+	}
+	if !commandNeedsComposeFiles("compose", "native-project", nativeCfg) {
+		t.Fatalf("explicit compose escape hatch should keep Compose file loading")
+	}
+}

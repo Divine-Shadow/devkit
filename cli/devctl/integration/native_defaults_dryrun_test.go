@@ -300,6 +300,8 @@ windows:
 		{name: "check-net", args: []string{"check-net"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "check-codex", args: []string{"check-codex"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "check-sts", args: []string{"check-sts", "tinyproxy"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "codex-auth", args: []string{"codex-auth", "reseed", "1"}, want: "seed codex auth"},
+		{name: "creds", args: []string{"creds", "reseed-all"}, want: "seed codex auth"},
 		{name: "codex-test", args: []string{"codex-test"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "codex-debug", args: []string{"codex-debug"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
@@ -307,10 +309,12 @@ windows:
 		{name: "exec-cd", args: []string{"exec-cd", "1", ".", "echo", "hi"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "attach-cd", args: []string{"attach-cd", "1", "."}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "layout-apply", args: []string{"layout-apply", "--file", layoutPath}, want: " -p " + project + " up --repo " + repo + " --count 1"},
+		{name: "layout-validate", args: []string{"layout-validate", "--file", layoutPath}, want: ""},
 		{name: "layout-generate", args: []string{"layout-generate"}, want: "project: " + project},
 		{name: "tmux-sync", args: []string{"tmux-sync", "--count", "1"}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "tmux-add-cd", args: []string{"tmux-add-cd", "1", ".", "--session", "native-front", "--name", "agent-1"}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "tmux-apply-layout", args: []string{"tmux-apply-layout", "--file", layoutPath}, want: " -p " + project + " exec 1 --repo " + repo},
+		{name: "worktrees-init", args: []string{"worktrees-init", repo, "1"}, want: "Initialize worktrees for " + repo},
 		{name: "worktrees-setup", args: []string{"worktrees-setup", repo, "1"}, want: "git -c core.sshCommand=ssh -C"},
 		{name: "run", args: []string{"run", repo, "1"}, want: " -p " + project + " up --repo " + repo + " --count 1"},
 		{name: "worktrees-branch", args: []string{"worktrees-branch", repo, "1", "agent-test"}, want: "git -C"},
@@ -329,10 +333,63 @@ windows:
 				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
 			}
 			normalized := strings.ReplaceAll(out, "'", "")
-			if !strings.Contains(normalized, tt.want) {
+			if tt.want != "" && !strings.Contains(normalized, tt.want) {
 				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
 			}
 		})
+	}
+}
+
+func TestFlakeBackedNonDevAllRegistryCommandsAvoidComposeWorkspaceValidationDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "allow", args: []string{"allow", "example.test"}, want: "Added to proxy allowlist: example.test"},
+		{name: "broker", args: []string{"broker", "status", "--format", "text"}, want: "running:"},
+		{name: "image-matrix", args: []string{"image-matrix", "--all"}, want: ".#ouroboros-static-front-end"},
+		{name: "tmux-bell-show-config", args: []string{"tmux-bell-show-config"}, want: "monitor-bell"},
+		{name: "verify-all", args: []string{"verify-all"}, want: " -p dev-all verify"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runProjectDryRun(t, bin, root, project, tt.args...)
+			if err != nil {
+				t.Fatalf("%s failed: %v\n%s", tt.name, err, out)
+			}
+			assertNoDockerCommand(t, out)
+			if strings.Contains(out, "workspace directory") {
+				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
+			}
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
+			}
+		})
+	}
+}
+
+func TestFlakeBackedHostsCommandIsLegacyOnlyDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+
+	out, err := runProjectDryRun(t, bin, root, project, "hosts", "print", "--target", "host")
+	if err == nil {
+		t.Fatalf("flake-backed hosts command unexpectedly succeeded:\n%s", out)
+	}
+	assertNoDockerCommand(t, out)
+	if strings.Contains(out, "workspace directory") {
+		t.Fatalf("hosts still required Compose workspace validation:\n%s", out)
+	}
+	if !strings.Contains(out, "legacy Compose/container command for flake-backed overlay") {
+		t.Fatalf("unexpected hosts error:\n%s", out)
 	}
 }
 
@@ -434,6 +491,23 @@ func TestDevAllComposeNamespaceIsRetiredDryRun(t *testing.T) {
 		t.Fatalf("dev-all compose unexpectedly succeeded:\n%s", out)
 	}
 	assertNoDockerCommand(t, out)
+	if !strings.Contains(out, "Docker Compose is retired for dev-all") {
+		t.Fatalf("unexpected dev-all compose error:\n%s", out)
+	}
+}
+
+func TestDevAllComposeNamespaceRefusesBeforeComposeFilesDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := flakeOverlayRoot(t, "dev-all", "ouroboros-ide", ".#dev-all")
+
+	out, err := runProjectDryRun(t, bin, root, "dev-all", "compose", "up")
+	if err == nil {
+		t.Fatalf("dev-all compose unexpectedly succeeded:\n%s", out)
+	}
+	assertNoDockerCommand(t, out)
+	if strings.Contains(out, "workspace directory") {
+		t.Fatalf("dev-all compose loaded Compose files before refusing:\n%s", out)
+	}
 	if !strings.Contains(out, "Docker Compose is retired for dev-all") {
 		t.Fatalf("unexpected dev-all compose error:\n%s", out)
 	}

@@ -2007,8 +2007,8 @@ func main() {
 			if strings.TrimSpace(svc) == "" {
 				svc = "dev-agent"
 			}
-			repo := defaultDevAllRepoMain(paths.OverlayPaths)
-			if project == "dev-all" {
+			repo := readDefaultRepo(project, paths)
+			if isNativeRuntime {
 				seedNativeCodexAuth(dryRun, paths, project, repo, mustAtoi(idx))
 				fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
 				break
@@ -2039,7 +2039,7 @@ func main() {
 				svc = "dev-agent"
 			}
 			if len(indexes) == 0 {
-				if project == "dev-all" {
+				if isNativeRuntime {
 					count := nativeDefaultAgentCount(paths, project, 1)
 					for i := 1; i <= count; i++ {
 						indexes = append(indexes, fmt.Sprintf("%d", i))
@@ -2055,9 +2055,9 @@ func main() {
 					indexes = append(indexes, fmt.Sprintf("%d", i))
 				}
 			}
-			repo := defaultDevAllRepoMain(paths.OverlayPaths)
+			repo := readDefaultRepo(project, paths)
 			for _, idx := range indexes {
-				if project == "dev-all" {
+				if isNativeRuntime {
 					seedNativeCodexAuth(dryRun, paths, project, repo, mustAtoi(idx))
 					fmt.Printf("reseeded Codex auth for %s agent %s\n", project, idx)
 					continue
@@ -3247,11 +3247,17 @@ func die(msg string) { fmt.Fprintln(os.Stderr, msg); os.Exit(2) }
 
 func commandNeedsComposeFiles(cmd, project string, cfg config.OverlayConfig) bool {
 	switch cmd {
+	case "compose":
+		return strings.TrimSpace(project) != "dev-all"
 	case "native", "proxy":
+		return false
+	case "allow", "broker", "image-matrix", "layout-validate", "preflight", "verify-all", "worktrees-init", "wt-release", "tmux-bell-install", "tmux-bell-show-config", "tmux-notify-bell":
 		return false
 	case "up", "down", "restart", "status", "logs", "scale", "ensure-ready", "exec", "attach", "warm", "maintain":
 		return !nativeRuntimeConfigured(project, cfg)
-	case "layout-apply", "layout-generate", "tmux-sync", "tmux-add-cd", "tmux-apply-layout", "wt-open", "exec-cd", "attach-cd", "check-net", "check-codex", "check-sts", "codex-test", "codex-debug", "doctor-runtime", "verify", "tmux-shells", "open", "fresh-open", "reset", "run", "worktrees-setup", "worktrees-branch", "worktrees-status", "worktrees-sync", "worktrees-tmux", "bootstrap":
+	case "hosts":
+		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
+	case "layout-apply", "layout-generate", "tmux-sync", "tmux-add-cd", "tmux-apply-layout", "wt-open", "exec-cd", "attach-cd", "check-net", "check-codex", "check-sts", "codex-test", "codex-debug", "doctor-runtime", "verify", "tmux-shells", "open", "fresh-open", "reset", "run", "worktrees-setup", "worktrees-branch", "worktrees-status", "worktrees-sync", "worktrees-tmux", "bootstrap", "codex-auth", "creds":
 		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
 	case "ssh-setup", "ssh-test", "repo-config-ssh", "repo-config-https", "repo-push-ssh", "repo-push-https":
 		return !(strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, cfg))
