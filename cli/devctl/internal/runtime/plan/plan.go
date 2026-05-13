@@ -20,6 +20,7 @@ type ProxyConfig struct {
 	HTTPProxy  string `json:"http_proxy"`
 	HTTPSProxy string `json:"https_proxy"`
 	NoProxy    string `json:"no_proxy"`
+	UnixSocket string `json:"unix_socket,omitempty"`
 }
 
 type DNSConfig struct {
@@ -69,6 +70,7 @@ type BuildOptions struct {
 	BranchPrefix          string
 	BrokerEndpoint        string
 	Proxy                 string
+	ProxySocket           string
 	DNSResolvConf         string
 	DedicatedWorktree     bool
 }
@@ -116,6 +118,10 @@ func Build(opts BuildOptions) (Plan, error) {
 		broker = "/run/devkit/test-container-broker.sock"
 	}
 	proxyURL := strings.TrimSpace(opts.Proxy)
+	proxySocket := strings.TrimSpace(opts.ProxySocket)
+	if proxySocket != "" && proxyURL == "" {
+		proxyURL = "http://127.0.0.1:18888"
+	}
 	resolvConf := strings.TrimSpace(opts.DNSResolvConf)
 	if resolvConf == "" {
 		resolvConf = filepath.Join(paths.HostAgentStateRoot, "resolv.conf")
@@ -176,6 +182,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			HTTPProxy:  proxyURL,
 			HTTPSProxy: proxyURL,
 			NoProxy:    env["NO_PROXY"],
+			UnixSocket: proxySocket,
 		},
 		DNS: DNSConfig{
 			ResolvConf: resolvConf,
@@ -192,6 +199,9 @@ func Build(opts BuildOptions) (Plan, error) {
 			"plan only: no sandbox is launched by this command",
 			"standard agents must use brokered OCI access only",
 		},
+	}
+	if proxySocket != "" {
+		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})
 	}
 	p.LauncherArgs = launcherArgs(p)
 	return p, nil

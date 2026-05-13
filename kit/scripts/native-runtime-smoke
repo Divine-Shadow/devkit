@@ -63,6 +63,9 @@ ensure_allowed_image
 smoke_dir="$(mktemp -d /tmp/devkit-native-smoke.XXXXXX)"
 sock="$smoke_dir/broker.sock"
 state="$smoke_dir/broker-state"
+egress_sock="$smoke_dir/egress.sock"
+egress_log="$smoke_dir/egress.log"
+egress_pid=""
 smoke_id="devkit-native-smoke-$(date +%s)-$$"
 devctl_backup=""
 
@@ -70,6 +73,9 @@ cleanup() {
   set +e
   if [[ -n "$devctl_backup" && -f "$devctl_backup" ]]; then
     mv -f "$devctl_backup" "$DEVKIT_BIN"
+  fi
+  if [[ -n "$egress_pid" ]]; then
+    kill "$egress_pid" >/dev/null 2>&1 || true
   fi
   "$DEVKIT" -p dev-all broker stop --socket "$sock" --state-root "$state" --format json >/dev/null 2>&1
   smoke_containers="$(host_docker ps -aq --filter "name=$smoke_id" 2>/dev/null || true)"
@@ -166,6 +172,31 @@ const { chromium } = require("@playwright/test");
 });
 EOF
 
+read -r -d '' native_egress_exec <<'EOF' || true
+set -euo pipefail
+
+test "${DEVKIT_NATIVE_AGENT:-}" = 1
+test "${HTTP_PROXY:-}" = "http://127.0.0.1:18888"
+test "${HTTPS_PROXY:-}" = "http://127.0.0.1:18888"
+
+allowed_connect="$(curl -k -sS -o /tmp/devkit-egress-allowed.out -w "%{http_connect}" --connect-timeout 10 --max-time 20 https://api.openai.com || true)"
+echo "allowed_connect=$allowed_connect"
+test "$allowed_connect" = 200
+
+blocked_connect="$(curl -k -sS -o /tmp/devkit-egress-blocked.out -w "%{http_connect}" --connect-timeout 10 --max-time 20 https://blocked.invalid || true)"
+echo "blocked_connect=$blocked_connect"
+test "$blocked_connect" = 403
+
+direct_status="$(
+  env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
+    curl -k -sS -o /tmp/devkit-egress-direct.out -w "%{http_code}" --connect-timeout 3 --max-time 6 https://blocked.invalid || true
+)"
+echo "direct_status=$direct_status"
+test "$direct_status" = 000
+
+echo native-egress-policy-ok
+EOF
+
 read -r -d '' template_overlay_local_exec <<'EOF' || true
 set -euo pipefail
 
@@ -257,6 +288,31 @@ step "dev-all native exec toolchain"
 reject_registry_cert_noise "$smoke_dir/dev-all-toolchain-exec.txt"
 grep_required "netlify-cli/" "$smoke_dir/dev-all-toolchain-exec.txt"
 grep_required "native-exec-playwright-ok" "$smoke_dir/dev-all-toolchain-exec.txt"
+
+step "native egress proxy"
+"$DEVKIT" -p dev-all native egress-proxy \
+  --socket "$egress_sock" --allowlist "$DEVKIT_ROOT/kit/proxy/allowlist.txt" \
+  >"$egress_log" 2>&1 &
+egress_pid=$!
+for _ in $(seq 1 50); do
+  if [[ -S "$egress_sock" ]]; then
+    break
+  fi
+  if ! kill -0 "$egress_pid" >/dev/null 2>&1; then
+    cat "$egress_log" >&2 || true
+    fail "native egress proxy exited before creating $egress_sock"
+  fi
+  sleep 0.1
+done
+[[ -S "$egress_sock" ]] || fail "native egress proxy did not create $egress_sock"
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$RUNTIME_FLAKE" \
+  --broker-socket "$sock" --proxy-socket "$egress_sock" -- \
+  bash -lc "$native_egress_exec" \
+  2>&1 | tee "$smoke_dir/native-egress.txt"
+grep_required "allowed_connect=200" "$smoke_dir/native-egress.txt"
+grep_required "blocked_connect=403" "$smoke_dir/native-egress.txt"
+grep_required "direct_status=000" "$smoke_dir/native-egress.txt"
+grep_required "native-egress-policy-ok" "$smoke_dir/native-egress.txt"
 
 step "brokered native exec"
 "$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$RUNTIME_FLAKE" \

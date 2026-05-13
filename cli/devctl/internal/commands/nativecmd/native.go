@@ -16,6 +16,7 @@ import (
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
+	"devkit/cli/devctl/internal/runtime/egressproxy"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/runtime/readiness"
@@ -54,6 +55,10 @@ func handle(ctx *cmdregistry.Context) error {
 		return handleCapacity(ctx)
 	case "shell":
 		return handleShell(ctx)
+	case "egress-proxy":
+		return handleEgressProxy(ctx)
+	case "proxy-bridge":
+		return handleProxyBridge(ctx)
 	default:
 		return fmt.Errorf("unknown native command %s", ctx.Args[0])
 	}
@@ -84,6 +89,8 @@ type lifecycleArgs struct {
 	brokerBinary            string
 	brokerAllowPulls        *bool
 	brokerAllowImage        []string
+	proxy                   string
+	proxySocket             string
 	worktreeRoot            string
 	agentStateRoot          string
 	worktreeContainerRoot   string
@@ -106,11 +113,76 @@ type topExecArgs struct {
 	repo                    string
 	flake                   string
 	brokerSocket            string
+	proxy                   string
+	proxySocket             string
 	worktreeRoot            string
 	agentStateRoot          string
 	worktreeContainerRoot   string
 	agentStateContainerRoot string
 	command                 []string
+}
+
+func handleEgressProxy(ctx *cmdregistry.Context) error {
+	socketPath := filepath.Join(ctx.Paths.Root, "..", ".devkit", "native-egress", "proxy.sock")
+	allowlistPath := filepath.Join(ctx.Paths.Kit, "proxy", "allowlist.txt")
+	for i := 1; i < len(ctx.Args); i++ {
+		switch ctx.Args[i] {
+		case "--socket":
+			if i+1 >= len(ctx.Args) {
+				return fmt.Errorf("--socket requires a value")
+			}
+			socketPath = resolveNativeRoot(ctx.Paths.Root, ctx.Args[i+1])
+			i++
+		case "--allowlist":
+			if i+1 >= len(ctx.Args) {
+				return fmt.Errorf("--allowlist requires a value")
+			}
+			allowlistPath = resolveNativeRoot(ctx.Paths.Root, ctx.Args[i+1])
+			i++
+		default:
+			return fmt.Errorf("unknown native egress-proxy arg %s", ctx.Args[i])
+		}
+	}
+	if ctx.DryRun {
+		fmt.Fprintf(os.Stdout, "native egress proxy socket=%s allowlist=%s\n", socketPath, allowlistPath)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "native egress proxy listening on %s allowlist=%s\n", socketPath, allowlistPath)
+	return egressproxy.Serve(context.Background(), egressproxy.Config{
+		SocketPath:    socketPath,
+		AllowlistPath: allowlistPath,
+	})
+}
+
+func handleProxyBridge(ctx *cmdregistry.Context) error {
+	listenAddr := "127.0.0.1:18888"
+	socketPath := ""
+	for i := 1; i < len(ctx.Args); i++ {
+		switch ctx.Args[i] {
+		case "--listen":
+			if i+1 >= len(ctx.Args) {
+				return fmt.Errorf("--listen requires a value")
+			}
+			listenAddr = ctx.Args[i+1]
+			i++
+		case "--socket":
+			if i+1 >= len(ctx.Args) {
+				return fmt.Errorf("--socket requires a value")
+			}
+			socketPath = resolveNativeRoot(ctx.Paths.Root, ctx.Args[i+1])
+			i++
+		default:
+			return fmt.Errorf("unknown native proxy-bridge arg %s", ctx.Args[i])
+		}
+	}
+	if strings.TrimSpace(socketPath) == "" {
+		return fmt.Errorf("--socket is required")
+	}
+	if ctx.DryRun {
+		fmt.Fprintf(os.Stdout, "native proxy bridge listen=%s socket=%s\n", listenAddr, socketPath)
+		return nil
+	}
+	return egressproxy.Bridge(context.Background(), listenAddr, socketPath)
 }
 
 func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMode bool) (planArgs, error) {
@@ -261,6 +333,12 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			}
 			parsed.opts.Proxy = ctx.Args[i+1]
 			i++
+		case "--proxy-socket":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--proxy-socket requires a value")
+			}
+			parsed.opts.ProxySocket = ctx.Args[i+1]
+			i++
 		case "--resolv-conf":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--resolv-conf requires a value")
@@ -394,6 +472,18 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 				return parsed, fmt.Errorf("--broker-binary requires a value")
 			}
 			parsed.brokerBinary = ctx.Args[i+1]
+			i++
+		case "--proxy":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--proxy requires a value")
+			}
+			parsed.proxy = ctx.Args[i+1]
+			i++
+		case "--proxy-socket":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--proxy-socket requires a value")
+			}
+			parsed.proxySocket = ctx.Args[i+1]
 			i++
 		case "--allow-image":
 			if i+1 >= len(ctx.Args) {
@@ -668,6 +758,18 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.brokerSocket = ctx.Args[i+1]
 			i++
+		case "--proxy":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--proxy requires a value")
+			}
+			parsed.proxy = ctx.Args[i+1]
+			i++
+		case "--proxy-socket":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--proxy-socket requires a value")
+			}
+			parsed.proxySocket = ctx.Args[i+1]
+			i++
 		case "--worktree-root":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--worktree-root requires a value")
@@ -702,6 +804,8 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		repo:                    parsed.repo,
 		flake:                   parsed.flake,
 		brokerSocket:            parsed.brokerSocket,
+		proxy:                   parsed.proxy,
+		proxySocket:             parsed.proxySocket,
 		worktreeRoot:            parsed.worktreeRoot,
 		agentStateRoot:          parsed.agentStateRoot,
 		worktreeContainerRoot:   parsed.worktreeContainerRoot,
@@ -836,6 +940,8 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		BaseBranch:            strings.TrimSpace(parsed.baseBranch),
 		BranchPrefix:          strings.TrimSpace(parsed.branchPrefix),
 		BrokerEndpoint:        brokerCfg.Socket,
+		Proxy:                 strings.TrimSpace(parsed.proxy),
+		ProxySocket:           resolveNativeRoot(ctx.Paths.Root, parsed.proxySocket),
 		DedicatedWorktree:     true,
 	}
 }

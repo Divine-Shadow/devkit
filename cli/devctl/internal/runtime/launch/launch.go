@@ -167,10 +167,14 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 	args := []string{
 		"--die-with-parent",
-		"--share-net",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
+	}
+	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
+		args = append(args, "--unshare-net")
+	} else {
+		args = append(args, "--share-net")
 	}
 	dirSet := map[string]bool{"/tmp": true}
 	dirArgs := []string{}
@@ -270,7 +274,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
 	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--no-write-lock-file", "--command")
-	args = append(args, shellCommand(p.Agent.SandboxWorktree, command)...)
+	args = append(args, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy)...)
 	return Command{Path: "bwrap", Args: args, Dir: p.DevkitHostRoot}, nil
 }
 
@@ -305,16 +309,42 @@ func ensureResolvConf(path string) error {
 	return nil
 }
 
-func shellCommand(workdir string, command []string) []string {
+func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig) []string {
 	script := "cd " + shellQuote(workdir)
+	bridgeProxy := strings.TrimSpace(proxy.UnixSocket) != ""
+	if bridgeProxy {
+		proxyURL := strings.TrimSpace(proxy.HTTPProxy)
+		if proxyURL == "" {
+			proxyURL = "http://127.0.0.1:18888"
+		}
+		devctlPath := filepath.Join(devkitRoot, "kit", "bin", "devctl")
+		script += " && { " + shellQuote(devctlPath) + " -p " + shellQuote(project) + " native proxy-bridge --listen 127.0.0.1:18888 --socket " + shellQuote(proxy.UnixSocket) + " & devkit_proxy_bridge_pid=$!; }"
+		script += " && trap 'kill \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || true; wait \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || true' EXIT"
+		script += " && sleep 0.1"
+		script += " && { kill -0 \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || { echo 'native proxy bridge failed to start' >&2; exit 1; }; }"
+		script += " && export HTTP_PROXY=" + shellQuote(proxyURL)
+		script += " HTTPS_PROXY=" + shellQuote(proxyURL)
+		script += " http_proxy=" + shellQuote(proxyURL)
+		script += " https_proxy=" + shellQuote(proxyURL)
+		script += " NO_PROXY=" + shellQuote(proxy.NoProxy)
+		script += " no_proxy=" + shellQuote(proxy.NoProxy)
+	}
 	if len(command) == 0 {
-		script += " && exec ${SHELL:-bash}"
+		if bridgeProxy {
+			script += " && ${SHELL:-bash}"
+		} else {
+			script += " && exec ${SHELL:-bash}"
+		}
 	} else {
 		quoted := make([]string, 0, len(command))
 		for _, arg := range command {
 			quoted = append(quoted, shellQuote(arg))
 		}
-		script += " && exec " + strings.Join(quoted, " ")
+		if bridgeProxy {
+			script += " && " + strings.Join(quoted, " ")
+		} else {
+			script += " && exec " + strings.Join(quoted, " ")
+		}
 	}
 	return []string{"bash", "-lc", script}
 }

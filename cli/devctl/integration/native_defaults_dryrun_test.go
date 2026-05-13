@@ -617,6 +617,23 @@ func TestGlobalDryRunNativeExecDoesNotPrepareOrRun(t *testing.T) {
 	}
 }
 
+func TestNativeTopLevelExecProxySocketDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := nativeDefaultsRoot(t)
+	proxySocket := filepath.Join(root, ".devkit", "native-egress", "proxy.sock")
+
+	out, err := runNativeDefaultDryRun(t, bin, root, "exec", "1", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent", "--proxy-socket", proxySocket, "--", "curl", "-I", "https://api.openai.com")
+	if err != nil {
+		t.Fatalf("native exec proxy-socket dry-run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "--unshare-net") || !strings.Contains(out, "native proxy-bridge --listen 127.0.0.1:18888") || !strings.Contains(out, proxySocket) {
+		t.Fatalf("proxy-socket dry-run did not print isolated native command:\n%s", out)
+	}
+	if strings.Contains(out, "--share-net") {
+		t.Fatalf("proxy-socket dry-run still shared host network:\n%s", out)
+	}
+}
+
 func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)

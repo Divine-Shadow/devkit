@@ -84,6 +84,52 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 }
 
+func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	proxySocket := filepath.Join(tmp, "egress.sock")
+	if err := os.WriteFile(proxySocket, []byte("socket placeholder"), 0o600); err != nil {
+		t.Fatalf("write proxy socket placeholder: %v", err)
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:       compose.Paths{Root: devkitRoot},
+		Repo:        "ouroboros-ide",
+		Flake:       ".#runtime-test-agent",
+		ProxySocket: proxySocket,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	cmd, err := BuildBubblewrap(p, []string{"curl", "-I", "https://api.openai.com"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	for _, want := range []string{
+		"'--unshare-net'",
+		"'--bind' '" + proxySocket + "' '" + proxySocket + "'",
+		"native proxy-bridge --listen 127.0.0.1:18888",
+		"'--setenv' 'HTTP_PROXY' 'http://127.0.0.1:18888'",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing %q:\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(joined, "proxy-bridge") || !strings.Contains(joined, proxySocket) {
+		t.Fatalf("command missing proxy socket bridge:\n%s", joined)
+	}
+	if strings.Contains(joined, "'--share-net'") {
+		t.Fatalf("proxy socket launches must not share host network:\n%s", joined)
+	}
+}
+
 func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	tmp := t.TempDir()
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{

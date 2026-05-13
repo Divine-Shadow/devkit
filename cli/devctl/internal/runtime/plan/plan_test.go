@@ -81,6 +81,26 @@ func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
 	}
 }
 
+func TestBuildDevAllProxySocketUsesLocalProxy(t *testing.T) {
+	p, err := BuildDevAll(BuildOptions{
+		Paths:       compose.Paths{Root: "/repo/devkit"},
+		Project:     "dev-all",
+		ProxySocket: "/repo/.devkit/native-egress/proxy.sock",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if p.Env["HTTP_PROXY"] != "http://127.0.0.1:18888" || p.Env["HTTPS_PROXY"] != "http://127.0.0.1:18888" {
+		t.Fatalf("proxy env = %#v", p.Env)
+	}
+	if p.Proxy.UnixSocket != "/repo/.devkit/native-egress/proxy.sock" {
+		t.Fatalf("proxy socket = %q", p.Proxy.UnixSocket)
+	}
+	if !hasBind(p.Binds, "/repo/.devkit/native-egress/proxy.sock", "/repo/.devkit/native-egress/proxy.sock") {
+		t.Fatalf("native plan must bind proxy socket: %#v", p.Binds)
+	}
+}
+
 func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 	p, err := Build(BuildOptions{
 		Paths:   compose.Paths{Root: "/repo/devkit"},

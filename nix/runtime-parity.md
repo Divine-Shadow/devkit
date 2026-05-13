@@ -30,6 +30,9 @@ used to keep it reviewable while retiring implicit Compose paths. It follows
 - `devctl native plan`: inspectable native plan output.
 - `devctl native exec`: prepares per-agent state and runs a flake shell through
   bubblewrap.
+- `devctl native egress-proxy` plus `native exec --proxy-socket`: host-side
+  Unix-socket CONNECT proxy with allow-list enforcement, bridged into a
+  per-command private network namespace as `http://127.0.0.1:18888`.
 - `devctl native readiness`: reports runtime readiness, repo readiness, and
   capacity availability separately.
 - `devctl broker start|status|stop`: manages the host-side broker process used
@@ -239,6 +242,10 @@ Observed key versions:
 - Broker smoke output: `DOCKER_HOST=unix:///tmp/devkit-native-smoke.<id>/broker.sock`,
   `redis_create_http=403`, `postgres_create_http=201`, and
   `native-broker-policy-ok`.
+- Native egress proxy smoke output: `allowed_connect=200` for an allow-listed
+  OpenAI endpoint, `blocked_connect=403` for an off-list CONNECT request, and
+  `direct_status=000` when proxy variables are removed inside the private
+  network namespace.
 - Managed broker lifecycle smoke output: `running: true` after native `up`,
   lightweight native `status` without a capacity block, broker log lines from
   `logs`, native `scale` to two agents, and `running: false` after native
@@ -357,6 +364,10 @@ Observed key versions:
   `/var/run/docker.sock`. That socket is consumed by the broker process on the
   host and is not mounted into the native agent sandbox.
 - Native bubblewrap execution requires `bwrap` and host Nix flakes support.
+- Native allow-list egress requires a running `devctl native egress-proxy`
+  process and `native exec --proxy-socket <sock>`. That mode intentionally uses
+  `--unshare-net`; direct outbound domain access fails unless traffic goes
+  through the bridged localhost proxy.
 - The `dev-all` broker endpoint defaults under the managed devkit state root:
   `unix://<dev-root>/.devkit/native-broker/broker.sock`. Tests can override it
   with `--broker-endpoint` or lifecycle `--broker-socket` for temporary broker
