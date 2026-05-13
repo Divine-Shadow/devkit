@@ -15,6 +15,26 @@ runtime:
     (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)
     (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")
   notes: Integration runtime with the Ouroboros Scala toolchain plus Terraform/AWS tooling and dedicated integration worktrees mounted read-write.
+readiness:
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker java sbt aws terraform packer node npm; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: terraform-packer-aws
+      command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
+    - name: sbt-jvm
+      command: java -version >/dev/null 2>&1 && command -v sbt >/dev/null
+  repo_checks:
+    - name: aws-config
+      command: test -f /workspaces/dev/.aws/config
+    - name: core-check
+      command: |
+        (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)
+        (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")
 
 env:
   AWS_PROFILE: codex

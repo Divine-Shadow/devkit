@@ -10,6 +10,22 @@ runtime:
   codex_version: 0.130.0
   core_check: npm run build
   notes: Node/Gatsby image for the standalone static front end.
+readiness:
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker node npm purs spago netlify deno playwright; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: frontend-tooling
+      command: node --version >/dev/null && npm --version >/dev/null && purs --version >/dev/null && spago --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null
+    - name: playwright-cli
+      command: playwright --version >/dev/null && node -e 'require("@playwright/test")'
+  repo_checks:
+    - name: core-check
+      command: npm run build
 env:
   NODE_ENV: development
   GATSBY_TELEMETRY_DISABLED: "1"

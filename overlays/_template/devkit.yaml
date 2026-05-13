@@ -14,6 +14,19 @@ runtime:
   core_check: echo "replace runtime.core_check with your repo validation command"
   notes: Template Nix runtime for new overlays.
 
+readiness:
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker codex python3 uv; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+  repo_checks:
+    - name: core-check
+      command: echo "replace runtime.core_check with your repo validation command"
+
 # Optional: environment exported on the host before running compose commands
 env: {}
 

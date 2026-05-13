@@ -1440,6 +1440,7 @@ func runtimeChecksFor(ctx *cmdregistry.Context) ([]runtimeCheck, error) {
 		return nil, err
 	}
 	checks := make([]runtimeCheck, 0, len(cfg.Readiness.RuntimeChecks))
+	seen := map[string]struct{}{}
 	for i, check := range cfg.Readiness.RuntimeChecks {
 		command := strings.TrimSpace(check.Command)
 		if command == "" {
@@ -1449,7 +1450,14 @@ func runtimeChecksFor(ctx *cmdregistry.Context) ([]runtimeCheck, error) {
 		if name == "" {
 			name = fmt.Sprintf("runtime-check-%d", i+1)
 		}
+		seen[name] = struct{}{}
 		checks = append(checks, runtimeCheck{Name: name, Command: command})
+	}
+	if version := strings.TrimSpace(cfg.Runtime.CodexVersion); version != "" {
+		if _, ok := seen["codex-version"]; !ok {
+			command := "test \"$(codex --version | awk '{print $NF}' | sed 's/^v//')\" = " + strconv.Quote(version)
+			checks = append(checks, runtimeCheck{Name: "codex-version", Command: command})
+		}
 	}
 	return checks, nil
 }
@@ -1465,7 +1473,8 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 	if err != nil {
 		return nil, err
 	}
-	checks := make([]repoCheck, 0, len(cfg.Readiness.RepoChecks)+2)
+	structured := make([]repoCheck, 0, len(cfg.Readiness.RepoChecks))
+	seen := map[string]struct{}{}
 	for i, check := range cfg.Readiness.RepoChecks {
 		command := strings.TrimSpace(check.Command)
 		if command == "" {
@@ -1475,16 +1484,20 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 		if name == "" {
 			name = fmt.Sprintf("repo-check-%d", i+1)
 		}
-		checks = append(checks, repoCheck{Name: name, Command: command})
+		seen[name] = struct{}{}
+		structured = append(structured, repoCheck{Name: name, Command: command})
 	}
-	if len(checks) > 0 {
-		return checks, nil
-	}
+	checks := make([]repoCheck, 0, len(structured)+2)
 	if warm := strings.TrimSpace(cfg.Hooks.Warm); warm != "" {
-		checks = append(checks, repoCheck{Name: "warm-hook", Command: warm})
+		if _, ok := seen["warm-hook"]; !ok {
+			checks = append(checks, repoCheck{Name: "warm-hook", Command: warm})
+		}
 	}
+	checks = append(checks, structured...)
 	if core := strings.TrimSpace(cfg.Runtime.CoreCheck); core != "" {
-		checks = append(checks, repoCheck{Name: "core-check", Command: core})
+		if _, ok := seen["core-check"]; !ok {
+			checks = append(checks, repoCheck{Name: "core-check", Command: core})
+		}
 	}
 	return checks, nil
 }

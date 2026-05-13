@@ -374,6 +374,38 @@ func TestFlakeBackedNonDevAllRegistryCommandsAvoidComposeWorkspaceValidationDryR
 	}
 }
 
+func TestFlakeBackedReadinessCommandsAvoidComposeDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	project := "ouroboros-static-front-end"
+	repo := "ouroboros-static-front-end"
+	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "ensure-ready", args: []string{"ensure-ready"}, want: "runtime: native"},
+		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
+		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runProjectDryRun(t, bin, root, project, tt.args...)
+			if err != nil {
+				t.Fatalf("%s failed: %v\n%s", tt.name, err, out)
+			}
+			assertNoDockerCommand(t, out)
+			if strings.Contains(out, "workspace directory") {
+				t.Fatalf("%s loaded Compose files before native readiness dispatch:\n%s", tt.name, out)
+			}
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
+			}
+		})
+	}
+}
+
 func TestFlakeBackedHostsCommandIsLegacyOnlyDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"

@@ -10,6 +10,25 @@ runtime:
   codex_version: 0.130.0
   core_check: terraform fmt -check -recursive
   notes: AWS/HashiCorp runtime for Terraform maintenance.
+readiness:
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker terraform packer aws; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: terraform-packer-aws
+      command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
+  repo_checks:
+    - name: aws-profile
+      command: |
+        test -n "${AWS_CONFIG_FILE:-}"
+        test -f "$AWS_CONFIG_FILE"
+        grep -q '^\[profile ouroboros\]' "$AWS_CONFIG_FILE"
+    - name: core-check
+      command: terraform fmt -check -recursive
 env:
   AWS_PROFILE: ouroboros
   PATH: /workspace/.local/bin:${PATH}

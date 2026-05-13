@@ -151,6 +151,7 @@ Worktrees workflow (flake-backed overlays):
 
 Runtime pairing and refresh note:
 - Repo-to-runtime pairings are declared in overlay `runtime.flake` metadata and summarized by `kit/scripts/devkit image-matrix --all`.
+- Native readiness expectations are documented in `kit/docs/native-readiness-contract.md`.
 - Compose project names such as `devkit-codex8` and `devkit-ouro8` are session names only.
 - Verify the overlay runtime matrix with `scripts/devkit image-matrix --all --check`.
 - `dev-all` no longer has an executable Compose runtime path. `overlays/dev-all/compose.override.yml` remains historical inventory only.
@@ -159,9 +160,9 @@ Runtime pairing and refresh note:
   - `kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 8`
   - `kit/scripts/devkit -p dev-all tmux-sync --count 8 --session devkit`
 
-Auto-readiness (`dev-all`):
-- Native lifecycle commands `up`, `restart`, and `scale` automatically run readiness for `dev-all`.
-- Native `status` is lightweight by default and does not run repo checks; use `devctl -p dev-all status --ready` or `ensure-ready` for readiness/capacity checks.
+Auto-readiness (flake-backed overlays):
+- Native lifecycle commands `up`, `restart`, and `scale` automatically run readiness when overlay defaults enable it.
+- Native `status` is lightweight by default and does not run repo checks; use `devctl -p <overlay> status --ready` or `ensure-ready` for readiness/capacity checks.
 - Native `ensure-ready` starts or reuses the managed broker before checking runtime/repo readiness.
 - Runtime readiness controls capacity; repo readiness checks are visible and retryable without hiding launchable native agents.
 - Top-level `ensure-ready` and lifecycle readiness fail when repo checks fail unless `--skip-repo-checks` or `--skip-ready` was requested.

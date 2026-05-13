@@ -20,9 +20,11 @@ readiness:
   runtime_checks:
     - name: required-tools
       command: |
-        for tool in git ssh curl docker go node npm spago netlify playwright deno; do
+        for tool in git ssh curl docker go java sbt node npm purs spago netlify playwright deno aws make gcc mgba-headless; do
           command -v "$tool" >/dev/null
         done
+    - name: docker-client
+      command: docker --version >/dev/null
     - name: purescript-spago-netlify
       command: purs --version >/dev/null && spago --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null
     - name: playwright-browser

@@ -52,8 +52,17 @@ readiness:
 	if err != nil {
 		t.Fatalf("repoChecksFor: %v", err)
 	}
-	if len(checks) != 1 || checks[0].Name != "typecheck" || checks[0].Command != "npm test" {
+	if len(checks) != 3 {
 		t.Fatalf("checks = %#v", checks)
+	}
+	if checks[0].Name != "warm-hook" || checks[0].Command != "echo warm" {
+		t.Fatalf("warm fallback = %#v", checks[0])
+	}
+	if checks[1].Name != "typecheck" || checks[1].Command != "npm test" {
+		t.Fatalf("structured check = %#v", checks[1])
+	}
+	if checks[2].Name != "core-check" || checks[2].Command != "echo core" {
+		t.Fatalf("core fallback = %#v", checks[2])
 	}
 }
 
@@ -69,6 +78,8 @@ readiness:
     - name: tools
       command: command -v spago
     - command: command -v playwright
+runtime:
+  codex_version: 0.130.0
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -80,11 +91,14 @@ readiness:
 	if err != nil {
 		t.Fatalf("runtimeChecksFor: %v", err)
 	}
-	if len(checks) != 2 || checks[0].Name != "tools" || checks[0].Command != "command -v spago" {
+	if len(checks) != 3 || checks[0].Name != "tools" || checks[0].Command != "command -v spago" {
 		t.Fatalf("checks = %#v", checks)
 	}
 	if checks[1].Name != "runtime-check-2" || checks[1].Command != "command -v playwright" {
 		t.Fatalf("defaulted check = %#v", checks[1])
+	}
+	if checks[2].Name != "codex-version" || checks[2].Command == "" {
+		t.Fatalf("codex version check = %#v", checks[2])
 	}
 }
 

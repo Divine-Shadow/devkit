@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
+EXPECTED_CODEX_VERSION="${DEVKIT_EXPECTED_CODEX_VERSION:-0.130.0}"
 
 overlays=(
   _template
@@ -26,28 +27,28 @@ flake_for() {
 smoke_for() {
   case "$1" in
     _template)
-      printf '%s\n' 'codex --version && git --version && uv --version && python3 --version'
+      printf '%s\n' 'for tool in git ssh curl docker codex python3 uv; do command -v "$tool" >/dev/null; done && docker --version && git --version && uv --version && python3 --version'
       ;;
     codex)
-      printf '%s\n' 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
+      printf '%s\n' 'for tool in git ssh curl docker go java sbt node npm purs spago netlify deno playwright; do command -v "$tool" >/dev/null; done && docker --version && java -version >/dev/null 2>&1 && node -e '\''require("@playwright/test")'\'''
       ;;
     dev-all)
-      printf '%s\n' 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+      printf '%s\n' 'for tool in git ssh curl docker go java sbt node npm purs spago netlify playwright deno aws make gcc mgba-headless; do command -v "$tool" >/dev/null; done && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
       ;;
     dumb-onion-hax)
-      printf '%s\n' 'codex --version && command -v sbt java aws python3 >/dev/null'
+      printf '%s\n' 'for tool in git ssh curl docker java sbt aws python3; do command -v "$tool" >/dev/null; done && docker --version && java -version >/dev/null 2>&1'
       ;;
     ouro-integration)
-      printf '%s\n' 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
+      printf '%s\n' 'for tool in git ssh curl docker java sbt aws terraform packer node npm; do command -v "$tool" >/dev/null; done && docker --version && terraform version | head -1 && packer version && aws --version'
       ;;
     ouroboros-static-front-end)
-      printf '%s\n' 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
+      printf '%s\n' 'for tool in git ssh curl docker node npm purs spago netlify deno playwright; do command -v "$tool" >/dev/null; done && docker --version && node --version && npm --version && purs --version && spago --version && netlify --version && deno --version && playwright --version && node -e '\''require("@playwright/test")'\'''
       ;;
     ouroboros-terraform)
-      printf '%s\n' 'codex --version && terraform version | head -1 && packer version && aws --version'
+      printf '%s\n' 'for tool in git ssh curl docker terraform packer aws; do command -v "$tool" >/dev/null; done && docker --version && terraform version | head -1 && packer version && aws --version'
       ;;
     pokeemerald)
-      printf '%s\n' 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
+      printf '%s\n' 'for tool in git ssh curl docker make arm-none-eabi-gcc arm-none-eabi-as mgba-headless; do command -v "$tool" >/dev/null; done && docker --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
       ;;
     *)
       return 1
@@ -66,7 +67,8 @@ run_overlay() {
   printf '\n== %s (%s) ==\n' "$overlay" ".#$flake"
   (
     cd "$DEVKIT_ROOT"
-    nix "${NIX_FLAGS[@]}" develop ".#$flake" --command bash -lc "$smoke"
+    nix "${NIX_FLAGS[@]}" develop ".#$flake" --command bash -lc \
+      "got=\"\$(codex --version | awk '{print \$NF}' | sed 's/^v//')\"; test \"\$got\" = '$EXPECTED_CODEX_VERSION'; $smoke"
   )
 }
 
