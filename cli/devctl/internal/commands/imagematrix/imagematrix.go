@@ -25,6 +25,7 @@ type Entry struct {
 	Canonical    bool
 	ConfigPath   string
 	ComposePath  string
+	FlakePath    string
 }
 
 // Register adds image-matrix to the command registry.
@@ -113,6 +114,7 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				Canonical:    canonical,
 				ConfigPath:   filepath.Join(cfgDir, "devkit.yaml"),
 				ComposePath:  filepath.Join(cfgDir, "compose.override.yml"),
+				FlakePath:    filepath.Join(cfgDir, "flake.nix"),
 			})
 		}
 	}
@@ -152,6 +154,15 @@ func Check(entries []Entry, dryRun bool) error {
 		if e.Flake != "" {
 			if expected := expectedFlake(e.Overlay); expected != "" && e.Flake != expected {
 				problems = append(problems, fmt.Sprintf("%s: runtime.flake %s does not match expected %s", e.Overlay, e.Flake, expected))
+			}
+			if strings.TrimSpace(e.FlakePath) == "" {
+				problems = append(problems, fmt.Sprintf("%s: overlay-local flake path is empty", e.Overlay))
+			} else if _, err := os.Stat(e.FlakePath); err != nil {
+				if os.IsNotExist(err) {
+					problems = append(problems, fmt.Sprintf("%s: missing overlay-local flake.nix", e.Overlay))
+				} else {
+					problems = append(problems, fmt.Sprintf("%s: stat overlay-local flake: %v", e.Overlay, err))
+				}
 			}
 		}
 		if e.CodexVersion == "" {

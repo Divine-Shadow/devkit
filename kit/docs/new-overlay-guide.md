@@ -28,6 +28,9 @@ Manual steps if not using the template:
 - overlays/<name>/runtime.nix
   - Define the Nix shell backing `runtime.flake`. Keep the root `flake.nix` as the umbrella entrypoint and import this file from there.
 
+- overlays/<name>/flake.nix
+  - Add a thin overlay-local flake that delegates to the root flake's dev shell output. It should make `nix develop ./overlays/<name>` equivalent to the root ref declared in `runtime.flake`.
+
 - overlays/<name>/compose.override.yml
   - Define your overlay service (e.g., `frontend`) and join it to the internal network.
   - Important: `build.context` is resolved relative to the FIRST compose file (kit/compose.yml). Use a path relative to `devkit/kit`, not the overlay folder.
@@ -93,7 +96,7 @@ hooks:
   maintain: npm run build
 ```
 - `service:` ensures CLI commands like `ssh-setup`, `repo-push-ssh`, `exec`, and `attach` target the right container.
-- `runtime.flake` is the authoritative runtime pairing. Compose image tags in `compose.override.yml` are legacy lifecycle metadata only.
+- `runtime.flake` is the authoritative runtime pairing and remains a root-flake ref such as `.#<overlay-name>` for CLI compatibility. Compose image tags in `compose.override.yml` are legacy lifecycle metadata only.
 
 4) Networking gotchas
 - Your overlay service must join `dev-internal` to resolve `tinyproxy` and DNS sidecar names.
@@ -132,6 +135,7 @@ Quoting pitfalls (important)
 - [ ] `devkit.yaml` created with `workspace` and `service`.
 - [ ] `devkit.yaml` declares `runtime.flake`, `runtime.codex_version`, and `runtime.core_check`.
 - [ ] `runtime.nix` exists and is exported by the root `flake.nix`.
+- [ ] `flake.nix` exists in the overlay directory and delegates to the root shell output.
 - [ ] Compose override uses correct `build.context` path, mounts `${WORKSPACE_DIR}` into `/workspace`, and joins `dev-internal`.
 - [ ] Dockerfile installs `netcat-openbsd` (for SSH proxy).
 - [ ] Container stays up (keepalive command) so tmux/exec can attach.

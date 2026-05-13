@@ -11,7 +11,10 @@ runtime to refresh.
 
 Run `devkit/kit/scripts/devkit image-matrix --all` for the machine-readable
 view. The command name is historical; runtime metadata now uses
-`runtime.flake`.
+`runtime.flake`. The values in `runtime.flake` intentionally remain root-flake
+refs such as `.#dev-all` in this transition slice. Each flake-backed overlay
+also has an overlay-local `flake.nix`; use `nix develop ./overlays/<overlay>`
+when you want to enter that overlay directly.
 
 | Repo | Canonical overlay | Service | Runtime | Core build check |
 | --- | --- | --- | --- | --- |
@@ -36,11 +39,13 @@ Use `--all` when you need to include legacy/non-canonical overlays. The
 ## Refresh Rule
 
 Refresh native runtimes by updating the overlay `runtime.nix` or root flake
-inputs/packages and rebuilding the CLI:
+inputs/packages and rebuilding the CLI. Keep root refs working while validating
+the overlay-local flakes:
 
 ```bash
 make -C devkit/cli/devctl build
 devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 --flake .#dev-all
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --no-write-lock-file --command true
 ```
 
 Legacy Compose image tags may still appear in `compose.override.yml` files for

@@ -3,6 +3,7 @@ package imagematrix
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,8 +68,8 @@ runtime:
 `)
 
 	err := Check([]Entry{
-		{Overlay: "a", Repo: "app", Flake: ".#a", CodexVersion: "0.128.0", CoreCheck: "make test", ComposePath: a, Canonical: true},
-		{Overlay: "b", Repo: "app", Flake: ".#b", CodexVersion: "0.128.0", CoreCheck: "make test", ComposePath: b, Canonical: true},
+		{Overlay: "a", Repo: "app", Flake: ".#a", CodexVersion: "0.128.0", CoreCheck: "make test", ComposePath: a, FlakePath: filepath.Join(root, "a", "flake.nix"), Canonical: true},
+		{Overlay: "b", Repo: "app", Flake: ".#b", CodexVersion: "0.128.0", CoreCheck: "make test", ComposePath: b, FlakePath: filepath.Join(root, "b", "flake.nix"), Canonical: true},
 	}, true)
 	if err == nil {
 		t.Fatal("expected duplicate repo error")
@@ -97,6 +98,9 @@ runtime:
 	if entries[0].Image != "" || entries[0].Flake != ".#native" {
 		t.Fatalf("runtime entry=%+v", entries[0])
 	}
+	if entries[0].FlakePath == "" {
+		t.Fatalf("missing overlay-local flake path: %+v", entries[0])
+	}
 	if err := Check(entries, true); err != nil {
 		t.Fatalf("native flake check failed: %v", err)
 	}
@@ -123,6 +127,10 @@ defaults:
 }
 
 func TestCheckRejectsRuntimeImageAndFlakeDrift(t *testing.T) {
+	flakePath := filepath.Join(t.TempDir(), "flake.nix")
+	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	err := Check([]Entry{{
 		Overlay:      "pokeemerald",
 		Repo:         "pokeemerald",
@@ -130,10 +138,26 @@ func TestCheckRejectsRuntimeImageAndFlakeDrift(t *testing.T) {
 		Flake:        ".#wrong",
 		CodexVersion: "0.130.0",
 		CoreCheck:    "make modern",
+		FlakePath:    flakePath,
 		Canonical:    true,
 	}}, true)
 	if err == nil {
 		t.Fatal("expected runtime image and flake drift error")
+	}
+}
+
+func TestCheckRejectsMissingOverlayLocalFlake(t *testing.T) {
+	err := Check([]Entry{{
+		Overlay:      "pokeemerald",
+		Repo:         "pokeemerald",
+		Flake:        ".#pokeemerald",
+		CodexVersion: "0.130.0",
+		CoreCheck:    "make modern",
+		FlakePath:    filepath.Join(t.TempDir(), "flake.nix"),
+		Canonical:    true,
+	}}, true)
+	if err == nil || !strings.Contains(err.Error(), "missing overlay-local flake.nix") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -152,6 +176,9 @@ func writeOverlay(t *testing.T, root, name, yaml string) string {
 		image = "local/dev-agent:app"
 	}
 	if err := os.WriteFile(composePath, []byte("services:\n  dev-agent:\n    image: "+image+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "flake.nix"), []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return composePath

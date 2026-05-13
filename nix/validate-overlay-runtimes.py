@@ -55,6 +55,7 @@ def main() -> int:
         core_check = runtime.get("core_check", "").strip()
         codex_version = runtime.get("codex_version", "").strip()
         runtime_nix = devkit_yaml.parent / "runtime.nix"
+        overlay_flake = devkit_yaml.parent / "flake.nix"
         expected = expected_flake(overlay)
 
         if not flake:
@@ -65,6 +66,8 @@ def main() -> int:
             problems.append(f"{overlay}: runtime.image is legacy metadata; use runtime.flake")
         if not runtime_nix.exists():
             problems.append(f"{overlay}: missing per-overlay runtime.nix")
+        if not overlay_flake.exists():
+            problems.append(f"{overlay}: missing per-overlay flake.nix")
         if not core_check:
             problems.append(f"{overlay}: runtime.core_check is required")
         if not codex_version:
@@ -75,6 +78,7 @@ def main() -> int:
                 "overlay": overlay,
                 "flake": flake,
                 "runtime_nix": str(runtime_nix.relative_to(overlays_dir.parent)),
+                "overlay_flake": str(overlay_flake.relative_to(overlays_dir.parent)),
                 "core_check": core_check,
                 "codex_version": codex_version,
             }
