@@ -83,7 +83,7 @@ run_overlay() {
   printf '\n== %s (%s) ==\n' "$overlay" "$flake"
   (
     cd "$DEVKIT_ROOT"
-    nix "${NIX_FLAGS[@]}" develop "$flake" --no-write-lock-file --command bash -lc \
+    nix "${NIX_FLAGS[@]}" develop "$flake" --output-lock-file /dev/null --command bash -lc \
       "got=\"\$(codex --version | awk '{print \$NF}' | sed 's/^v//')\"; test \"\$got\" = '$EXPECTED_CODEX_VERSION'; $smoke"
   )
 }

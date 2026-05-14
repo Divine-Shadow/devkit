@@ -43,7 +43,7 @@ shell and the native lifecycle matrix:
 ```bash
 make -C devkit/cli/devctl build
 devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 --flake ./overlays/dev-all#default
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --no-write-lock-file --command true
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --output-lock-file /dev/null --command true
 make -C devkit native-overlay-matrix
 ```
 

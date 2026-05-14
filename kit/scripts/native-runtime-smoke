@@ -348,7 +348,7 @@ grep_required '"repo_ready": 0' "$smoke_dir/capacity.json"
 grep_required '"capacity_available": 1' "$smoke_dir/capacity.json"
 
 step "Spago and Playwright"
-nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --no-write-lock-file --command bash -lc \
+nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --output-lock-file /dev/null --command bash -lc \
   "purs --version && spago --version && deno --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
   | tee "$smoke_dir/dev-all-tools.txt"
 grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
@@ -356,14 +356,14 @@ grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
 frontend_dir="$DEVKIT_ROOT/../$REPO/frontend"
 if [[ -f "$frontend_dir/package.json" ]]; then
   step "frontend-local Playwright"
-  nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --no-write-lock-file --command bash -lc \
+  nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --output-lock-file /dev/null --command bash -lc \
     "npm --prefix '$frontend_dir' ci --include=dev --ignore-scripts >/dev/null && cd '$frontend_dir' && node -e 'const { chromium } = require(\"@playwright/test\"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent(\"<title>frontend-playwright-ok</title>\"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'" \
     | tee "$smoke_dir/frontend-playwright.txt"
   grep_required "frontend-playwright-ok" "$smoke_dir/frontend-playwright.txt"
 fi
 
 step "Spago and Netlify"
-nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --no-write-lock-file --command bash -lc \
+nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --output-lock-file /dev/null --command bash -lc \
   "spago --version && netlify --version && deno --version" \
   | tee "$smoke_dir/static-tools.txt"
 grep_required "netlify-cli/" "$smoke_dir/static-tools.txt"

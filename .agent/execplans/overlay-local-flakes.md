@@ -23,13 +23,13 @@ Devkit currently has one root `flake.nix` that defines every native runtime shel
   Evidence: `find . -maxdepth 3 -path '*/.agent/PLANS.md' -print` returned no local file.
 
 - Observation: Nix ignores new files in a Git-backed flake until they are tracked or staged.
-  Evidence: `nix flake metadata ./overlays/dev-all --no-write-lock-file` first failed with `Path 'overlays/dev-all/flake.nix' ... is not tracked by Git`; staging the file allowed metadata and `nix develop` to succeed.
+  Evidence: `nix flake metadata ./overlays/dev-all --output-lock-file /dev/null` first failed with `Path 'overlays/dev-all/flake.nix' ... is not tracked by Git`; staging the file allowed metadata and `nix develop` to succeed.
 
 - Observation: The existing CLI can keep using root refs while overlay-local flakes are introduced.
   Evidence: A subagent inspected native flake resolution and found `runtime.flake` is treated as an opaque string by native planning, while `image-matrix` and `nix/validate-overlay-runtimes.py` intentionally validate root-style refs.
 
 - Observation: `nix develop ./overlays/_template#default` is valid from the repo root, but writing locks must be disabled for read-only verification.
-  Evidence: A subagent syntax probe succeeded and created `overlays/_template/flake.lock`; the file was removed and subsequent checks used `--no-write-lock-file`.
+  Evidence: A subagent syntax probe succeeded and created `overlays/_template/flake.lock`; the file was removed and subsequent checks use `--output-lock-file /dev/null`.
 
 ## Decision Log
 
@@ -42,7 +42,7 @@ Devkit currently has one root `flake.nix` that defines every native runtime shel
   Date/Author: 2026-05-13 / Codex
 
 - Decision: Do not commit per-overlay `flake.lock` files.
-  Rationale: The overlay-local flakes delegate to the root flake, so committing eight child lock files would duplicate and drift from the root lock graph. Verification uses `--no-write-lock-file` for overlay-local smoke commands.
+  Rationale: The overlay-local flakes delegate to the root flake, so committing eight child lock files would duplicate and drift from the root lock graph. Verification uses `--output-lock-file /dev/null` for overlay-local smoke commands.
   Date/Author: 2026-05-13 / Codex
 
 - Decision: Use `_template` as the canary for overlay-local `runtime.flake`.
@@ -53,7 +53,7 @@ Devkit currently has one root `flake.nix` that defines every native runtime shel
 
 The first implementation added thin overlay-local flakes for all flake-backed overlays while leaving `runtime.flake` values rooted at `.#...` for compatibility. Root flake checks, overlay runtime smoke, image-matrix validation, CLI dry-runs, and overlay-local `nix develop` checks all passed. No per-overlay lock files were generated or committed. The next canary phase makes `_template` use an overlay-local `runtime.flake` while keeping production overlays on root refs.
 
-The canary phase changed `_template` to `runtime.flake: "./overlays/_template#default"`, kept `dev-all` and production overlays on root refs, taught validation to accept only that canary overlay-local ref, and updated native Nix invocations that may touch overlay flakes to pass `--no-write-lock-file`.
+The canary phase changed `_template` to `runtime.flake: "./overlays/_template#default"`, kept `dev-all` and production overlays on root refs, taught validation to accept only that canary overlay-local ref, and updated native Nix invocations that may touch overlay flakes to pass `--output-lock-file /dev/null`.
 
 ## Context and Orientation
 
@@ -83,8 +83,8 @@ Run all commands from `/home/bayesartre/dev/devkit` unless a command says otherw
 6. Run representative root-flake dry-runs for every flake-backed overlay:
    `kit/scripts/devkit --dry-run -p <overlay> native plan --repo <repo> --flake .#<overlay-or-alias>`.
 7. Run representative overlay-local Nix smoke commands:
-   `nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<overlay> --command true`.
-8. For the canary phase, run `nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template --no-write-lock-file --command true` and wrapper dry-runs for `_template`.
+   `nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<overlay> --output-lock-file /dev/null --command true`.
+8. For the canary phase, run `nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template --output-lock-file /dev/null --command true` and wrapper dry-runs for `_template`.
 
 ## Validation and Acceptance
 
@@ -100,8 +100,8 @@ Verification transcripts will be recorded here as they are produced.
 
 Trial evidence:
 
-    nix --extra-experimental-features 'nix-command flakes' flake metadata ./overlays/dev-all --no-write-lock-file
-    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --no-write-lock-file --command true
+    nix --extra-experimental-features 'nix-command flakes' flake metadata ./overlays/dev-all --output-lock-file /dev/null
+    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --output-lock-file /dev/null --command true
 
 Both commands exited 0 after `overlays/dev-all/flake.nix` was staged. No `overlays/dev-all/flake.lock` file was created.
 
@@ -126,7 +126,7 @@ Gate evidence:
     kit/scripts/devkit --dry-run -p <overlay> ensure-ready --repo <repo> --runtime-only
     Result: exited 0 for `_template`, `codex`, `dev-all`, `dumb-onion-hax`, `ouro-integration`, `ouroboros-static-front-end`, `ouroboros-terraform`, and `pokeemerald`; each plan printed the expected root flake and each readiness dry-run printed `readiness_mode: runtime-only`.
 
-    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<overlay> --no-write-lock-file --command sh -c 'test "$DEVKIT_NIX_SHELL" = "$expected"'
+    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<overlay> --output-lock-file /dev/null --command sh -c 'test "$DEVKIT_NIX_SHELL" = "$expected"'
     Result: exited 0 for all eight overlays. `find overlays -maxdepth 2 -name flake.lock -print` produced no output.
 
 Canary evidence:
@@ -154,7 +154,7 @@ Canary evidence:
     kit/scripts/devkit --dry-run -p _template ensure-ready --repo your-repo-name --runtime-only
     Result: exited 0; `_template` printed `flake: ./overlays/_template#default`.
 
-    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template --no-write-lock-file --command true
+    nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template --output-lock-file /dev/null --command true
     find overlays -maxdepth 2 -name flake.lock -print
     Result: `nix develop` exited 0 and `find` produced no output.
 

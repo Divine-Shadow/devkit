@@ -10,7 +10,7 @@ Spago, Netlify, and Playwright toolchain through that same path.
 
 - [x] (2026-05-13T15:35:00Z) Reproduced the canary path through
   `kit/scripts/devkit -p _template exec`; it reached bubblewrap and
-  `nix develop ./overlays/_template#default`, but emitted registry/certificate
+  `nix develop ./overlays/_template#default --output-lock-file /dev/null`, but emitted registry/certificate
   retry warnings before succeeding.
 - [x] (2026-05-13T15:42:00Z) Used subagents to inspect the launcher and smoke
   layout. One confirmed the warning root cause in missing `/etc/static` and

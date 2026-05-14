@@ -257,7 +257,7 @@ func launcherArgs(p Plan) []string {
 			"--user",
 			"--scope",
 			"--unit", p.Agent.ID.Name(),
-			"nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--command", "bash", "-lc",
+			"nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--output-lock-file", "/dev/null", "--command", "bash", "-lc",
 			"cd " + shellQuote(p.Agent.SandboxWorktree) + " && exec ${SHELL:-bash}",
 		}
 	default:
@@ -286,7 +286,7 @@ func launcherArgs(p Plan) []string {
 		for _, key := range keys {
 			args = append(args, "--setenv", key, p.Env[key])
 		}
-		args = append(args, "nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--command", "bash", "-lc", "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")
+		args = append(args, "nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--output-lock-file", "/dev/null", "--command", "bash", "-lc", "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")
 		return args
 	}
 }

@@ -14,13 +14,13 @@ Devkit has retired Docker Compose as a supported runtime. This follow-up makes t
 - [x] (2026-05-14T00:30:00Z) Inventoried remaining legacy-shaped code, metadata, docs, scripts, and test gaps.
 - [x] (2026-05-14T00:43:00Z) Removed dead container-backed command builders, host/container mutation paths, retired runner helpers, stale command context plumbing, and legacy layout fields.
 - [x] (2026-05-14T00:57:00Z) Added `kit/scripts/native-overlay-matrix` and `make native-overlay-matrix` to prove every overlay as an independent flake/runtime unit.
-- [x] (2026-05-14T01:01:00Z) Hardened `kit/scripts/native-runtime-smoke` so direct overlay `nix develop` checks use `--no-write-lock-file`.
+- [x] (2026-05-14T01:01:00Z) Hardened `kit/scripts/native-runtime-smoke` so direct overlay `nix develop` checks use `--output-lock-file /dev/null`.
 - [x] (2026-05-14T01:05:00Z) Ran the required verification gate and recorded concrete evidence below.
 - [ ] Commit the completed hardening work.
 
 ## Surprises & Discoveries
 
-- `native-runtime-smoke` initially created `overlays/dev-all/flake.lock` and `overlays/ouroboros-static-front-end/flake.lock` during direct `nix develop` toolchain probes. The script now passes `--no-write-lock-file` for those probes, the generated locks were removed, and a rerun left no overlay locks.
+- `native-runtime-smoke` initially created `overlays/dev-all/flake.lock` and `overlays/ouroboros-static-front-end/flake.lock` during direct `nix develop` toolchain probes. The script now passes `--output-lock-file /dev/null` for those probes, the generated locks were removed, and a rerun left no overlay locks.
 - `hosts` was still a container mutation command for non-native overlays. It is now native host-only, requires `runtime.flake`, and refuses agent/container targets instead of shelling out to container commands.
 - The static retirement guard was too narrow for dead-code regressions. It now also catches structural symbols such as `ComposeProject`, `BuildCommand`, `ResolveContainerName`, `ExistingComposeNetwork`, Docker label probes, and generated ingress fragments.
 
@@ -73,7 +73,7 @@ Acceptance requires:
 
 ## Idempotence and Recovery
 
-All changes are source-controlled and recoverable through Git. Runtime smoke commands should use isolated broker sockets, state roots, and temporary homes where practical. Overlay-local Nix checks must use `--no-write-lock-file` and must not leave `overlays/*/flake.lock` files behind unless the design explicitly changes.
+All changes are source-controlled and recoverable through Git. Runtime smoke commands should use isolated broker sockets, state roots, and temporary homes where practical. Overlay-local Nix checks must use `--output-lock-file /dev/null` and must not leave `overlays/*/flake.lock` files behind unless the design explicitly changes.
 
 ## Artifacts and Notes
 

@@ -97,14 +97,15 @@ A blocked host should fail through the proxy; an allowed host should connect.
 Nix:
 
 Overlay runtime refs are intentionally overlay-local, for example
-`./overlays/dev-all#default`. Automation must pass `--no-write-lock-file` when
-running overlay flakes directly. Do not commit generated
+`./overlays/dev-all#default`. Automation must pass `--output-lock-file
+/dev/null` when running overlay flakes directly. Do not commit generated
 `overlays/*/flake.lock` files.
 
 Decision: keep overlay flakes lockless. The root `flake.lock` remains the
 single pin source; committing one lock per overlay would remove the warning but
 would duplicate pins and create drift risk. The supported friction reduction is
-to use devkit commands or smoke scripts, all of which pass `--no-write-lock-file`
+to use devkit commands or smoke scripts, all of which pass `--output-lock-file
+/dev/null`
 for direct overlay checks.
 
 Auth:

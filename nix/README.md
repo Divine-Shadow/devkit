@@ -26,20 +26,20 @@ default:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' flake check
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --command bash -lc 'git --version && sbt --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --output-lock-file /dev/null --command bash -lc 'git --version && sbt --version'
 ```
 
 Overlay smoke commands:
 
 ```bash
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template#default --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/codex#default --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dumb-onion-hax#default --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouro-integration#default --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-static-front-end#default --command bash -lc 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-terraform#default --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/pokeemerald#default --command bash -lc 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template#default --output-lock-file /dev/null --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/codex#default --output-lock-file /dev/null --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --output-lock-file /dev/null --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dumb-onion-hax#default --output-lock-file /dev/null --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouro-integration#default --output-lock-file /dev/null --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-static-front-end#default --output-lock-file /dev/null --command bash -lc 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-terraform#default --output-lock-file /dev/null --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/pokeemerald#default --output-lock-file /dev/null --command bash -lc 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
 ```
 
 Run them together with:
@@ -56,8 +56,9 @@ matching `overlays/<overlay>/runtime.nix` and `overlays/<overlay>/flake.nix`
 files.
 
 Overlay-local flakes intentionally stay lockless. The root `flake.lock` is the
-single pin source; direct overlay checks should use `--no-write-lock-file`, and
-generated `overlays/*/flake.lock` files should not be committed. See
+single pin source; direct overlay checks should use `--output-lock-file
+/dev/null`, and generated `overlays/*/flake.lock` files should not be
+committed. See
 `kit/docs/native-operator-runbook.md` for the operator policy and rationale.
 
 Historical parity notes are archived under `documentation/archive/compose-retirement/`.

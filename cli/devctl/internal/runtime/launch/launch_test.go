@@ -58,7 +58,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
 		"'--setenv' 'DOCKER_HOST' 'unix://" + brokerSocket + "'",
 		"'--setenv' 'TMPDIR' '/tmp'",
-		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' 'develop' '.#runtime-test-agent' '--no-write-lock-file'",
+		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command missing %q:\n%s", want, joined)
