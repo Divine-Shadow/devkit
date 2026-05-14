@@ -11,7 +11,7 @@ N          ?= 4
 
 NIX       ?= nix --extra-experimental-features 'nix-command flakes'
 
-.PHONY: build-cli health run ci-cheap native-e2e-lifecycle native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke compose-retirement-guard postgres-broker-container-smoke
+.PHONY: build-cli health run ci-cheap native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke compose-retirement-guard postgres-broker-container-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -50,6 +50,10 @@ native-runtime-smoke: build-cli
 native-e2e-lifecycle: build-cli
 	@echo "== Native end-to-end lifecycle =="
 	@kit/scripts/native-e2e-lifecycle
+
+native-overlay-e2e-matrix: build-cli
+	@echo "== Native overlay end-to-end lifecycle matrix =="
+	@kit/scripts/native-overlay-e2e-matrix
 
 native-readiness-audit: build-cli
 	@echo "== Native readiness audit (two-agent dev-all) =="

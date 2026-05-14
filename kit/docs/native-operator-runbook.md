@@ -154,6 +154,7 @@ Full local readiness gate:
 
 ```bash
 make native-e2e-lifecycle
+make native-overlay-e2e-matrix
 make native-runtime-smoke
 make native-readiness-audit
 make postgres-broker-container-smoke
@@ -162,6 +163,11 @@ make postgres-broker-container-smoke
 `make native-e2e-lifecycle` runs real native `up`, `status --ready`, `exec`,
 stdin-driven `attach`, `scale`, and `down` cycles for `dev-all` and the
 configured smaller overlay, defaulting to `ouroboros-static-front-end`.
+
+`make native-overlay-e2e-matrix` classifies real overlays as `e2e-pass`,
+`runtime-pass`, or `not-locally-runnable` with per-overlay evidence under
+`/tmp`. It preserves the cheap CI boundary because full E2E coverage expects
+sibling repository checkouts and creates temporary native Git worktrees.
 
 `make postgres-broker-container-smoke` starts the Nix-built Postgres broker,
 denies a Redis create request, pulls/creates/starts/inspects/deletes a real

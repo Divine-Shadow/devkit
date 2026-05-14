@@ -3,7 +3,7 @@ service: dev-agent
 defaults:
   repo: pokeemerald
   agents: 1
-  base_branch: main
+  base_branch: master
   branch_prefix: agent
 runtime:
   flake: ./overlays/pokeemerald#default

@@ -1,0 +1,491 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
+DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+SCALE_COUNT="${DEVKIT_NATIVE_OVERLAY_E2E_SCALE_COUNT:-2}"
+
+default_overlays=(
+  codex
+  dev-all
+  dumb-onion-hax
+  ouro-integration
+  ouroboros-static-front-end
+  ouroboros-terraform
+  pokeemerald
+)
+
+if [[ $# -gt 0 ]]; then
+  overlays=("$@")
+elif [[ -n "${DEVKIT_NATIVE_OVERLAY_E2E_OVERLAYS:-}" ]]; then
+  read -r -a overlays <<<"$DEVKIT_NATIVE_OVERLAY_E2E_OVERLAYS"
+else
+  overlays=("${default_overlays[@]}")
+fi
+
+fail() {
+  echo "native-overlay-e2e-matrix: $*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n== %s ==\n' "$*"
+}
+
+grep_required() {
+  local pattern="$1"
+  local file="$2"
+  grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+yaml_section_scalar() {
+  local yaml="$1"
+  local section="$2"
+  local key="$3"
+  awk -v section="$section" -v key="$key" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    /^[^[:space:]][^:]*:[[:space:]]*$/ {
+      current = $0
+      sub(/:.*/, "", current)
+      next
+    }
+    current == section && $0 ~ "^[[:space:]]+" key ":[[:space:]]*" {
+      sub("^[[:space:]]+" key ":[[:space:]]*", "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if ((substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") ||
+          (substr($0, 1, 1) == "'"'"'" && substr($0, length($0), 1) == "'"'"'")) {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$yaml"
+}
+
+default_repo_for() {
+  local overlay="$1"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  local repo
+  repo="$(yaml_section_scalar "$yaml" defaults repo)"
+  if [[ -n "$repo" ]]; then
+    echo "$repo"
+  else
+    echo "$overlay"
+  fi
+}
+
+base_branch_for() {
+  local overlay="$1"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  local branch
+  branch="$(yaml_section_scalar "$yaml" defaults base_branch)"
+  if [[ -n "$branch" ]]; then
+    echo "$branch"
+  else
+    echo "main"
+  fi
+}
+
+runtime_flake_for() {
+  local overlay="$1"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  yaml_section_scalar "$yaml" runtime flake
+}
+
+broker_upstream_for() {
+  local overlay="$1"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  local upstream
+  upstream="$(yaml_section_scalar "$yaml" broker upstream)"
+  if [[ -n "$upstream" ]]; then
+    echo "$upstream"
+  else
+    echo "unix:///var/run/docker.sock"
+  fi
+}
+
+expected_shell_for() {
+  case "$1" in
+    _template) echo "template-agent" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+full_e2e_skip_reason_for() {
+  case "$1" in
+    codex)
+      echo "noncanonical overlay; dev-all is the canonical ouroboros-ide E2E target"
+      return 0
+      ;;
+    ouro-integration)
+      echo "noncanonical integration overlay; full readiness is Terraform/SBT/AWS-scoped and outside this lifecycle matrix"
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+repo_available() {
+  local repo="$1"
+  git -C "$DEV_ROOT/$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+base_ref_available() {
+  local repo="$1"
+  local base="$2"
+  git -C "$DEV_ROOT/$repo" rev-parse --verify --quiet "origin/$base^{commit}" >/dev/null
+}
+
+join_reasons() {
+  local joined=""
+  local reason
+  for reason in "$@"; do
+    if [[ -z "$joined" ]]; then
+      joined="$reason"
+    else
+      joined="$joined; $reason"
+    fi
+  done
+  echo "$joined"
+}
+
+broker_upstream_ready_reason() {
+  local upstream="$1"
+  local sock
+  case "$upstream" in
+    unix://*)
+      sock="${upstream#unix://}"
+      if [[ ! -S "$sock" ]]; then
+        echo "broker upstream unavailable: socket $sock is missing"
+        return 1
+      fi
+      if ! curl --unix-socket "$sock" -fsS http://docker/_ping >/dev/null 2>&1; then
+        echo "broker upstream unavailable: $upstream does not answer Docker _ping"
+        return 1
+      fi
+      ;;
+    *)
+      echo "broker upstream probe unsupported for $upstream"
+      return 1
+      ;;
+  esac
+  echo "broker upstream ready: $upstream"
+}
+
+cleanup_runtime_cycle() {
+  local overlay="$1"
+  local repo="$2"
+  local flake="$3"
+  local dir="$4"
+  local sock="$dir/broker.sock"
+  local state="$dir/broker-state"
+  local workroot="$dir/runtime-worktrees"
+  local stateroot="$dir/runtime-agents"
+
+  "$DEVKIT" -p "$overlay" down --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >/dev/null 2>&1 || true
+
+  rm -rf "$workroot" "$stateroot" "$state"
+}
+
+cleanup_cycle() {
+  local overlay="$1"
+  local repo="$2"
+  local flake="$3"
+  local dir="$4"
+  local prefix="$5"
+  local count="$6"
+  local sock="$dir/broker.sock"
+  local state="$dir/broker-state"
+  local workroot="$dir/worktrees"
+  local stateroot="$dir/agents"
+
+  "$DEVKIT" -p "$overlay" down --repo "$repo" --count "$count" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >/dev/null 2>&1 || true
+
+  for idx in $(seq 1 "$count"); do
+    git -C "$DEV_ROOT/$repo" worktree remove -f "$workroot/agent$idx/$repo" >/dev/null 2>&1 || true
+  done
+  git -C "$DEV_ROOT/$repo" worktree prune >/dev/null 2>&1 || true
+  for idx in $(seq 1 "$count"); do
+    git -C "$DEV_ROOT/$repo" branch -D "${prefix}${idx}" >/dev/null 2>&1 || true
+  done
+  rm -rf "$workroot" "$stateroot" "$state"
+}
+
+run_runtime_probe() {
+  local overlay="$1"
+  local repo="$2"
+  local flake="$3"
+  local dir="$4"
+  local shell_name="$5"
+  local sock="$dir/broker.sock"
+  local state="$dir/broker-state"
+  local workroot="$dir/runtime-worktrees"
+  local stateroot="$dir/runtime-agents"
+
+  mkdir -p "$dir" "$workroot/agent1/$repo" "$stateroot"
+  runtime_cleanup_stack+=("$overlay|$repo|$flake|$dir")
+
+  step "$overlay runtime up/status/exec/down"
+  if ! "$DEVKIT" -p "$overlay" up --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --skip-prepare --skip-ready \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >"$dir/runtime-up.json" 2>&1; then
+    return 1
+  fi
+  grep -q '"command": "up"' "$dir/runtime-up.json" || return 1
+  grep -q '"runtime": "native"' "$dir/runtime-up.json" || return 1
+  grep -q '"running": true' "$dir/runtime-up.json" || return 1
+
+  if ! "$DEVKIT" -p "$overlay" status --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >"$dir/runtime-status.json" 2>&1; then
+    return 1
+  fi
+  grep -q '"command": "status"' "$dir/runtime-status.json" || return 1
+  grep -q '"runtime": "native"' "$dir/runtime-status.json" || return 1
+
+  if ! "$DEVKIT" -p "$overlay" exec 1 --repo "$repo" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    -- \
+    env "EXPECTED_SHELL=$shell_name" "EXPECTED_BROKER=unix://$sock" \
+      bash -lc '
+        set -euo pipefail
+        test "${DEVKIT_NATIVE_AGENT:-}" = 1
+        test "${DEVKIT_NIX_SHELL:-}" = "$EXPECTED_SHELL"
+        test "${DOCKER_HOST:-}" = "$EXPECTED_BROKER"
+        test ! -e /var/run/docker.sock
+        codex --version
+        printf "runtime-ok shell=%s repo=%s\n" "$DEVKIT_NIX_SHELL" "$(basename "$PWD")"
+      ' >"$dir/runtime-exec.txt" 2>&1; then
+    return 1
+  fi
+  grep -q "runtime-ok shell=$shell_name" "$dir/runtime-exec.txt" || return 1
+  grep -q "codex-cli" "$dir/runtime-exec.txt" || return 1
+
+  if ! "$DEVKIT" -p "$overlay" down --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >"$dir/runtime-down.json" 2>&1; then
+    return 1
+  fi
+  grep -q '"command": "down"' "$dir/runtime-down.json" || return 1
+  grep -q '"runtime": "native"' "$dir/runtime-down.json" || return 1
+  grep -q '"running": false' "$dir/runtime-down.json" || return 1
+}
+
+run_cycle() {
+  local overlay="$1"
+  local repo="$2"
+  local flake="$3"
+  local base_branch="$4"
+  local dir="$5"
+  local shell_name="$6"
+  local count="$SCALE_COUNT"
+  local prefix="devkit-overlay-e2e-$(date +%s)-$$-$overlay-agent"
+  local sock="$dir/broker.sock"
+  local state="$dir/broker-state"
+  local workroot="$dir/worktrees"
+  local stateroot="$dir/agents"
+
+  mkdir -p "$dir" "$workroot" "$stateroot"
+  cleanup_stack+=("$overlay|$repo|$flake|$dir|$prefix|$count")
+
+  step "$overlay up"
+  "$DEVKIT" -p "$overlay" up --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --base-branch "$base_branch" \
+    --branch-prefix "$prefix" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --runtime-only \
+    --format json \
+    | tee "$dir/up.json"
+  grep_required '"command": "up"' "$dir/up.json"
+  grep_required '"runtime": "native"' "$dir/up.json"
+  grep_required '"running": true' "$dir/up.json"
+  grep_required '"capacity_available": 1' "$dir/up.json"
+
+  step "$overlay status --ready"
+  "$DEVKIT" -p "$overlay" status --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --ready \
+    --runtime-only \
+    --format json \
+    | tee "$dir/status-ready.json"
+  grep_required '"command": "status"' "$dir/status-ready.json"
+  grep_required '"readiness_mode": "runtime-only"' "$dir/status-ready.json"
+  grep_required '"capacity_available": 1' "$dir/status-ready.json"
+
+  step "$overlay exec"
+  "$DEVKIT" -p "$overlay" exec 1 --repo "$repo" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    -- \
+    env "EXPECTED_SHELL=$shell_name" "EXPECTED_BROKER=unix://$sock" \
+      bash -lc '
+        set -euo pipefail
+        test "${DEVKIT_NATIVE_AGENT:-}" = 1
+        test "${DEVKIT_NIX_SHELL:-}" = "$EXPECTED_SHELL"
+        test "${DOCKER_HOST:-}" = "$EXPECTED_BROKER"
+        test ! -e /var/run/docker.sock
+        codex --version
+        printf "exec-ok shell=%s repo=%s\n" "$DEVKIT_NIX_SHELL" "$(basename "$PWD")"
+      ' \
+    2>&1 | tee "$dir/exec.txt"
+  grep_required "exec-ok shell=$shell_name" "$dir/exec.txt"
+  grep_required "codex-cli" "$dir/exec.txt"
+
+  step "$overlay attach"
+  printf 'echo attach-ok shell=$DEVKIT_NIX_SHELL repo=$(basename "$PWD")\nexit\n' |
+    timeout 180s "$DEVKIT" -p "$overlay" attach 1 --repo "$repo" \
+      --flake "$flake" \
+      --broker-socket "$sock" \
+      --worktree-root "$workroot" \
+      --agent-state-root "$stateroot" \
+    2>&1 | tee "$dir/attach.txt"
+  grep_required "attach-ok shell=$shell_name" "$dir/attach.txt"
+
+  step "$overlay scale"
+  "$DEVKIT" -p "$overlay" scale "$count" --repo "$repo" \
+    --flake "$flake" \
+    --base-branch "$base_branch" \
+    --branch-prefix "$prefix" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --runtime-only \
+    --format json \
+    | tee "$dir/scale.json"
+  grep_required '"command": "scale"' "$dir/scale.json"
+  grep_required "\"count\": $count" "$dir/scale.json"
+  grep_required "\"capacity_available\": $count" "$dir/scale.json"
+
+  step "$overlay down"
+  "$DEVKIT" -p "$overlay" down --repo "$repo" --count "$count" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json \
+    | tee "$dir/down.json"
+  grep_required '"command": "down"' "$dir/down.json"
+  grep_required '"runtime": "native"' "$dir/down.json"
+  grep_required '"running": false' "$dir/down.json"
+}
+
+command -v timeout >/dev/null 2>&1 || fail "timeout is required"
+
+evidence_root="${DEVKIT_NATIVE_OVERLAY_E2E_EVIDENCE_ROOT:-$(mktemp -d /tmp/devkit-native-overlay-e2e.XXXXXX)}"
+mkdir -p "$evidence_root"
+report="$evidence_root/report.tsv"
+cleanup_stack=()
+runtime_cleanup_stack=()
+
+cleanup() {
+  set +e
+  for item in "${runtime_cleanup_stack[@]}"; do
+    IFS='|' read -r overlay repo flake dir <<<"$item"
+    cleanup_runtime_cycle "$overlay" "$repo" "$flake" "$dir"
+  done
+  for item in "${cleanup_stack[@]}"; do
+    IFS='|' read -r overlay repo flake dir prefix count <<<"$item"
+    cleanup_cycle "$overlay" "$repo" "$flake" "$dir" "$prefix" "$count"
+  done
+}
+trap cleanup EXIT
+
+printf 'OVERLAY\tREPO\tFLAKE\tCLASSIFICATION\tEVIDENCE\tREASON\n' | tee "$report"
+
+for overlay in "${overlays[@]}"; do
+  yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  if [[ ! -f "$yaml" ]]; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$overlay" "" "" "not-locally-runnable" "" "overlay metadata missing" | tee -a "$report"
+    continue
+  fi
+
+  repo="$(default_repo_for "$overlay")"
+  base_branch="$(base_branch_for "$overlay")"
+  flake="$(runtime_flake_for "$overlay")"
+  shell_name="$(expected_shell_for "$overlay")"
+  overlay_dir="$evidence_root/$overlay"
+  blockers=()
+
+  if [[ -z "$flake" ]]; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$overlay" "$repo" "" "not-locally-runnable" "$overlay_dir" "runtime.flake missing" | tee -a "$report"
+    continue
+  fi
+  if ! run_runtime_probe "$overlay" "$repo" "$flake" "$overlay_dir" "$shell_name"; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$overlay" "$repo" "$flake" "not-locally-runnable" "$overlay_dir" "native runtime up/status/exec/down failed; see runtime-* evidence files" | tee -a "$report"
+    continue
+  fi
+  if skip_reason="$(full_e2e_skip_reason_for "$overlay")"; then
+    blockers+=("$skip_reason")
+  fi
+  if ! repo_available "$repo"; then
+    blockers+=("missing sibling checkout at $DEV_ROOT/$repo")
+  elif ! base_ref_available "$repo" "$base_branch"; then
+    blockers+=("origin/$base_branch is not available in $repo")
+  fi
+  upstream="$(broker_upstream_for "$overlay")"
+  if ! upstream_reason="$(broker_upstream_ready_reason "$upstream")"; then
+    blockers+=("$upstream_reason")
+  fi
+  if [[ "${#blockers[@]}" -gt 0 ]]; then
+    reason="runtime up/status/exec/down passed; full e2e blocked: $(join_reasons "${blockers[@]}")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$overlay" "$repo" "$flake" "runtime-pass" "$overlay_dir" "$reason" | tee -a "$report"
+    continue
+  fi
+
+  run_cycle "$overlay" "$repo" "$flake" "$base_branch" "$overlay_dir" "$shell_name"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$overlay" "$repo" "$flake" "e2e-pass" "$overlay_dir" "real up/status-ready/exec/attach/scale/down passed" | tee -a "$report"
+done
+
+if find "$DEVKIT_ROOT/overlays" -maxdepth 2 -name flake.lock -print | grep -q .; then
+  fail "overlay-local Nix checks created flake.lock files"
+fi
+
+echo
+echo "native-overlay-e2e-matrix: evidence_root=$evidence_root"
+echo "native-overlay-e2e-matrix: report=$report"
+echo "native-overlay-e2e-matrix: ok"
