@@ -4,16 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
-	"devkit/cli/devctl/internal/agentexec"
 	"devkit/cli/devctl/internal/config"
 )
 
 const (
-	defaultIngressImage = "caddy:2.7.6-alpine"
-	defaultPortMapping  = "${DEVKIT_INGRESS_PORT:-8443}:443"
+	generatedCaddyfileName = "Caddyfile.generated"
 )
 
 type renderedRoute struct {
@@ -25,12 +22,12 @@ type renderedRoute struct {
 	keyPath  string
 }
 
-// Fragment represents a generated ingress fragment.
+// Fragment represents a resolved or generated native ingress config file.
 type Fragment struct {
 	Path string
 }
 
-// BuildFragment renders the ingress fragment for the provided configuration.
+// BuildFragment renders the ingress config for the provided configuration.
 // When cfg is nil, it returns an empty Fragment and no error.
 func BuildFragment(project string, cfg *config.IngressConfig, overlayDir string, root string) (Fragment, error) {
 	var out Fragment
@@ -50,16 +47,10 @@ func buildCaddyFragment(project string, cfg *config.IngressConfig, overlayDir st
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return out, err
 	}
-	mounted := map[string]string{}
-	var volumes []string
-	certTargetDir := "/ingress/certs"
-	if strings.TrimSpace(cfg.Config) != "" {
-		certTargetDir = "/ingress"
-	}
 	fallbackCert := ""
 	fallbackKey := ""
 	for idx, cert := range cfg.Certs {
-		dest, err := mountCertFile(cert.Path, overlayDir, root, certTargetDir, mounted, &volumes)
+		dest, err := resolveCertFile(cert.Path, overlayDir, root)
 		if err != nil {
 			return out, err
 		}
@@ -72,62 +63,22 @@ func buildCaddyFragment(project string, cfg *config.IngressConfig, overlayDir st
 			fallbackKey = dest
 		}
 	}
-	configSrc, err := ensureConfigFile(project, tmpDir, cfg, overlayDir, root, mounted, &volumes, fallbackCert, fallbackKey)
+	configSrc, err := ensureConfigFile(project, tmpDir, cfg, overlayDir, root, fallbackCert, fallbackKey)
 	if err != nil {
 		return out, err
 	}
-	volumes = append(volumes, fmt.Sprintf("%s:/ingress/Caddyfile:ro", configSrc))
-	composePath := filepath.Join(tmpDir, "compose.ingress.yml")
-	if err := writeCompose(composePath, volumes, cfg.Env); err != nil {
-		return out, err
-	}
-	out.Path = composePath
+	out.Path = configSrc
 	return out, nil
 }
 
-func writeCompose(path string, volumes []string, extraEnv map[string]string) error {
-	var b strings.Builder
-	b.WriteString("services:\n")
-	b.WriteString("  ingress:\n")
-	b.WriteString(fmt.Sprintf("    image: %s\n", defaultIngressImage))
-	b.WriteString("    command: [\"caddy\", \"run\", \"--config\", \"/ingress/Caddyfile\"]\n")
-	b.WriteString("    working_dir: /ingress\n")
-	if len(volumes) > 0 {
-		b.WriteString("    volumes:\n")
-		for _, vol := range volumes {
-			b.WriteString(fmt.Sprintf("      - %s\n", vol))
-		}
-	}
-	if len(extraEnv) > 0 {
-		b.WriteString("    environment:\n")
-		keys := make([]string, 0, len(extraEnv))
-		for k := range extraEnv {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			b.WriteString(fmt.Sprintf("      - %s=%s\n", k, extraEnv[k]))
-		}
-	}
-	b.WriteString("    networks:\n")
-	b.WriteString("      - dev-internal\n")
-	b.WriteString("      - dev-egress\n")
-	b.WriteString("    ports:\n")
-	b.WriteString(fmt.Sprintf("      - \"%s\"\n", defaultPortMapping))
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-		return err
-	}
-	return nil
-}
-
-func ensureConfigFile(project string, tmpDir string, cfg *config.IngressConfig, overlayDir, root string, mounted map[string]string, volumes *[]string, fallbackCert, fallbackKey string) (string, error) {
+func ensureConfigFile(project string, tmpDir string, cfg *config.IngressConfig, overlayDir, root string, fallbackCert, fallbackKey string) (string, error) {
 	if strings.TrimSpace(cfg.Config) != "" {
 		return resolvePath(cfg.Config, overlayDir, root), nil
 	}
 	if len(cfg.Routes) == 0 {
 		return "", fmt.Errorf("ingress: config path or routes required")
 	}
-	dest := filepath.Join(tmpDir, "Caddyfile.generated")
+	dest := filepath.Join(tmpDir, generatedCaddyfileName)
 	routes := make([]renderedRoute, 0, len(cfg.Routes))
 	for _, route := range cfg.Routes {
 		host := strings.TrimSpace(route.Host)
@@ -139,7 +90,7 @@ func ensureConfigFile(project string, tmpDir string, cfg *config.IngressConfig, 
 		if path != "" && !strings.HasPrefix(path, "/") {
 			return "", fmt.Errorf("ingress: route %s path must start with /", route.Host)
 		}
-		certPath, keyPath, err := resolveRouteCerts(route, overlayDir, root, mounted, volumes, fallbackCert, fallbackKey)
+		certPath, keyPath, err := resolveRouteCerts(route, overlayDir, root, fallbackCert, fallbackKey)
 		if err != nil {
 			return "", err
 		}
@@ -245,32 +196,32 @@ func resolveServiceName(service string, project string) string {
 	if service == "" {
 		return service
 	}
-	composeProject := strings.TrimSpace(agentexec.ComposeProjectName(project))
-	if strings.Contains(service, "{project}") && composeProject != "" {
-		return strings.ReplaceAll(service, "{project}", composeProject)
+	project = strings.TrimSpace(project)
+	if strings.Contains(service, "{project}") && project != "" {
+		return strings.ReplaceAll(service, "{project}", sanitize(project))
 	}
 	const agentPrefix = "dev-agent@"
-	if strings.HasPrefix(service, agentPrefix) && composeProject != "" {
+	if strings.HasPrefix(service, agentPrefix) {
 		index := strings.TrimSpace(strings.TrimPrefix(service, agentPrefix))
 		if index != "" {
-			return fmt.Sprintf("%s-dev-agent-%s", composeProject, index)
+			return fmt.Sprintf("agent-%s", index)
 		}
 	}
 	return service
 }
 
-func resolveRouteCerts(route config.IngressRoute, overlayDir, root string, mounted map[string]string, volumes *[]string, fallbackCert, fallbackKey string) (string, string, error) {
+func resolveRouteCerts(route config.IngressRoute, overlayDir, root string, fallbackCert, fallbackKey string) (string, string, error) {
 	certRaw := strings.TrimSpace(route.Cert)
 	keyRaw := strings.TrimSpace(route.Key)
 	if certRaw != "" || keyRaw != "" {
 		if certRaw == "" || keyRaw == "" {
 			return "", "", fmt.Errorf("ingress: route %s missing cert or key path", route.Host)
 		}
-		certPath, err := mountCertFile(certRaw, overlayDir, root, "/ingress/certs", mounted, volumes)
+		certPath, err := resolveCertFile(certRaw, overlayDir, root)
 		if err != nil {
 			return "", "", err
 		}
-		keyPath, err := mountCertFile(keyRaw, overlayDir, root, "/ingress/certs", mounted, volumes)
+		keyPath, err := resolveCertFile(keyRaw, overlayDir, root)
 		if err != nil {
 			return "", "", err
 		}
@@ -285,7 +236,7 @@ func resolveRouteCerts(route config.IngressRoute, overlayDir, root string, mount
 	return "", "", nil
 }
 
-func mountCertFile(raw string, overlayDir, root string, targetDir string, mounted map[string]string, volumes *[]string) (string, error) {
+func resolveCertFile(raw string, overlayDir, root string) (string, error) {
 	resolved := resolvePath(raw, overlayDir, root)
 	if resolved == "" {
 		return "", nil
@@ -300,14 +251,7 @@ func mountCertFile(raw string, overlayDir, root string, targetDir string, mounte
 	if info.IsDir() {
 		return "", fmt.Errorf("ingress: cert path %s is a directory, expected a file", resolved)
 	}
-	if dest, ok := mounted[resolved]; ok {
-		return dest, nil
-	}
-	base := filepath.Base(resolved)
-	target := filepath.Join(targetDir, base)
-	*volumes = append(*volumes, fmt.Sprintf("%s:%s:ro", resolved, target))
-	mounted[resolved] = target
-	return target, nil
+	return resolved, nil
 }
 
 func resolvePath(p string, overlayDir, root string) string {

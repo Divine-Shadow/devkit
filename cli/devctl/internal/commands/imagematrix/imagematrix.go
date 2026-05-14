@@ -199,11 +199,7 @@ func runtimeArtifact(e Entry) string {
 }
 
 func acceptedFlakeRefs(overlay string) []string {
-	refs := []string{rootFlakeRef(overlay)}
-	if overlay == "_template" {
-		refs = append(refs, overlayLocalFlakeRef(overlay))
-	}
-	return refs
+	return []string{overlayLocalFlakeRef(overlay)}
 }
 
 func flakeRefAccepted(overlay string, flake string) bool {
@@ -213,13 +209,6 @@ func flakeRefAccepted(overlay string, flake string) bool {
 		}
 	}
 	return false
-}
-
-func rootFlakeRef(overlay string) string {
-	if overlay == "_template" {
-		return ".#template-agent"
-	}
-	return ".#" + overlay
 }
 
 func overlayLocalFlakeRef(overlay string) string {

@@ -12,7 +12,7 @@ kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'pwd && co
 kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 2
 ```
 
-Overlay metadata lives in `overlays/<project>/devkit.yaml`. A supported overlay must declare `runtime.flake`, `defaults.repo`, and the readiness policy needed by that repo. Overlay-local flakes are available at `overlays/<project>/flake.nix`.
+Overlay metadata lives in `overlays/<project>/devkit.yaml`. A supported overlay must declare an overlay-local `runtime.flake`, `defaults.repo`, and the readiness policy needed by that repo. Overlay-local flakes are available at `overlays/<project>/flake.nix`.
 
 ## Native Agent State
 
@@ -32,6 +32,7 @@ cd cli/devctl && go test -count=1 ./...
 make -C cli/devctl build
 nix flake check
 make overlay-runtime-smoke
+make native-overlay-matrix
 make native-runtime-smoke
 make native-readiness-audit
 make compose-retirement-guard

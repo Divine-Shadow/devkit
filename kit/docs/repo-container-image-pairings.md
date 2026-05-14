@@ -9,20 +9,19 @@ to refresh.
 ## Canonical Pairings
 
 Run `devkit/kit/scripts/devkit image-matrix --all` for the machine-readable
-view. The command name is historical; runtime metadata now uses
-`runtime.flake`. Production overlays intentionally remain root-flake refs such
-as `.#dev-all` during this transition. `_template` is the overlay-local canary
-and uses `./overlays/_template#default`. Each flake-backed overlay also has an
-overlay-local `flake.nix`; use `nix develop ./overlays/<overlay>` when you want
-to enter that overlay directly.
+view. The command name is historical; runtime metadata now uses one
+overlay-local `runtime.flake` per overlay, such as
+`./overlays/dev-all#default`. The root flake still exposes compatible shells
+for direct Nix use, but devkit runtime metadata points at the overlay-local
+flake boundary.
 
 | Repo | Canonical overlay | Service | Runtime | Core build check |
 | --- | --- | --- | --- | --- |
-| `ouroboros-ide` | `dev-all` | `dev-agent` | `.#dev-all` | `bash scripts/sbt2 "Compile / compile"` |
-| `dumb-onion-hax` | `dumb-onion-hax` | `dev-agent` | `.#dumb-onion-hax` | `sbt compile` |
-| `ouroboros-static-front-end` | `ouroboros-static-front-end` | `frontend` | `.#ouroboros-static-front-end` | `npm run build` |
-| `ouroboros-terraform` | `ouroboros-terraform` | `dev-agent` | `.#ouroboros-terraform` | `terraform fmt -check -recursive` |
-| `pokeemerald` | `pokeemerald` | `dev-agent` | `.#pokeemerald` | `make modern` |
+| `ouroboros-ide` | `dev-all` | `dev-agent` | `./overlays/dev-all#default` | `bash scripts/sbt2 "Compile / compile"` |
+| `dumb-onion-hax` | `dumb-onion-hax` | `dev-agent` | `./overlays/dumb-onion-hax#default` | `sbt compile` |
+| `ouroboros-static-front-end` | `ouroboros-static-front-end` | `frontend` | `./overlays/ouroboros-static-front-end#default` | `npm run build` |
+| `ouroboros-terraform` | `ouroboros-terraform` | `dev-agent` | `./overlays/ouroboros-terraform#default` | `terraform fmt -check -recursive` |
+| `pokeemerald` | `pokeemerald` | `dev-agent` | `./overlays/pokeemerald#default` | `make modern` |
 
 Each listed runtime is expected to carry the current Codex CLI version declared
 in the overlay `runtime.codex_version`. On May 9, 2026 that value is `0.130.0`.
@@ -38,13 +37,14 @@ overlay is not a second runtime pairing for `ouroboros-ide`.
 ## Refresh Rule
 
 Refresh native runtimes by updating the overlay `runtime.nix` or root flake
-inputs/packages and rebuilding the CLI. Keep root refs working while validating
-the overlay-local flakes:
+inputs/packages and rebuilding the CLI. Validate both the overlay-local Nix
+shell and the native lifecycle matrix:
 
 ```bash
 make -C devkit/cli/devctl build
-devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 --flake .#dev-all
+devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 --flake ./overlays/dev-all#default
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --no-write-lock-file --command true
+make -C devkit native-overlay-matrix
 ```
 
 `runtime.flake` is the authoritative runtime pairing metadata.

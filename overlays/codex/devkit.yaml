@@ -9,7 +9,7 @@ runtime:
   # Legacy single-checkout overlay kept for image builds and direct debugging.
   # dev-all is the canonical ouroboros-ide runtime pairing.
   canonical: false
-  flake: .#codex
+  flake: ./overlays/codex#default
   codex_version: 0.130.0
   core_check: scripts/sbt2 "Compile / compile"
 readiness:

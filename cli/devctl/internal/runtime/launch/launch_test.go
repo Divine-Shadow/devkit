@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"devkit/cli/devctl/internal/compose"
+	"devkit/cli/devctl/internal/devkitpaths"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
@@ -25,7 +25,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		t.Fatalf("write broker socket placeholder: %v", err)
 	}
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
-		Paths:          compose.Paths{Root: devkitRoot},
+		Paths:          devkitpaths.Paths{Root: devkitRoot},
 		Repo:           "ouroboros-ide",
 		Flake:          ".#runtime-test-agent",
 		BrokerEndpoint: brokerSocket,
@@ -99,7 +99,7 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 		t.Fatalf("write proxy socket placeholder: %v", err)
 	}
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
-		Paths:       compose.Paths{Root: devkitRoot},
+		Paths:       devkitpaths.Paths{Root: devkitRoot},
 		Repo:        "ouroboros-ide",
 		Flake:       ".#runtime-test-agent",
 		ProxySocket: proxySocket,
@@ -133,7 +133,7 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	tmp := t.TempDir()
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
-		Paths: compose.Paths{Root: filepath.Join(tmp, "devkit")},
+		Paths: devkitpaths.Paths{Root: filepath.Join(tmp, "devkit")},
 		Repo:  "missing",
 	})
 	if err != nil {

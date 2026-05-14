@@ -5,22 +5,6 @@ import (
 	"testing"
 )
 
-func TestBuildCommandIsRetired(t *testing.T) {
-	_, err := BuildCommand(CommandOpts{
-		Project:        "dev-all",
-		Index:          "2",
-		Dest:           "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide",
-		Service:        "dev-agent",
-		ComposeProject: "devkit-ouro8",
-		ContainerName:  "devkit-ouro8-dev-agent-2",
-		GitName:        "Test User",
-		GitEmail:       "test@example.com",
-	})
-	if err == nil || !strings.Contains(err.Error(), "retired") {
-		t.Fatalf("expected retired command error, got %v", err)
-	}
-}
-
 func TestBuildNativeCommandUsesDevkitExec(t *testing.T) {
 	cmd, err := BuildNativeCommand(NativeCommandOpts{
 		Exe:     "/home/me/dev/devkit/kit/scripts/devkit",

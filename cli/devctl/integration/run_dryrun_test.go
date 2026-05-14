@@ -34,8 +34,6 @@ func TestRun_DryRun(t *testing.T) {
 		t.Skipf("go build failed: %v\n%s", err, out)
 	}
 
-	t.Setenv("COMPOSE_PROJECT_NAME", "")
-
 	var stderr bytes.Buffer
 	cmd := exec.Command(bin, "--dry-run", "--no-tmux", "--no-seed", "-p", "dev-all", "run", "testrepo", "2")
 	cmd.Env = append(os.Environ(), "DEVKIT_ROOT="+root)
@@ -45,7 +43,7 @@ func TestRun_DryRun(t *testing.T) {
 		t.Fatalf("run dry-run failed: %v\nstderr=%s", err, stderr.String())
 	}
 	out := stderr.String()
-	// Expect native lifecycle and tmux commands, not Compose-backed agent execs.
+	// Expect native lifecycle and tmux commands, not container-backed agent execs.
 	wants := []string{
 		" -p dev-all up --repo testrepo --count 2",
 	}

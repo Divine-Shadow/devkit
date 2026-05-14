@@ -34,7 +34,7 @@ func setupMinimalNativeOverlay(t *testing.T, root string) {
 			t.Fatalf("write failed: %v", err)
 		}
 	}
-	write(filepath.Join(root, "overlays/dev-all/devkit.yaml"), "runtime:\n  flake: .#dev-all\n")
+	write(filepath.Join(root, "overlays/dev-all/devkit.yaml"), "runtime:\n  flake: ./overlays/dev-all#default\n")
 }
 
 func TestLayoutValidateSuccess(t *testing.T) {

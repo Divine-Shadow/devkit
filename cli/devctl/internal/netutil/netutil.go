@@ -14,23 +14,6 @@ import (
 	"devkit/cli/devctl/internal/execx"
 )
 
-type routeEntry struct {
-	Dst string `json:"dst"`
-}
-
-type dockerNetworkInspect struct {
-	Name      string `json:"Name"`
-	IPAM      struct {
-		Config []struct {
-			Subnet string `json:"Subnet"`
-		} `json:"Config"`
-	} `json:"IPAM"`
-	Containers map[string]struct {
-		Name        string `json:"Name"`
-		IPv4Address string `json:"IPv4Address"`
-	} `json:"Containers"`
-}
-
 const dnsHostOffset = 53
 
 // PickInternalSubnet returns a non-overlapping /24 CIDR and a DNS IP reserved away from the first few auto-assigned addresses.
@@ -210,43 +193,6 @@ func getDockerNetworkCIDRs() []string {
 // UsedCIDRs exposes the discovered CIDR list (host + docker networks).
 func UsedCIDRs() []string {
 	return getUsedCIDRs()
-}
-
-// ExistingComposeNetwork returns the current subnet and DNS IP for a live compose project, if present.
-func ExistingComposeNetwork(composeProject string) (cidr string, dnsIP string, ok bool) {
-	project := strings.TrimSpace(composeProject)
-	if project == "" {
-		return "", "", false
-	}
-	networkName := project + "_dev-internal"
-	ctx, cancel := execx.WithTimeout(5 * time.Second)
-	defer cancel()
-	out, res := execx.Capture(ctx, "docker", "network", "inspect", networkName)
-	if res.Code != 0 {
-		return "", "", false
-	}
-	var inspected []dockerNetworkInspect
-	if err := json.Unmarshal([]byte(out), &inspected); err != nil || len(inspected) == 0 {
-		return "", "", false
-	}
-	netInfo := inspected[0]
-	if len(netInfo.IPAM.Config) > 0 {
-		cidr = strings.TrimSpace(netInfo.IPAM.Config[0].Subnet)
-	}
-	for _, container := range netInfo.Containers {
-		if strings.HasSuffix(strings.TrimSpace(container.Name), "-dns-1") {
-			dnsIP = strings.TrimSpace(container.IPv4Address)
-			dnsIP = strings.TrimSuffix(dnsIP, "/24")
-			break
-		}
-	}
-	if cidr == "" {
-		return "", "", false
-	}
-	if dnsIP == "" {
-		dnsIP = DNSFromCIDR(cidr)
-	}
-	return cidr, dnsIP, true
 }
 
 // SubnetAvailable attempts to create a dummy network with the provided CIDR to detect conflicts.

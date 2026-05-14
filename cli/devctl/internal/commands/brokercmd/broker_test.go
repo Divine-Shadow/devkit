@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"devkit/cli/devctl/internal/cmdregistry"
-	"devkit/cli/devctl/internal/compose"
+	"devkit/cli/devctl/internal/devkitpaths"
 )
 
 func TestParseUsesOverlayBrokerConfig(t *testing.T) {
@@ -31,7 +31,7 @@ broker:
 	parsed, err := parse(&cmdregistry.Context{
 		Project: "dev-all",
 		Args:    []string{"status"},
-		Paths:   compose.Paths{Root: filepath.Join(tmp, "devkit"), OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{Root: filepath.Join(tmp, "devkit"), OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -58,7 +58,7 @@ func TestParseCLIAllowedImagesOverrideOverlay(t *testing.T) {
 	parsed, err := parse(&cmdregistry.Context{
 		Project: "dev-all",
 		Args:    []string{"start", "--allow-image", "postgres:16", "--allow-image", "redis:7", "--socket", "/tmp/b.sock"},
-		Paths:   compose.Paths{Root: filepath.Join(tmp, "devkit")},
+		Paths:   devkitpaths.Paths{Root: filepath.Join(tmp, "devkit")},
 	})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -87,7 +87,7 @@ broker:
 	parsed, err := parse(&cmdregistry.Context{
 		Project: "dev-all",
 		Args:    []string{"status"},
-		Paths:   compose.Paths{Root: root, OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{Root: root, OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	})
 	if err != nil {
 		t.Fatalf("parse overlay: %v", err)
@@ -99,7 +99,7 @@ broker:
 	parsed, err = parse(&cmdregistry.Context{
 		Project: "dev-all",
 		Args:    []string{"status", "--socket", "../custom.sock"},
-		Paths:   compose.Paths{Root: root, OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{Root: root, OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	})
 	if err != nil {
 		t.Fatalf("parse CLI: %v", err)

@@ -8,9 +8,8 @@ DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
 DEVKIT_BIN="$DEVKIT_ROOT/kit/bin/devctl"
 
 REPO="${DEVKIT_NATIVE_SMOKE_REPO:-ouroboros-ide}"
-RUNTIME_FLAKE="${DEVKIT_NATIVE_SMOKE_RUNTIME_FLAKE:-.#runtime-test-agent}"
-DEV_ALL_FLAKE="${DEVKIT_NATIVE_SMOKE_DEV_ALL_FLAKE:-.#dev-all}"
-STATIC_FRONTEND_FLAKE="${DEVKIT_NATIVE_SMOKE_STATIC_FRONTEND_FLAKE:-.#ouroboros-static-front-end}"
+DEV_ALL_FLAKE="${DEVKIT_NATIVE_SMOKE_DEV_ALL_FLAKE:-./overlays/dev-all#default}"
+STATIC_FRONTEND_FLAKE="${DEVKIT_NATIVE_SMOKE_STATIC_FRONTEND_FLAKE:-./overlays/ouroboros-static-front-end#default}"
 ALLOWED_IMAGE="${DEVKIT_NATIVE_SMOKE_ALLOWED_IMAGE:-postgres:latest}"
 DISALLOWED_IMAGE="${DEVKIT_NATIVE_SMOKE_DISALLOWED_IMAGE:-redis:7}"
 SCALE_COUNT="${DEVKIT_NATIVE_SMOKE_SCALE_COUNT:-2}"
@@ -268,7 +267,7 @@ grep_required "\"count\": $SCALE_COUNT" "$smoke_dir/scale.json"
 
 step "native attach dry-run"
 "$DEVKIT" -p dev-all --dry-run attach 1 --repo "$REPO" \
-  --flake "$RUNTIME_FLAKE" --broker-socket "$sock" \
+  --flake "$DEV_ALL_FLAKE" --broker-socket "$sock" \
   | tee "$smoke_dir/attach.txt"
 grep_required "bwrap" "$smoke_dir/attach.txt"
 grep_required "DOCKER_HOST" "$smoke_dir/attach.txt"
@@ -306,7 +305,7 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 [[ -S "$egress_sock" ]] || fail "native egress proxy did not create $egress_sock"
-"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$RUNTIME_FLAKE" \
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
   --broker-socket "$sock" --proxy-socket "$egress_sock" -- \
   bash -lc "$native_egress_exec" \
   2>&1 | tee "$smoke_dir/native-egress.txt"
@@ -316,7 +315,7 @@ grep_required "direct_status=000" "$smoke_dir/native-egress.txt"
 grep_required "native-egress-policy-ok" "$smoke_dir/native-egress.txt"
 
 step "brokered native exec"
-"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$RUNTIME_FLAKE" \
+"$DEVKIT" -p dev-all exec 1 --repo "$REPO" --flake "$DEV_ALL_FLAKE" \
   --broker-socket "$sock" -- \
   env "DEVKIT_NATIVE_SMOKE_SOCK=$sock" \
     "DEVKIT_NATIVE_SMOKE_ALLOWED_IMAGE=$ALLOWED_IMAGE" \
@@ -349,7 +348,7 @@ grep_required '"repo_ready": 0' "$smoke_dir/capacity.json"
 grep_required '"capacity_available": 1' "$smoke_dir/capacity.json"
 
 step "Spago and Playwright"
-nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
+nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --no-write-lock-file --command bash -lc \
   "purs --version && spago --version && deno --version && playwright --version && node '$smoke_dir/playwright-smoke.js'" \
   | tee "$smoke_dir/dev-all-tools.txt"
 grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
@@ -357,14 +356,14 @@ grep_required "native-playwright-ok" "$smoke_dir/dev-all-tools.txt"
 frontend_dir="$DEVKIT_ROOT/../$REPO/frontend"
 if [[ -f "$frontend_dir/package.json" ]]; then
   step "frontend-local Playwright"
-  nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --command bash -lc \
+  nix "${NIX_FLAGS[@]}" develop "$DEV_ALL_FLAKE" --no-write-lock-file --command bash -lc \
     "npm --prefix '$frontend_dir' ci --include=dev --ignore-scripts >/dev/null && cd '$frontend_dir' && node -e 'const { chromium } = require(\"@playwright/test\"); (async () => { const browser = await chromium.launch({ headless: true }); const page = await browser.newPage(); await page.setContent(\"<title>frontend-playwright-ok</title>\"); console.log(await page.title()); await browser.close(); })().catch((err) => { console.error(err); process.exit(1); });'" \
     | tee "$smoke_dir/frontend-playwright.txt"
   grep_required "frontend-playwright-ok" "$smoke_dir/frontend-playwright.txt"
 fi
 
 step "Spago and Netlify"
-nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --command bash -lc \
+nix "${NIX_FLAGS[@]}" develop "$STATIC_FRONTEND_FLAKE" --no-write-lock-file --command bash -lc \
   "spago --version && netlify --version && deno --version" \
   | tee "$smoke_dir/static-tools.txt"
 grep_required "netlify-cli/" "$smoke_dir/static-tools.txt"

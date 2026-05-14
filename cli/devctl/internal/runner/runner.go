@@ -9,35 +9,6 @@ import (
 	"devkit/cli/devctl/internal/execx"
 )
 
-func retiredRuntimeError() string {
-	return "Compose runtime is retired; use the native flake lifecycle through kit/scripts/devkit"
-}
-
-func Compose(dry bool, fileArgs []string, args ...string) {
-	if dry {
-		fmt.Fprintln(os.Stderr, "+ "+retiredRuntimeError())
-	} else {
-		fmt.Fprintln(os.Stderr, retiredRuntimeError())
-	}
-	os.Exit(2)
-}
-
-func ComposeInteractive(dry bool, fileArgs []string, args ...string) {
-	Compose(dry, fileArgs, args...)
-}
-
-func ComposeInput(dry bool, fileArgs []string, input []byte, args ...string) {
-	Compose(dry, fileArgs, args...)
-}
-
-func ComposeWithProject(dry bool, projectName string, fileArgs []string, args ...string) error {
-	if dry {
-		fmt.Fprintln(os.Stderr, "+ "+retiredRuntimeError())
-		return nil
-	}
-	return fmt.Errorf(retiredRuntimeError())
-}
-
 // Host executes a host binary with a default 10 minute timeout.
 func Host(dry bool, name string, args ...string) {
 	ctx, cancel := execx.WithTimeout(10 * time.Minute)

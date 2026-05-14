@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="${1:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 
-pattern='docker[[:space:]]+compose|docker-compose|compose[.]override[.]yml|kit/compose[^[:space:]]*[.]yml|codexw|/usr/local/bin/codex'
+pattern='docker[[:space:]]+compose|docker-compose|compose[.]override[.]yml|compose[.]ingress[.]yml|kit/compose[^[:space:]]*[.]yml|codexw|/usr/local/bin/codex|COMPOSE_PROJECT|com[.]docker[.]compose|compose_project|ComposeProject|RetiredRuntimeFiles|RetiredAllRuntimeFiles|runner[.]Compose|BuildCommand|ResolveContainerName|ExistingComposeNetwork'
 
 cd "$ROOT"
 

@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"devkit/cli/devctl/internal/cmdregistry"
-	"devkit/cli/devctl/internal/compose"
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/devkitpaths"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
@@ -46,7 +46,7 @@ readiness:
 	}
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
-		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	}
 	checks, err := repoChecksFor(ctx, planArgs{})
 	if err != nil {
@@ -85,7 +85,7 @@ runtime:
 	}
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
-		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	}
 	checks, err := runtimeChecksFor(ctx)
 	if err != nil {
@@ -118,7 +118,7 @@ runtime:
 	}
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
-		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	}
 	checks, err := repoChecksFor(ctx, planArgs{})
 	if err != nil {
@@ -252,7 +252,7 @@ func TestLifecycleStatusRequiresExplicitReadiness(t *testing.T) {
 func TestLifecyclePlanOptionsUsesOverlayNativeRoots(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
-		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
 	}
 	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
 		Native: config.Native{
@@ -276,12 +276,12 @@ func TestLifecyclePlanOptionsUsesOverlayNativeRoots(t *testing.T) {
 func TestLifecyclePlanOptionsUsesOverlayRuntimeFlake(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "pokeemerald",
-		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
 	}
 	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
-		Runtime: config.Runtime{Flake: ".#pokeemerald"},
+		Runtime: config.Runtime{Flake: "./overlays/pokeemerald#default"},
 	}, lifecycleArgs{}, "pokeemerald", runtimebroker.Config{Socket: "/tmp/broker.sock"})
-	if opts.Flake != ".#pokeemerald" {
+	if opts.Flake != "./overlays/pokeemerald#default" {
 		t.Fatalf("flake = %q", opts.Flake)
 	}
 }
@@ -289,10 +289,10 @@ func TestLifecyclePlanOptionsUsesOverlayRuntimeFlake(t *testing.T) {
 func TestLifecyclePlanOptionsCLIFlakeOverridesOverlayRuntimeFlake(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "pokeemerald",
-		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
 	}
 	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
-		Runtime: config.Runtime{Flake: ".#pokeemerald"},
+		Runtime: config.Runtime{Flake: "./overlays/pokeemerald#default"},
 	}, lifecycleArgs{flake: ".#custom"}, "pokeemerald", runtimebroker.Config{Socket: "/tmp/broker.sock"})
 	if opts.Flake != ".#custom" {
 		t.Fatalf("flake = %q", opts.Flake)
@@ -302,7 +302,7 @@ func TestLifecyclePlanOptionsCLIFlakeOverridesOverlayRuntimeFlake(t *testing.T) 
 func TestLifecyclePlanOptionsCLIOverridesOverlayNativeRoots(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
-		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
 	}
 	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
 		Native: config.Native{
@@ -324,7 +324,7 @@ func TestLifecyclePlanOptionsCLIOverridesOverlayNativeRoots(t *testing.T) {
 }
 
 func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
-	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	cfg := config.OverlayConfig{Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"}}
 	got := lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{})
 	if got.Socket != "/home/me/dev/.devkit/native-broker/broker.sock" {
@@ -333,7 +333,7 @@ func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
 }
 
 func TestLifecycleBrokerConfigDerivesStateRootForExplicitSocket(t *testing.T) {
-	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	got := lifecycleBrokerConfig(ctx, config.OverlayConfig{}, lifecycleArgs{
 		brokerSocket: "/tmp/devkit-smoke/broker.sock",
 	})
@@ -346,7 +346,7 @@ func TestLifecycleBrokerConfigDerivesStateRootForExplicitSocket(t *testing.T) {
 }
 
 func TestLifecycleBrokerConfigHonorsExplicitStateRootWithSocket(t *testing.T) {
-	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	got := lifecycleBrokerConfig(ctx, config.OverlayConfig{}, lifecycleArgs{
 		brokerSocket:    "/tmp/devkit-smoke/broker.sock",
 		brokerStateRoot: "/tmp/devkit-state",
@@ -357,7 +357,7 @@ func TestLifecycleBrokerConfigHonorsExplicitStateRootWithSocket(t *testing.T) {
 }
 
 func TestApplyNativeConfigDefaultsUsesOverlayBrokerSocket(t *testing.T) {
-	ctx := &cmdregistry.Context{Paths: compose.Paths{Root: "/home/me/dev/devkit"}}
+	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	opts := nativeplan.BuildOptions{}
 	applyNativeConfigDefaults(ctx, config.OverlayConfig{
 		Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"},
@@ -424,7 +424,7 @@ func TestLifecycleEnsureReadyBrokerSkipBrokerPreservesCurrentStateOnly(t *testin
 func TestLifecycleEnsureReadyBrokerPropagatesSocketToPlanOptions(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",
-		Paths:   compose.Paths{Root: "/home/me/dev/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
 	}
 	brokerCfg, _, err := lifecycleEnsureReadyBroker(ctx, lifecycleArgs{}, runtimebroker.Config{Socket: "/tmp/requested.sock"}, func(context.Context, runtimebroker.Config, bool) (runtimebroker.Status, error) {
 		return runtimebroker.Status{Running: true, Socket: "/tmp/running.sock"}, nil
@@ -464,13 +464,13 @@ func TestEnsureNativeLifecycleProjectAcceptsRuntimeFlakeOverlay(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(overlay, "devkit.yaml"), []byte(`
 runtime:
-  flake: .#pokeemerald
+  flake: ./overlays/pokeemerald#default
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	ctx := &cmdregistry.Context{
 		Project: "pokeemerald",
-		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	}
 	if err := ensureNativeLifecycleProject(ctx); err != nil {
 		t.Fatalf("ensureNativeLifecycleProject: %v", err)
@@ -488,7 +488,7 @@ func TestEnsureNativeLifecycleProjectRejectsOverlayWithoutRuntimeFlake(t *testin
 	}
 	ctx := &cmdregistry.Context{
 		Project: "legacy",
-		Paths:   compose.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
+		Paths:   devkitpaths.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	}
 	err := ensureNativeLifecycleProject(ctx)
 	if err == nil {

@@ -69,7 +69,6 @@ func TestNewTabsArgsSupportsExecArgs(t *testing.T) {
 		{Title: "agent-5", Args: []string{
 			"/home/bayesartre/dev/devkit/kit/bin/devctl",
 			"-p", "dev-all",
-			"--compose-project", "devkit-ouro8",
 			"exec-cd", "5",
 			"/workspaces/dev/agent-worktrees/agent5/ouroboros-ide",
 			"zsh", "-i",
@@ -85,7 +84,6 @@ func TestNewTabsArgsSupportsExecArgs(t *testing.T) {
 		"--exec",
 		"/home/bayesartre/dev/devkit/kit/bin/devctl",
 		"-p", "dev-all",
-		"--compose-project", "devkit-ouro8",
 		"exec-cd", "5",
 		"/workspaces/dev/agent-worktrees/agent5/ouroboros-ide",
 		"zsh", "-i",

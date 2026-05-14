@@ -139,7 +139,7 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 	defaultSessionName = func(project string) string { return "devkit:" + project }
 	hasTmuxSession = func(session string) bool { return false }
 	originalDetectPlainProject := detectPlainProject
-	detectPlainProject = func(ctx *cmdregistry.Context) string { return strings.TrimSpace(ctx.Project) }
+	detectPlainProject = func(ctx *cmdregistry.Context) string { return "dev-all" }
 	t.Cleanup(func() { detectPlainProject = originalDetectPlainProject })
 	mustAtoi = func(value string) int {
 		switch value {
@@ -149,12 +149,6 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 			t.Fatalf("unexpected mustAtoi input %q", value)
 			return 0
 		}
-	}
-	listServiceNames = func(_ []string, service string) []string {
-		if service != "dev-agent" {
-			return nil
-		}
-		return []string{"dev-agent-1", "dev-agent-2"}
 	}
 	lockPath := wtutil.ViewerLockPath("devkit:codex8-plain")
 	_ = os.Remove(lockPath)
@@ -169,10 +163,9 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 
 	ctx := &cmdregistry.Context{
-		Project:        "codex",
-		ComposeProject: "devkit-codex8",
-		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
-		Args:           []string{"--plain", "--count", "2", "--cd", "/workspace"},
+		Project: "codex",
+		Exe:     "/home/bayesartre/dev/devkit/kit/bin/devctl",
+		Args:    []string{"--plain", "--count", "2", "--cd", "/workspace"},
 	}
 	if err := handleWTOpen(ctx); err != nil {
 		t.Fatalf("handleWTOpen plain error: %v", err)
@@ -189,7 +182,7 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 	if strings.Contains(lines[0], "zsh -lic") {
 		t.Fatalf("plain wt launch should not use nested zsh -lic: %q", lines[0])
 	}
-	if !strings.Contains(lines[0], "--exec /home/bayesartre/dev/devkit/kit/bin/devctl -p codex --compose-project devkit-codex8 exec-cd 1 /workspace zsh -i ; new-tab --title agent-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS --exec /home/bayesartre/dev/devkit/kit/bin/devctl -p codex --compose-project devkit-codex8 exec-cd 2 /workspace zsh -i") {
+	if !strings.Contains(lines[0], "--exec /home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all exec-cd 1 /workspace zsh -i ; new-tab --title agent-2 -- "+filepath.Join(dir, "wsl.exe")+" -d NixOS --exec /home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all exec-cd 2 /workspace zsh -i") {
 		t.Fatalf("unexpected plain wt launch: %q", lines[0])
 	}
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
@@ -197,16 +190,15 @@ func TestHandleWTOpenPlainLaunchesDirectExecTabs(t *testing.T) {
 	}
 }
 
-func TestPlainTabArgsInfersDevAllForCodex8ComposeProject(t *testing.T) {
+func TestPlainTabArgsUsesDetectedNativeProject(t *testing.T) {
 	originalDetectPlainProject := detectPlainProject
 	detectPlainProject = func(ctx *cmdregistry.Context) string { return "dev-all" }
 	t.Cleanup(func() { detectPlainProject = originalDetectPlainProject })
 
 	ctx := &cmdregistry.Context{
-		Project:        "codex",
-		ComposeProject: "devkit-codex8",
-		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
-		Paths:          cmdregistry.Context{}.Paths,
+		Project: "codex",
+		Exe:     "/home/bayesartre/dev/devkit/kit/bin/devctl",
+		Paths:   cmdregistry.Context{}.Paths,
 	}
 	got := strings.Join(plainTabArgs(ctx, "5", ""), " ")
 	want := "/home/bayesartre/dev/devkit/kit/bin/devctl -p dev-all exec-cd 5 /workspaces/dev/agent-worktrees/agent5/ouroboros-ide zsh -i"
@@ -240,10 +232,9 @@ func TestHandleWTOpenPlainIndexLaunchesSingleDirectExecTab(t *testing.T) {
 	t.Setenv("WSL_DISTRO_NAME", "NixOS")
 
 	ctx := &cmdregistry.Context{
-		Project:        "dev-all",
-		ComposeProject: "devkit-ouro8",
-		Exe:            "/home/bayesartre/dev/devkit/kit/bin/devctl",
-		Args:           []string{"--plain", "--index", "5"},
+		Project: "dev-all",
+		Exe:     "/home/bayesartre/dev/devkit/kit/bin/devctl",
+		Args:    []string{"--plain", "--index", "5"},
 	}
 	if err := handleWTOpen(ctx); err != nil {
 		t.Fatalf("handleWTOpen plain index error: %v", err)

@@ -9,7 +9,7 @@ defaults:
 
 runtime:
   canonical: false
-  flake: .#ouro-integration
+  flake: ./overlays/ouro-integration#default
   codex_version: 0.130.0
   core_check: |
     (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)

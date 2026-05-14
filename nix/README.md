@@ -26,34 +26,33 @@ default:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' flake check
-nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'git --version && sbt --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --command bash -lc 'git --version && sbt --version'
 ```
 
 Overlay smoke commands:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template#default --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
-nix --extra-experimental-features 'nix-command flakes' develop .#codex --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop .#dev-all --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
-nix --extra-experimental-features 'nix-command flakes' develop .#dumb-onion-hax --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop .#ouro-integration --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-static-front-end --command bash -lc 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
-nix --extra-experimental-features 'nix-command flakes' develop .#ouroboros-terraform --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version'
-nix --extra-experimental-features 'nix-command flakes' develop .#pokeemerald --command bash -lc 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/codex#default --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dumb-onion-hax#default --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouro-integration#default --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-static-front-end#default --command bash -lc 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-terraform#default --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/pokeemerald#default --command bash -lc 'codex --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
 ```
 
 Run them together with:
 
 ```bash
 kit/scripts/overlay-runtime-smoke
+kit/scripts/native-overlay-matrix
 ```
 
-Every shell conversion must be verified against
-`kit/docs/proposals/nix-runtime-verification-contract.md`.
+Every shell conversion must pass the local smoke and lifecycle matrix gates.
 `nix flake check` also runs `nix/validate-overlay-runtimes.py`, which requires
 each overlay `devkit.yaml` to declare an accepted `runtime.flake` and have
 matching `overlays/<overlay>/runtime.nix` and `overlays/<overlay>/flake.nix`
 files.
 
-Current smoke evidence and known parity gaps are tracked in
-`nix/runtime-parity.md`.
+Historical parity notes are archived under `documentation/archive/compose-retirement/`.

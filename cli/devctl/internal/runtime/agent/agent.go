@@ -2,8 +2,7 @@ package agent
 
 import "strings"
 
-// ID identifies a native devkit agent without relying on Docker or Compose
-// identity such as service names, container indexes, or labels.
+// ID identifies a native devkit agent without relying on container labels.
 type ID struct {
 	Project string `json:"project"`
 	Index   int    `json:"index"`

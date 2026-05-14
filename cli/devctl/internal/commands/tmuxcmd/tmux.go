@@ -12,7 +12,6 @@ import (
 
 	agentexec "devkit/cli/devctl/internal/agentexec"
 	"devkit/cli/devctl/internal/cmdregistry"
-	"devkit/cli/devctl/internal/compose"
 	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/layout"
@@ -23,26 +22,15 @@ import (
 	"devkit/cli/devctl/internal/wtutil"
 )
 
-// Register adds tmux-related commands to the registry. Helpers from the legacy
-// main.go are injected so we can reuse them without moving everything at once.
+// Register adds tmux-related commands to the registry.
 func Register(
 	r *cmdregistry.Registry,
-	syncFn func(bool, compose.Paths, string, []string, string, string, string, int, string),
-	ensureWindowFn func(bool, compose.Paths, string, []string, string, string, string, string, string),
 	defaultSessionFn func(string) string,
 	atoiFn func(string) int,
-	listFn func([]string, string) []string,
-	buildFn func([]string, string, string, string, string, string, *agentexec.SeedTracker) (string, error),
-	trackerFn func() *agentexec.SeedTracker,
 	hasFn func(string) bool,
 ) {
-	doSyncTmux = syncFn
-	ensureTmuxSessionWithWindow = ensureWindowFn
 	defaultSessionName = defaultSessionFn
 	mustAtoi = atoiFn
-	listServiceNames = listFn
-	buildWindowCmd = buildFn
-	newSeedTracker = trackerFn
 	hasTmuxSession = hasFn
 
 	r.Register("tmux-sync", handleSync)
@@ -94,28 +82,23 @@ func handleSync(ctx *cmdregistry.Context) error {
 		}
 	}
 	if count <= 0 {
-		if nativeRuntimeConfigured(ctx) {
-			cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
-			if err != nil {
-				return err
-			}
-			count = cfg.Defaults.Agents
-			if count <= 0 {
-				return fmt.Errorf("tmux-sync requires --count for native overlays when defaults.agents is unset")
-			}
+		if !nativeRuntimeConfigured(ctx) {
+			return fmt.Errorf("tmux-sync requires runtime.flake")
+		}
+		cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+		if err != nil {
+			return err
+		}
+		count = cfg.Defaults.Agents
+		if count <= 0 {
+			return fmt.Errorf("tmux-sync requires --count when defaults.agents is unset")
 		}
 	}
-	if nativeRuntimeConfigured(ctx) {
-		return nativeSyncTmux(ctx, sessName, namePrefix, cdPath, count)
+	if !nativeRuntimeConfigured(ctx) {
+		return fmt.Errorf("tmux-sync requires runtime.flake")
 	}
-	if count <= 0 {
-		count = len(listServiceNames(ctx.Files, service))
-		if count == 0 {
-			return fmt.Errorf("no dev-agent containers running; use up/scale first or provide --count")
-		}
-	}
-	doSyncTmux(ctx.DryRun, ctx.Paths, ctx.Project, ctx.Files, sessName, namePrefix, cdPath, count, service)
-	return nil
+	_ = service
+	return nativeSyncTmux(ctx, sessName, namePrefix, cdPath, count)
 }
 
 func handleAddCD(ctx *cmdregistry.Context) error {
@@ -152,11 +135,11 @@ func handleAddCD(ctx *cmdregistry.Context) error {
 	if sessName == "" {
 		sessName = defaultSessionName(ctx.Project)
 	}
-	if nativeRuntimeConfigured(ctx) {
-		return nativeEnsureTmuxSessionWithWindow(ctx, sessName, idx, subpath, winName)
+	if !nativeRuntimeConfigured(ctx) {
+		return fmt.Errorf("tmux-add-cd requires runtime.flake")
 	}
-	ensureTmuxSessionWithWindow(ctx.DryRun, ctx.Paths, ctx.Project, ctx.Files, sessName, idx, subpath, winName, service)
-	return nil
+	_ = service
+	return nativeEnsureTmuxSessionWithWindow(ctx, sessName, idx, subpath, winName)
 }
 
 func handleApplyLayout(ctx *cmdregistry.Context) error {
@@ -196,83 +179,13 @@ func handleApplyLayout(ctx *cmdregistry.Context) error {
 			sessName = defaultSessionName(ctx.Project)
 		}
 	}
-	if nativeLayoutEligible(ctx, lf) {
-		return nativeApplyLayout(ctx, lf, sessName, doAttach)
+	if !nativeRuntimeConfigured(ctx) {
+		return fmt.Errorf("tmux-apply-layout requires runtime.flake")
 	}
-	if nativeRuntimeConfigured(ctx) {
-		return fmt.Errorf("tmux-apply-layout for flake-backed overlays only supports native single-overlay layouts; use explicit legacy Compose workflows for mixed layouts")
+	if !nativeLayoutEligible(ctx, lf) {
+		return fmt.Errorf("tmux-apply-layout only supports native single-overlay layouts")
 	}
-	if layoutReferencesProject(lf, "dev-all") {
-		return fmt.Errorf("legacy tmux-apply-layout cannot target dev-all; use a native dev-all layout with -p dev-all")
-	}
-	sessExists := hasTmuxSession(sessName)
-	tracker := newSeedTracker()
-	if tracker == nil {
-		tracker = agentexec.NewSeedTracker()
-	}
-	if !sessExists && len(lf.Windows) > 0 {
-		w := lf.Windows[0]
-		idx := fmt.Sprintf("%d", w.Index)
-		winProj := ctx.Project
-		if strings.TrimSpace(w.Project) != "" {
-			winProj = w.Project
-		}
-		fargs, err := compose.Files(ctx.Paths, winProj, ctx.Profile)
-		if err != nil {
-			return err
-		}
-		dest := layout.CleanPath(winProj, w.Path)
-		svc := w.Service
-		if strings.TrimSpace(svc) == "" {
-			svc = "dev-agent"
-		}
-		name := w.Name
-		if strings.TrimSpace(name) == "" {
-			name = "agent-" + idx
-		}
-		composeProject := strings.TrimSpace(w.ComposeProject)
-		cmdStr, err := buildWindowCmd(fargs, winProj, idx, dest, svc, composeProject, tracker)
-		if err != nil {
-			return err
-		}
-		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewSession(sessName, cmdStr)...)
-		runner.Host(ctx.DryRun, "tmux", tmuxutil.RenameWindow(sessName+":0", name)...)
-		sessExists = true
-	}
-	start := 0
-	if sessExists && len(lf.Windows) > 0 {
-		start = 1
-	}
-	for _, w := range lf.Windows[start:] {
-		idx := fmt.Sprintf("%d", w.Index)
-		winProj := ctx.Project
-		if strings.TrimSpace(w.Project) != "" {
-			winProj = w.Project
-		}
-		fargs, err := compose.Files(ctx.Paths, winProj, ctx.Profile)
-		if err != nil {
-			return err
-		}
-		dest := layout.CleanPath(winProj, w.Path)
-		svc := w.Service
-		if strings.TrimSpace(svc) == "" {
-			svc = "dev-agent"
-		}
-		name := w.Name
-		if strings.TrimSpace(name) == "" {
-			name = "agent-" + idx
-		}
-		composeProject := strings.TrimSpace(w.ComposeProject)
-		cmdStr, err := buildWindowCmd(fargs, winProj, idx, dest, svc, composeProject, tracker)
-		if err != nil {
-			return err
-		}
-		runner.Host(ctx.DryRun, "tmux", tmuxutil.NewWindow(sessName, name, cmdStr)...)
-	}
-	if doAttach {
-		runner.HostInteractive(ctx.DryRun, "tmux", tmuxutil.Attach(sessName)...)
-	}
-	return nil
+	return nativeApplyLayout(ctx, lf, sessName, doAttach)
 }
 
 func nativeSyncTmux(ctx *cmdregistry.Context, session, namePrefix, cdPath string, count int) error {
@@ -375,29 +288,8 @@ func nativeLayoutEligible(ctx *cmdregistry.Context, lf layout.File) bool {
 		if svc := strings.TrimSpace(ov.Service); svc != "" && svc != "dev-agent" {
 			return false
 		}
-		if strings.TrimSpace(ov.ComposeProject) != "" || strings.TrimSpace(ov.Profiles) != "" || ov.Build || ov.Network != nil || len(ov.Env) > 0 {
-			return false
-		}
 	}
 	return defaultProject != ""
-}
-
-func layoutReferencesProject(lf layout.File, project string) bool {
-	project = strings.TrimSpace(project)
-	if project == "" {
-		return false
-	}
-	for _, ov := range lf.Overlays {
-		if strings.TrimSpace(ov.Project) == project {
-			return true
-		}
-	}
-	for _, w := range lf.Windows {
-		if strings.TrimSpace(w.Project) == project {
-			return true
-		}
-	}
-	return false
 }
 
 func nativeApplyLayout(ctx *cmdregistry.Context, lf layout.File, session string, attach bool) error {
@@ -541,6 +433,9 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 		if indexSet && index <= 0 {
 			return fmt.Errorf("wt-open --plain --index must be positive")
 		}
+		if !nativeRuntimeConfiguredForProject(ctx, detectPlainProject(ctx)) {
+			return fmt.Errorf("wt-open --plain requires runtime.flake")
+		}
 		if indexSet {
 			idx := fmt.Sprintf("%d", index)
 			tabs = append(tabs, wtutil.TabSpec{
@@ -549,13 +444,9 @@ func handleWTOpen(ctx *cmdregistry.Context) error {
 			})
 		} else {
 			if count <= 0 {
-				if nativeRuntimeConfigured(ctx) {
-					count = nativeDefaultAgentCount(ctx, 0)
-				} else {
-					count = len(listServiceNames(ctx.Files, service))
-				}
+				count = nativeDefaultAgentCount(ctx, 0)
 				if count == 0 {
-					return fmt.Errorf("no running %s containers found; use up/scale first or provide --count", service)
+					return fmt.Errorf("no native agent count configured; use --count")
 				}
 			}
 			for i := 1; i <= count; i++ {
@@ -881,9 +772,6 @@ func plainTabArgs(ctx *cmdregistry.Context, idx, cdPath string) []string {
 	if strings.TrimSpace(project) != "" {
 		args = append(args, "-p", project)
 	}
-	if strings.TrimSpace(ctx.ComposeProject) != "" && !isNative {
-		args = append(args, "--compose-project", ctx.ComposeProject)
-	}
 	if dest != "" {
 		args = append(args, "exec-cd", idx, dest, "zsh", "-i")
 	} else {
@@ -1048,12 +936,7 @@ func parseNotifyArgs(ctx *cmdregistry.Context) (string, tmuxnotify.Config, tmuxn
 }
 
 var (
-	doSyncTmux                  func(bool, compose.Paths, string, []string, string, string, string, int, string)
-	ensureTmuxSessionWithWindow func(bool, compose.Paths, string, []string, string, string, string, string, string)
-	defaultSessionName          func(string) string
-	mustAtoi                    func(string) int
-	listServiceNames            func([]string, string) []string
-	buildWindowCmd              func([]string, string, string, string, string, string, *agentexec.SeedTracker) (string, error)
-	newSeedTracker              func() *agentexec.SeedTracker
-	hasTmuxSession              func(string) bool
+	defaultSessionName func(string) string
+	mustAtoi           func(string) int
+	hasTmuxSession     func(string) bool
 )

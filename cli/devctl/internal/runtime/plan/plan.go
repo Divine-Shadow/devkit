@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"devkit/cli/devctl/internal/compose"
+	"devkit/cli/devctl/internal/devkitpaths"
 	"devkit/cli/devctl/internal/runtime/agent"
 )
 
@@ -56,7 +56,7 @@ type Plan struct {
 }
 
 type BuildOptions struct {
-	Paths                 compose.Paths
+	Paths                 devkitpaths.Paths
 	Project               string
 	Index                 int
 	Repo                  string

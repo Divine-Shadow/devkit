@@ -37,7 +37,7 @@ defaults:
   repo: ouroboros-ide
   agents: 2
 runtime:
-  flake: .#dev-all
+  flake: ./overlays/dev-all#default
 readiness:
   default_mode: runtime-only
 native:
@@ -86,7 +86,7 @@ native:
 	return root
 }
 
-func legacyComposeRoot(t *testing.T) string {
+func nonFlakeRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	write := func(p, s string) {
@@ -176,7 +176,7 @@ func assertNoDockerCommand(t *testing.T, output string) {
 
 func TestNonFlakeTopLevelAliasesRequireRuntimeFlakeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
-	root := legacyComposeRoot(t)
+	root := nonFlakeRoot(t)
 
 	for _, args := range [][]string{{"up"}, {"status"}, {"logs", "--tail", "1"}, {"down"}, {"scale", "2"}} {
 		out, err := runProjectDryRun(t, bin, root, "codex", args...)
@@ -192,7 +192,7 @@ func TestNonFlakeTopLevelAliasesRequireRuntimeFlakeDryRun(t *testing.T) {
 
 func TestNonFlakeTopLevelExecRequiresRuntimeFlakeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
-	root := legacyComposeRoot(t)
+	root := nonFlakeRoot(t)
 
 	out, err := runProjectDryRun(t, bin, root, "codex", "exec", "1", "echo", "hi")
 	if err == nil {
@@ -212,9 +212,9 @@ func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
 		flake   string
 	}{
 		{project: "_template", repo: "your-repo-name", flake: "./overlays/_template#default"},
-		{project: "ouroboros-static-front-end", repo: "ouroboros-static-front-end", flake: ".#ouroboros-static-front-end"},
-		{project: "ouroboros-terraform", repo: "ouroboros-terraform", flake: ".#ouroboros-terraform"},
-		{project: "pokeemerald", repo: "pokeemerald", flake: ".#pokeemerald"},
+		{project: "ouroboros-static-front-end", repo: "ouroboros-static-front-end", flake: "./overlays/ouroboros-static-front-end#default"},
+		{project: "ouroboros-terraform", repo: "ouroboros-terraform", flake: "./overlays/ouroboros-terraform#default"},
+		{project: "pokeemerald", repo: "pokeemerald", flake: "./overlays/pokeemerald#default"},
 	}
 	commands := [][]string{
 		{"up"},
@@ -238,7 +238,7 @@ func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
 				}
 				assertNoDockerCommand(t, out)
 				if strings.Contains(out, "workspace directory") {
-					t.Fatalf("%s %v still required Compose workspace validation:\n%s", overlay.project, args, out)
+					t.Fatalf("%s %v still required container workspace validation:\n%s", overlay.project, args, out)
 				}
 				switch args[0] {
 				case "exec", "attach":
@@ -264,7 +264,7 @@ func TestFlakeBackedNonDevAllHelperCommandsUseNativeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 	layoutPath := filepath.Join(root, "native-layout.yaml")
 	if err := os.WriteFile(layoutPath, []byte(`
 session: native-front
@@ -319,7 +319,7 @@ windows:
 			}
 			assertNoDockerCommand(t, out)
 			if strings.Contains(out, "workspace directory") {
-				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
+				t.Fatalf("%s still required container workspace validation:\n%s", tt.name, out)
 			}
 			normalized := strings.ReplaceAll(out, "'", "")
 			if tt.want != "" && !strings.Contains(normalized, tt.want) {
@@ -329,11 +329,11 @@ windows:
 	}
 }
 
-func TestFlakeBackedNonDevAllRegistryCommandsAvoidComposeWorkspaceValidationDryRun(t *testing.T) {
+func TestFlakeBackedNonDevAllRegistryCommandsAvoidContainerWorkspaceValidationDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 
 	tests := []struct {
 		name string
@@ -342,7 +342,7 @@ func TestFlakeBackedNonDevAllRegistryCommandsAvoidComposeWorkspaceValidationDryR
 	}{
 		{name: "allow", args: []string{"allow", "example.test"}, want: "Added to proxy allowlist: example.test"},
 		{name: "broker", args: []string{"broker", "status", "--format", "text"}, want: "running:"},
-		{name: "image-matrix", args: []string{"image-matrix", "--all"}, want: ".#ouroboros-static-front-end"},
+		{name: "image-matrix", args: []string{"image-matrix", "--all"}, want: "./overlays/ouroboros-static-front-end#default"},
 		{name: "tmux-bell-show-config", args: []string{"tmux-bell-show-config"}, want: "monitor-bell"},
 		{name: "verify-all", args: []string{"verify-all"}, want: " -p dev-all verify"},
 	}
@@ -354,7 +354,7 @@ func TestFlakeBackedNonDevAllRegistryCommandsAvoidComposeWorkspaceValidationDryR
 			}
 			assertNoDockerCommand(t, out)
 			if strings.Contains(out, "workspace directory") {
-				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
+				t.Fatalf("%s still required container workspace validation:\n%s", tt.name, out)
 			}
 			if !strings.Contains(out, tt.want) {
 				t.Fatalf("%s missing %q:\n%s", tt.name, tt.want, out)
@@ -363,11 +363,11 @@ func TestFlakeBackedNonDevAllRegistryCommandsAvoidComposeWorkspaceValidationDryR
 	}
 }
 
-func TestFlakeBackedReadinessCommandsAvoidComposeDryRun(t *testing.T) {
+func TestFlakeBackedReadinessCommandsAvoidRetiredRuntimeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 
 	tests := []struct {
 		name string
@@ -399,7 +399,7 @@ func TestFlakeBackedLifecycleUsesReadinessDefaultDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 
 	for _, args := range [][]string{{"up"}, {"scale", "1"}} {
 		out, err := runProjectDryRun(t, bin, root, project, args...)
@@ -413,22 +413,22 @@ func TestFlakeBackedLifecycleUsesReadinessDefaultDryRun(t *testing.T) {
 	}
 }
 
-func TestFlakeBackedHostsCommandIsLegacyOnlyDryRun(t *testing.T) {
+func TestFlakeBackedHostsCommandUsesNativeHostOnlyDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 
 	out, err := runProjectDryRun(t, bin, root, project, "hosts", "print", "--target", "host")
-	if err == nil {
-		t.Fatalf("flake-backed hosts command unexpectedly succeeded:\n%s", out)
+	if err != nil {
+		t.Fatalf("flake-backed hosts command failed: %v\n%s", err, out)
 	}
 	assertNoDockerCommand(t, out)
 	if strings.Contains(out, "workspace directory") {
-		t.Fatalf("hosts still required Compose workspace validation:\n%s", out)
+		t.Fatalf("hosts still required container workspace validation:\n%s", out)
 	}
-	if !strings.Contains(out, "legacy Compose/container command for flake-backed overlay") {
-		t.Fatalf("unexpected hosts error:\n%s", out)
+	if !strings.Contains(out, "No ingress.hosts configured") {
+		t.Fatalf("unexpected hosts output:\n%s", out)
 	}
 }
 
@@ -436,7 +436,7 @@ func TestFlakeBackedNonDevAllWTOpenAndWorktreeTmuxPlainUseNativeDryRun(t *testin
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 	env := fakeWindowsTerminalEnv(t)
 
 	for _, args := range [][]string{
@@ -462,7 +462,7 @@ func TestFlakeBackedNonDevAllSSHAndRepoHelpersUseNativeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	project := "ouroboros-static-front-end"
 	repo := "ouroboros-static-front-end"
-	root := flakeOverlayRoot(t, project, repo, ".#ouroboros-static-front-end")
+	root := flakeOverlayRoot(t, project, repo, "./overlays/ouroboros-static-front-end#default")
 	nativePathPart := filepath.Join(".devkit", "native-agents", project+"-agent1", "home")
 	worktreePathPart := filepath.Join("agent-worktrees", "agent1", repo)
 
@@ -486,7 +486,7 @@ func TestFlakeBackedNonDevAllSSHAndRepoHelpersUseNativeDryRun(t *testing.T) {
 			}
 			assertNoDockerCommand(t, out)
 			if strings.Contains(out, "workspace directory") {
-				t.Fatalf("%s still required Compose workspace validation:\n%s", tt.name, out)
+				t.Fatalf("%s still required container workspace validation:\n%s", tt.name, out)
 			}
 			for _, want := range tt.wants {
 				if !strings.Contains(out, want) {
@@ -499,7 +499,7 @@ func TestFlakeBackedNonDevAllSSHAndRepoHelpersUseNativeDryRun(t *testing.T) {
 
 func TestNonFlakeSSHAndRepoHelpersRefuseRetiredRuntimeDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
-	root := legacyComposeRoot(t)
+	root := nonFlakeRoot(t)
 
 	for _, args := range [][]string{
 		{"ssh-test", "1"},
@@ -535,7 +535,7 @@ func TestDevAllComposeNamespaceIsRetiredDryRun(t *testing.T) {
 
 func TestDevAllComposeNamespaceRefusesBeforeComposeFilesDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
-	root := flakeOverlayRoot(t, "dev-all", "ouroboros-ide", ".#dev-all")
+	root := flakeOverlayRoot(t, "dev-all", "ouroboros-ide", "./overlays/dev-all#default")
 
 	out, err := runProjectDryRun(t, bin, root, "dev-all", "compose", "up")
 	if err == nil {
@@ -652,7 +652,7 @@ func TestDevAllCheckAndHookHelpersUseNativeExecDryRun(t *testing.T) {
 	}
 }
 
-func TestDevAllMixedLayoutRefusesComposeFallbackDryRun(t *testing.T) {
+func TestDevAllMixedLayoutRefusesNonNativeFallbackDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
 	layout := filepath.Join(root, "mixed-layout.yaml")
@@ -677,12 +677,12 @@ windows:
 	}
 }
 
-func TestLegacyLayoutCannotTargetDevAllDryRun(t *testing.T) {
+func TestNonNativeLayoutCannotTargetDevAllDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
-	root := legacyComposeRoot(t)
-	layout := filepath.Join(root, "legacy-devall-layout.yaml")
+	root := nonFlakeRoot(t)
+	layout := filepath.Join(root, "non-native-devall-layout.yaml")
 	if err := os.WriteFile(layout, []byte(`
-session: legacy-devall
+session: non-native-devall
 windows:
   - index: 1
     project: dev-all
@@ -694,10 +694,10 @@ windows:
 
 	out, err := runProjectDryRun(t, bin, root, "codex", "layout-apply", "--file", layout)
 	if err == nil {
-		t.Fatalf("legacy layout targeting dev-all unexpectedly succeeded:\n%s", out)
+		t.Fatalf("non-native layout targeting dev-all unexpectedly succeeded:\n%s", out)
 	}
 	assertNoDockerCommand(t, out)
-	if !strings.Contains(out, "legacy layout-apply cannot target dev-all") {
-		t.Fatalf("unexpected legacy layout failure:\n%s", out)
+	if !strings.Contains(out, "only supports native single-overlay layouts") {
+		t.Fatalf("unexpected non-native layout failure:\n%s", out)
 	}
 }

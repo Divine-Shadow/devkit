@@ -3,21 +3,19 @@ package cmdregistry
 import (
 	"fmt"
 
-	"devkit/cli/devctl/internal/compose"
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/devkitpaths"
 )
 
 // Context carries the pre-parsed data and handles that command handlers need.
 type Context struct {
-	DryRun         bool
-	Project        string
-	Profile        string
-	ComposeProject string
-	Args           []string
-	Files          []string
-	Paths          compose.Paths
-	Pool           config.PoolConfig
-	Exe            string
+	DryRun  bool
+	Project string
+	Profile string
+	Args    []string
+	Paths   devkitpaths.Paths
+	Pool    config.PoolConfig
+	Exe     string
 }
 
 // Handler executes a command given the shared context.

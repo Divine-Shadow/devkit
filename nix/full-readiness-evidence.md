@@ -15,22 +15,22 @@ kit/scripts/devkit -p dev-all down --repo ouroboros-ide-nix-readiness \
 kit/scripts/devkit -p dev-all up --repo ouroboros-ide-nix-readiness \
   --count 1 \
   --branch-prefix nixready-agent \
-  --flake .#dev-all \
+  --flake ./overlays/dev-all#default \
   --skip-ready \
   --format json
 
 kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide-nix-readiness \
-  --flake .#dev-all -- bash -lc \
+  --flake ./overlays/dev-all#default -- bash -lc \
   'GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null && purs --version >/dev/null && spago --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null && playwright --version >/dev/null'
 
 kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide-nix-readiness \
   --count 1 \
   --branch-prefix nixready-agent \
-  --flake .#dev-all \
+  --flake ./overlays/dev-all#default \
   --format json
 
 kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
-  --flake .#dev-all \
+  --flake ./overlays/dev-all#default \
   --skip-repo-checks \
   --format json
 
@@ -97,7 +97,7 @@ the native agent1 path:
 ```bash
 kit/scripts/devkit -p dev-all native exec \
   --repo ouroboros-ide-core-readiness \
-  --flake .#dev-all \
+  --flake ./overlays/dev-all#default \
   -- bash -lc 'bash scripts/sbt2 "Compile / compile"'
 ```
 
@@ -116,7 +116,7 @@ A socket-only broker override probe also passed:
 
 ```bash
 kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 \
-  --flake .#dev-all \
+  --flake ./overlays/dev-all#default \
   --broker-socket /tmp/devkit-broker-socket-only.<id>/broker.sock \
   --skip-repo-checks \
   --format json
@@ -130,3 +130,36 @@ now covered by the clean readiness evidence above. `native prepare` writes
 absolute `.git` gitdir metadata for native agent worktrees, and the sandbox plan
 binds the dev root both at `/workspaces/dev` and at its host path so those Git
 metadata paths resolve inside bubblewrap.
+
+## 2026-05-14 Native-Only Hardening Gate
+
+The post-retirement hardening pass verified the canonical wrapper path and
+overlay-local flakes after removing remaining container-backed dead code.
+
+Commands passed:
+
+- `go test -count=1 ./...` under `cli/devctl`
+- `make -C cli/devctl build`
+- `nix flake check`
+- `nix/validate-overlay-runtimes.py overlays`
+- `kit/scripts/devkit -p dev-all image-matrix --all --check`
+- `make native-overlay-matrix`
+- `make native-runtime-smoke`
+- `make native-readiness-audit`
+- `make overlay-runtime-smoke`
+- `make compose-retirement-guard`
+- `git diff --check`
+
+Observed runtime evidence:
+
+- All eight overlays completed native `up/status/exec/down` through
+  `kit/scripts/devkit`.
+- `native-runtime-smoke` exercised Spago `0.93.45`, Netlify `26.0.1`,
+  Playwright `1.58.2`, broker allow/deny policy, egress allow/block policy,
+  runtime-only readiness, repo-failure capacity, frontend Playwright, and clean
+  native `down`.
+- `native-readiness-audit` launched two native agents, verified governed
+  control-plane warmup and exact Codex `0.130.0` execution on both agents,
+  assembled the backend jar, launched it in the native sandbox, and shut down
+  cleanly.
+- Final `find overlays -maxdepth 2 -name flake.lock -print` printed no paths.

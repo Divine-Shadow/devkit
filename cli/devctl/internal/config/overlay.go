@@ -23,8 +23,6 @@ type Defaults struct {
 	BaseBranch string `yaml:"base_branch"`
 	// Prefix for per-agent branch names (e.g., agent -> agent1, agent2, ...)
 	BranchPrefix string `yaml:"branch_prefix"`
-	// Default compose profiles to apply (comma-separated)
-	Profiles string `yaml:"profiles"`
 	// Auto-run readiness (ssh+warm+validation) after lifecycle commands.
 	AutoReady *bool `yaml:"auto_ready"`
 	// Require warm hook for readiness (fail if missing).
@@ -33,9 +31,9 @@ type Defaults struct {
 
 type Runtime struct {
 	// Canonical marks this overlay as the one supported repo/container pairing
-	// for Defaults.Repo. Legacy build shims can set this false.
+	// for Defaults.Repo. Alternate overlays can set this false.
 	Canonical *bool `yaml:"canonical"`
-	// Image is legacy Compose metadata; native runtime metadata should use Flake.
+	// Image is accepted only so validators can report retired metadata clearly.
 	Image string `yaml:"image"`
 	// Flake is the native Nix runtime surface for this overlay.
 	Flake string `yaml:"flake"`

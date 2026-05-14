@@ -1,7 +1,6 @@
-package compose
+package devkitpaths
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,14 +29,6 @@ func DetectPathsFromExe(exePath string) (Paths, error) {
 		overlays = append(overlays, filepath.Join(root, "overlays"))
 	}
 	return Paths{Root: root, Kit: kit, OverlayPaths: uniquePaths(overlays)}, nil
-}
-
-func Files(p Paths, project, profile string) ([]string, error) {
-	return nil, fmt.Errorf("Compose file resolution is retired; configure runtime.flake for %s", strings.TrimSpace(project))
-}
-
-func AllProfilesFiles(p Paths, project string) []string {
-	return nil
 }
 
 func splitOverlayPaths(root, override string) []string {

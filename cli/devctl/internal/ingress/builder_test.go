@@ -31,14 +31,10 @@ func TestBuildFragmentFromConfigFile(t *testing.T) {
 		t.Fatalf("BuildFragment error: %v", err)
 	}
 	if frag.Path == "" {
-		t.Fatalf("missing fragment path")
+		t.Fatalf("missing config path")
 	}
-	data, err := os.ReadFile(frag.Path)
-	if err != nil {
-		t.Fatalf("read compose: %v", err)
-	}
-	if !strings.Contains(string(data), cfgPath) {
-		t.Fatalf("compose file did not include config path: %s", string(data))
+	if frag.Path != cfgPath {
+		t.Fatalf("config path mismatch: got %q want %q", frag.Path, cfgPath)
 	}
 }
 
@@ -68,7 +64,7 @@ func TestBuildFragmentGeneratesConfigFromRoutes(t *testing.T) {
 	if !strings.Contains(string(content), "ouroboros.test") {
 		t.Fatalf("generated config missing host: %s", string(content))
 	}
-	if !strings.Contains(string(content), "devkit-proj-routes-dev-agent-7:5173") {
+	if !strings.Contains(string(content), "agent-7:5173") {
 		t.Fatalf("generated config missing agent service: %s", string(content))
 	}
 	if frag.Path == "" {
@@ -98,10 +94,10 @@ func TestBuildFragmentGroupsPathRoutesByHost(t *testing.T) {
 	if strings.Count(text, "ouroboros-1.test {") != 1 {
 		t.Fatalf("expected one grouped site block: %s", text)
 	}
-	if !strings.Contains(text, "handle_path /_governance/*") || !strings.Contains(text, "devkit-proj-path-routes-dev-agent-1:7778") {
+	if !strings.Contains(text, "handle_path /_governance/*") || !strings.Contains(text, "agent-1:7778") {
 		t.Fatalf("generated config missing path route: %s", text)
 	}
-	if !strings.Contains(text, "handle {") || !strings.Contains(text, "devkit-proj-path-routes-dev-agent-1:5173") {
+	if !strings.Contains(text, "handle {") || !strings.Contains(text, "agent-1:5173") {
 		t.Fatalf("generated config missing fallback route: %s", text)
 	}
 }

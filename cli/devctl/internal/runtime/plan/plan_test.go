@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"devkit/cli/devctl/internal/compose"
+	"devkit/cli/devctl/internal/devkitpaths"
 )
 
 func TestBuildDevAllPlan(t *testing.T) {
-	paths := compose.Paths{Root: "/home/bayesartre/dev/devkit", Kit: "/home/bayesartre/dev/devkit/kit"}
+	paths := devkitpaths.Paths{Root: "/home/bayesartre/dev/devkit", Kit: "/home/bayesartre/dev/devkit/kit"}
 	p, err := BuildDevAll(BuildOptions{
 		Paths:    paths,
 		Project:  "dev-all",
@@ -42,7 +42,7 @@ func TestBuildDevAllPlan(t *testing.T) {
 		t.Fatalf("DOCKER_HOST = %q", p.Env["DOCKER_HOST"])
 	}
 	if p.Env["HTTP_PROXY"] != "" || p.Env["HTTPS_PROXY"] != "" {
-		t.Fatalf("native plan should not default to Compose-era proxy env: %#v", p.Env)
+		t.Fatalf("native plan should not default to retired proxy env: %#v", p.Env)
 	}
 	if p.DirectDockerSocket {
 		t.Fatalf("native plan must not expose direct Docker socket")
@@ -69,7 +69,7 @@ func hasBind(binds []Bind, source, target string) bool {
 
 func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
-		Paths:   compose.Paths{Root: "/repo/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/repo/devkit"},
 		Project: "dev-all",
 		Proxy:   "http://127.0.0.1:8899",
 	})
@@ -83,7 +83,7 @@ func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
 
 func TestBuildDevAllProxySocketUsesLocalProxy(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
-		Paths:       compose.Paths{Root: "/repo/devkit"},
+		Paths:       devkitpaths.Paths{Root: "/repo/devkit"},
 		Project:     "dev-all",
 		ProxySocket: "/repo/.devkit/native-egress/proxy.sock",
 	})
@@ -103,10 +103,10 @@ func TestBuildDevAllProxySocketUsesLocalProxy(t *testing.T) {
 
 func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 	p, err := Build(BuildOptions{
-		Paths:   compose.Paths{Root: "/repo/devkit"},
+		Paths:   devkitpaths.Paths{Root: "/repo/devkit"},
 		Project: "codex",
 		Repo:    "ouroboros-ide",
-		Flake:   ".#codex",
+		Flake:   "./overlays/codex#default",
 	})
 	if err != nil {
 		t.Fatalf("Build error: %v", err)
@@ -114,7 +114,7 @@ func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 	if p.Agent.ID.Project != "codex" {
 		t.Fatalf("project = %q", p.Agent.ID.Project)
 	}
-	if p.Flake != ".#codex" {
+	if p.Flake != "./overlays/codex#default" {
 		t.Fatalf("flake = %q", p.Flake)
 	}
 	if p.Agent.StateRoot != "/repo/.devkit/native-agents/codex-agent1" {
@@ -127,7 +127,7 @@ func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 
 func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
-		Paths:             compose.Paths{Root: "/repo/devkit"},
+		Paths:             devkitpaths.Paths{Root: "/repo/devkit"},
 		Project:           "dev-all",
 		Index:             1,
 		Repo:              "ouroboros-ide",
@@ -167,7 +167,7 @@ func TestBuildDevAllProjectsSymlinkedWorktreeIntoMountedDevRoot(t *testing.T) {
 	}
 
 	p, err := BuildDevAll(BuildOptions{
-		Paths:   compose.Paths{Root: devkitRoot},
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
 		Project: "dev-all",
 		Index:   1,
 		Repo:    "ouroboros-ide",
@@ -185,7 +185,7 @@ func TestBuildDevAllProjectsSymlinkedWorktreeIntoMountedDevRoot(t *testing.T) {
 
 func TestBuildDevAllUsesConfiguredRoots(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
-		Paths:                 compose.Paths{Root: "/repo/devkit"},
+		Paths:                 devkitpaths.Paths{Root: "/repo/devkit"},
 		Project:               "dev-all",
 		Index:                 2,
 		Repo:                  "devkit",
@@ -213,7 +213,7 @@ func TestBuildDevAllUsesConfiguredRoots(t *testing.T) {
 
 func TestBuildManifestIncludesEveryAgent(t *testing.T) {
 	manifest, err := BuildManifest(BuildOptions{
-		Paths:        compose.Paths{Root: "/repo/devkit"},
+		Paths:        devkitpaths.Paths{Root: "/repo/devkit"},
 		Project:      "dev-all",
 		Repo:         "devkit",
 		BaseBranch:   "main",
@@ -240,7 +240,7 @@ func TestBuildManifestIncludesEveryAgent(t *testing.T) {
 }
 
 func TestRenderJSONRoundTrip(t *testing.T) {
-	p, err := BuildDevAll(BuildOptions{Paths: compose.Paths{Root: "/repo/devkit"}})
+	p, err := BuildDevAll(BuildOptions{Paths: devkitpaths.Paths{Root: "/repo/devkit"}})
 	if err != nil {
 		t.Fatalf("BuildDevAll error: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestRenderJSONRoundTrip(t *testing.T) {
 }
 
 func TestRenderTextIncludesSafetyFields(t *testing.T) {
-	p, err := BuildDevAll(BuildOptions{Paths: compose.Paths{Root: "/repo/devkit"}})
+	p, err := BuildDevAll(BuildOptions{Paths: devkitpaths.Paths{Root: "/repo/devkit"}})
 	if err != nil {
 		t.Fatalf("BuildDevAll error: %v", err)
 	}

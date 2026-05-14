@@ -9,7 +9,7 @@ CLI        := $(KIT)/bin/devctl
 REPO       ?= ouroboros-ide
 N          ?= 4
 
-.PHONY: build-cli health run native-runtime-smoke native-readiness-audit overlay-runtime-smoke compose-retirement-guard
+.PHONY: build-cli health run native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke compose-retirement-guard
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -34,6 +34,10 @@ native-runtime-smoke: build-cli
 native-readiness-audit: build-cli
 	@echo "== Native readiness audit (two-agent dev-all) =="
 	@kit/scripts/native-readiness-audit
+
+native-overlay-matrix: build-cli
+	@echo "== Native overlay lifecycle matrix =="
+	@kit/scripts/native-overlay-matrix
 
 overlay-runtime-smoke:
 	@echo "== Overlay runtime smoke (Nix flakes) =="

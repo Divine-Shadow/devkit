@@ -14,17 +14,17 @@ service: dev-agent
 defaults:
   repo: app
 runtime:
-  flake: .#primary
+  flake: ./overlays/primary#default
   codex_version: 0.128.0
   core_check: make test
 `)
-	writeOverlay(t, root, "legacy", `
+	writeOverlay(t, root, "alternate", `
 service: dev-agent
 defaults:
   repo: app
 runtime:
   canonical: false
-  flake: .#legacy
+  flake: ./overlays/alternate#default
   codex_version: 0.128.0
   core_check: make test
 `)
@@ -53,7 +53,7 @@ service: dev-agent
 defaults:
   repo: app
 runtime:
-  flake: .#a
+  flake: ./overlays/a#default
   codex_version: 0.128.0
   core_check: make test
 `)
@@ -62,14 +62,14 @@ service: dev-agent
 defaults:
   repo: app
 runtime:
-  flake: .#b
+  flake: ./overlays/b#default
   codex_version: 0.128.0
   core_check: make test
 `)
 
 	err := Check([]Entry{
-		{Overlay: "a", Repo: "app", Flake: ".#a", CodexVersion: "0.128.0", CoreCheck: "make test", FlakePath: filepath.Join(root, "a", "flake.nix"), Canonical: true},
-		{Overlay: "b", Repo: "app", Flake: ".#b", CodexVersion: "0.128.0", CoreCheck: "make test", FlakePath: filepath.Join(root, "b", "flake.nix"), Canonical: true},
+		{Overlay: "a", Repo: "app", Flake: "./overlays/a#default", CodexVersion: "0.128.0", CoreCheck: "make test", FlakePath: filepath.Join(root, "a", "flake.nix"), Canonical: true},
+		{Overlay: "b", Repo: "app", Flake: "./overlays/b#default", CodexVersion: "0.128.0", CoreCheck: "make test", FlakePath: filepath.Join(root, "b", "flake.nix"), Canonical: true},
 	}, true)
 	if err == nil {
 		t.Fatal("expected duplicate repo error")
@@ -83,7 +83,7 @@ service: dev-agent
 defaults:
   repo: app
 runtime:
-  flake: .#native
+  flake: ./overlays/native#default
   codex_version: 0.130.0
   core_check: make test
 `)
@@ -95,7 +95,7 @@ runtime:
 	if len(entries) != 1 {
 		t.Fatalf("entries=%+v", entries)
 	}
-	if entries[0].Image != "" || entries[0].Flake != ".#native" {
+	if entries[0].Image != "" || entries[0].Flake != "./overlays/native#default" {
 		t.Fatalf("runtime entry=%+v", entries[0])
 	}
 	if entries[0].FlakePath == "" {
@@ -144,7 +144,7 @@ func TestCheckRejectsWrongOverlayLocalFlakeRef(t *testing.T) {
 	}
 }
 
-func TestCheckRejectsNonTemplateOverlayLocalFlakeRef(t *testing.T) {
+func TestCheckAcceptsNonTemplateOverlayLocalFlakeRef(t *testing.T) {
 	flakePath := filepath.Join(t.TempDir(), "flake.nix")
 	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -158,8 +158,8 @@ func TestCheckRejectsNonTemplateOverlayLocalFlakeRef(t *testing.T) {
 		FlakePath:    flakePath,
 		Canonical:    true,
 	}}, true)
-	if err == nil || !strings.Contains(err.Error(), "is not an accepted ref") {
-		t.Fatalf("err = %v", err)
+	if err != nil {
+		t.Fatalf("overlay-local flake ref rejected: %v", err)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestCheckRejectsRuntimeImageAndFlakeDrift(t *testing.T) {
 		Overlay:      "pokeemerald",
 		Repo:         "pokeemerald",
 		Image:        "local/dev-agent:pokeemerald",
-		Flake:        ".#wrong",
+		Flake:        "./overlays/wrong#default",
 		CodexVersion: "0.130.0",
 		CoreCheck:    "make modern",
 		FlakePath:    flakePath,
@@ -207,7 +207,7 @@ func TestCheckRejectsMissingOverlayLocalFlake(t *testing.T) {
 	err := Check([]Entry{{
 		Overlay:      "pokeemerald",
 		Repo:         "pokeemerald",
-		Flake:        ".#pokeemerald",
+		Flake:        "./overlays/pokeemerald#default",
 		CodexVersion: "0.130.0",
 		CoreCheck:    "make modern",
 		FlakePath:    filepath.Join(t.TempDir(), "flake.nix"),

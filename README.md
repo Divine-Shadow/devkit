@@ -29,7 +29,7 @@ If `kit/bin/devctl` is missing or not executable, the wrapper fails loudly and p
 
 ## Runtime Model
 
-Each supported overlay declares `runtime.flake` in `overlays/<project>/devkit.yaml`. The root flake exposes compatible shells such as `.#dev-all`, and overlays also have local flakes so they can be inspected from their own directory.
+Each supported overlay declares an overlay-local `runtime.flake` in `overlays/<project>/devkit.yaml`, for example `./overlays/dev-all#default`. The root flake still exposes compatible shells for direct Nix use, but devkit runtime metadata is one flake ref per overlay.
 
 Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes Docker only through configured broker sockets.
 
@@ -53,6 +53,7 @@ make -C cli/devctl build
 cd cli/devctl && go test -count=1 ./...
 nix flake check
 make overlay-runtime-smoke
+make native-overlay-matrix
 make native-runtime-smoke
 make native-readiness-audit
 make compose-retirement-guard

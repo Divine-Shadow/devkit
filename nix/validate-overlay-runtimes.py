@@ -4,24 +4,12 @@ import sys
 from pathlib import Path
 
 
-ROOT_FLAKES = {
-    "_template": ".#template-agent",
-}
-
-
-def root_flake(overlay: str) -> str:
-    return ROOT_FLAKES.get(overlay, f".#{overlay}")
-
-
 def overlay_local_flake(overlay: str) -> str:
     return f"./overlays/{overlay}#default"
 
 
 def accepted_flakes(overlay: str) -> list[str]:
-    refs = [root_flake(overlay)]
-    if overlay == "_template":
-        refs.append(overlay_local_flake(overlay))
-    return refs
+    return [overlay_local_flake(overlay)]
 
 
 def clean_scalar(value: str) -> str:
@@ -34,7 +22,11 @@ def clean_scalar(value: str) -> str:
 def parse_top_level_mapping(text: str, section_name: str) -> dict[str, str]:
     section = None
     values: dict[str, str] = {}
-    for raw_line in text.splitlines():
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index]
+        index += 1
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
@@ -45,7 +37,20 @@ def parse_top_level_mapping(text: str, section_name: str) -> dict[str, str]:
         if section != section_name or indent == 0 or ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
-        values[key.strip()] = clean_scalar(value)
+        key = key.strip()
+        value = value.strip()
+        if value in {"|", ">"}:
+            block_lines = []
+            while index < len(lines):
+                next_line = lines[index]
+                next_indent = len(next_line) - len(next_line.lstrip(" "))
+                if next_line.strip() and next_indent <= indent:
+                    break
+                block_lines.append(next_line[indent + 2 :] if len(next_line) >= indent + 2 else "")
+                index += 1
+            values[key] = "\n".join(block_lines).strip()
+            continue
+        values[key] = clean_scalar(value)
     return values
 
 

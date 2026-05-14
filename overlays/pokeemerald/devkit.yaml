@@ -6,7 +6,7 @@ defaults:
   base_branch: main
   branch_prefix: agent
 runtime:
-  flake: .#pokeemerald
+  flake: ./overlays/pokeemerald#default
   codex_version: 0.130.0
   core_check: make modern
   notes: GBA build workspace; current warm hook is intentionally no-op.

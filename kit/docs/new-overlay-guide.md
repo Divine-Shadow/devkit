@@ -19,7 +19,7 @@ defaults:
   repo: your-repo
   agents: 1
 runtime:
-  flake: .#your-overlay
+  flake: ./overlays/your-overlay#default
   codex_version: 0.130.0
   core_check: make test
 readiness:
