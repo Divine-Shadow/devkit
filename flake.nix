@@ -417,6 +417,18 @@
             mkdir -p "$out"
             bash ${./kit/scripts/retired-runtime-guard} ${./.} > "$out/guard.log"
           '';
+
+          overlay-nix-runtime-static = pkgs.runCommand "devkit-overlay-nix-runtime-static" {
+            nativeBuildInputs = [
+              pkgs.bash
+              pkgs.findutils
+              pkgs.gnugrep
+              pkgs.ripgrep
+            ];
+          } ''
+            mkdir -p "$out"
+            bash ${./kit/scripts/nix-overlay-runtime-guard} ${./.} > "$out/guard.log"
+          '';
         }
       );
     };

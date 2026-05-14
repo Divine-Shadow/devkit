@@ -42,6 +42,7 @@ make native-runtime-smoke
 make native-readiness-audit
 make postgres-broker-container-smoke
 make retired-runtime-guard
+make nix-overlay-runtime-guard
 ```
 
 Historical migration notes are archived under `documentation/archive/compose-retirement/`.
