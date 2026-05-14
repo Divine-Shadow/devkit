@@ -55,4 +55,9 @@ each overlay `devkit.yaml` to declare an accepted `runtime.flake` and have
 matching `overlays/<overlay>/runtime.nix` and `overlays/<overlay>/flake.nix`
 files.
 
+Overlay-local flakes intentionally stay lockless. The root `flake.lock` is the
+single pin source; direct overlay checks should use `--no-write-lock-file`, and
+generated `overlays/*/flake.lock` files should not be committed. See
+`kit/docs/native-operator-runbook.md` for the operator policy and rationale.
+
 Historical parity notes are archived under `documentation/archive/compose-retirement/`.

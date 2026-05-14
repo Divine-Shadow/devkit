@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
+IMAGE="${DEVKIT_POSTGRES_BROKER_SMOKE_IMAGE:-postgres:latest}"
+UPSTREAM="${DEVKIT_POSTGRES_BROKER_UPSTREAM:-unix:///var/run/docker.sock}"
+
+fail() {
+  echo "postgres-broker-container-smoke: $*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+curl_broker() {
+  curl --unix-socket "$sock" "$@"
+}
+
+wait_for_broker() {
+  for _ in $(seq 1 100); do
+    if curl_broker -fsS http://docker/_ping 2>/dev/null | grep -qx OK; then
+      return 0
+    fi
+    if ! kill -0 "$broker_pid" 2>/dev/null; then
+      cat "$log" >&2 || true
+      fail "broker exited before becoming ready"
+    fi
+    sleep 0.1
+  done
+  cat "$log" >&2 || true
+  fail "broker socket did not become ready"
+}
+
+http_code() {
+  local output="$1"
+  local method="$2"
+  local url="$3"
+  shift 3
+  curl_broker -sS -o "$output" -w "%{http_code}" -X "$method" "$@" "$url" || true
+}
+
+json_field() {
+  local file="$1"
+  local expr="$2"
+  python3 - "$file" "$expr" <<'PY'
+import json
+import sys
+
+path, expr = sys.argv[1], sys.argv[2]
+with open(path) as handle:
+    data = json.load(handle)
+value = data
+for part in expr.split("."):
+    if not part:
+        continue
+    value = value[part]
+if isinstance(value, bool):
+    print("true" if value else "false")
+else:
+    print(value)
+PY
+}
+
+host_docker() {
+  DOCKER_HOST="$UPSTREAM" docker "$@"
+}
+
+require_command curl
+require_command docker
+require_command nix
+require_command python3
+
+host_docker info >/dev/null || fail "Docker Engine is not reachable at $UPSTREAM"
+
+tmp="$(mktemp -d /tmp/devkit-postgres-broker-smoke.XXXXXX)"
+sock="$tmp/broker.sock"
+state="$tmp/state"
+log="$tmp/broker.log"
+name="devkit-postgres-broker-smoke-$$"
+cid=""
+broker_pid=""
+
+cleanup() {
+  set +e
+  if [[ -n "$cid" ]]; then
+    host_docker rm -f "$cid" >/dev/null 2>&1 || true
+  fi
+  host_docker rm -f "$name" "$name-redis" >/dev/null 2>&1 || true
+  if [[ -n "$broker_pid" ]]; then
+    kill "$broker_pid" >/dev/null 2>&1 || true
+    wait "$broker_pid" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+mkdir -p "$state"
+
+broker_out="$(
+  cd "$DEVKIT_ROOT"
+  nix "${NIX_FLAGS[@]}" build .#postgres-broker --no-link --print-out-paths
+)"
+broker_bin="$(printf '%s\n' "$broker_out" | tail -n 1)/bin/postgres-broker"
+[[ -x "$broker_bin" ]] || fail "postgres-broker binary not found at $broker_bin"
+
+BROKER_LISTEN="unix://$sock" \
+BROKER_UPSTREAM="$UPSTREAM" \
+BROKER_ALLOWED_IMAGES="$IMAGE" \
+BROKER_ALLOW_PULLS=true \
+BROKER_LOG_LEVEL=info \
+  "$broker_bin" >"$log" 2>&1 &
+broker_pid="$!"
+
+wait_for_broker
+echo "broker_ping=OK"
+
+redis_code="$(http_code "$tmp/redis-create.out" POST "http://docker/v1.45/containers/create?name=$name-redis" \
+  -H "Content-Type: application/json" \
+  --data '{"Image":"redis:latest","HostConfig":{}}')"
+echo "redis_create_http=$redis_code"
+[[ "$redis_code" == "403" ]] || fail "expected redis create to be denied with 403"
+
+pull_code="$(http_code "$tmp/pull.out" POST "http://docker/v1.45/images/create?fromImage=postgres&tag=latest")"
+echo "postgres_pull_http=$pull_code"
+[[ "$pull_code" == "200" ]] || fail "expected postgres pull to return HTTP 200"
+if grep -q '"error"' "$tmp/pull.out"; then
+  cat "$tmp/pull.out" >&2
+  fail "postgres pull stream reported an error"
+fi
+
+create_payload="$tmp/create.json"
+cat >"$create_payload" <<JSON
+{
+  "Image": "$IMAGE",
+  "Env": [
+    "POSTGRES_PASSWORD=devkit",
+    "POSTGRES_DB=devkit"
+  ],
+  "HostConfig": {
+    "NetworkMode": "bridge",
+    "PortBindings": {
+      "5432/tcp": [
+        {
+          "HostPort": ""
+        }
+      ]
+    }
+  }
+}
+JSON
+
+create_code="$(http_code "$tmp/postgres-create.out" POST "http://docker/v1.45/containers/create?name=$name" \
+  -H "Content-Type: application/json" \
+  --data @"$create_payload")"
+echo "postgres_create_http=$create_code"
+[[ "$create_code" == "201" ]] || {
+  cat "$tmp/postgres-create.out" >&2
+  fail "expected postgres create to return HTTP 201"
+}
+cid="$(json_field "$tmp/postgres-create.out" Id)"
+[[ -n "$cid" ]] || fail "postgres create response did not include an Id"
+
+start_code="$(http_code "$tmp/postgres-start.out" POST "http://docker/v1.45/containers/$cid/start")"
+echo "postgres_start_http=$start_code"
+[[ "$start_code" == "204" || "$start_code" == "304" ]] || {
+  cat "$tmp/postgres-start.out" >&2
+  fail "expected postgres start to return HTTP 204 or 304"
+}
+
+running=false
+for _ in $(seq 1 100); do
+  inspect_code="$(http_code "$tmp/postgres-inspect.out" GET "http://docker/v1.45/containers/$cid/json")"
+  [[ "$inspect_code" == "200" ]] || {
+    cat "$tmp/postgres-inspect.out" >&2
+    fail "expected postgres inspect to return HTTP 200"
+  }
+  running="$(json_field "$tmp/postgres-inspect.out" State.Running)"
+  if [[ "$running" == "true" ]]; then
+    break
+  fi
+  sleep 0.2
+done
+echo "postgres_running=$running"
+[[ "$running" == "true" ]] || fail "postgres container did not reach running state"
+
+delete_code="$(http_code "$tmp/postgres-delete.out" DELETE "http://docker/v1.45/containers/$cid?force=true")"
+echo "postgres_delete_http=$delete_code"
+[[ "$delete_code" == "204" ]] || {
+  cat "$tmp/postgres-delete.out" >&2
+  fail "expected postgres delete to return HTTP 204"
+}
+cid=""
+
+echo "postgres-broker-container-smoke: ok"

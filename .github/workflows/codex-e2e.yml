@@ -4,16 +4,25 @@ on:
   push:
     paths:
       - 'Makefile'
-      - 'kit/**'
-      - 'overlays/codex/**'
-      - '.github/workflows/codex-e2e.yml'
+      - 'flake.lock'
+      - 'flake.nix'
+      - 'brokers/postgres-broker/**'
       - 'cli/devctl/**'
+      - 'kit/**'
+      - 'nix/**'
+      - 'overlays/**'
+      - '.github/workflows/codex-e2e.yml'
   pull_request:
     paths:
       - 'Makefile'
-      - 'kit/**'
-      - 'overlays/codex/**'
+      - 'flake.lock'
+      - 'flake.nix'
+      - 'brokers/postgres-broker/**'
       - 'cli/devctl/**'
+      - 'kit/**'
+      - 'nix/**'
+      - 'overlays/**'
+      - '.github/workflows/codex-e2e.yml'
 
 jobs:
   e2e:
@@ -30,13 +39,17 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Build CLI
-        run: make -C devkit build-cli
-      - name: Fresh open (codex)
-        run: make -C devkit codex-fresh-open N=1
-      - name: Verify dev-agent behavior
-        run: make -C devkit codex-verify
+        run: make build-cli
+      - name: Native runtime smoke
+        run: make native-runtime-smoke
+      - name: Native readiness audit
+        run: make native-readiness-audit
       - name: Teardown
         if: always()
-        run: make -C devkit codex-down
-
+        run: kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 2 --format json || true

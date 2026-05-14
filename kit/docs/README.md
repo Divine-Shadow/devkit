@@ -14,6 +14,9 @@ kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 2
 
 Overlay metadata lives in `overlays/<project>/devkit.yaml`. A supported overlay must declare an overlay-local `runtime.flake`, `defaults.repo`, and the readiness policy needed by that repo. Overlay-local flakes are available at `overlays/<project>/flake.nix`.
 
+The detailed operator runbook is
+[`native-operator-runbook.md`](native-operator-runbook.md).
+
 ## Native Agent State
 
 Native agents use host worktrees plus sandboxed agent homes:
@@ -35,6 +38,7 @@ make overlay-runtime-smoke
 make native-overlay-matrix
 make native-runtime-smoke
 make native-readiness-audit
+make postgres-broker-container-smoke
 make compose-retirement-guard
 ```
 

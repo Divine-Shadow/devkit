@@ -33,6 +33,9 @@ Each supported overlay declares an overlay-local `runtime.flake` in `overlays/<p
 
 Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes Docker only through configured broker sockets.
 
+For day-to-day operations, see the native runbook:
+`kit/docs/native-operator-runbook.md`.
+
 ## Common Commands
 
 - `up`, `down`, `restart`, `status`, `logs`: native lifecycle.
@@ -56,6 +59,7 @@ make overlay-runtime-smoke
 make native-overlay-matrix
 make native-runtime-smoke
 make native-readiness-audit
+make postgres-broker-container-smoke
 make compose-retirement-guard
 ```
 

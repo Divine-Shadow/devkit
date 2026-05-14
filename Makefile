@@ -9,7 +9,9 @@ CLI        := $(KIT)/bin/devctl
 REPO       ?= ouroboros-ide
 N          ?= 4
 
-.PHONY: build-cli health run native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke compose-retirement-guard
+NIX       ?= nix --extra-experimental-features 'nix-command flakes'
+
+.PHONY: build-cli health run ci-cheap native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke compose-retirement-guard postgres-broker-container-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -26,6 +28,20 @@ health: build-cli
 run: build-cli
 	@echo "== Run: $(REPO) with N=$(N) agents (dev-all overlay) =="
 	@$(CLI) -p dev-all run $(REPO) $(N)
+
+ci-cheap: build-cli
+	@echo "== Go tests =="
+	@cd cli/devctl && go test -count=1 ./...
+	@echo "== Nix flake check =="
+	@$(NIX) flake check
+	@echo "== Overlay runtime metadata =="
+	@$(NIX) develop --command nix/validate-overlay-runtimes.py overlays >/tmp/devkit-overlay-runtimes.json
+	@echo "== Overlay lock policy =="
+	@! find overlays -maxdepth 2 -name flake.lock -print | grep -q .
+	@echo "== Image matrix =="
+	@kit/scripts/devkit --dry-run -p dev-all image-matrix --all --check
+	@echo "== Compose retirement guard =="
+	@kit/scripts/compose-retirement-guard
 
 native-runtime-smoke: build-cli
 	@echo "== Native runtime smoke (dev-all) =="
@@ -46,3 +62,7 @@ overlay-runtime-smoke:
 compose-retirement-guard:
 	@echo "== Compose retirement static guard =="
 	@kit/scripts/compose-retirement-guard
+
+postgres-broker-container-smoke:
+	@echo "== Postgres broker container smoke =="
+	@kit/scripts/postgres-broker-container-smoke
