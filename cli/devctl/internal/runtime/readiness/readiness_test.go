@@ -17,6 +17,15 @@ func TestRepoFailureDoesNotHideRuntimeReadiness(t *testing.T) {
 	if !report.CapacityAvailable() {
 		t.Fatalf("capacity should depend on runtime checks only")
 	}
+	if got := report.Status(); got != "degraded" {
+		t.Fatalf("status = %q", got)
+	}
+	if got := report.ComponentState("repo"); got != "blocked" {
+		t.Fatalf("repo component = %q", got)
+	}
+	if report.Action() == "" {
+		t.Fatalf("expected repo failure action")
+	}
 }
 
 func TestRuntimeFailureBlocksCapacity(t *testing.T) {
@@ -29,6 +38,12 @@ func TestRuntimeFailureBlocksCapacity(t *testing.T) {
 	}
 	if report.CapacityAvailable() {
 		t.Fatalf("capacity must be unavailable when runtime checks fail")
+	}
+	if got := report.Status(); got != "blocked" {
+		t.Fatalf("status = %q", got)
+	}
+	if got := report.ComponentState("tooling"); got != "blocked" {
+		t.Fatalf("tooling component = %q", got)
 	}
 }
 
@@ -49,5 +64,54 @@ func TestRepoChecksAreVisibleAndRetryable(t *testing.T) {
 	}
 	if !repoCheck.Retryable {
 		t.Fatalf("repo check should be retryable")
+	}
+}
+
+func TestRuntimeCheckMetadataIdentifiesOperatorComponents(t *testing.T) {
+	var report Report
+	report.AddRuntime("prepare-state", false, "missing worktree")
+	report.AddRuntime("broker-socket", true, "")
+	report.AddRuntime("sandbox-command", true, "")
+	report.AddRepo("typecheck", true, "")
+
+	failed := report.FailedChecks()
+	if len(failed) != 1 {
+		t.Fatalf("failed checks = %#v", failed)
+	}
+	if failed[0].Component != "worktree" {
+		t.Fatalf("failed component = %q", failed[0].Component)
+	}
+	if failed[0].Action == "" {
+		t.Fatalf("expected missing worktree action")
+	}
+	for component, want := range map[string]string{
+		"worktree": "blocked",
+		"broker":   "ready",
+		"sandbox":  "ready",
+		"tooling":  "unknown",
+		"repo":     "ready",
+	} {
+		if got := report.ComponentState(component); got != want {
+			t.Fatalf("%s component = %q, want %q", component, got, want)
+		}
+	}
+}
+
+func TestMissingRuntimeToolGetsToolingAction(t *testing.T) {
+	var report Report
+	report.AddRuntime("spago", false, "not found")
+
+	failed := report.FailedChecks()
+	if len(failed) != 1 {
+		t.Fatalf("failed checks = %#v", failed)
+	}
+	if failed[0].Component != "tooling" {
+		t.Fatalf("component = %q", failed[0].Component)
+	}
+	if failed[0].Action == "" {
+		t.Fatalf("expected missing tool action")
+	}
+	if got := report.ComponentState("tooling"); got != "blocked" {
+		t.Fatalf("tooling component = %q", got)
 	}
 }

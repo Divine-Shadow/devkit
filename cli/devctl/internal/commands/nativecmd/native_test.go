@@ -2,9 +2,11 @@ package nativecmd
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -246,6 +248,87 @@ func TestLifecycleStatusRequiresExplicitReadiness(t *testing.T) {
 	}
 	if lifecycleStatusRunsReadiness(lifecycleArgs{ready: true, skipReady: true}) {
 		t.Fatalf("--skip-ready should override --ready")
+	}
+}
+
+func TestLifecycleStatusAttachCapacitySurfacesOperatorSummary(t *testing.T) {
+	var runtimeOnly readiness.Report
+	runtimeOnly.AddRuntime("sandbox-command", true, "")
+	runtimeOnly.AddRepo("typecheck", false, "compile failed")
+
+	var blocked readiness.Report
+	blocked.AddRuntime("runtime-check-1", false, "spago missing")
+	blocked.AddRepo("typecheck", true, "")
+
+	summary := capacity.Build(map[int]readiness.Report{
+		1: runtimeOnly,
+		2: blocked,
+	})
+	status := lifecycleStatus{Command: "status", Runtime: "native"}
+	status.attachCapacity(summary)
+
+	if status.Status != "degraded" {
+		t.Fatalf("status = %q", status.Status)
+	}
+	if status.Action == "" {
+		t.Fatalf("expected lifecycle action")
+	}
+	if len(status.Failures) != 2 {
+		t.Fatalf("failures = %#v", status.Failures)
+	}
+
+	text := captureStdout(t, func() error {
+		return printLifecycleStatus(status, "text")
+	})
+	for _, want := range []string{
+		"status: degraded",
+		"capacity_status: degraded",
+		"usable_capacity: 1",
+		"agent1_status: status=degraded",
+		"sandbox=ready",
+		"repo=blocked",
+		"agent2_status: status=blocked",
+		"tooling=blocked",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text output missing %q:\n%s", want, text)
+		}
+	}
+
+	jsonOut := captureStdout(t, func() error {
+		return printLifecycleStatus(status, "json")
+	})
+	for _, want := range []string{
+		`"status": "degraded"`,
+		`"usable_capacity": 1`,
+		`"failed_checks"`,
+		`"failures"`,
+		`"sandbox_state": "ready"`,
+		`"tooling_state": "blocked"`,
+	} {
+		if !strings.Contains(jsonOut, want) {
+			t.Fatalf("json output missing %q:\n%s", want, jsonOut)
+		}
+	}
+}
+
+func TestLifecycleAttachBrokerStatusSurfacesStoppedAndStaleStates(t *testing.T) {
+	stale := lifecycleStatus{}
+	stale.attachBrokerStatus(runtimebroker.Status{StaleState: true, StateRoot: "/tmp/state"}, false)
+	if stale.Status != "degraded" || stale.Action == "" || stale.Broker == nil {
+		t.Fatalf("stale status = %#v", stale)
+	}
+
+	stoppedDown := lifecycleStatus{}
+	stoppedDown.attachBrokerStatus(runtimebroker.Status{}, true)
+	if stoppedDown.Status != "stopped" || stoppedDown.Action != "" {
+		t.Fatalf("down status = %#v", stoppedDown)
+	}
+
+	stoppedStatus := lifecycleStatus{}
+	stoppedStatus.attachBrokerStatus(runtimebroker.Status{}, false)
+	if stoppedStatus.Status != "stopped" || stoppedStatus.Action == "" {
+		t.Fatalf("status output = %#v", stoppedStatus)
 	}
 }
 
@@ -574,4 +657,31 @@ func TestTailLines(t *testing.T) {
 	if len(got) != 2 || got[0] != "b" || got[1] != "c" {
 		t.Fatalf("tail = %#v", got)
 	}
+}
+
+func captureStdout(t *testing.T, fn func() error) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	fnErr := fn()
+	closeErr := w.Close()
+	os.Stdout = old
+	data, readErr := io.ReadAll(r)
+	if err := r.Close(); err != nil {
+		t.Fatalf("close read pipe: %v", err)
+	}
+	if fnErr != nil {
+		t.Fatalf("captured function failed: %v", fnErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close write pipe: %v", closeErr)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	return string(data)
 }

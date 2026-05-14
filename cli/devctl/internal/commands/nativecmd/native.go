@@ -576,11 +576,14 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 type lifecycleStatus struct {
 	Command       string                   `json:"command"`
 	Runtime       string                   `json:"runtime"`
+	Status        string                   `json:"status,omitempty"`
 	Repo          string                   `json:"repo,omitempty"`
 	Count         int                      `json:"count,omitempty"`
 	ReadinessMode string                   `json:"readiness_mode,omitempty"`
 	Broker        *runtimebroker.Status    `json:"broker,omitempty"`
 	Capacity      *capacity.Summary        `json:"capacity,omitempty"`
+	Action        string                   `json:"action,omitempty"`
+	Failures      []readiness.Check        `json:"failures,omitempty"`
 	Agents        []preparedLifecycleAgent `json:"agents,omitempty"`
 	ManifestPath  string                   `json:"manifest_path,omitempty"`
 	LogPath       string                   `json:"log_path,omitempty"`
@@ -660,7 +663,7 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 		return err
 	}
 	if brokerStatus != nil {
-		status.Broker = brokerStatus
+		status.attachBrokerStatus(*brokerStatus, false)
 	}
 	opts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 	if ctx.DryRun {
@@ -671,7 +674,7 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	status.Capacity = &summary
+	status.attachCapacity(summary)
 	if err := printLifecycleStatus(status, parsed.format); err != nil {
 		return err
 	}
@@ -1034,7 +1037,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 			return err
 		}
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
-		status.Broker = &brokerStatus
+		status.attachBrokerStatus(brokerStatus, false)
 	}
 	parsed.baseBranch = baseBranch
 	parsed.branchPrefix = branchPrefix
@@ -1084,7 +1087,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 		if err != nil {
 			return err
 		}
-		status.Capacity = &summary
+		status.attachCapacity(summary)
 		if err := lifecycleReadinessError(summary, parsed); err != nil {
 			printLifecycleStatus(status, parsed.format)
 			return err
@@ -1109,7 +1112,8 @@ func lifecycleDown(ctx *cmdregistry.Context, parsed lifecycleArgs) error {
 	if err != nil {
 		return err
 	}
-	status := lifecycleStatus{Command: "down", Runtime: "native", Repo: repo, Count: count, Broker: &brokerStatus}
+	status := lifecycleStatus{Command: "down", Runtime: "native", Repo: repo, Count: count}
+	status.attachBrokerStatus(brokerStatus, true)
 	return printLifecycleStatus(status, parsed.format)
 }
 
@@ -1133,7 +1137,8 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 	if err != nil {
 		return err
 	}
-	status := lifecycleStatus{Command: "status", Runtime: "native", Repo: repo, Count: count, Broker: &brokerStatus}
+	status := lifecycleStatus{Command: "status", Runtime: "native", Repo: repo, Count: count}
+	status.attachBrokerStatus(brokerStatus, false)
 	if lifecycleStatusRunsReadiness(parsed) {
 		if err := applyLifecycleReadinessMode(&parsed, cfg); err != nil {
 			return err
@@ -1143,7 +1148,7 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 		planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
 		if err == nil {
-			status.Capacity = &summary
+			status.attachCapacity(summary)
 		} else {
 			status.Message = err.Error()
 		}
@@ -1166,7 +1171,8 @@ func lifecycleLogs(ctx *cmdregistry.Context, parsed lifecycleArgs) error {
 		return err
 	}
 	logPath := status.LogPath
-	out := lifecycleStatus{Command: "logs", Runtime: "native", Broker: &status, LogPath: logPath}
+	out := lifecycleStatus{Command: "logs", Runtime: "native", LogPath: logPath}
+	out.attachBrokerStatus(status, false)
 	if strings.TrimSpace(logPath) == "" {
 		out.Message = "broker log path is not available"
 		return printLifecycleStatus(out, parsed.format)
@@ -1235,17 +1241,35 @@ func printLifecycleStatus(status lifecycleStatus, format string) error {
 		if status.ReadinessMode != "" {
 			fmt.Fprintf(os.Stdout, "readiness_mode: %s\n", status.ReadinessMode)
 		}
+		if status.Status != "" {
+			fmt.Fprintf(os.Stdout, "status: %s\n", status.Status)
+		}
+		if status.Action != "" {
+			fmt.Fprintf(os.Stdout, "action: %s\n", status.Action)
+		}
 		if status.Broker != nil {
 			fmt.Fprintf(os.Stdout, "broker_running: %t\n", status.Broker.Running)
 			fmt.Fprintf(os.Stdout, "broker_socket: %s\n", status.Broker.Socket)
+			fmt.Fprintf(os.Stdout, "broker_state: stale=%t socket_exists=%t state=%s\n", status.Broker.StaleState, status.Broker.SocketExists, status.Broker.StateRoot)
 			if status.Broker.Message != "" {
 				fmt.Fprintf(os.Stdout, "broker_message: %s\n", status.Broker.Message)
 			}
 		}
 		if status.Capacity != nil {
+			if status.Capacity.Status != "" {
+				fmt.Fprintf(os.Stdout, "capacity_status: %s\n", status.Capacity.Status)
+			}
 			fmt.Fprintf(os.Stdout, "capacity_available: %d/%d\n", status.Capacity.CapacityAvailable, status.Capacity.Total)
 			fmt.Fprintf(os.Stdout, "runtime_ready: %d/%d\n", status.Capacity.RuntimeReady, status.Capacity.Total)
 			fmt.Fprintf(os.Stdout, "repo_ready: %d/%d\n", status.Capacity.RepoReady, status.Capacity.Total)
+			fmt.Fprintf(os.Stdout, "usable_capacity: %d\n", status.Capacity.UsableCapacity)
+			if status.Capacity.Action != "" {
+				fmt.Fprintf(os.Stdout, "capacity_action: %s\n", status.Capacity.Action)
+			}
+			for _, agent := range status.Capacity.Agents {
+				fmt.Fprintf(os.Stdout, "agent%d_status: status=%s worktree=%s broker=%s sandbox=%s tooling=%s repo=%s action=%q\n",
+					agent.Index, agent.Status, agent.WorktreeState, agent.BrokerState, agent.SandboxState, agent.ToolingState, agent.RepoState, agent.Action)
+			}
 		}
 		if status.ManifestPath != "" {
 			fmt.Fprintf(os.Stdout, "manifest: %s\n", status.ManifestPath)
@@ -1266,6 +1290,41 @@ func printLifecycleStatus(status lifecycleStatus, format string) error {
 		return fmt.Errorf("--format must be text or json")
 	}
 	return nil
+}
+
+func (s *lifecycleStatus) attachBrokerStatus(status runtimebroker.Status, stoppedOK bool) {
+	s.Broker = &status
+	if s.Status != "" {
+		return
+	}
+	if status.StaleState {
+		s.Status = "degraded"
+		s.Action = "inspect the broker pid/state files or run down to clear stale managed broker state"
+		return
+	}
+	if status.Running {
+		s.Status = "running"
+		return
+	}
+	s.Status = "stopped"
+	if !stoppedOK {
+		s.Action = "run up or ensure-ready when native runtime capacity is required"
+	}
+}
+
+func (s *lifecycleStatus) attachCapacity(summary capacity.Summary) {
+	s.Capacity = &summary
+	s.Status = summary.Status
+	s.Action = summary.Action
+	s.Failures = lifecycleFailures(summary)
+}
+
+func lifecycleFailures(summary capacity.Summary) []readiness.Check {
+	var failures []readiness.Check
+	for _, agent := range summary.Agents {
+		failures = append(failures, agent.FailedChecks...)
+	}
+	return failures
 }
 
 func tailLines(text string, count int) []string {
@@ -1537,15 +1596,21 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	case "", "json":
 		data, err := json.MarshalIndent(struct {
 			ReadinessMode     string            `json:"readiness_mode"`
+			Status            string            `json:"status"`
 			RuntimeReady      bool              `json:"runtime_ready"`
 			RepoReady         bool              `json:"repo_ready"`
 			CapacityAvailable bool              `json:"capacity_available"`
+			Action            string            `json:"action,omitempty"`
+			FailedChecks      []readiness.Check `json:"failed_checks,omitempty"`
 			Checks            []readiness.Check `json:"checks"`
 		}{
 			ReadinessMode:     parsed.readinessMode,
+			Status:            report.Status(),
 			RuntimeReady:      report.RuntimeReady(),
 			RepoReady:         report.RepoReady(),
 			CapacityAvailable: report.CapacityAvailable(),
+			Action:            report.Action(),
+			FailedChecks:      report.FailedChecks(),
 			Checks:            report.Checks,
 		}, "", "  ")
 		if err != nil {
@@ -1554,13 +1619,20 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 		fmt.Fprintln(os.Stdout, string(data))
 	case "text":
 		fmt.Fprintf(os.Stdout, "readiness_mode: %s\n", parsed.readinessMode)
+		fmt.Fprintf(os.Stdout, "status: %s\n", report.Status())
 		fmt.Fprintf(os.Stdout, "runtime_ready: %t\n", report.RuntimeReady())
 		fmt.Fprintf(os.Stdout, "repo_ready: %t\n", report.RepoReady())
 		fmt.Fprintf(os.Stdout, "capacity_available: %t\n", report.CapacityAvailable())
+		if action := report.Action(); action != "" {
+			fmt.Fprintf(os.Stdout, "action: %s\n", action)
+		}
 		for _, check := range report.Checks {
-			fmt.Fprintf(os.Stdout, "%s.%s: ok=%t retryable=%t required_for_capacity=%t", check.Phase, check.Name, check.OK, check.Retryable, check.RequiredForCapacity)
+			fmt.Fprintf(os.Stdout, "%s.%s: ok=%t component=%s retryable=%t required_for_capacity=%t", check.Phase, check.Name, check.OK, check.Component, check.Retryable, check.RequiredForCapacity)
 			if check.Detail != "" {
 				fmt.Fprintf(os.Stdout, " detail=%q", check.Detail)
+			}
+			if check.Action != "" {
+				fmt.Fprintf(os.Stdout, " action=%q", check.Action)
 			}
 			fmt.Fprintln(os.Stdout)
 		}
@@ -1628,11 +1700,17 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 		fmt.Fprintln(os.Stdout, string(data))
 	case "text":
 		fmt.Fprintf(os.Stdout, "total: %d\n", summary.Total)
+		fmt.Fprintf(os.Stdout, "status: %s\n", summary.Status)
+		fmt.Fprintf(os.Stdout, "usable_capacity: %d\n", summary.UsableCapacity)
 		fmt.Fprintf(os.Stdout, "runtime_ready: %d\n", summary.RuntimeReady)
 		fmt.Fprintf(os.Stdout, "repo_ready: %d\n", summary.RepoReady)
 		fmt.Fprintf(os.Stdout, "capacity_available: %d\n", summary.CapacityAvailable)
+		if summary.Action != "" {
+			fmt.Fprintf(os.Stdout, "action: %s\n", summary.Action)
+		}
 		for _, agent := range summary.Agents {
-			fmt.Fprintf(os.Stdout, "agent%d: runtime_ready=%t repo_ready=%t capacity_available=%t\n", agent.Index, agent.RuntimeReady, agent.RepoReady, agent.CapacityAvailable)
+			fmt.Fprintf(os.Stdout, "agent%d: status=%s runtime_ready=%t repo_ready=%t capacity_available=%t worktree=%s broker=%s sandbox=%s tooling=%s repo=%s action=%q\n",
+				agent.Index, agent.Status, agent.RuntimeReady, agent.RepoReady, agent.CapacityAvailable, agent.WorktreeState, agent.BrokerState, agent.SandboxState, agent.ToolingState, agent.RepoState, agent.Action)
 		}
 	default:
 		return fmt.Errorf("--format must be text or json")
