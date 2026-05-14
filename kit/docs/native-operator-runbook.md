@@ -153,10 +153,15 @@ make ci-cheap
 Full local readiness gate:
 
 ```bash
+make native-e2e-lifecycle
 make native-runtime-smoke
 make native-readiness-audit
 make postgres-broker-container-smoke
 ```
+
+`make native-e2e-lifecycle` runs real native `up`, `status --ready`, `exec`,
+stdin-driven `attach`, `scale`, and `down` cycles for `dev-all` and the
+configured smaller overlay, defaulting to `ouroboros-static-front-end`.
 
 `make postgres-broker-container-smoke` starts the Nix-built Postgres broker,
 denies a Redis create request, pulls/creates/starts/inspects/deletes a real

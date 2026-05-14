@@ -449,7 +449,7 @@ func TestFlakeBackedNonDevAllWTOpenAndWorktreeTmuxPlainUseNativeDryRun(t *testin
 		}
 		assertNoDockerCommand(t, out)
 		if strings.Contains(out, "--compose-project") {
-			t.Fatalf("%v leaked compose project into native WT launch:\n%s", args, out)
+			t.Fatalf("%v leaked retired project override into native WT launch:\n%s", args, out)
 		}
 		normalized := strings.ReplaceAll(out, "'", "")
 		if !strings.Contains(normalized, " -p "+project+" exec-cd 1") && !strings.Contains(normalized, " -p "+project+" exec 1 --repo "+repo) {

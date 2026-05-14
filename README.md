@@ -57,6 +57,7 @@ cd cli/devctl && go test -count=1 ./...
 nix flake check
 make overlay-runtime-smoke
 make native-overlay-matrix
+make native-e2e-lifecycle
 make native-runtime-smoke
 make native-readiness-audit
 make postgres-broker-container-smoke
