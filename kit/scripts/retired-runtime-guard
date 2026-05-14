@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${1:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
+
+content_pattern='docker[[:space:]]+compose|docker-compose|compose[.]override[.]yml|compose[.]ingress[.]yml|kit/compose[^[:space:]]*[.]yml|codexw|/usr/local/bin/codex|COMPOSE_PROJECT|com[.]docker[.]compose|compose_project|ComposeProject|RetiredRuntimeFiles|RetiredAllRuntimeFiles|runner[.]Compose|BuildCommand|ResolveContainerName|ExistingComposeNetwork|internal/commands/composecmd|internal/compose'
+
+cd "$ROOT"
+
+if rg -n -i -e "$content_pattern" . \
+  --glob '!documentation/archive/**' \
+  --glob '!kit/scripts/retired-runtime-guard' \
+  --glob '!kit/bin/**' \
+  --glob '!kit/.devhome/**' \
+  --glob '!result/**' \
+  --glob '!.agent/**'; then
+  echo "retired-runtime-guard: retired runtime references remain" >&2
+  exit 1
+fi
+
+retired_paths=()
+while IFS= read -r path; do
+  retired_paths+=("$path")
+done < <(
+  find . \
+    \( -path './.git' -o -path './documentation/archive' -o -path './kit/bin' -o -path './kit/.devhome' -o -path './result' -o -path './.agent' \) -prune -o \
+    \( -path './cli/devctl/internal/commands/composecmd' -o \
+       -path './cli/devctl/internal/compose' -o \
+       -name 'compose.override.yml' -o \
+       -name 'compose.ingress.yml' -o \
+       -path './kit/compose*.yml' \) -print
+)
+
+if [[ "${#retired_paths[@]}" -gt 0 ]]; then
+  printf '%s\n' "${retired_paths[@]}"
+  echo "retired-runtime-guard: retired runtime paths remain" >&2
+  exit 1
+fi
+
+echo "retired-runtime-guard: ok"

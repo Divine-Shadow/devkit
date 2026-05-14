@@ -96,11 +96,11 @@ grep_required "make -C" "$smoke_dir/missing-wrapper.err"
 mv "$devctl_backup" "$DEVKIT_BIN"
 devctl_backup=""
 
-step "retired compose namespace"
+step "retired runtime namespace"
 if "$DEVKIT" --dry-run -p dev-all compose up >"$smoke_dir/retired-runtime.out" 2>"$smoke_dir/retired-runtime.err"; then
   fail "retired runtime namespace unexpectedly succeeded"
 fi
-grep_required "Compose runtime is retired" "$smoke_dir/retired-runtime.err"
+grep_required "retired runtime namespace" "$smoke_dir/retired-runtime.err"
 retired_cmd="docker ""compose"
 if grep -q "$retired_cmd" "$smoke_dir/retired-runtime.err" "$smoke_dir/retired-runtime.out"; then
   fail "retired runtime rejection emitted $retired_cmd"

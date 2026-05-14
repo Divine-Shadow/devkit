@@ -519,34 +519,48 @@ func TestNonFlakeSSHAndRepoHelpersRefuseRetiredRuntimeDryRun(t *testing.T) {
 	}
 }
 
-func TestDevAllComposeNamespaceIsRetiredDryRun(t *testing.T) {
+func TestRetiredRuntimeNamespaceIsRejectedForNativeProjectDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
 
 	out, err := runNativeDefaultDryRun(t, bin, root, "compose", "up")
 	if err == nil {
-		t.Fatalf("dev-all compose unexpectedly succeeded:\n%s", out)
+		t.Fatalf("retired runtime namespace unexpectedly succeeded:\n%s", out)
 	}
 	assertNoDockerCommand(t, out)
-	if !strings.Contains(out, "Compose runtime is retired") {
-		t.Fatalf("unexpected dev-all compose error:\n%s", out)
+	if !strings.Contains(out, "retired runtime namespace") {
+		t.Fatalf("unexpected retired runtime namespace error:\n%s", out)
 	}
 }
 
-func TestDevAllComposeNamespaceRefusesBeforeComposeFilesDryRun(t *testing.T) {
+func TestRetiredRuntimeNamespaceRefusesBeforeRuntimeFilesDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := flakeOverlayRoot(t, "dev-all", "ouroboros-ide", "./overlays/dev-all#default")
 
 	out, err := runProjectDryRun(t, bin, root, "dev-all", "compose", "up")
 	if err == nil {
-		t.Fatalf("dev-all compose unexpectedly succeeded:\n%s", out)
+		t.Fatalf("retired runtime namespace unexpectedly succeeded:\n%s", out)
 	}
 	assertNoDockerCommand(t, out)
 	if strings.Contains(out, "workspace directory") {
-		t.Fatalf("dev-all compose loaded retired runtime files before refusing:\n%s", out)
+		t.Fatalf("retired runtime namespace loaded runtime files before refusing:\n%s", out)
 	}
-	if !strings.Contains(out, "Compose runtime is retired") {
-		t.Fatalf("unexpected dev-all compose error:\n%s", out)
+	if !strings.Contains(out, "retired runtime namespace") {
+		t.Fatalf("unexpected retired runtime namespace error:\n%s", out)
+	}
+}
+
+func TestRetiredRuntimeNamespaceIsRejectedForNonFlakeProjectDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := nonFlakeRoot(t)
+
+	out, err := runProjectDryRun(t, bin, root, "codex", "compose", "up")
+	if err == nil {
+		t.Fatalf("retired runtime namespace unexpectedly succeeded:\n%s", out)
+	}
+	assertNoDockerCommand(t, out)
+	if !strings.Contains(out, "retired runtime namespace") {
+		t.Fatalf("unexpected retired runtime namespace error:\n%s", out)
 	}
 }
 

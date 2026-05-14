@@ -147,7 +147,7 @@ Commands passed:
 - `make native-runtime-smoke`
 - `make native-readiness-audit`
 - `make overlay-runtime-smoke`
-- `make compose-retirement-guard`
+- `make retired-runtime-guard`
 - `git diff --check`
 
 Observed runtime evidence:

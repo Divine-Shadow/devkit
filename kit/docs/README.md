@@ -41,7 +41,7 @@ make native-overlay-e2e-matrix
 make native-runtime-smoke
 make native-readiness-audit
 make postgres-broker-container-smoke
-make compose-retirement-guard
+make retired-runtime-guard
 ```
 
 Historical migration notes are archived under `documentation/archive/compose-retirement/`.

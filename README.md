@@ -62,7 +62,7 @@ make native-overlay-e2e-matrix
 make native-runtime-smoke
 make native-readiness-audit
 make postgres-broker-container-smoke
-make compose-retirement-guard
+make retired-runtime-guard
 ```
 
 Historical migration notes live under `documentation/archive/compose-retirement/`. They are retained for context and are not supported runtime documentation.

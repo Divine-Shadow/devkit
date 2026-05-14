@@ -20,7 +20,7 @@ overlay.
 - Use `--runtime-only` to force runtime checks and `--repo-readiness` or
   `--full` to force repo checks. A bare trailing `--repo` is accepted as a
   full-readiness alias when it is not followed by a repo name.
-- The retired `compose` namespace is not a readiness path.
+- The retired runtime namespace is not a readiness path.
 
 ## Built-In Native Checks
 

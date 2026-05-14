@@ -579,7 +579,7 @@ func main() {
 	}
 	switch cmd {
 	case "compose":
-		die("Compose runtime is retired; use native lifecycle commands backed by runtime.flake")
+		die("retired runtime namespace; use native lifecycle commands backed by runtime.flake")
 	case "up", "down", "restart", "status", "logs":
 		die("native lifecycle command was not registered")
 	case "scale", "ensure-ready":
@@ -657,7 +657,7 @@ func main() {
 			}
 			break
 		}
-		die("layout-apply only supports native single-overlay layouts; mixed or Compose layouts are retired")
+		die("layout-apply only supports native single-overlay layouts; mixed legacy layouts are retired")
 	case "layout-validate":
 		layoutPath := ""
 		for i := 0; i < len(sub); i++ {

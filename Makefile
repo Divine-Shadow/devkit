@@ -11,7 +11,7 @@ N          ?= 4
 
 NIX       ?= nix --extra-experimental-features 'nix-command flakes'
 
-.PHONY: build-cli health run ci-cheap native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke compose-retirement-guard postgres-broker-container-smoke
+.PHONY: build-cli health run ci-cheap native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-audit native-overlay-matrix overlay-runtime-smoke retired-runtime-guard postgres-broker-container-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -40,8 +40,8 @@ ci-cheap: build-cli
 	@! find overlays -maxdepth 2 -name flake.lock -print | grep -q .
 	@echo "== Image matrix =="
 	@kit/scripts/devkit --dry-run -p dev-all image-matrix --all --check
-	@echo "== Compose retirement guard =="
-	@kit/scripts/compose-retirement-guard
+	@echo "== Retired runtime guard =="
+	@kit/scripts/retired-runtime-guard
 
 native-runtime-smoke: build-cli
 	@echo "== Native runtime smoke (dev-all) =="
@@ -67,9 +67,9 @@ overlay-runtime-smoke:
 	@echo "== Overlay runtime smoke (Nix flakes) =="
 	@kit/scripts/overlay-runtime-smoke
 
-compose-retirement-guard:
-	@echo "== Compose retirement static guard =="
-	@kit/scripts/compose-retirement-guard
+retired-runtime-guard:
+	@echo "== Retired runtime static guard =="
+	@kit/scripts/retired-runtime-guard
 
 postgres-broker-container-smoke:
 	@echo "== Postgres broker container smoke =="

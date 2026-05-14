@@ -9,8 +9,7 @@ Canonical user entry remains `kit/scripts/devkit`, which execs the compiled
 Default lifecycle and entry commands are native for overlays with
 `runtime.flake`:
 `up`, `down`, `restart`, `status`, `logs`, `scale`, `exec`, `attach`, and
-`ensure-ready`. The retired `compose` namespace now fails before invoking any
-runtime.
+`ensure-ready`. The retired runtime namespace fails before invoking any runtime.
 
 ## Review Commits
 
@@ -62,7 +61,7 @@ cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command fla
 
 ## Retired Runtime Boundary
 
-- The explicit `compose` namespace is retired.
+- The explicit retired runtime namespace is rejected before launch.
 - Lifecycle and exec dispatch are owned by the native command registry.
 - Supported overlays must declare `runtime.flake`.
 - Diagnostics refuse unsupported runtime shapes instead of falling back.

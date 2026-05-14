@@ -408,14 +408,14 @@
             python3 ${./nix/validate-overlay-runtimes.py} ${./overlays} > "$out/overlay-runtimes.json"
           '';
 
-          compose-retirement-static = pkgs.runCommand "devkit-compose-retirement-static" {
+          retired-runtime-static = pkgs.runCommand "devkit-retired-runtime-static" {
             nativeBuildInputs = [
               pkgs.bash
               pkgs.ripgrep
             ];
           } ''
             mkdir -p "$out"
-            bash ${./kit/scripts/compose-retirement-guard} ${./.} > "$out/guard.log"
+            bash ${./kit/scripts/retired-runtime-guard} ${./.} > "$out/guard.log"
           '';
         }
       );
