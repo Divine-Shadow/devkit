@@ -145,7 +145,7 @@ Autonomous edits may touch:
 
 Do not do these without explicit user approval:
 
-- Remove legacy Compose commands.
+- Remove retired Compose command namespaces.
 - Rewrite tmux/layout wholesale before native readiness is proven.
 - Grant native agents direct Docker or Podman daemon socket access.
 - Introduce shell-hook network installs.

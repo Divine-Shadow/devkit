@@ -1,4 +1,4 @@
-package imagematrix
+package runtimematrix
 
 import (
 	"os"

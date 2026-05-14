@@ -39,7 +39,7 @@ From the repo root:
 
 ```bash
 nix flake check
-kit/scripts/devkit image-matrix --all --check
+kit/scripts/devkit runtime-matrix --all --check
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/<name> --no-write-lock-file --command true
 kit/scripts/devkit --dry-run -p <name> native plan --repo <repo>
 kit/scripts/devkit --dry-run -p <name> ensure-ready --repo <repo> --runtime-only

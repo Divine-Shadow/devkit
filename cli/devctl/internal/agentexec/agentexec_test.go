@@ -27,9 +27,9 @@ func TestBuildNativeCommandUsesDevkitExec(t *testing.T) {
 	if strings.Contains(cmd, "docker") {
 		t.Fatalf("native command must not reference docker: %s", cmd)
 	}
-	for _, legacy := range []string{"/usr/local/bin/" + "codex", "codex" + "w", "docker " + "compose", "docker " + "exec"} {
-		if strings.Contains(cmd, legacy) {
-			t.Fatalf("native command contains legacy runtime assumption %q: %s", legacy, cmd)
+	for _, retired := range []string{"/usr/local/bin/" + "codex", "codex" + "w", "docker " + "compose", "docker " + "exec"} {
+		if strings.Contains(cmd, retired) {
+			t.Fatalf("native command contains retired runtime assumption %q: %s", retired, cmd)
 		}
 	}
 }

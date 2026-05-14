@@ -342,7 +342,7 @@ func TestFlakeBackedNonDevAllRegistryCommandsAvoidContainerWorkspaceValidationDr
 	}{
 		{name: "allow", args: []string{"allow", "example.test"}, want: "Added to proxy allowlist: example.test"},
 		{name: "broker", args: []string{"broker", "status", "--format", "text"}, want: "running:"},
-		{name: "image-matrix", args: []string{"image-matrix", "--all"}, want: "./overlays/ouroboros-static-front-end#default"},
+		{name: "runtime-matrix", args: []string{"runtime-matrix", "--all"}, want: "./overlays/ouroboros-static-front-end#default"},
 		{name: "tmux-bell-show-config", args: []string{"tmux-bell-show-config"}, want: "monitor-bell"},
 		{name: "verify-all", args: []string{"verify-all"}, want: " -p dev-all verify"},
 	}

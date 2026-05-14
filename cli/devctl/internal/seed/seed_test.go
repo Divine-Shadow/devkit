@@ -74,9 +74,9 @@ func TestBuildAnchorScripts(t *testing.T) {
 	if contains(sc, "/usr/local/bin/"+"codex") {
 		t.Fatalf("anchor script must resolve codex from PATH: %s", sc)
 	}
-	for _, legacy := range []string{"codex" + "w", "docker " + "compose", "docker " + "exec"} {
-		if contains(sc, legacy) {
-			t.Fatalf("anchor script contains legacy runtime assumption %q: %s", legacy, sc)
+	for _, retired := range []string{"codex" + "w", "docker " + "compose", "docker " + "exec"} {
+		if contains(sc, retired) {
+			t.Fatalf("anchor script contains retired runtime assumption %q: %s", retired, sc)
 		}
 	}
 }
@@ -135,9 +135,9 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 	if contains(sc, "/usr/local/bin/"+"codex") {
 		t.Fatalf("direct home script must resolve codex from PATH: %s", sc)
 	}
-	for _, legacy := range []string{"codex" + "w", "docker " + "compose", "docker " + "exec"} {
-		if contains(sc, legacy) {
-			t.Fatalf("direct home script contains legacy runtime assumption %q: %s", legacy, sc)
+	for _, retired := range []string{"codex" + "w", "docker " + "compose", "docker " + "exec"} {
+		if contains(sc, retired) {
+			t.Fatalf("direct home script contains retired runtime assumption %q: %s", retired, sc)
 		}
 	}
 }

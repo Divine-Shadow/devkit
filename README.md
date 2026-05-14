@@ -43,7 +43,7 @@ For day-to-day operations, see the native runbook:
 - `exec`, `attach`: enter a native sandbox for an agent index.
 - `ensure-ready`: run runtime or repo readiness checks.
 - `native plan`: inspect the computed sandbox plan.
-- `image-matrix --all --check`: validate overlay-to-flake metadata.
+- `runtime-matrix --all --check`: validate overlay-to-flake metadata.
 - `preflight`: check host prerequisites.
 - `verify-all`: run the supported verification flow for configured overlays.
 

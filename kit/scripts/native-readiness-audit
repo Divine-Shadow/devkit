@@ -57,19 +57,19 @@ generated_zshrc_files() {
 }
 
 guard_native_shells() {
-  local legacy_bin="/usr/local/bin/""codex"
-  local legacy_wrapper="codex""w"
+  local retired_bin="/usr/local/bin/""codex"
+  local retired_wrapper="codex""w"
   local source_guard_files=(
     "$DEVKIT_ROOT/cli/devctl/internal/seed/seed.go"
     "$DEVKIT_ROOT/cli/devctl/internal/agentexec/agentexec.go"
     "$DEVKIT_ROOT/cli/devctl/internal/runtime/launch/launch.go"
     "$DEVKIT_ROOT/cli/devctl/internal/commands/nativecmd/native.go"
   )
-  if grep -nE "$legacy_bin|$legacy_wrapper" "${source_guard_files[@]}"; then
+  if grep -nE "$retired_bin|$retired_wrapper" "${source_guard_files[@]}"; then
     fail "native shell sources contain stale Codex image path assumptions"
   fi
 
-  if generated_zshrc_files | xargs -0 -r grep -nE "$legacy_bin|$legacy_wrapper"; then
+  if generated_zshrc_files | xargs -0 -r grep -nE "$retired_bin|$retired_wrapper"; then
     fail "live generated zshrc contains stale Codex image path assumptions"
   fi
   return 0

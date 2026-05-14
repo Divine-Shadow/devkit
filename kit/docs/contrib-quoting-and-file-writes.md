@@ -1,7 +1,7 @@
 Contrib Guideline — Quoting and File Writes
 
 Goals
-- Eliminate brittle shell quoting and ensure config/files are written correctly inside containers.
+- Eliminate brittle shell quoting and ensure config/files are written correctly inside native sandboxes.
 
 Principles
 - Prefer Go over shell heredocs for generating config text.
@@ -22,4 +22,4 @@ Checklist for new flows
 - [ ] Files written via `RunWithInput` + `mkdir -p` and chmod.
 - [ ] No quotes in ssh_config paths; absolute or `~` as appropriate.
 - [ ] Global Git set under the effective HOME; repo‑local overrides cleared when necessary.
-- [ ] Validate inside the container: `ssh -F ~/.ssh/config -T github.com -o BatchMode=yes` and `git pull --ff-only`.
+- [ ] Validate inside the native sandbox: `ssh -F ~/.ssh/config -T github.com -o BatchMode=yes` and `git pull --ff-only`.

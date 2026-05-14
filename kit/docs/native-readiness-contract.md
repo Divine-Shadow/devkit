@@ -85,5 +85,5 @@ The readiness contract is covered by:
 - `kit/scripts/devkit --dry-run -p <flake-overlay> doctor-runtime`
 - `kit/scripts/devkit --dry-run -p <flake-overlay> ensure-ready --runtime-only`
 - `kit/scripts/devkit --dry-run -p <flake-overlay> ensure-ready --repo-readiness`
-- `kit/scripts/devkit image-matrix --all --check`
+- `kit/scripts/devkit runtime-matrix --all --check`
 - `make overlay-runtime-smoke`

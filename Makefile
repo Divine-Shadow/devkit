@@ -38,8 +38,8 @@ ci-cheap: build-cli
 	@$(NIX) develop --command nix/validate-overlay-runtimes.py overlays >/tmp/devkit-overlay-runtimes.json
 	@echo "== Overlay lock policy =="
 	@! find overlays -maxdepth 2 -name flake.lock -print | grep -q .
-	@echo "== Image matrix =="
-	@kit/scripts/devkit --dry-run -p dev-all image-matrix --all --check
+	@echo "== Runtime matrix =="
+	@kit/scripts/devkit --dry-run -p dev-all runtime-matrix --all --check
 	@echo "== Retired runtime guard =="
 	@kit/scripts/retired-runtime-guard
 

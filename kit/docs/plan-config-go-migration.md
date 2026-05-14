@@ -1,4 +1,4 @@
-Plan — Configs in Go and Heredoc Audit
+Plan - Configs in Go and Runtime File Audit
 
 Objective
 - Eliminate brittle shell heredocs for config/content writes in our dev flows. Move to typed generators and safe writers (Go + RunWithInput) where possible.
@@ -16,14 +16,14 @@ Scope of audit (current repo)
   - io/prod/...: terraform user_data heredocs
 
 Categorization
-1) Container runtime config (dynamic, per-window):
+1) Native runtime config (dynamic, per-agent):
    - ssh_config: already in Go; continue with typed writer.
    - Other dotfiles (if introduced): generate via Go, write via `RunWithInput`.
 
-2) Container image build-time config (static):
+2) Runtime static config:
    - java_proxy.sh, java_sbt.sh profile snippets (in `ouroboros-ide` and dumb-onion-hax):
-     - Move to committed template files under the overlay’s Docker build context or under devkit resources, COPY during image build.
-     - Avoid writing via heredoc at runtime; prefer files in the image or mounted configs.
+     - Move to committed template files under overlay resources or devkit resources.
+     - Avoid writing via heredoc at runtime; prefer files in Nix runtime inputs or mounted configs.
 
 3) One-off provisioning (terraform user_data, openssl stdin blocks):
    - Terraform user_data heredocs are appropriate; keep but lint for quoting consistency.
@@ -35,12 +35,12 @@ Migration steps
   - Add helpers for common patterns: “write file with mkdir -p + chmod”, “set global git under HOME”, etc.
   - Replace any remaining shell heredocs in devkit scripts (none currently beyond docs/examples) with CLI subcommands.
 
-- Phase 2 (Overlay image configs):
+- Phase 2 (Overlay runtime configs):
   - For `ouroboros-ide` and dumb-onion-hax environment setup scripts:
     - Extract embedded heredoc content into tracked files:
-      - `docker/dev/files/java_proxy.sh`
-      - `docker/dev/files/java_sbt.sh`
-    - Update Dockerfiles (or setup scripts) to COPY these files into `/etc/profile.d/` with correct perms.
+      - `runtime/files/java_proxy.sh`
+      - `runtime/files/java_sbt.sh`
+    - Update `runtime.nix` or setup scripts to install these files with correct perms.
     - Remove heredocs from the shell scripts.
 
 - Phase 3 (Terraform/infra):
@@ -53,7 +53,7 @@ Tooling & guardrails
   - Blocked: heredocs in `ouroboros-ide/scripts/**`, `dumb-onion-hax/**`, and `devkit/**` (runtime path) — suggest migration.
 - Unit tests for config builders (ssh_config present). Add tests for any new config builders.
 - Tiny integration probe:
-  - Inside container: `ssh -F ~/.ssh/config -G github.com | grep -E '^identityfile|^userknownhostsfile'`
+  - Inside a native sandbox: `ssh -F ~/.ssh/config -G github.com | grep -E '^identityfile|^userknownhostsfile'`
   - Ensures paths are unquoted and present.
 
 Timeline & ownership

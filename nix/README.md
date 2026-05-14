@@ -1,7 +1,7 @@
 # Devkit Nix Runtime Shells
 
 This directory tracks the Nix-first replacement surface for long-lived devkit
-agent containers. The root `flake.nix` remains the umbrella entrypoint, while
+agent runtimes. The root `flake.nix` remains the umbrella entrypoint, while
 each overlay owns its shell definition in `overlays/<overlay>/runtime.nix` and
 a thin overlay-local flake at `overlays/<overlay>/flake.nix`.
 

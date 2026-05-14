@@ -1,4 +1,4 @@
-package imagematrix
+package runtimematrix
 
 import (
 	"fmt"
@@ -27,9 +27,9 @@ type Entry struct {
 	FlakePath    string
 }
 
-// Register adds image-matrix to the command registry.
+// Register adds runtime-matrix to the command registry.
 func Register(r *cmdregistry.Registry) {
-	r.Register("image-matrix", handle)
+	r.Register("runtime-matrix", handle)
 }
 
 func handle(ctx *cmdregistry.Context) error {
@@ -42,7 +42,7 @@ func handle(ctx *cmdregistry.Context) error {
 		case "--check":
 			check = true
 		default:
-			return fmt.Errorf("unknown image-matrix argument %q", arg)
+			return fmt.Errorf("unknown runtime-matrix argument %q", arg)
 		}
 	}
 	entries, err := Discover(ctx.Paths.OverlayPaths, includeAll)
@@ -147,7 +147,7 @@ func Check(entries []Entry, dryRun bool) error {
 			problems = append(problems, fmt.Sprintf("%s: runtime.flake is empty", e.Overlay))
 		}
 		if e.Image != "" {
-			problems = append(problems, fmt.Sprintf("%s: runtime.image is legacy; declare runtime.flake instead", e.Overlay))
+			problems = append(problems, fmt.Sprintf("%s: runtime.image is retired metadata; declare runtime.flake instead", e.Overlay))
 		}
 		if e.Flake != "" {
 			if !flakeRefAccepted(e.Overlay, e.Flake) {
@@ -185,9 +185,9 @@ func Check(entries []Entry, dryRun bool) error {
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("image matrix check failed:\n- %s", strings.Join(problems, "\n- "))
+		return fmt.Errorf("runtime matrix check failed:\n- %s", strings.Join(problems, "\n- "))
 	}
-	fmt.Println("image-matrix: OK")
+	fmt.Println("runtime-matrix: OK")
 	return nil
 }
 

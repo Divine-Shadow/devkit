@@ -142,7 +142,7 @@ Commands passed:
 - `make -C cli/devctl build`
 - `nix flake check`
 - `nix/validate-overlay-runtimes.py overlays`
-- `kit/scripts/devkit -p dev-all image-matrix --all --check`
+- `kit/scripts/devkit -p dev-all runtime-matrix --all --check`
 - `make native-overlay-matrix`
 - `make native-runtime-smoke`
 - `make native-readiness-audit`

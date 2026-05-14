@@ -17,10 +17,10 @@ import (
 	brokercmd "devkit/cli/devctl/internal/commands/brokercmd"
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
-	imagematrixcmd "devkit/cli/devctl/internal/commands/imagematrix"
 	nativecmd "devkit/cli/devctl/internal/commands/nativecmd"
 	networkcmd "devkit/cli/devctl/internal/commands/network"
 	preflightcmd "devkit/cli/devctl/internal/commands/preflight"
+	runtimematrixcmd "devkit/cli/devctl/internal/commands/runtimematrix"
 	tmuxcmd "devkit/cli/devctl/internal/commands/tmuxcmd"
 	verifyallcmd "devkit/cli/devctl/internal/commands/verifyall"
 	"devkit/cli/devctl/internal/config"
@@ -381,7 +381,7 @@ func defaultDevAllRepoMain(overlayPaths []string) string {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `devctl (Go) — experimental
+	fmt.Fprintf(os.Stderr, `devctl - Nix/native runtime CLI
 Usage: devctl -p <project> [--profile <profiles>] <command> [args]
 
 Commands:
@@ -423,10 +423,10 @@ Commands:
   worktrees-tmux <repo> <count> [--plain]    (flake-backed overlays)
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (flake-backed overlays)
-  image-matrix [--check] [--all]             (repo to runtime pairing report)
+  runtime-matrix [--check] [--all]           (repo to runtime pairing report)
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
-  preflight                                  (host checks: docker, tmux, ssh keys, ~/.codex)
+  preflight                                  (host checks: nix, bubblewrap, tmux, ssh keys, ~/.codex, broker Docker)
 
 Flags:
   -p, --project   overlay project name (required for most)
@@ -555,7 +555,7 @@ func main() {
 	hookcmd.Register(registry)
 	networkcmd.Register(registry)
 	preflightcmd.Register(registry)
-	imagematrixcmd.Register(registry)
+	runtimematrixcmd.Register(registry)
 	nativecmd.Register(registry)
 	verifyallcmd.Register(registry)
 	tmuxcmd.Register(registry, defaultSessionName, mustAtoi, hasTmuxSession)
@@ -657,7 +657,7 @@ func main() {
 			}
 			break
 		}
-		die("layout-apply only supports native single-overlay layouts; mixed legacy layouts are retired")
+		die("layout-apply only supports native single-overlay layouts; mixed retired-runtime layouts are not supported")
 	case "layout-validate":
 		layoutPath := ""
 		for i := 0; i < len(sub); i++ {

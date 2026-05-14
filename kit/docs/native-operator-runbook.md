@@ -137,7 +137,7 @@ kit/scripts/devkit -p dev-all ssh-setup /path/to/id_ed25519 --index 1
 ```bash
 nix --extra-experimental-features 'nix-command flakes' flake check
 nix --extra-experimental-features 'nix-command flakes' develop --command nix/validate-overlay-runtimes.py overlays
-kit/scripts/devkit --dry-run -p dev-all image-matrix --all --check
+kit/scripts/devkit --dry-run -p dev-all runtime-matrix --all --check
 make overlay-runtime-smoke
 make native-overlay-matrix
 ```

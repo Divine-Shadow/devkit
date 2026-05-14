@@ -8,9 +8,9 @@ to refresh.
 
 ## Canonical Pairings
 
-Run `devkit/kit/scripts/devkit image-matrix --all` for the machine-readable
-view. The command name is historical; runtime metadata now uses one
-overlay-local `runtime.flake` per overlay, such as
+Run `devkit/kit/scripts/devkit runtime-matrix --all` for the machine-readable
+view. Runtime metadata uses one overlay-local `runtime.flake` per overlay, such
+as
 `./overlays/dev-all#default`. The root flake still exposes compatible shells
 for direct Nix use, but devkit runtime metadata points at the overlay-local
 flake boundary.
@@ -28,7 +28,7 @@ in the overlay `runtime.codex_version`. On May 9, 2026 that value is `0.130.0`.
 Verify local runtimes with:
 
 ```bash
-devkit/kit/scripts/devkit image-matrix --all --check
+devkit/kit/scripts/devkit runtime-matrix --all --check
 ```
 
 Use `--all` when you need to include non-canonical overlays. The `codex`

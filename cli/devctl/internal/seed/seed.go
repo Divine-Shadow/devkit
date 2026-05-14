@@ -36,7 +36,7 @@ func TightenPermsScript(home string) string {
 }
 
 // BuildSeedScripts returns a sequence of small bash scripts that, when run
-// inside the agent container (via `bash -lc`), refresh the per‑agent Codex HOME
+// inside the agent sandbox (via `bash -lc`), refresh the per-agent Codex HOME
 // from host mounts.
 func BuildSeedScripts(home string) []string {
 	return []string{
@@ -65,20 +65,20 @@ func BuildForceReseedScripts(home string) []string {
 	}
 }
 
-// AnchorConfig describes how to anchor HOME for a container and optionally seed Codex.
+// AnchorConfig describes how to anchor HOME for an agent sandbox and optionally seed Codex.
 type AnchorConfig struct {
 	// Anchor is the symlink path exposed to tooling, e.g. /workspace/.devhome.
 	Anchor string
-	// Base is the directory holding per-container homes, e.g. /workspace/.devhomes.
+	// Base is the directory holding per-agent homes, e.g. /workspace/.devhomes.
 	Base string
 	// SeedCodex indicates whether Codex credentials should be copied after relinking.
 	SeedCodex bool
 }
 
 // BuildAnchorScripts returns bash snippets that (1) ensure the anchor symlink points at the
-// container-unique directory and (2) optionally seed Codex credentials beneath it. The seeding
+// agent-unique directory and (2) optionally seed Codex credentials beneath it. The seeding
 // work operates directly on the resolved target (instead of the shared symlink) so multiple
-// containers can run it concurrently without clobbering each other's state.
+// agents can run it concurrently without clobbering each other's state.
 func BuildAnchorScripts(cfg AnchorConfig) []string {
 	anchor := strings.TrimSpace(cfg.Anchor)
 	base := strings.TrimSpace(cfg.Base)

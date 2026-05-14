@@ -479,7 +479,7 @@ runtime:
 
 func TestEnsureNativeLifecycleProjectRejectsOverlayWithoutRuntimeFlake(t *testing.T) {
 	tmp := t.TempDir()
-	overlay := filepath.Join(tmp, "overlays", "legacy")
+	overlay := filepath.Join(tmp, "overlays", "missing-flake")
 	if err := os.MkdirAll(overlay, 0o755); err != nil {
 		t.Fatalf("mkdir overlay: %v", err)
 	}
@@ -487,14 +487,14 @@ func TestEnsureNativeLifecycleProjectRejectsOverlayWithoutRuntimeFlake(t *testin
 		t.Fatalf("write config: %v", err)
 	}
 	ctx := &cmdregistry.Context{
-		Project: "legacy",
+		Project: "missing-flake",
 		Paths:   devkitpaths.Paths{OverlayPaths: []string{filepath.Join(tmp, "overlays")}},
 	}
 	err := ensureNativeLifecycleProject(ctx)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if got := err.Error(); got != "native lifecycle requires runtime.flake for -p legacy; add a flake-backed runtime before using lifecycle commands" {
+	if got := err.Error(); got != "native lifecycle requires runtime.flake for -p missing-flake; add a flake-backed runtime before using lifecycle commands" {
 		t.Fatalf("err = %q", got)
 	}
 }

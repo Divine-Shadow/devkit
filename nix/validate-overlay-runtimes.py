@@ -80,7 +80,7 @@ def main() -> int:
         elif flake not in accepted:
             problems.append(f"{overlay}: runtime.flake {flake!r} is not an accepted ref ({' or '.join(accepted)})")
         if image:
-            problems.append(f"{overlay}: runtime.image is legacy metadata; use runtime.flake")
+            problems.append(f"{overlay}: runtime.image is retired metadata; use runtime.flake")
         if not runtime_nix.exists():
             problems.append(f"{overlay}: missing per-overlay runtime.nix")
         if not overlay_flake.exists():
