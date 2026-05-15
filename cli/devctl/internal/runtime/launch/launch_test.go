@@ -214,6 +214,44 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	}
 }
 
+func TestPrepareRepairsRetiredCodexWrapperWithoutTouchingSessions(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	sessionPath := filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")
+	writeTestFile(t, sessionPath, "past")
+	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
+	writeTestFile(t, zshrc, `codex() {
+  HOME="$HOME" CODEX_HOME="$HOME/.codex" /usr/local/bin/codex "$@"
+}
+`)
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	got := readTestFile(t, zshrc)
+	if strings.Contains(got, "/usr/local/bin/codex") {
+		t.Fatalf("retired codex path was not repaired:\n%s", got)
+	}
+	if !strings.Contains(got, "command codex") {
+		t.Fatalf("repaired wrapper missing command codex:\n%s", got)
+	}
+	if session := readTestFile(t, sessionPath); session != "past" {
+		t.Fatalf("session was changed: %q", session)
+	}
+}
+
 func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 	hostUserHome := t.TempDir()
 	srcSSH := filepath.Join(hostUserHome, ".ssh")

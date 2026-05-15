@@ -48,6 +48,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
 		return err
 	}
+	if err := repairRetiredCodexWrapper(p.Agent.HostHome); err != nil {
+		return err
+	}
 	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
 		return err
 	}
@@ -64,6 +67,30 @@ func Prepare(p nativeplan.Plan) error {
 		if _, err := os.Stat(bind.Source); err != nil {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
+	}
+	return nil
+}
+
+func repairRetiredCodexWrapper(hostHome string) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	zshrc := filepath.Join(hostHome, ".zshrc")
+	data, err := os.ReadFile(zshrc)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", zshrc, err)
+	}
+	const retired = "/usr/local/bin/codex"
+	if !strings.Contains(string(data), retired) {
+		return nil
+	}
+	repaired := strings.ReplaceAll(string(data), retired, "command codex")
+	if err := os.WriteFile(zshrc, []byte(repaired), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", zshrc, err)
 	}
 	return nil
 }
