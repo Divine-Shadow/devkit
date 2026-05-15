@@ -33,8 +33,8 @@ Overlay smoke commands:
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/_template#default --output-lock-file /dev/null --command bash -lc 'codex --version && git --version && uv --version && python3 --version'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/codex#default --output-lock-file /dev/null --command bash -lc 'codex --version && command -v sbt java go docker spago netlify deno playwright >/dev/null'
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --output-lock-file /dev/null --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/codex#default --output-lock-file /dev/null --command bash -lc 'codex --version && command -v sbt java go spago netlify deno playwright >/dev/null'
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all#default --output-lock-file /dev/null --command bash -lc 'codex --version && spago --version && netlify --version && deno --version && playwright --version && go version && mgba-headless --help 2>&1 | grep -q -- --script'
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dumb-onion-hax#default --output-lock-file /dev/null --command bash -lc 'codex --version && command -v sbt java aws python3 >/dev/null'
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouro-integration#default --output-lock-file /dev/null --command bash -lc 'codex --version && terraform version | head -1 && packer version && aws --version && command -v sbt java >/dev/null'
 nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-static-front-end#default --output-lock-file /dev/null --command bash -lc 'codex --version && node --version && npm --version && spago --version && netlify --version && deno --version && playwright --version'

@@ -59,7 +59,7 @@ Tooling & guardrails
 Timeline & ownership
 - Week 1:
   - Land heredoc lint, document allowed exceptions.
-  - Extract java profile files to tracked files; update Docker contexts and scripts.
+  - Extract java profile files to tracked files; update legacy dev resource paths and scripts.
   - Document the new patterns in `contrib-quoting-and-file-writes.md`.
 - Week 2–3:
   - Audit remaining scripts for heredocs; migrate low-risk items to Go CLI where useful.
@@ -71,8 +71,8 @@ Notes
 
 Status (implemented)
 - Replaced heredocs in runtime setup scripts with tracked files:
-  - Added `ouroboros-ide/docker/dev/files/java_proxy.sh` and `java_sbt.sh`; environment setup scripts now install these files instead of writing via heredocs.
+  - Added tracked `java_proxy.sh` and `java_sbt.sh` resources for the affected dev setup scripts; those scripts now install these files instead of writing via heredocs.
   - Mirrored the same change in `agent{2,3,4,5}/ouroboros-ide/...` copies.
-  - Updated `dumb-onion-hax/Codex_Environment_Setup.sh` to install `docker/dev/files/java_sbt.sh` instead of a heredoc block.
+  - Updated `dumb-onion-hax/Codex_Environment_Setup.sh` to install the tracked `java_sbt.sh` resource instead of a heredoc block.
 - Added heredoc lint (focused): `devkit/kit/scripts/lint-heredocs.sh` checks the above paths are heredoc‑free.
 - Credentials now generated via Go: added `devctl aws-cred write` and updated `ouroboros-ide` and `terraform/scripts/configure_codex_credential_file.sh` to delegate through the migration compatibility path. Terraform user_data heredocs remain intact.

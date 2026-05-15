@@ -46,7 +46,7 @@ The sandbox should expose:
 
 - `DEVKIT_NATIVE_AGENT=1`
 - `CODEX_HOME` under the agent state root
-- `DOCKER_HOST=unix://...` only when brokered Docker is configured
+- `DOCKER_HOST=unix://...` only when brokered OCI access is configured
 - no direct `/var/run/docker.sock` bind for standard agents
 
 ## Scale
@@ -81,7 +81,7 @@ kit/scripts/devkit -p dev-all broker status --format json
 kit/scripts/devkit -p dev-all logs --repo ouroboros-ide --tail 50 --format json
 ```
 
-If brokered Docker commands fail, confirm that `DOCKER_HOST` points at the
+If brokered OCI commands fail, confirm that `DOCKER_HOST` points at the
 broker socket in `exec`, that the socket exists, and that the requested image is
 allowed by overlay policy.
 

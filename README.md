@@ -6,7 +6,7 @@ Devkit runs project agents through Nix flakes and the native devkit sandbox. The
 
 - Nix with flakes enabled.
 - Bubblewrap for native sandbox launch.
-- Docker Engine only when a native overlay intentionally uses brokered Docker access, such as testcontainers through the devkit broker.
+- A host container daemon only when a native overlay intentionally uses brokered OCI access, such as testcontainers through the devkit broker.
 - `tmux` for terminal sessions.
 
 Build the CLI once:
@@ -31,7 +31,7 @@ If `kit/bin/devctl` is missing or not executable, the wrapper fails loudly and p
 
 Each supported overlay declares an overlay-local `runtime.flake` in `overlays/<project>/devkit.yaml`, for example `./overlays/dev-all#default`. The root flake still exposes compatible shells for direct Nix use, but devkit runtime metadata is one flake ref per overlay.
 
-Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes Docker only through configured broker sockets.
+Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes OCI API access only through configured broker sockets.
 
 For day-to-day operations, see the native runbook:
 `kit/docs/native-operator-runbook.md`.

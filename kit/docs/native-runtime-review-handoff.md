@@ -70,9 +70,9 @@ cd brokers/postgres-broker && nix --extra-experimental-features 'nix-command fla
 
 - Host Nix with flakes enabled.
 - `bubblewrap` available for native agent execution.
-- Host Docker daemon reachable at `/var/run/docker.sock` for broker-backed
-  test-container smokes. The socket is consumed by the broker and is not mounted
-  into native agents.
+- Host container daemon reachable through the configured upstream socket,
+  defaulting to `/var/run/docker.sock`, for broker-backed OCI smokes. The socket
+  is consumed by the broker and is not mounted into native agents.
 - `postgres:latest` must be present or pullable for the broker allow-path smoke.
 - The `dev-all` broker socket defaults under the managed devkit state root:
   `<dev-root>/.devkit/native-broker/broker.sock`. Repeatable smokes can still

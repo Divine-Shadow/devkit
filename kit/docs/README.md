@@ -24,7 +24,7 @@ Native agents use host worktrees plus sandboxed agent homes:
 - Worktrees: `../agent-worktrees/agent<N>/<repo>` by default.
 - Agent state: `../.devkit/native-agents/<project>/agent<N>`.
 - Codex state and SSH config are seeded into the agent home.
-- Docker access is available only when the native broker policy provides a socket.
+- OCI API access is available only when the native broker policy provides a socket.
 
 ## Checks
 

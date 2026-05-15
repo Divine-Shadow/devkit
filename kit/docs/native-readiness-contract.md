@@ -10,7 +10,7 @@ overlay.
 - `verify`, `doctor-runtime`, and `ensure-ready` route flake-backed overlays
   through native lifecycle/readiness.
 - Native readiness runs inside the Nix sandbox through bubblewrap.
-- Runtime checks prove the sandbox, brokered Docker endpoint, declared Codex
+- Runtime checks prove the sandbox, brokered OCI endpoint, declared Codex
   version, and overlay toolchain are present.
 - Repo checks prove repository-specific readiness. These checks may be slower or
   stateful and are intentionally separate from runtime capacity.
@@ -29,8 +29,8 @@ Every native readiness run first validates:
 - native agent state can be prepared;
 - the sandbox can launch and has `DEVKIT_NATIVE_AGENT=1`;
 - `DOCKER_HOST` points at the broker socket, not `/var/run/docker.sock`;
-- the host Docker socket is absent inside the sandbox;
-- the broker socket responds to Docker `_ping`.
+- the host daemon socket is absent inside the sandbox;
+- the broker socket responds to API `_ping`.
 
 Overlay `readiness.runtime_checks` then adds tool-specific checks, and
 `runtime.codex_version` is converted into a `codex-version` runtime check.
@@ -52,14 +52,14 @@ visible and named.
 
 | Overlay | Runtime readiness | Repo readiness |
 | --- | --- | --- |
-| `_template` | common agent tools, Docker client, Codex version | placeholder `core-check` for new overlays to replace |
-| `codex` | SBT/JVM, Go, Docker client, Spago, Netlify, Deno, Playwright | warm hook plus `scripts/sbt2 "Compile / compile"` |
-| `dev-all` | SBT/JVM, Go, Docker client, AWS, Pokeemerald tools, Spago, Netlify, Deno, Playwright browser launch | git remote, frontend warm/build/typecheck/test/browser/server checks, SBT core check |
-| `dumb-onion-hax` | SBT/JVM, AWS CLI, Docker client | warm hook plus `sbt compile` |
-| `ouro-integration` | Terraform, Packer, AWS CLI, SBT/JVM, Docker client | AWS config plus Terraform plan/backend assembly |
-| `ouroboros-static-front-end` | Node/npm, PureScript, Spago, Netlify, Deno, Playwright, Docker client | warm hook plus `npm run build` |
-| `ouroboros-terraform` | Terraform, Packer, AWS CLI, Docker client | AWS profile config plus `terraform fmt -check -recursive` |
-| `pokeemerald` | ARM toolchain, `mgba-headless` scripting support, Docker client | warm hook plus `make modern` |
+| `_template` | common agent tools, container API client, Codex version | placeholder `core-check` for new overlays to replace |
+| `codex` | SBT/JVM, Go, container API client, Spago, Netlify, Deno, Playwright | warm hook plus `scripts/sbt2 "Compile / compile"` |
+| `dev-all` | SBT/JVM, Go, container API client, AWS, Pokeemerald tools, Spago, Netlify, Deno, Playwright browser launch | git remote, frontend warm/build/typecheck/test/browser/server checks, SBT core check |
+| `dumb-onion-hax` | SBT/JVM, AWS CLI, container API client | warm hook plus `sbt compile` |
+| `ouro-integration` | Terraform, Packer, AWS CLI, SBT/JVM, container API client | AWS config plus Terraform plan/backend assembly |
+| `ouroboros-static-front-end` | Node/npm, PureScript, Spago, Netlify, Deno, Playwright, container API client | warm hook plus `npm run build` |
+| `ouroboros-terraform` | Terraform, Packer, AWS CLI, container API client | AWS profile config plus `terraform fmt -check -recursive` |
+| `pokeemerald` | ARM toolchain, `mgba-headless` scripting support, container API client | warm hook plus `make modern` |
 
 ## Cost Model
 

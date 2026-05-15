@@ -22,7 +22,7 @@ contract wins.
 
 Claude is not a blocker for Nix runtime parity.
 
-- Remove Claude from must-match Dockerfile parity and smoke requirements.
+- Remove Claude from must-match retired image parity and smoke requirements.
 - Keep shells functional without requiring `claude-code` from nixpkgs.
 - Do not spend implementation time pinning, packaging, wrapping, or validating
   Claude unless explicitly reauthorized.
@@ -32,10 +32,10 @@ Acceptance evidence:
 - `nix/runtime-parity.md` no longer lists Claude as an unresolved parity gap.
 - Smoke commands do not rely on `claude --version`.
 
-### 2. Spago And Netlify Match Docker Pins
+### 2. Spago And Netlify Match Retired Image Pins
 
 The static frontend shell must provide deterministic versions matching the
-Dockerfile intent:
+retired image intent:
 
 - `spago@0.93.45`
 - `netlify-cli@26.0.1`
@@ -44,7 +44,8 @@ Implementation constraints:
 
 - Prefer fixed-output or lockfile-backed Nix packaging.
 - No `npm install`, `npx`, curl installer, or registry fetch in shell hooks.
-- Do not downgrade Node below the Dockerfile-compatible Node 20 line.
+- Do not downgrade Node below the Node 20 line inherited from the retired image
+  contract.
 
 Acceptance evidence:
 
@@ -64,7 +65,7 @@ Implementation constraints:
 - `DOCKER_HOST` must point to the broker socket, not the host daemon socket.
 - It is acceptable to extend or rename the current Postgres broker toward a
   test-container broker if that is the smallest honest path.
-- Broker tests may use a controlled host-side Docker or Podman daemon, but that
+- Broker tests may use a controlled host-side container daemon, but that
   daemon access must stay outside the native agent sandbox.
 
 Acceptance evidence:
@@ -147,7 +148,7 @@ Do not do these without explicit user approval:
 
 - Remove retired runtime command namespaces.
 - Rewrite tmux/layout wholesale before native readiness is proven.
-- Grant native agents direct Docker or Podman daemon socket access.
+- Grant native agents direct container daemon socket access.
 - Introduce shell-hook network installs.
 - Rework unrelated overlays.
 - Revert or rewrite user-created commits or unrelated files.
