@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
+DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+
+PROJECT="${DEVKIT_CODEX_HOME_PRESERVATION_PROJECT:-dev-all}"
+REPO="${DEVKIT_CODEX_HOME_PRESERVATION_REPO:-ouroboros-ide}"
+FLAKE="${DEVKIT_CODEX_HOME_PRESERVATION_FLAKE:-./overlays/dev-all#default}"
+BASE_BRANCH="${DEVKIT_CODEX_HOME_PRESERVATION_BASE_BRANCH:-main}"
+
+fail() {
+  echo "native-codex-home-preservation-guard: $*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n== %s ==\n' "$*"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+require_repo() {
+  local repo="$1"
+  local path="$DEV_ROOT/$repo"
+  git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    fail "$path must be an existing Git checkout"
+}
+
+grep_required() {
+  local pattern="$1"
+  local file="$2"
+  grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+assert_file_content() {
+  local path="$1"
+  local expected="$2"
+  [[ -f "$path" ]] || fail "$path is missing"
+  [[ "$(cat "$path")" == "$expected" ]] || fail "$path content changed"
+}
+
+assert_dir() {
+  local path="$1"
+  [[ -d "$path" ]] || fail "$path directory is missing"
+}
+
+cleanup_cycle() {
+  "$DEVKIT" -p "$PROJECT" down --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >/dev/null 2>&1 || true
+}
+
+cleanup_worktree() {
+  git -C "$DEV_ROOT/$REPO" worktree remove -f "$workroot/agent1/$REPO" >/dev/null 2>&1 || true
+  git -C "$DEV_ROOT/$REPO" worktree prune >/dev/null 2>&1 || true
+  git -C "$DEV_ROOT/$REPO" branch -D "${branch_prefix}1" >/dev/null 2>&1 || true
+}
+
+run_up() {
+  local output="$1"
+  "$DEVKIT" -p "$PROJECT" up --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --base-branch "$BASE_BRANCH" \
+    --branch-prefix "$branch_prefix" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --skip-ready \
+    --format json \
+    | tee "$output"
+}
+
+require_command git
+require_command timeout
+require_repo "$REPO"
+
+guard_dir="$(mktemp -d /tmp/devkit-codex-home-preserve.XXXXXX)"
+workroot="$guard_dir/worktrees"
+stateroot="$guard_dir/agents"
+broker_sock="$guard_dir/broker.sock"
+broker_state="$guard_dir/broker-state"
+branch_prefix="devkit-codex-preserve-$(date +%s)-$$-agent"
+agent_home="$stateroot/$PROJECT-agent1/home"
+codex_home="$agent_home/.codex"
+auth_file="$codex_home/auth.json"
+rollout_file="$codex_home/rollouts/in-flight.jsonl"
+config_file="$codex_home/config.toml"
+auth_sentinel='{"auth":"preserved"}'
+rollout_sentinel="rollout-preserved"
+config_sentinel='model = "preserve"'
+
+cleanup() {
+  set +e
+  cleanup_cycle
+  cleanup_worktree
+  rm -rf "$guard_dir"
+}
+trap cleanup EXIT
+
+mkdir -p "$workroot" "$stateroot"
+
+step "initial native setup"
+run_up "$guard_dir/up-initial.json"
+grep_required '"command": "up"' "$guard_dir/up-initial.json"
+grep_required '"runtime": "native"' "$guard_dir/up-initial.json"
+
+step "write Codex home sentinels"
+mkdir -p "$codex_home/rollouts"
+printf '%s' "$auth_sentinel" >"$auth_file"
+printf '%s' "$rollout_sentinel" >"$rollout_file"
+printf '%s' "$config_sentinel" >"$config_file"
+chmod 600 "$auth_file"
+
+step "repeat native setup"
+run_up "$guard_dir/up-repeat.json"
+grep_required '"command": "up"' "$guard_dir/up-repeat.json"
+grep_required '"runtime": "native"' "$guard_dir/up-repeat.json"
+
+assert_file_content "$auth_file" "$auth_sentinel"
+assert_file_content "$rollout_file" "$rollout_sentinel"
+assert_file_content "$config_file" "$config_sentinel"
+assert_dir "$codex_home"
+assert_dir "$codex_home/rollouts"
+assert_dir "$agent_home/.cache"
+assert_dir "$agent_home/.config"
+assert_dir "$agent_home/.local"
+
+step "sandbox sees preserved Codex home"
+timeout 240s "$DEVKIT" -p "$PROJECT" exec 1 --repo "$REPO" \
+  --flake "$FLAKE" \
+  --broker-socket "$broker_sock" \
+  --worktree-root "$workroot" \
+  --agent-state-root "$stateroot" \
+  -- \
+  bash -lc '
+    set -euo pipefail
+    test "${CODEX_HOME:-}" = "$HOME/.codex"
+    test "${CODEX_ROLLOUT_DIR:-}" = "$HOME/.codex/rollouts"
+    grep -qx '\''{"auth":"preserved"}'\'' "$CODEX_HOME/auth.json"
+    grep -qx '\''rollout-preserved'\'' "$CODEX_ROLLOUT_DIR/in-flight.jsonl"
+    grep -qx '\''model = "preserve"'\'' "$CODEX_HOME/config.toml"
+    printf "codex-home-preserved\n"
+  ' \
+  2>&1 | tee "$guard_dir/exec.txt"
+grep_required "codex-home-preserved" "$guard_dir/exec.txt"
+
+assert_file_content "$auth_file" "$auth_sentinel"
+assert_file_content "$rollout_file" "$rollout_sentinel"
+assert_file_content "$config_file" "$config_sentinel"
+
+if find "$DEVKIT_ROOT/overlays" -maxdepth 2 -name flake.lock -print | grep -q .; then
+  fail "overlay-local Nix checks created flake.lock files"
+fi
+
+echo
+echo "native-codex-home-preservation-guard: ok"

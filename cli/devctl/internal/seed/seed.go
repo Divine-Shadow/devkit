@@ -11,10 +11,10 @@ func WaitForHostMountsScript() string {
 	return `for i in $(seq 1 20); do { [ -d /var/host-codex ] || [ -f /var/auth.json ]; } && break || sleep 0.5; done`
 }
 
-// ResetAndCreateDirsScript resets $HOME/.codex and ensures auxiliary dirs exist.
+// ResetAndCreateDirsScript preserves $HOME/.codex and ensures auxiliary dirs exist.
 func ResetAndCreateDirsScript(home string) string {
 	h := home
-	return `rm -rf '` + h + `/.codex' && mkdir -p '` + h + `/.codex' '` + h + `/.codex/rollouts' '` + h + `/.cache' '` + h + `/.config' '` + h + `/.local'`
+	return `mkdir -p '` + h + `/.codex' '` + h + `/.codex/rollouts' '` + h + `/.cache' '` + h + `/.config' '` + h + `/.local'`
 }
 
 // CopyHostAuthScript copies the host auth.json into $HOME/.codex/auth.json when present.
@@ -48,16 +48,15 @@ func BuildSeedScripts(home string) []string {
 	}
 }
 
-// BuildForceReseedScripts returns a sequence of bash snippets that forcibly
-// refresh $HOME/.codex auth from the host mounts and recreate the seeded marker
-// expected by anchor startup flows.
+// BuildForceReseedScripts returns a sequence of bash snippets that refresh
+// $HOME/.codex auth from host mounts when available and recreate the seeded
+// marker expected by anchor startup flows.
 func BuildForceReseedScripts(home string) []string {
 	h := home
 	marker := h + "/.codex/.seeded"
 	return []string{
 		WaitForHostMountsScript(),
 		`mkdir -p '` + h + `/.codex' '` + h + `/.codex/rollouts' '` + h + `/.cache' '` + h + `/.config' '` + h + `/.local'`,
-		`rm -f '` + h + `/.codex/auth.json'`,
 		CopyHostAuthScript(home),
 		FallbackCopyAuthScript(home),
 		TightenPermsScript(home),
@@ -123,7 +122,6 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 	if cfg.SeedCodex {
 		seedSteps := []string{
 			WaitForHostMountsScript(),
-			"rm -rf \"$target/.codex\"",
 			"mkdir -p \"$target/.codex\" \"$target/.codex/rollouts\" \"$target/.cache\" \"$target/.config\" \"$target/.local\"",
 			"if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json \"$target/.codex/auth.json\"; fi",
 			"if [ ! -f \"$target/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$target/.codex/auth.json\"; fi",
@@ -183,7 +181,6 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 		marker := "$home/.codex/.seeded"
 		seedSteps := []string{
 			WaitForHostMountsScript(),
-			"rm -rf \"$home/.codex\"",
 			"mkdir -p \"$home/.codex\" \"$home/.codex/rollouts\" \"$home/.cache\" \"$home/.config\" \"$home/.local\"",
 			"if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json \"$home/.codex/auth.json\"; fi",
 			"if [ ! -f \"$home/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$home/.codex/auth.json\"; fi",
