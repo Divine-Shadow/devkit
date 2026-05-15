@@ -45,7 +45,8 @@ kit/scripts/devkit -p dev-all attach 1 --repo ouroboros-ide
 The sandbox should expose:
 
 - `DEVKIT_NATIVE_AGENT=1`
-- `CODEX_HOME` under the agent state root
+- for `dev-all`, `CODEX_HOME` under the repo-local per-agent `.devhome-agentN`
+  directory so tmux and `codex resume` see the same session history
 - `DOCKER_HOST=unix://...` only when brokered OCI access is configured
 - no direct `/var/run/docker.sock` bind for standard agents
 
@@ -110,7 +111,20 @@ for direct overlay checks.
 
 Auth:
 
-Codex and SSH state live under each agent home. To inspect the active state:
+Codex and SSH state live under each agent home. For `dev-all`, the active
+Codex home is repo-local:
+
+- agent 1: `<dev-root>/<repo>/.devhome-agent1/.codex`
+- agent N: `<dev-root>/agent-worktrees/agentN/.devhome-agentN/.codex`
+
+The native state root under `.devkit/native-agents/<project>-agentN/` remains
+for manifests, resolver state, broker metadata, and legacy imports. Native
+prepare imports only missing Codex files from the old
+`.devkit/native-agents/<project>-agentN/home/.codex` location; it does not
+delete files or overwrite existing auth, config, sessions, logs, rollouts,
+shell snapshots, or SQLite state.
+
+To inspect the active state:
 
 ```bash
 kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'printf "HOME=%s\nCODEX_HOME=%s\n" "$HOME" "$CODEX_HOME"; ls -la "$CODEX_HOME"'

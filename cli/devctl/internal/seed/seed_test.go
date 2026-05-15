@@ -67,6 +67,8 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"codex() {",
 		"mcp_servers.codex-cli.command=\\\"codex\\\"",
 		"mcp_servers.governance.command=\\\"bash\\\"",
+		"/workspaces/dev/.devkit/ouro8-governance-env.sh",
+		"required governance env missing",
 		"exec bash scripts/devops/governance-mcp-stdio-forward",
 		`command codex "${extra[@]}" "$@"`,
 		"marker=\"$target/.codex/.seeded\"",
@@ -142,6 +144,8 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 		`cp -f /var/host-codex/auth.json "$home/.codex/auth.json"`,
 		`touch $home/.codex/.seeded`,
 		`codex() {`,
+		`/workspaces/dev/.devkit/ouro8-governance-env.sh`,
+		`required governance env missing`,
 		`exec bash scripts/devops/governance-mcp-stdio-forward`,
 		`command codex "${extra[@]}" "$@"`,
 	} {

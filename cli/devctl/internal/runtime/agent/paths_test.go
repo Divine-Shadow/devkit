@@ -19,11 +19,14 @@ func TestResolvePathsDedicatedAgentOne(t *testing.T) {
 	if got.SandboxWorktree != "/worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", got.SandboxWorktree)
 	}
-	if got.HostHome != "/home/me/dev/.devkit/native-agents/dev-all-agent1/home" {
+	if got.HostHome != "/home/me/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1" {
 		t.Fatalf("host home = %q", got.HostHome)
 	}
-	if got.SandboxHome != "/agent-state/dev-all-agent1/home" {
+	if got.SandboxHome != "/worktrees/agent1/ouroboros-ide/.devhome-agent1" {
 		t.Fatalf("sandbox home = %q", got.SandboxHome)
+	}
+	if got.HostAgentStateRoot != "/home/me/dev/.devkit/native-agents/dev-all-agent1" {
+		t.Fatalf("host agent state root = %q", got.HostAgentStateRoot)
 	}
 }
 
@@ -51,7 +54,10 @@ func TestResolvePathsUsesConfiguredRoots(t *testing.T) {
 	if got.SandboxWorktree != "/native-worktrees/agent2/devkit" {
 		t.Fatalf("sandbox worktree = %q", got.SandboxWorktree)
 	}
-	if got.SandboxHome != "/native-state/dev-all-agent2/home" {
+	if got.SandboxHome != "/native-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("sandbox home = %q", got.SandboxHome)
+	}
+	if got.HostHome != "/home/me/dev/native-worktrees/agent2/.devhome-agent2" {
+		t.Fatalf("host home = %q", got.HostHome)
 	}
 }

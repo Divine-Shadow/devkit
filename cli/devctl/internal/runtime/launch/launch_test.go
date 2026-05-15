@@ -58,11 +58,15 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
 		"'--setenv' 'DOCKER_HOST' 'unix://" + brokerSocket + "'",
 		"'--setenv' 'TMPDIR' '/tmp'",
+		"'--setenv' 'XDG_CACHE_HOME' '/tmp/devkit-nix-cache/dev-all-agent1'",
 		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command missing %q:\n%s", want, joined)
 		}
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export XDG_CACHE_HOME='/worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'") {
+		t.Fatalf("agent shell does not restore XDG_CACHE_HOME:\n%#v", cmd.Args)
 	}
 	for _, optionalHostPath := range []string{"/etc/static", "/etc/ssl", "/etc/pki"} {
 		if _, err := os.Stat(optionalHostPath); err != nil {
@@ -144,6 +148,72 @@ func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	}
 }
 
+func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+
+	legacyCodex := filepath.Join(p.Agent.StateRoot, "home", ".codex")
+	writeTestFile(t, filepath.Join(legacyCodex, "sessions", "2026", "05", "15", "rollout.jsonl"), "legacy session")
+	writeTestFile(t, filepath.Join(legacyCodex, "rollouts", "in-flight.jsonl"), "legacy rollout")
+	writeTestFile(t, filepath.Join(legacyCodex, "shell_snapshots", "snapshot.sh"), "legacy shell")
+	writeTestFile(t, filepath.Join(legacyCodex, "log", "codex-tui.log"), "legacy log")
+	writeTestFile(t, filepath.Join(legacyCodex, "state_5.sqlite"), "legacy state")
+	writeTestFile(t, filepath.Join(legacyCodex, "logs_2.sqlite"), "legacy logs")
+	writeTestFile(t, filepath.Join(legacyCodex, "auth.json"), "legacy auth")
+	writeTestFile(t, filepath.Join(legacyCodex, "config.toml"), "legacy config")
+
+	dstCodex := filepath.Join(p.Agent.HostHome, ".codex")
+	writeTestFile(t, filepath.Join(dstCodex, "auth.json"), "current auth")
+	writeTestFile(t, filepath.Join(dstCodex, "config.toml"), "current config")
+	beforeSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if got := readTestFile(t, filepath.Join(dstCodex, "sessions", "2026", "05", "15", "rollout.jsonl")); got != "legacy session" {
+		t.Fatalf("session content = %q", got)
+	}
+	for rel, want := range map[string]string{
+		filepath.Join("rollouts", "in-flight.jsonl"):    "legacy rollout",
+		filepath.Join("shell_snapshots", "snapshot.sh"): "legacy shell",
+		filepath.Join("log", "codex-tui.log"):           "legacy log",
+		"state_5.sqlite":                                "legacy state",
+		"logs_2.sqlite":                                 "legacy logs",
+		"auth.json":                                     "current auth",
+		"config.toml":                                   "current config",
+	} {
+		if got := readTestFile(t, filepath.Join(dstCodex, rel)); got != want {
+			t.Fatalf("%s content = %q, want %q", rel, got, want)
+		}
+	}
+	afterSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
+	if afterSessions < beforeSessions+1 {
+		t.Fatalf("session count did not increase as expected: before=%d after=%d", beforeSessions, afterSessions)
+	}
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("second Prepare: %v", err)
+	}
+	if got := countFiles(t, filepath.Join(dstCodex, "sessions")); got != afterSessions {
+		t.Fatalf("second Prepare changed session count: before=%d after=%d", afterSessions, got)
+	}
+	if got := readTestFile(t, filepath.Join(dstCodex, "auth.json")); got != "current auth" {
+		t.Fatalf("auth was clobbered: %q", got)
+	}
+}
+
 func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 	hostUserHome := t.TempDir()
 	srcSSH := filepath.Join(hostUserHome, ".ssh")
@@ -178,4 +248,41 @@ func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 			t.Fatalf("%s mode = %v, want %v", name, got, wantMode)
 		}
 	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func countFiles(t *testing.T, root string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			count++
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return count
 }

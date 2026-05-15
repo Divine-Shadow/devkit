@@ -45,6 +45,9 @@ func Prepare(p nativeplan.Plan) error {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
+	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
+		return err
+	}
 	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
 		return err
 	}
@@ -61,6 +64,126 @@ func Prepare(p nativeplan.Plan) error {
 		if _, err := os.Stat(bind.Source); err != nil {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
+	}
+	return nil
+}
+
+func migrateMissingCodexState(dstHome, srcHome string) error {
+	dstHome = strings.TrimSpace(dstHome)
+	srcHome = strings.TrimSpace(srcHome)
+	if dstHome == "" || srcHome == "" || sameFilesystemPath(dstHome, srcHome) {
+		return nil
+	}
+	srcCodex := filepath.Join(srcHome, ".codex")
+	dstCodex := filepath.Join(dstHome, ".codex")
+	if st, err := os.Stat(srcCodex); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat legacy Codex home %s: %w", srcCodex, err)
+	} else if !st.IsDir() {
+		return nil
+	}
+	if err := os.MkdirAll(dstCodex, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dstCodex, err)
+	}
+	for _, rel := range []string{"sessions", "rollouts", "shell_snapshots", "log"} {
+		if err := copyTreeMissing(filepath.Join(srcCodex, rel), filepath.Join(dstCodex, rel)); err != nil {
+			return err
+		}
+	}
+	entries, err := os.ReadDir(srcCodex)
+	if err != nil {
+		return fmt.Errorf("read legacy Codex home %s: %w", srcCodex, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !shouldCopyCodexRootFile(entry.Name()) {
+			continue
+		}
+		if err := copyFileMissing(filepath.Join(srcCodex, entry.Name()), filepath.Join(dstCodex, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sameFilesystemPath(a, b string) bool {
+	a = filepath.Clean(a)
+	b = filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	if resolvedA, err := filepath.EvalSymlinks(a); err == nil {
+		a = filepath.Clean(resolvedA)
+	}
+	if resolvedB, err := filepath.EvalSymlinks(b); err == nil {
+		b = filepath.Clean(resolvedB)
+	}
+	return a == b
+}
+
+func shouldCopyCodexRootFile(name string) bool {
+	switch name {
+	case "history.jsonl", "installation_id", "models_cache.json", "version.json", ".personality_migration":
+		return true
+	}
+	return strings.HasPrefix(name, "state_") || strings.HasPrefix(name, "logs_")
+}
+
+func copyTreeMissing(srcRoot, dstRoot string) error {
+	if st, err := os.Stat(srcRoot); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", srcRoot, err)
+	} else if !st.IsDir() {
+		return nil
+	}
+	return filepath.WalkDir(srcRoot, func(src string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcRoot, src)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dstRoot, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(dst, info.Mode().Perm())
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return copyFileMissing(src, dst)
+	})
+}
+
+func copyFileMissing(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", src, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", dst, err)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	return nil
 }
@@ -269,12 +392,16 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		args = append(args, "--setenv", key, p.Env[key])
+		value := p.Env[key]
+		if key == "XDG_CACHE_HOME" {
+			value = filepath.Join("/tmp", "devkit-nix-cache", p.Agent.ID.Name())
+		}
+		args = append(args, "--setenv", key, value)
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
 	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--output-lock-file", "/dev/null", "--command")
-	args = append(args, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy)...)
+	args = append(args, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env)...)
 	return Command{Path: "bwrap", Args: args, Dir: p.DevkitHostRoot}, nil
 }
 
@@ -309,8 +436,17 @@ func ensureResolvConf(path string) error {
 	return nil
 }
 
-func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig) []string {
-	script := "cd " + shellQuote(workdir)
+func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig, env map[string]string) []string {
+	exports := make([]string, 0, len(env))
+	for key, value := range env {
+		exports = append(exports, "export "+key+"="+shellQuote(value))
+	}
+	sort.Strings(exports)
+	script := strings.Join(exports, "; ")
+	if script != "" {
+		script += "; "
+	}
+	script += "cd " + shellQuote(workdir)
 	bridgeProxy := strings.TrimSpace(proxy.UnixSocket) != ""
 	if bridgeProxy {
 		proxyURL := strings.TrimSpace(proxy.HTTPProxy)

@@ -29,10 +29,10 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent2/home" {
+	if p.Agent.HostHome != "/home/bayesartre/dev/agent-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
 	}
-	if p.Agent.SandboxHome != "/agent-state/dev-all-agent2/home" {
+	if p.Agent.SandboxHome != "/worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
 	}
 	if p.Env["CODEX_HOME"] != filepath.Join(p.Agent.SandboxHome, ".codex") {
@@ -142,7 +142,7 @@ func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/repo/.devkit/native-agents/dev-all-agent1/home" {
+	if p.Agent.HostHome != "/repo/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
 	}
 }
@@ -181,6 +181,15 @@ func TestBuildDevAllProjectsSymlinkedWorktreeIntoMountedDevRoot(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/workspaces/dev/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
+	if p.Agent.HostHome != filepath.Join(repoRoot, ".devhome-agent1") {
+		t.Fatalf("host home = %q", p.Agent.HostHome)
+	}
+	if p.Agent.SandboxHome != "/workspaces/dev/ouroboros-ide/.devhome-agent1" {
+		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
+	}
+	if p.Env["HOME"] != p.Agent.SandboxHome || p.Env["CODEX_HOME"] != filepath.Join(p.Agent.SandboxHome, ".codex") {
+		t.Fatalf("env home mismatch: %#v", p.Env)
+	}
 }
 
 func TestBuildDevAllUsesConfiguredRoots(t *testing.T) {
@@ -206,7 +215,7 @@ func TestBuildDevAllUsesConfiguredRoots(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/native-worktrees/agent2/devkit" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.SandboxHome != "/native-state/dev-all-agent2/home" {
+	if p.Agent.SandboxHome != "/native-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
 	}
 }

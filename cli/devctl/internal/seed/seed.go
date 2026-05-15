@@ -113,7 +113,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"if [[ \\\\\\\"$PWD\\\\\\\" == /workspaces/dev/* && ! -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]]; then echo required governance env missing: /workspaces/dev/.devkit/ouro8-governance-env.sh >&2; exit 1; fi; [[ -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
@@ -171,7 +171,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"if [[ \\\\\\\"$PWD\\\\\\\" == /workspaces/dev/* && ! -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]]; then echo required governance env missing: /workspaces/dev/.devkit/ouro8-governance-env.sh >&2; exit 1; fi; [[ -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +

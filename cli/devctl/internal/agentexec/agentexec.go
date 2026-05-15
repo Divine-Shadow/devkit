@@ -40,8 +40,8 @@ func BuildNativeCommand(opts NativeCommandOpts) (string, error) {
 	if repo == "" {
 		repo = "ouroboros-ide"
 	}
-	dest := nativeDest(idxInt, repo, opts.Dest)
-	shell := "set -e; cd " + shSingleQuote(dest) + " 2>/dev/null || cd " + shSingleQuote(nativeDest(idxInt, repo, "")) + "; if command -v zsh >/dev/null 2>&1; then exec zsh -i; fi; exec bash"
+	dest := nativeDest(project, idxInt, repo, opts.Dest)
+	shell := "set -e; cd " + shSingleQuote(dest) + "; if command -v zsh >/dev/null 2>&1; then exec zsh -i; fi; exec bash"
 	return strings.Join([]string{
 		shSingleQuote(exe),
 		"-p", shSingleQuote(project),
@@ -51,7 +51,7 @@ func BuildNativeCommand(opts NativeCommandOpts) (string, error) {
 	}, " "), nil
 }
 
-func nativeDest(index int, repo string, dest string) string {
+func nativeDest(project string, index int, repo string, dest string) string {
 	if index < 1 {
 		index = 1
 	}
@@ -59,12 +59,26 @@ func nativeDest(index int, repo string, dest string) string {
 	if repo == "" {
 		repo = "ouroboros-ide"
 	}
-	base := filepath.Join("/worktrees", fmt.Sprintf("agent%d", index), repo)
+	base := nativeBase(project, index, repo)
 	dest = strings.TrimSpace(dest)
 	if dest == "" {
 		return base
 	}
 	if !strings.HasPrefix(dest, "/") {
+		parts := strings.Split(filepath.Clean(dest), string(filepath.Separator))
+		if len(parts) >= 3 && parts[0] == "agent-worktrees" && strings.HasPrefix(parts[1], "agent") && parts[2] == repo {
+			target := filepath.Join("/worktrees", parts[1], repo)
+			if len(parts) == 3 {
+				return target
+			}
+			return filepath.Join(append([]string{target}, parts[3:]...)...)
+		}
+		if len(parts) >= 1 && parts[0] == repo {
+			if len(parts) == 1 {
+				return base
+			}
+			return filepath.Join(append([]string{base}, parts[1:]...)...)
+		}
 		return filepath.Join(base, dest)
 	}
 	normalized := filepath.Clean(dest)
@@ -86,6 +100,13 @@ func nativeDest(index int, repo string, dest string) string {
 		}
 	}
 	return normalized
+}
+
+func nativeBase(project string, index int, repo string) string {
+	if strings.TrimSpace(project) == "dev-all" && index == 1 {
+		return filepath.Join("/workspaces/dev", repo)
+	}
+	return filepath.Join("/worktrees", fmt.Sprintf("agent%d", index), repo)
 }
 
 func nativeRepoFromDest(dest string) string {

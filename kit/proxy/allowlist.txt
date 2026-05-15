@@ -43,6 +43,10 @@ platform.openai.com
 chatgpt.com
 auth.openai.com
 
+# SSO providers
+login.microsoftonline.com
+appleid.apple.com
+
 # Mistral
 api.mistral.ai
 

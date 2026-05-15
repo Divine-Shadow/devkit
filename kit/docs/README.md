@@ -22,8 +22,10 @@ The detailed operator runbook is
 Native agents use host worktrees plus sandboxed agent homes:
 
 - Worktrees: `../agent-worktrees/agent<N>/<repo>` by default.
-- Agent state: `../.devkit/native-agents/<project>/agent<N>`.
-- Codex state and SSH config are seeded into the agent home.
+- Agent state: `../.devkit/native-agents/<project>-agent<N>`.
+- For `dev-all`, Codex state and SSH config are seeded into the repo-local
+  `.devhome-agentN` home so tmux and `codex resume` use the same session files.
+  The native agent state home is treated as legacy import/metadata state.
 - OCI API access is available only when the native broker policy provides a socket.
 
 ## Checks

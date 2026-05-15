@@ -104,6 +104,12 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
+		if project == "dev-all" && index == 1 {
+			paths.SandboxHome = filepath.Join(paths.SandboxWorktree, ".devhome-agent1")
+			if resolved, err := filepath.EvalSymlinks(paths.HostWorktree); err == nil {
+				paths.HostHome = filepath.Join(filepath.Clean(resolved), ".devhome-agent1")
+			}
+		}
 	}
 	flake := strings.TrimSpace(opts.Flake)
 	if flake == "" {

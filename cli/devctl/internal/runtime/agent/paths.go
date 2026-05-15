@@ -71,18 +71,30 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 
 	hostAgentStateRoot := filepath.Join(hostStateRoot, agentName)
 	sandboxAgentStateRoot := filepath.Join(sandboxStateRoot, agentName)
+	hostHome := filepath.Join(hostAgentStateRoot, "home")
+	sandboxHome := filepath.Join(sandboxAgentStateRoot, "home")
+	if project == "dev-all" {
+		suffix := fmt.Sprintf(".devhome-agent%d", index)
+		if index == 1 {
+			hostHome = filepath.Join(hostWorktree, suffix)
+			sandboxHome = filepath.Join(sandboxWorktree, suffix)
+		} else {
+			hostHome = filepath.Join(filepath.Dir(hostWorktree), suffix)
+			sandboxHome = filepath.Join(filepath.Dir(sandboxWorktree), suffix)
+		}
+	}
 	return Paths{
 		DevRoot:               devRoot,
 		HostWorktreeRoot:      hostWorktreeRoot,
 		HostStateRoot:         hostStateRoot,
 		HostWorktree:          hostWorktree,
 		HostAgentStateRoot:    hostAgentStateRoot,
-		HostHome:              filepath.Join(hostAgentStateRoot, "home"),
+		HostHome:              hostHome,
 		SandboxWorktreeRoot:   sandboxWorktreeRoot,
 		SandboxStateRoot:      sandboxStateRoot,
 		SandboxWorktree:       sandboxWorktree,
 		SandboxAgentStateRoot: sandboxAgentStateRoot,
-		SandboxHome:           filepath.Join(sandboxAgentStateRoot, "home"),
+		SandboxHome:           sandboxHome,
 	}, nil
 }
 
