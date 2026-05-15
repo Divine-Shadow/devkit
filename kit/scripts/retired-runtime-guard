@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${1:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 
 content_pattern='docker[[:space:]]+compose|docker-compose|compose[.]override[.]yml|compose[.]ingress[.]yml|kit/compose[^[:space:]]*[.]yml|codexw|/usr/local/bin/codex|COMPOSE_PROJECT|com[.]docker[.]compose|compose_project|ComposeProject|RetiredRuntimeFiles|RetiredAllRuntimeFiles|runner[.]Compose|BuildCommand|ResolveContainerName|ExistingComposeNetwork|internal/commands/composecmd|internal/compose'
+docs_pattern='Docker Compose|docker[[:space:]]+compose|docker-compose|Compose command namespace|Compose command namespaces|Compose runtime|legacy Compose|docker[[:space:]]+exec|codexw|fallback wrapper|safe fallback'
 
 cd "$ROOT"
 
@@ -15,6 +16,20 @@ if rg -n -i -e "$content_pattern" . \
   --glob '!result/**' \
   --glob '!.agent/**'; then
   echo "retired-runtime-guard: retired runtime references remain" >&2
+  exit 1
+fi
+
+docs_hits="$(
+  rg -n -i -e "$docs_pattern" README.md docs documentation kit/docs nix 2>/dev/null \
+    --glob '!documentation/archive/**' \
+    --glob '!kit/bin/**' \
+    --glob '!kit/.devhome/**' \
+    --glob '!result/**' || true
+)"
+docs_hits="$(printf '%s\n' "$docs_hits" | rg -v 'RETIREMENT_GUARD_ALLOW' || true)"
+if [[ -n "$docs_hits" ]]; then
+  printf '%s\n' "$docs_hits"
+  echo "retired-runtime-guard: active docs contain retired runtime guidance" >&2
   exit 1
 fi
 

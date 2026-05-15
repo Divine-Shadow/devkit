@@ -75,4 +75,4 @@ Status (implemented)
   - Mirrored the same change in `agent{2,3,4,5}/ouroboros-ide/...` copies.
   - Updated `dumb-onion-hax/Codex_Environment_Setup.sh` to install `docker/dev/files/java_sbt.sh` instead of a heredoc block.
 - Added heredoc lint (focused): `devkit/kit/scripts/lint-heredocs.sh` checks the above paths are heredoc‑free.
-- Credentials now generated via Go: added `devctl aws-cred write` and updated `ouroboros-ide` and `terraform/scripts/configure_codex_credential_file.sh` to delegate (with safe fallback). Terraform user_data heredocs remain intact.
+- Credentials now generated via Go: added `devctl aws-cred write` and updated `ouroboros-ide` and `terraform/scripts/configure_codex_credential_file.sh` to delegate through the migration compatibility path. Terraform user_data heredocs remain intact.
