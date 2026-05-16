@@ -1,0 +1,63 @@
+# Managed by the dev-all overlay for Ouroboros Codex homes.
+# Mirrors deny-rg-require-governed-search from:
+# ouroboros-ide/tools/subagent-governance/catalog/policies.json
+
+prefix_rule(
+    pattern = ["rg"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["bash", "scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["bash", "./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["/bin/bash", "scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["/bin/bash", "./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["sh", "scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)
+
+prefix_rule(
+    pattern = ["sh", "./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: broad raw repository search through direct rg or legacy rgb is blocked in governed runs. Use MCP governance.search first; if MCP search is unavailable, use scripts/subagent/governed-search with scoped --query, --scope, and --kind options. Log diagnostics require explicit opt-in."
+)

@@ -26,17 +26,39 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Agent.HostWorktree != "/home/bayesartre/dev/agent-worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
 	}
-	if p.Agent.SandboxWorktree != "/worktrees/agent2/ouroboros-ide" {
+	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
 	if p.Agent.HostHome != "/home/bayesartre/dev/agent-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
 	}
-	if p.Agent.SandboxHome != "/worktrees/agent2/.devhome-agent2" {
+	if p.Agent.SandboxHome != "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
 	}
 	if p.Env["CODEX_HOME"] != filepath.Join(p.Agent.SandboxHome, ".codex") {
 		t.Fatalf("CODEX_HOME = %q", p.Env["CODEX_HOME"])
+	}
+	if p.Env["SBT_GLOBAL_BASE"] != filepath.Join(p.Agent.SandboxHome, ".sbt") {
+		t.Fatalf("SBT_GLOBAL_BASE = %q", p.Env["SBT_GLOBAL_BASE"])
+	}
+	if p.Env["SBT_BOOT_DIR"] != filepath.Join(p.Agent.SandboxHome, ".sbt", "boot") {
+		t.Fatalf("SBT_BOOT_DIR = %q", p.Env["SBT_BOOT_DIR"])
+	}
+	if p.Env["SBT_IVY_HOME"] != "/workspaces/dev/.cache/shared/ivy2" {
+		t.Fatalf("SBT_IVY_HOME = %q", p.Env["SBT_IVY_HOME"])
+	}
+	if p.Env["COURSIER_CACHE"] != "/workspaces/dev/.cache/shared/coursier" {
+		t.Fatalf("COURSIER_CACHE = %q", p.Env["COURSIER_CACHE"])
+	}
+	for _, want := range []string{
+		"-Dsbt.global.base=" + p.Env["SBT_GLOBAL_BASE"],
+		"-Dsbt.boot.directory=" + p.Env["SBT_BOOT_DIR"],
+		"-Dsbt.ivy.home=" + p.Env["SBT_IVY_HOME"],
+		"-Dsbt.coursier.home=" + p.Env["COURSIER_CACHE"],
+	} {
+		if !strings.Contains(p.Env["SBT_OPTS"], want) {
+			t.Fatalf("SBT_OPTS missing %q: %q", want, p.Env["SBT_OPTS"])
+		}
 	}
 	if p.Env["DOCKER_HOST"] != "unix:///run/devkit/test-container-broker.sock" {
 		t.Fatalf("DOCKER_HOST = %q", p.Env["DOCKER_HOST"])
@@ -139,7 +161,7 @@ func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	if p.Agent.HostWorktree != "/repo/agent-worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
 	}
-	if p.Agent.SandboxWorktree != "/worktrees/agent1/ouroboros-ide" {
+	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
 	if p.Agent.HostHome != "/repo/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1" {

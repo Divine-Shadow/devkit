@@ -723,7 +723,11 @@ func main() {
 			var b strings.Builder
 			fmt.Fprintf(&b, "session: %s\n\nwindows:\n", sessName)
 			for i := 1; i <= count; i++ {
-				fmt.Fprintf(&b, "  - index: %d\n    project: %s\n    service: dev-agent\n    path: %s\n    name: agent-%d\n", i, project, filepath.Join("/worktrees", fmt.Sprintf("agent%d", i), repo), i)
+				path := filepath.Join("/workspaces/dev/agent-worktrees", fmt.Sprintf("agent%d", i), repo)
+				if i == 1 && project == "dev-all" {
+					path = filepath.Join("/workspaces/dev", repo)
+				}
+				fmt.Fprintf(&b, "  - index: %d\n    project: %s\n    service: dev-agent\n    path: %s\n    name: agent-%d\n", i, project, path, i)
 			}
 			yml := b.String()
 			if strings.TrimSpace(output) == "" {
@@ -910,12 +914,11 @@ exit 0`
 		repo := nativeRepoForSubpath(paths, project, subpath)
 		index := mustAtoi(idx)
 		dest := nativeSandboxDest(index, repo, subpath)
-		base := nativeSandboxDest(index, repo, "")
 		cmdstr := "bash"
 		if len(sub) > 2 {
 			cmdstr = strings.Join(sub[2:], " ")
 		}
-		script := "set -e; cd " + shSingleQuote(dest) + " 2>/dev/null || cd " + shSingleQuote(base) + "; exec " + cmdstr
+		script := "set -e; cd " + shSingleQuote(dest) + "; exec " + cmdstr
 		nativeExecScriptCommandInteractive(dryRun, exe, project, repo, index, script)
 	case "attach-cd":
 		mustProject(project)
@@ -930,8 +933,7 @@ exit 0`
 		repo := nativeRepoForSubpath(paths, project, subpath)
 		index := mustAtoi(idx)
 		dest := nativeSandboxDest(index, repo, subpath)
-		base := nativeSandboxDest(index, repo, "")
-		script := "set -e; cd " + shSingleQuote(dest) + " 2>/dev/null || cd " + shSingleQuote(base) + "; exec bash"
+		script := "set -e; cd " + shSingleQuote(dest) + "; exec bash"
 		nativeExecScriptCommandInteractive(dryRun, exe, project, repo, index, script)
 	case "tmux-shells":
 		mustProject(project)
@@ -1828,13 +1830,19 @@ func nativeSandboxDest(index int, repo, subpath string) string {
 	if index < 1 {
 		index = 1
 	}
-	base := filepath.Join("/worktrees", fmt.Sprintf("agent%d", index), repo)
+	base := filepath.Join("/workspaces/dev/agent-worktrees", fmt.Sprintf("agent%d", index), repo)
+	if index == 1 {
+		base = filepath.Join("/workspaces/dev", repo)
+	}
 	cleaned := filepath.Clean(strings.TrimSpace(subpath))
 	if cleaned == "." || cleaned == "" {
 		return base
 	}
 	if !strings.HasPrefix(cleaned, "/") {
 		parts := strings.Split(cleaned, string(filepath.Separator))
+		if len(parts) >= 3 && parts[0] == pth.AgentWorktreesDir && strings.HasPrefix(parts[1], "agent") && parts[2] == repo {
+			return filepath.Join(append([]string{"/workspaces/dev", parts[0], parts[1], parts[2]}, parts[3:]...)...)
+		}
 		if len(parts) > 1 && parts[0] == repo {
 			return filepath.Join(append([]string{base}, parts[1:]...)...)
 		}
@@ -1848,7 +1856,7 @@ func nativeSandboxDest(index int, repo, subpath string) string {
 		rel := strings.TrimPrefix(cleaned, devPrefix)
 		parts := strings.Split(rel, "/")
 		if len(parts) >= 3 && parts[0] == pth.AgentWorktreesDir && strings.HasPrefix(parts[1], "agent") {
-			return filepath.Join(append([]string{"/worktrees", parts[1]}, parts[2:]...)...)
+			return cleaned
 		}
 		if len(parts) >= 1 && parts[0] == repo {
 			return filepath.Join(append([]string{base}, parts[1:]...)...)

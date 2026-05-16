@@ -17,7 +17,7 @@ func TestBuildNativeCommandUsesDevkitExec(t *testing.T) {
 	}
 	for _, frag := range []string{
 		"'/home/me/dev/devkit/kit/scripts/devkit' -p 'dev-all' exec 2 --repo 'ouroboros-ide' -- bash -lc",
-		"/worktrees/agent2/ouroboros-ide/frontend",
+		"/workspaces/dev/agent-worktrees/agent2/ouroboros-ide/frontend",
 		"exec zsh -i",
 	} {
 		if !strings.Contains(cmd, frag) {
@@ -64,10 +64,10 @@ func TestBuildNativeCommandLayoutPathUsesAgentWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildNativeCommand returned error: %v", err)
 	}
-	if !strings.Contains(cmd, "/worktrees/agent3/ouroboros-ide") {
+	if !strings.Contains(cmd, "/workspaces/dev/agent-worktrees/agent3/ouroboros-ide") {
 		t.Fatalf("unexpected native command: %s", cmd)
 	}
-	if strings.Contains(cmd, "/worktrees/agent3/ouroboros-ide/agent-worktrees/agent3/ouroboros-ide") {
+	if strings.Contains(cmd, "/workspaces/dev/agent-worktrees/agent3/ouroboros-ide/agent-worktrees/agent3/ouroboros-ide") {
 		t.Fatalf("layout path was appended inside repo: %s", cmd)
 	}
 }

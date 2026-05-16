@@ -67,7 +67,7 @@ func nativeDest(project string, index int, repo string, dest string) string {
 	if !strings.HasPrefix(dest, "/") {
 		parts := strings.Split(filepath.Clean(dest), string(filepath.Separator))
 		if len(parts) >= 3 && parts[0] == "agent-worktrees" && strings.HasPrefix(parts[1], "agent") && parts[2] == repo {
-			target := filepath.Join("/worktrees", parts[1], repo)
+			target := filepath.Join("/workspaces/dev/agent-worktrees", parts[1], repo)
 			if len(parts) == 3 {
 				return target
 			}
@@ -90,7 +90,7 @@ func nativeDest(project string, index int, repo string, dest string) string {
 		rel := strings.TrimPrefix(normalized, devPrefix)
 		parts := strings.Split(rel, "/")
 		if len(parts) >= 3 && parts[0] == "agent-worktrees" && strings.HasPrefix(parts[1], "agent") {
-			return filepath.Join(append([]string{"/worktrees", parts[1]}, parts[2:]...)...)
+			return normalized
 		}
 		if len(parts) >= 1 && parts[0] == repo {
 			if len(parts) == 1 {
@@ -105,6 +105,9 @@ func nativeDest(project string, index int, repo string, dest string) string {
 func nativeBase(project string, index int, repo string) string {
 	if strings.TrimSpace(project) == "dev-all" && index == 1 {
 		return filepath.Join("/workspaces/dev", repo)
+	}
+	if strings.TrimSpace(project) == "dev-all" {
+		return filepath.Join("/workspaces/dev/agent-worktrees", fmt.Sprintf("agent%d", index), repo)
 	}
 	return filepath.Join("/worktrees", fmt.Sprintf("agent%d", index), repo)
 }

@@ -154,7 +154,7 @@ broker:
 native:
   worktree_root: ../agent-worktrees
   state_root: ../.devkit/native-agents
-  worktree_container_root: /worktrees
+  worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
 ingress:
   kind: caddy
@@ -363,6 +363,37 @@ hooks:
   # Warm frontend deps and ensure playwright/typecheck tooling exists.
   warm: |
     set -euo pipefail
+    cleanup_governance_logs() {
+      local ttl="${OURO_LOG_TTL_DAYS:-7}"
+      if ! printf '%s' "$ttl" | grep -Eq '^[0-9]+$'; then
+        echo "[dev-all warm] invalid OURO_LOG_TTL_DAYS=$ttl, skipping log cleanup" >&2
+        return 0
+      fi
+
+      for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
+        [ -d "$repo/logs" ] || continue
+        if [ -x "$repo/scripts/devops/governance-retention-cleanup" ]; then
+          "$repo/scripts/devops/governance-retention-cleanup" --root "$repo/logs" --ttl-days "$ttl"
+        else
+          find "$repo/logs" -path "$repo/logs/plans" -prune -o -type f -mtime +"$ttl" -delete
+        fi
+      done
+    }
+    install_governed_search_policy_rules() {
+      local source=/workspaces/dev/devkit/overlays/dev-all/codex-governed-search-policy.rules
+      local target
+      [ -r "$source" ] || return 0
+
+      for home in \
+        /workspaces/dev/ouroboros-ide/.devhome-agent1 \
+        /workspaces/dev/agent-worktrees/agent[0-9]*/.devhome-agent[0-9]* \
+        /workspaces/dev/.devkit/native-agents/dev-all-agent[0-9]*/home; do
+        [ -d "$home" ] || continue
+        target="$home/.codex/rules/governed-search-policy.rules"
+        mkdir -p "$(dirname "$target")"
+        cp -f "$source" "$target"
+      done
+    }
     governance_input_hash() {
       local repo="$1"
       (
@@ -381,6 +412,8 @@ hooks:
         done | sha256sum | awk '{print $1}'
       )
     }
+    cleanup_governance_logs
+    install_governed_search_policy_rules
     governance_cache_dir=/tmp/devkit-governance-cache
     mkdir -p "$governance_cache_dir"
     # Keep a compatibility path for workflows that expect agent1 under agent-worktrees.

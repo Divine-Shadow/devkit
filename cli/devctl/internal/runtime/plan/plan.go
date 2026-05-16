@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -104,10 +105,15 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
-		if project == "dev-all" && index == 1 {
-			paths.SandboxHome = filepath.Join(paths.SandboxWorktree, ".devhome-agent1")
-			if resolved, err := filepath.EvalSymlinks(paths.HostWorktree); err == nil {
-				paths.HostHome = filepath.Join(filepath.Clean(resolved), ".devhome-agent1")
+		if project == "dev-all" {
+			suffix := fmt.Sprintf(".devhome-agent%d", index)
+			if index == 1 {
+				paths.SandboxHome = filepath.Join(paths.SandboxWorktree, suffix)
+				if resolved, err := filepath.EvalSymlinks(paths.HostWorktree); err == nil {
+					paths.HostHome = filepath.Join(filepath.Clean(resolved), suffix)
+				}
+			} else {
+				paths.SandboxHome = filepath.Join(filepath.Dir(paths.SandboxWorktree), suffix)
 			}
 		}
 	}
@@ -133,13 +139,29 @@ func Build(opts BuildOptions) (Plan, error) {
 		resolvConf = filepath.Join(paths.HostAgentStateRoot, "resolv.conf")
 	}
 
+	sharedCacheRoot := filepath.Join("/workspaces", "dev", ".cache", "shared")
+	sbtGlobalBase := filepath.Join(paths.SandboxHome, ".sbt")
+	sbtBootDir := filepath.Join(sbtGlobalBase, "boot")
+	sbtIvyHome := filepath.Join(sharedCacheRoot, "ivy2")
+	coursierCache := filepath.Join(sharedCacheRoot, "coursier")
+	sbtOpts := strings.Join([]string{
+		"-Dsbt.global.base=" + sbtGlobalBase,
+		"-Dsbt.boot.directory=" + sbtBootDir,
+		"-Dsbt.ivy.home=" + sbtIvyHome,
+		"-Dsbt.coursier.home=" + coursierCache,
+	}, " ")
+
 	env := map[string]string{
 		"HOME":                         paths.SandboxHome,
 		"CODEX_HOME":                   filepath.Join(paths.SandboxHome, ".codex"),
 		"CODEX_ROLLOUT_DIR":            filepath.Join(paths.SandboxHome, ".codex", "rollouts"),
 		"XDG_CACHE_HOME":               filepath.Join(paths.SandboxHome, ".cache"),
 		"XDG_CONFIG_HOME":              filepath.Join(paths.SandboxHome, ".config"),
-		"SBT_GLOBAL_BASE":              filepath.Join(paths.SandboxHome, ".sbt"),
+		"SBT_GLOBAL_BASE":              sbtGlobalBase,
+		"SBT_BOOT_DIR":                 sbtBootDir,
+		"SBT_IVY_HOME":                 sbtIvyHome,
+		"COURSIER_CACHE":               coursierCache,
+		"SBT_OPTS":                     sbtOpts,
 		"TMPDIR":                       "/tmp",
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
@@ -229,18 +251,22 @@ func defaultRepo(project string) string {
 
 func sandboxPathForHostWorktree(paths agent.Paths) (string, bool) {
 	hostWorktree := filepath.Clean(paths.HostWorktree)
-	resolved, err := filepath.EvalSymlinks(hostWorktree)
-	if err != nil {
-		return "", false
+	resolved := ""
+	if resolvedPath, err := filepath.EvalSymlinks(hostWorktree); err == nil {
+		resolved = filepath.Clean(resolvedPath)
+		if sandbox, ok := projectSandboxPath(resolved, paths.DevRoot, "/workspaces/dev"); ok {
+			return sandbox, true
+		}
 	}
-	resolved = filepath.Clean(resolved)
-	if resolved == hostWorktree {
-		return "", false
-	}
-	if sandbox, ok := projectSandboxPath(resolved, paths.DevRoot, "/workspaces/dev"); ok {
+	if sandbox, ok := projectSandboxPath(hostWorktree, paths.DevRoot, "/workspaces/dev"); ok {
 		return sandbox, true
 	}
-	if sandbox, ok := projectSandboxPath(resolved, paths.HostWorktreeRoot, paths.SandboxWorktreeRoot); ok {
+	if resolved != "" {
+		if sandbox, ok := projectSandboxPath(resolved, paths.HostWorktreeRoot, paths.SandboxWorktreeRoot); ok {
+			return sandbox, true
+		}
+	}
+	if sandbox, ok := projectSandboxPath(hostWorktree, paths.HostWorktreeRoot, paths.SandboxWorktreeRoot); ok {
 		return sandbox, true
 	}
 	return "", false

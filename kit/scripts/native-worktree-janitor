@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+
+def default_dev_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def run_git_worktree_list(repo: Path) -> set[Path]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError:
+        return set()
+    if result.returncode != 0:
+        return set()
+    registered: set[Path] = set()
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        registered.add(Path(line.removeprefix("worktree ")).resolve())
+    return registered
+
+
+def host_equivalent(path: Path, dev_root: Path) -> Path:
+    raw = str(path)
+    prefix = "/workspaces/dev"
+    if raw == prefix:
+        return dev_root
+    if raw.startswith(prefix + "/"):
+        return dev_root / raw[len(prefix) + 1 :]
+    return path
+
+
+def read_gitdir(candidate: Path, dev_root: Path) -> dict[str, Any]:
+    git_path = candidate / ".git"
+    if git_path.is_dir():
+        return {
+            "kind": "directory",
+            "path": str(git_path),
+            "exists": True,
+            "hostEquivalent": str(git_path),
+            "hostEquivalentExists": True,
+        }
+    if not git_path.exists():
+        return {"kind": "missing", "exists": False}
+    try:
+        text = git_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError as exc:
+        return {"kind": "unreadable", "exists": False, "error": str(exc)}
+    if not text.startswith("gitdir:"):
+        return {"kind": "file", "path": str(git_path), "exists": True, "content": text[:200]}
+    gitdir = Path(text.removeprefix("gitdir:").strip())
+    if not gitdir.is_absolute():
+        gitdir = (candidate / gitdir).resolve()
+    equivalent = host_equivalent(gitdir, dev_root)
+    return {
+        "kind": "gitdir-file",
+        "path": str(gitdir),
+        "exists": gitdir.exists(),
+        "hostEquivalent": str(equivalent),
+        "hostEquivalentExists": equivalent.exists(),
+    }
+
+
+def size_bytes(path: Path) -> int | None:
+    try:
+        result = subprocess.run(
+            ["du", "-sxB1", str(path)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    first = result.stdout.split(None, 1)[0] if result.stdout.strip() else ""
+    try:
+        return int(first)
+    except ValueError:
+        return None
+
+
+def human_size(value: int | None) -> str:
+    if value is None:
+        return "unknown"
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    amount = float(value)
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            return f"{amount:.1f}{unit}" if unit != "B" else f"{value}B"
+        amount /= 1024
+    return f"{value}B"
+
+
+def candidate_dirs(agent_root: Path) -> list[Path]:
+    if not agent_root.is_dir():
+        return []
+    candidates: list[Path] = []
+    for child in sorted(agent_root.iterdir()):
+        if not child.is_dir() and not child.is_symlink():
+            continue
+        nested = child / "ouroboros-ide"
+        if nested.exists():
+            candidates.append(nested)
+        elif (child / ".git").exists():
+            candidates.append(child)
+    return candidates
+
+
+def classify(candidate: Path, registered: set[Path], dev_root: Path, stale_days: int, include_size: bool) -> dict[str, Any]:
+    resolved = candidate.resolve()
+    stat = candidate.lstat()
+    age_days = max(0.0, (time.time() - stat.st_mtime) / 86400)
+    gitdir = read_gitdir(candidate, dev_root)
+    is_registered = resolved in registered
+    broken_gitdir = gitdir.get("kind") == "gitdir-file" and not gitdir.get("exists") and not gitdir.get("hostEquivalentExists")
+    unregistered = not is_registered
+    stale = age_days >= stale_days
+    reasons: list[str] = []
+    if is_registered:
+        reasons.append("registered")
+    if unregistered:
+        reasons.append("unregistered")
+    if broken_gitdir:
+        reasons.append("broken-gitdir")
+    if stale:
+        reasons.append(f"mtime>={stale_days}d")
+    size = size_bytes(candidate) if include_size else None
+    return {
+        "path": str(candidate),
+        "resolvedPath": str(resolved),
+        "registered": is_registered,
+        "unregistered": unregistered,
+        "brokenGitdir": bool(broken_gitdir),
+        "stale": bool(stale),
+        "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+        "ageDays": round(age_days, 2),
+        "sizeBytes": size,
+        "sizeHuman": human_size(size),
+        "gitdir": gitdir,
+        "reasons": reasons,
+        "candidateForReview": bool(unregistered or broken_gitdir or stale),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Dry-run report for native Ouroboros worktree bloat.")
+    parser.add_argument("--dev-root", type=Path, default=default_dev_root())
+    parser.add_argument("--repo", default="ouroboros-ide")
+    parser.add_argument("--stale-days", type=int, default=7)
+    parser.add_argument("--format", choices=["text", "json"], default="text")
+    parser.add_argument("--no-size", action="store_true", help="Skip du size probes.")
+    args = parser.parse_args()
+
+    dev_root = args.dev_root.resolve()
+    repo = dev_root / args.repo
+    agent_root = dev_root / "agent-worktrees"
+    registered = run_git_worktree_list(repo)
+    records = [
+        classify(candidate, registered, dev_root, args.stale_days, not args.no_size)
+        for candidate in candidate_dirs(agent_root)
+    ]
+    payload = {
+        "mode": "dry-run",
+        "devRoot": str(dev_root),
+        "repo": str(repo),
+        "agentRoot": str(agent_root),
+        "registeredWorktrees": sorted(str(path) for path in registered),
+        "records": records,
+    }
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    print(f"native-worktree-janitor dry-run devRoot={dev_root} repo={repo}")
+    for record in records:
+        marker = "REVIEW" if record["candidateForReview"] else "ok"
+        reasons = ",".join(record["reasons"]) or "none"
+        print(
+            f"{marker}\t{record['sizeHuman']}\tmtime={record['mtime']}\tage={record['ageDays']}d\t{reasons}\t{record['path']}"
+        )
+        gitdir = record["gitdir"]
+        if gitdir.get("kind") == "gitdir-file" and (not gitdir.get("exists") or not gitdir.get("hostEquivalentExists")):
+            print(
+                f"  gitdir={gitdir.get('path')} exists={gitdir.get('exists')} hostEquivalent={gitdir.get('hostEquivalent')} hostExists={gitdir.get('hostEquivalentExists')}"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -150,7 +150,7 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 	repoPath := filepath.Join(devRoot, repo)
 	// Host git should not inherit container SSH settings; force ssh
 	envGit := func(args ...string) []string {
-		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh"}, args...)
+		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh -F /dev/null"}, args...)
 	}
 
 	var repoWorktreesDir string
@@ -269,7 +269,7 @@ func SetupNative(opts NativeOptions) error {
 	}
 	repoPath := filepath.Join(devRoot, repo)
 	envGit := func(args ...string) []string {
-		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh"}, args...)
+		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh -F /dev/null"}, args...)
 	}
 	var repoWorktreesDir string
 	if !opts.DryRun {

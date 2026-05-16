@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_MAX_BYTES = 256 * 1024 * 1024
+
+
+def default_dev_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def log_candidates(dev_root: Path) -> list[Path]:
+    patterns = [
+        "ouroboros-ide/.devhome-agent1/.codex/log/codex-tui.log",
+        "agent-worktrees/agent*/.devhome-agent*/.codex/log/codex-tui.log",
+    ]
+    paths: list[Path] = []
+    for pattern in patterns:
+        paths.extend(sorted(dev_root.glob(pattern)))
+    return [path for path in paths if path.is_file()]
+
+
+def cap_file(path: Path, max_bytes: int) -> None:
+    size = path.stat().st_size
+    if size <= max_bytes:
+        return
+    with path.open("r+b") as handle:
+        handle.seek(size - max_bytes, os.SEEK_SET)
+        tail = handle.read()
+        handle.truncate(0)
+        handle.seek(0)
+        handle.write(tail)
+
+
+def inspect(path: Path, max_bytes: int, apply: bool) -> dict[str, Any]:
+    before = path.stat().st_size
+    action = "none"
+    if before > max_bytes:
+        action = "cap"
+        if apply:
+            cap_file(path, max_bytes)
+    after = path.stat().st_size
+    return {
+        "path": str(path),
+        "beforeBytes": before,
+        "afterBytes": after,
+        "maxBytes": max_bytes,
+        "wouldChange": before > max_bytes,
+        "changed": apply and before > max_bytes,
+        "action": action,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Cap diagnostic .codex/log/codex-tui.log files without touching durable Codex state.")
+    parser.add_argument("--dev-root", type=Path, default=default_dev_root())
+    parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
+    parser.add_argument("--apply", action="store_true", help="Apply caps. Default is dry-run.")
+    parser.add_argument("--format", choices=["text", "json"], default="text")
+    args = parser.parse_args()
+
+    if args.max_bytes < 1:
+        raise SystemExit("--max-bytes must be positive")
+    dev_root = args.dev_root.resolve()
+    records = [inspect(path, args.max_bytes, args.apply) for path in log_candidates(dev_root)]
+    payload = {
+        "mode": "apply" if args.apply else "dry-run",
+        "devRoot": str(dev_root),
+        "records": records,
+        "changedCount": sum(1 for record in records if record["changed"]),
+        "wouldChangeCount": sum(1 for record in records if record["wouldChange"]),
+    }
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    print(f"codex-tui-log-guard mode={payload['mode']} devRoot={dev_root} maxBytes={args.max_bytes}")
+    for record in records:
+        marker = "CAP" if record["wouldChange"] else "ok"
+        print(
+            f"{marker}\tbefore={record['beforeBytes']}\tafter={record['afterBytes']}\t{record['path']}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

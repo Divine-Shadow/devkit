@@ -2,9 +2,11 @@ package launch
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
@@ -51,6 +53,15 @@ func Prepare(p nativeplan.Plan) error {
 	if err := repairRetiredCodexWrapper(p.Agent.HostHome); err != nil {
 		return err
 	}
+	if err := installProjectCodexRules(p); err != nil {
+		return err
+	}
+	if err := ensureScalaCacheDirs(p); err != nil {
+		return err
+	}
+	if err := capCodexTUILog(p.Agent.HostHome); err != nil {
+		return err
+	}
 	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
 		return err
 	}
@@ -71,6 +82,122 @@ func Prepare(p nativeplan.Plan) error {
 	return nil
 }
 
+func ensureScalaCacheDirs(p nativeplan.Plan) error {
+	for _, key := range []string{"COURSIER_CACHE", "SBT_IVY_HOME", "SBT_GLOBAL_BASE", "SBT_BOOT_DIR"} {
+		sandboxPath := strings.TrimSpace(p.Env[key])
+		if sandboxPath == "" {
+			continue
+		}
+		hostPath, ok := sandboxPathToHost(p, sandboxPath)
+		if !ok {
+			continue
+		}
+		if err := os.MkdirAll(hostPath, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s for %s: %w", hostPath, key, err)
+		}
+	}
+	return nil
+}
+
+func sandboxPathToHost(p nativeplan.Plan, sandboxPath string) (string, bool) {
+	sandboxPath = filepath.Clean(sandboxPath)
+	if strings.TrimSpace(p.Agent.SandboxHome) != "" {
+		if rel, err := filepath.Rel(filepath.Clean(p.Agent.SandboxHome), sandboxPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return filepath.Join(p.Agent.HostHome, rel), true
+		}
+	}
+	const workspaceRoot = "/workspaces/dev"
+	if rel, err := filepath.Rel(workspaceRoot, sandboxPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.Join(filepath.Dir(p.DevkitHostRoot), rel), true
+	}
+	return "", false
+}
+
+const defaultCodexTUILogMaxBytes int64 = 256 * 1024 * 1024
+
+func codexTUILogMaxBytes() (int64, error) {
+	raw := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_TUI_LOG_MAX_BYTES"))
+	if raw == "" {
+		return defaultCodexTUILogMaxBytes, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid DEVKIT_CODEX_TUI_LOG_MAX_BYTES=%q: %w", raw, err)
+	}
+	return value, nil
+}
+
+func capCodexTUILog(hostHome string) error {
+	maxBytes, err := codexTUILogMaxBytes()
+	if err != nil {
+		return err
+	}
+	if maxBytes <= 0 || strings.TrimSpace(hostHome) == "" {
+		return nil
+	}
+	path := filepath.Join(hostHome, ".codex", "log", "codex-tui.log")
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() <= maxBytes {
+		return nil
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+	if _, err := file.Seek(info.Size()-maxBytes, io.SeekStart); err != nil {
+		return fmt.Errorf("seek %s: %w", path, err)
+	}
+	tail, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read tail from %s: %w", path, err)
+	}
+	if err := file.Truncate(0); err != nil {
+		return fmt.Errorf("truncate %s: %w", path, err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind %s: %w", path, err)
+	}
+	if _, err := file.Write(tail); err != nil {
+		return fmt.Errorf("write capped tail to %s: %w", path, err)
+	}
+	return nil
+}
+
+func installProjectCodexRules(p nativeplan.Plan) error {
+	if strings.TrimSpace(p.Agent.ID.Project) != "dev-all" || strings.TrimSpace(p.Agent.ID.Repo) != "ouroboros-ide" {
+		return nil
+	}
+	if strings.TrimSpace(p.Agent.HostHome) == "" || strings.TrimSpace(p.DevkitHostRoot) == "" {
+		return nil
+	}
+	source := filepath.Join(p.DevkitHostRoot, "overlays", "dev-all", "codex-governed-search-policy.rules")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read governed search policy %s: %w", source, err)
+	}
+	target := filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")
+	if existing, err := os.ReadFile(target); err == nil && string(existing) == string(data) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		return fmt.Errorf("write governed search policy %s: %w", target, err)
+	}
+	return nil
+}
+
 func repairRetiredCodexWrapper(hostHome string) error {
 	hostHome = strings.TrimSpace(hostHome)
 	if hostHome == "" {
@@ -84,16 +211,41 @@ func repairRetiredCodexWrapper(hostHome string) error {
 		}
 		return fmt.Errorf("read %s: %w", zshrc, err)
 	}
+	original := string(data)
+	repaired := original
 	const retired = "/usr/local/bin/codex"
-	if !strings.Contains(string(data), retired) {
+	if strings.Contains(repaired, retired) {
+		repaired = strings.ReplaceAll(repaired, retired, "command codex")
+	}
+	if strings.Contains(repaired, "codex() {") && !strings.Contains(repaired, "devkit_codex_tui_log_guard()") {
+		repaired = strings.Replace(repaired, "codex() {\n", codexTUILogGuardZsh+"\ncodex() {\n", 1)
+	}
+	const codexCommand = `  HOME="$HOME" CODEX_HOME="$HOME/.codex" CODEX_ROLLOUT_DIR="$HOME/.codex/rollouts" command codex "${extra[@]}" "$@"`
+	if strings.Contains(repaired, codexCommand) && !strings.Contains(repaired, "  devkit_codex_tui_log_guard\n"+codexCommand) {
+		repaired = strings.Replace(repaired, codexCommand, "  devkit_codex_tui_log_guard\n"+codexCommand, 1)
+	}
+	if repaired == original {
 		return nil
 	}
-	repaired := strings.ReplaceAll(string(data), retired, "command codex")
 	if err := os.WriteFile(zshrc, []byte(repaired), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", zshrc, err)
 	}
 	return nil
 }
+
+const codexTUILogGuardZsh = `devkit_codex_tui_log_guard() {
+  local log="$HOME/.codex/log/codex-tui.log"
+  local max="${DEVKIT_CODEX_TUI_LOG_MAX_BYTES:-268435456}"
+  [[ "$max" == <-> ]] || return 0
+  (( max > 0 )) || return 0
+  [[ -f "$log" ]] || return 0
+  local size tmp
+  size=$(wc -c < "$log" 2>/dev/null) || return 0
+  (( size > max )) || return 0
+  tmp="${log}.tmp.$$"
+  tail -c "$max" "$log" > "$tmp" 2>/dev/null && cat "$tmp" > "$log"
+  rm -f "$tmp"
+}`
 
 func migrateMissingCodexState(dstHome, srcHome string) error {
 	dstHome = strings.TrimSpace(dstHome)
@@ -211,6 +363,9 @@ func copyFileMissing(src, dst string) error {
 	}
 	if err := os.WriteFile(dst, data, info.Mode().Perm()); err != nil {
 		return fmt.Errorf("write %s: %w", dst, err)
+	}
+	if err := os.Chtimes(dst, info.ModTime(), info.ModTime()); err != nil {
+		return fmt.Errorf("preserve mtime for %s: %w", dst, err)
 	}
 	return nil
 }

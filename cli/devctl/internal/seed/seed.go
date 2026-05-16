@@ -104,6 +104,19 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
 			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
 			"'unalias codex 2>/dev/null || true' " +
+			"'devkit_codex_tui_log_guard() {' " +
+			"'  local log=\"$HOME/.codex/log/codex-tui.log\"' " +
+			"'  local max=\"${DEVKIT_CODEX_TUI_LOG_MAX_BYTES:-268435456}\"' " +
+			"'  [[ \"$max\" == <-> ]] || return 0' " +
+			"'  (( max > 0 )) || return 0' " +
+			"'  [[ -f \"$log\" ]] || return 0' " +
+			"'  local size tmp' " +
+			"'  size=$(wc -c < \"$log\" 2>/dev/null) || return 0' " +
+			"'  (( size > max )) || return 0' " +
+			"'  tmp=\"${log}.tmp.$$\"' " +
+			"'  tail -c \"$max\" \"$log\" > \"$tmp\" 2>/dev/null && cat \"$tmp\" > \"$log\"' " +
+			"'  rm -f \"$tmp\"' " +
+			"'}' " +
 			"'codex() {' " +
 			"'  local -a extra' " +
 			"'  extra=(' " +
@@ -116,6 +129,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"if [[ \\\\\\\"$PWD\\\\\\\" == /workspaces/dev/* && ! -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]]; then echo required governance env missing: /workspaces/dev/.devkit/ouro8-governance-env.sh >&2; exit 1; fi; [[ -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
+			"'  devkit_codex_tui_log_guard' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
 			"'}' > \"$target/.zshrc\"",
 	}
@@ -162,6 +176,19 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
 			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
 			"'unalias codex 2>/dev/null || true' " +
+			"'devkit_codex_tui_log_guard() {' " +
+			"'  local log=\"$HOME/.codex/log/codex-tui.log\"' " +
+			"'  local max=\"${DEVKIT_CODEX_TUI_LOG_MAX_BYTES:-268435456}\"' " +
+			"'  [[ \"$max\" == <-> ]] || return 0' " +
+			"'  (( max > 0 )) || return 0' " +
+			"'  [[ -f \"$log\" ]] || return 0' " +
+			"'  local size tmp' " +
+			"'  size=$(wc -c < \"$log\" 2>/dev/null) || return 0' " +
+			"'  (( size > max )) || return 0' " +
+			"'  tmp=\"${log}.tmp.$$\"' " +
+			"'  tail -c \"$max\" \"$log\" > \"$tmp\" 2>/dev/null && cat \"$tmp\" > \"$log\"' " +
+			"'  rm -f \"$tmp\"' " +
+			"'}' " +
 			"'codex() {' " +
 			"'  local -a extra' " +
 			"'  extra=(' " +
@@ -174,6 +201,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"if [[ \\\\\\\"$PWD\\\\\\\" == /workspaces/dev/* && ! -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]]; then echo required governance env missing: /workspaces/dev/.devkit/ouro8-governance-env.sh >&2; exit 1; fi; [[ -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
+			"'  devkit_codex_tui_log_guard' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
 			"'}' > \"$home/.zshrc\"",
 	}
