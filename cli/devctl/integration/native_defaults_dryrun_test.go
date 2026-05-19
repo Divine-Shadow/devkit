@@ -291,20 +291,21 @@ windows:
 		{name: "check-sts", args: []string{"check-sts", "tinyproxy"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "codex-auth", args: []string{"codex-auth", "reseed", "1"}, want: "seed codex auth"},
 		{name: "creds", args: []string{"creds", "reseed-all"}, want: "seed codex auth"},
-		{name: "codex-test", args: []string{"codex-test"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
+		{name: "codex-test", args: []string{"codex-test"}, want: " -p " + project + " exec 1 --repo " + repo + " -- zsh -ic"},
 		{name: "codex-debug", args: []string{"codex-debug"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "verify", args: []string{"verify"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1 --repo-readiness"},
 		{name: "doctor-runtime", args: []string{"doctor-runtime"}, want: " -p " + project + " ensure-ready --repo " + repo + " --count 1 --runtime-only"},
 		{name: "exec-cd", args: []string{"exec-cd", "1", ".", "echo", "hi"}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "attach-cd", args: []string{"attach-cd", "1", "."}, want: " -p " + project + " exec 1 --repo " + repo + " -- bash -lc"},
 		{name: "layout-apply", args: []string{"layout-apply", "--file", layoutPath}, want: " -p " + project + " up --repo " + repo + " --count 1"},
+		{name: "layout-apply-skip-broker-ready", args: []string{"layout-apply", "--file", layoutPath, "--skip-broker", "--skip-ready"}, want: " -p " + project + " up --repo " + repo + " --count 1 --skip-broker --skip-ready"},
 		{name: "layout-validate", args: []string{"layout-validate", "--file", layoutPath}, want: ""},
 		{name: "layout-generate", args: []string{"layout-generate"}, want: "project: " + project},
 		{name: "tmux-sync", args: []string{"tmux-sync", "--count", "1"}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "tmux-add-cd", args: []string{"tmux-add-cd", "1", ".", "--session", "native-front", "--name", "agent-1"}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "tmux-apply-layout", args: []string{"tmux-apply-layout", "--file", layoutPath}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "worktrees-init", args: []string{"worktrees-init", repo, "1"}, want: "Initialize worktrees for " + repo},
-		{name: "worktrees-setup", args: []string{"worktrees-setup", repo, "1"}, want: "git -c core.sshCommand=ssh -C"},
+		{name: "worktrees-setup", args: []string{"worktrees-setup", repo, "1"}, want: "git -c core.sshCommand=ssh -F /dev/null -C"},
 		{name: "run", args: []string{"run", repo, "1"}, want: " -p " + project + " up --repo " + repo + " --count 1"},
 		{name: "worktrees-branch", args: []string{"worktrees-branch", repo, "1", "agent-test"}, want: "git -C"},
 		{name: "worktrees-status", args: []string{"worktrees-status", repo, "--index", "1"}, want: "git -C"},
@@ -663,6 +664,51 @@ func TestDevAllCheckAndHookHelpersUseNativeExecDryRun(t *testing.T) {
 		if !strings.Contains(out, " -p dev-all exec 1 --repo ouroboros-ide -- bash -lc") {
 			t.Fatalf("%v missing native exec:\n%s", args, out)
 		}
+	}
+}
+
+func TestDevAllLayoutApplyRejectsUnsafeOrUnknownArgsDryRun(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := nativeDefaultsRoot(t)
+	layout := filepath.Join(root, "layout.yaml")
+	if err := os.WriteFile(layout, []byte(`
+session: native-front
+windows:
+  - index: 1
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-ide
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "skip broker without skip ready",
+			args: []string{"layout-apply", "--file", layout, "--skip-broker"},
+			want: "--skip-broker requires --skip-ready",
+		},
+		{
+			name: "unknown argument",
+			args: []string{"layout-apply", "--file", layout, "--definitely-unknown"},
+			want: "layout-apply: unknown argument --definitely-unknown",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := runNativeDefaultDryRun(t, bin, root, tt.args...)
+			if err == nil {
+				t.Fatalf("%s unexpectedly succeeded:\n%s", tt.name, out)
+			}
+			assertNoDockerCommand(t, out)
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("%s did not include %q:\n%s", tt.name, tt.want, out)
+			}
+		})
 	}
 }
 

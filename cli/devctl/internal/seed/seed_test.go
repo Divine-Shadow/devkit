@@ -71,8 +71,14 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"mcp_servers.codex-cli.command=\\\"codex\\\"",
 		"mcp_servers.governance.command=\\\"bash\\\"",
 		"/workspaces/dev/.devkit/ouro8-governance-env.sh",
+		"\\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh",
 		"required governance env missing",
-		"exec bash scripts/devops/governance-mcp-stdio-forward",
+		"SUBAGENT_GOVERNANCE_WORKSPACE_ID",
+		"workspace_tail=\\${PWD#*/agent-worktrees/}",
+		"governance_root=\\${governance_env%/.devkit/ouro8-governance-env.sh}/ouroboros-ide",
+		"required canonical governance bridge missing",
+		"using governance env: \\${governance_env}",
+		"exec bash \\${governance_root}/scripts/devops/governance-mcp-stdio-forward",
 		"devkit_codex_tui_log_guard",
 		`command codex "${extra[@]}" "$@"`,
 		"marker=\"$target/.codex/.seeded\"",
@@ -91,6 +97,9 @@ func TestBuildAnchorScripts(t *testing.T) {
 	}
 	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {
 		t.Fatalf("anchor script must not disable governance singleton auto-warm: %s", sc)
+	}
+	if contains(sc, "]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh") {
+		t.Fatalf("anchor script must not silently skip missing governance env: %s", sc)
 	}
 	assertNoDestructiveCodexCleanup(t, sc)
 	if contains(sc, "/usr/local/bin/"+"codex") {
@@ -151,8 +160,14 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 		`devkit_codex_tui_log_guard()`,
 		`tail -c "$max" "$log"`,
 		`/workspaces/dev/.devkit/ouro8-governance-env.sh`,
+		`\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh`,
 		`required governance env missing`,
-		`exec bash scripts/devops/governance-mcp-stdio-forward`,
+		`SUBAGENT_GOVERNANCE_WORKSPACE_ID`,
+		`workspace_tail=\${PWD#*/agent-worktrees/}`,
+		`governance_root=\${governance_env%/.devkit/ouro8-governance-env.sh}/ouroboros-ide`,
+		`required canonical governance bridge missing`,
+		`using governance env: \${governance_env}`,
+		`exec bash \${governance_root}/scripts/devops/governance-mcp-stdio-forward`,
 		`devkit_codex_tui_log_guard`,
 		`command codex "${extra[@]}" "$@"`,
 	} {
@@ -162,6 +177,9 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 	}
 	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {
 		t.Fatalf("direct home script must not disable governance singleton auto-warm: %s", sc)
+	}
+	if contains(sc, "]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh") {
+		t.Fatalf("direct home script must not silently skip missing governance env: %s", sc)
 	}
 	assertNoDestructiveCodexCleanup(t, sc)
 	if contains(sc, "/usr/local/bin/"+"codex") {

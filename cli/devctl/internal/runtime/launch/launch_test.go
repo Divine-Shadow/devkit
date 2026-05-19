@@ -234,7 +234,7 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	}
 }
 
-func TestPrepareRepairsRetiredCodexWrapperWithoutTouchingSessions(t *testing.T) {
+func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -252,8 +252,9 @@ func TestPrepareRepairsRetiredCodexWrapperWithoutTouchingSessions(t *testing.T) 
 	sessionPath := filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")
 	writeTestFile(t, sessionPath, "past")
 	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
+	retiredPath := "/usr/local/bin/" + "codex"
 	writeTestFile(t, zshrc, `codex() {
-  HOME="$HOME" CODEX_HOME="$HOME/.codex" /usr/local/bin/codex "$@"
+  HOME="$HOME" CODEX_HOME="$HOME/.codex" `+retiredPath+` "$@"
 }
 `)
 
@@ -261,7 +262,7 @@ func TestPrepareRepairsRetiredCodexWrapperWithoutTouchingSessions(t *testing.T) 
 		t.Fatalf("Prepare: %v", err)
 	}
 	got := readTestFile(t, zshrc)
-	if strings.Contains(got, "/usr/local/bin/codex") {
+	if strings.Contains(got, retiredPath) {
 		t.Fatalf("retired codex path was not repaired:\n%s", got)
 	}
 	if !strings.Contains(got, "command codex") {
@@ -270,12 +271,18 @@ func TestPrepareRepairsRetiredCodexWrapperWithoutTouchingSessions(t *testing.T) 
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("repaired wrapper missing TUI log guard:\n%s", got)
 	}
+	if !strings.Contains(got, "using governance env: ${governance_env}") {
+		t.Fatalf("repaired wrapper does not loudly label selected governance env:\n%s", got)
+	}
+	if strings.Contains(got, "]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh") {
+		t.Fatalf("repaired wrapper silently skips missing governance env:\n%s", got)
+	}
 	if session := readTestFile(t, sessionPath); session != "past" {
 		t.Fatalf("session was changed: %q", session)
 	}
 }
 
-func TestPrepareAddsTUILogGuardToGeneratedCodexWrapper(t *testing.T) {
+func TestPrepareAddsTUILogGuardToGeneratedCodexShellHook(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -310,6 +317,15 @@ codex() {
 	}
 	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  HOME=\"$HOME\" CODEX_HOME=") {
 		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
+	}
+	if !strings.Contains(got, "${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh") {
+		t.Fatalf("generated wrapper missing host dev-root governance env derivation:\n%s", got)
+	}
+	if !strings.Contains(got, "required governance env missing") {
+		t.Fatalf("generated wrapper missing loud governance env failure:\n%s", got)
+	}
+	if strings.Contains(got, "]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh") {
+		t.Fatalf("generated wrapper silently skips missing governance env:\n%s", got)
 	}
 }
 

@@ -409,7 +409,7 @@ Commands:
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
   native capacity --repo REPO [--count N] [--flake REF] [--runtime-only|--repo-readiness] [--format text|json]
   native egress-proxy [--socket SOCK] [--allowlist FILE]
-  layout-apply --file <layout.yaml> [--attach]   (bring up overlays, run warm hooks, then attach tmux)
+  layout-apply --file <layout.yaml> [--attach] [--skip-broker --skip-ready] [--runtime-only|--repo-readiness]
   layout-validate --file <layout.yaml>                (static checks; exits non-zero on errors)
   layout-generate [--service NAME] [--session NAME] [--output PATH]
   ssh-setup [--key path] [--index N], ssh-test [N]
@@ -587,16 +587,50 @@ func main() {
 	case "layout-apply":
 		layoutPath := ""
 		doAttach := false
+		skipBroker := false
+		skipReady := false
+		readinessFlag := ""
 		for i := 0; i < len(sub); i++ {
-			if sub[i] == "--file" && i+1 < len(sub) {
+			switch sub[i] {
+			case "--file":
+				if i+1 >= len(sub) {
+					die("--file requires a value")
+				}
 				layoutPath = sub[i+1]
 				i++
-			} else if sub[i] == "--attach" {
+			case "--file=":
+				die("--file requires a value")
+			case "--attach":
 				doAttach = true
+			case "--skip-broker":
+				skipBroker = true
+			case "--skip-ready":
+				skipReady = true
+			case "--runtime-only", "--repo-readiness", "--full":
+				nextReadinessFlag := sub[i]
+				if nextReadinessFlag == "--full" {
+					nextReadinessFlag = "--repo-readiness"
+				}
+				if readinessFlag != "" && readinessFlag != nextReadinessFlag {
+					die("layout-apply: --runtime-only conflicts with --repo-readiness")
+				}
+				readinessFlag = nextReadinessFlag
+			default:
+				if strings.HasPrefix(sub[i], "--file=") {
+					layoutPath = strings.TrimPrefix(sub[i], "--file=")
+					if strings.TrimSpace(layoutPath) == "" {
+						die("--file requires a value")
+					}
+					break
+				}
+				die("layout-apply: unknown argument " + sub[i])
 			}
 		}
 		if strings.TrimSpace(layoutPath) == "" {
-			die("Usage: layout-apply --file <layout.yaml>")
+			die("Usage: layout-apply --file <layout.yaml> [--attach] [--skip-broker --skip-ready] [--runtime-only|--repo-readiness]")
+		}
+		if skipBroker && !skipReady {
+			die("layout-apply: --skip-broker requires --skip-ready because native readiness currently requires broker access")
 		}
 		lf, err := layout.Read(layoutPath)
 		if err != nil {
@@ -604,7 +638,17 @@ func main() {
 		}
 		if layoutIsNativeRuntime(paths, lf, project) {
 			repo, count := layoutNativeRepoAndCount(paths, project, lf)
-			runner.Host(dryRun, exe, "-p", project, "up", "--repo", repo, "--count", fmt.Sprintf("%d", count))
+			upArgs := []string{"-p", project, "up", "--repo", repo, "--count", fmt.Sprintf("%d", count)}
+			if skipBroker {
+				upArgs = append(upArgs, "--skip-broker")
+			}
+			if skipReady {
+				upArgs = append(upArgs, "--skip-ready")
+			}
+			if readinessFlag != "" {
+				upArgs = append(upArgs, readinessFlag)
+			}
+			runner.Host(dryRun, exe, upArgs...)
 			if skipTmux() {
 				fmt.Fprintln(os.Stderr, "[layout] tmux skipped via DEVKIT_NO_TMUX")
 				break
@@ -839,8 +883,7 @@ func main() {
 		if strings.TrimSpace(repo) == "" {
 			repo = readDefaultRepo(project, paths)
 		}
-		script := "set -euo pipefail; if codex exec 'reply with: ok' 2>&1 | tr -d '\\r' | grep -m1 -x ok >/dev/null; then echo ok; else echo 'codex-test failed'; exit 1; fi"
-		nativeExecScriptCommand(dryRun, exe, project, repo, mustAtoi(idx), script)
+		nativeExecZshInteractiveCommand(dryRun, exe, project, repo, mustAtoi(idx), nativeCodexGovernanceAlivenessScript())
 	case "doctor-runtime":
 		mustProject(project)
 		if !isNativeRuntime {
@@ -1565,11 +1608,193 @@ func nativeExecScriptCommand(dry bool, exe, project, repo string, index int, scr
 	runner.Host(dry, exe, "-p", project, "exec", fmt.Sprintf("%d", index), "--repo", repo, "--", "bash", "-lc", script)
 }
 
+func nativeExecZshInteractiveCommand(dry bool, exe, project, repo string, index int, script string) {
+	if index < 1 {
+		index = 1
+	}
+	runner.Host(dry, exe, "-p", project, "exec", fmt.Sprintf("%d", index), "--repo", repo, "--", "zsh", "-ic", script)
+}
+
 func nativeExecScriptCommandInteractive(dry bool, exe, project, repo string, index int, script string) {
 	if index < 1 {
 		index = 1
 	}
 	runner.HostInteractive(dry, exe, "-p", project, "exec", fmt.Sprintf("%d", index), "--repo", repo, "--", "bash", "-lc", script)
+}
+
+func nativeCodexGovernanceAlivenessScript() string {
+	return strings.TrimSpace(`
+set -eu
+set -o pipefail
+
+fail() {
+  echo "codex-test failed: $*" >&2
+  exit 1
+}
+
+print_and_require_env() {
+  local key="$1"
+  local value=""
+  case "$key" in
+    PWD) value="${PWD:-}" ;;
+    HOME) value="${HOME:-}" ;;
+    CODEX_HOME) value="${CODEX_HOME:-}" ;;
+    CODEX_ROLLOUT_DIR) value="${CODEX_ROLLOUT_DIR:-}" ;;
+    XDG_CACHE_HOME) value="${XDG_CACHE_HOME:-}" ;;
+    XDG_CONFIG_HOME) value="${XDG_CONFIG_HOME:-}" ;;
+  esac
+  printf '%s=%s\n' "$key" "$value"
+  [[ -n "$value" ]] || fail "$key is not set in the zsh Codex startup path"
+}
+
+for key in PWD HOME CODEX_HOME CODEX_ROLLOUT_DIR XDG_CACHE_HOME XDG_CONFIG_HOME; do
+  print_and_require_env "$key"
+done
+
+[[ -e .git ]] || fail "PWD is not a git worktree: ${PWD:-}"
+[[ "$HOME" == */.devhome-agent* ]] || fail "HOME is not a repo-local agent home: $HOME"
+[[ "$CODEX_HOME" == "$HOME/.codex" ]] || fail "CODEX_HOME does not point inside HOME: $CODEX_HOME"
+[[ "$CODEX_ROLLOUT_DIR" == "$CODEX_HOME/rollouts" ]] || fail "CODEX_ROLLOUT_DIR does not point inside CODEX_HOME: $CODEX_ROLLOUT_DIR"
+[[ "$XDG_CACHE_HOME" == "$HOME/.cache" ]] || fail "XDG_CACHE_HOME does not point inside HOME: $XDG_CACHE_HOME"
+[[ "$XDG_CONFIG_HOME" == "$HOME/.config" ]] || fail "XDG_CONFIG_HOME does not point inside HOME: $XDG_CONFIG_HOME"
+functions codex >/dev/null 2>&1 || fail "codex shell function was not loaded from .zshrc"
+
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/devkit-codex-governance.XXXXXX")"
+cleanup() {
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
+
+out="$tmpdir/codex.out"
+new_log="$tmpdir/codex-tui.delta.log"
+combined="$tmpdir/combined.log"
+log_path="$CODEX_HOME/log/codex-tui.log"
+pre_log_size=0
+if [[ -f "$log_path" ]]; then
+  pre_log_size="$(wc -c < "$log_path" | tr -d ' ')"
+fi
+
+prompt='Call the MCP tool mcp__governance__.governance_operator_attention_status with sessionId "devkit-governance-aliveness-probe". Do not run shell commands. Do not answer from memory. Do not claim success before making that exact tool call. After the governance tool returns structured content, reply with exactly GOVERNANCE_MCP_OK. If the governance tool is unavailable or returns an error, reply with GOVERNANCE_MCP_FAIL followed by the exact error.'
+
+set +e
+codex exec "$prompt" >"$out" 2>&1
+codex_exit_code=$?
+set -e
+cat "$out"
+
+: > "$new_log"
+if [[ -f "$log_path" ]]; then
+  tail -c +"$((pre_log_size + 1))" "$log_path" > "$new_log" 2>/dev/null || fail "unable to read Codex log delta from $log_path"
+else
+  echo "codex-test notice: no Codex TUI log at $log_path; relying on codex exec output and rollout evidence" >&2
+fi
+if [[ ! -s "$new_log" ]]; then
+  echo "codex-test notice: no new Codex TUI log bytes from $log_path; relying on codex exec output and rollout evidence" >&2
+fi
+cat "$out" "$new_log" > "$combined"
+
+for pattern in \
+  'MCP client .*failed to start' \
+  'MCP startup incomplete' \
+  'handshaking with MCP server failed' \
+  'connection closed: initialize response' \
+  'Transport closed' \
+  'stale jar' \
+  'prewarmed singleton control plane is not ready' \
+  'required governance env missing'; do
+  if grep -Eiq "$pattern" "$combined"; then
+    fail "governance MCP startup emitted forbidden warning: $pattern"
+  fi
+done
+
+if [[ "$codex_exit_code" -ne 0 ]]; then
+  fail "codex exec exited with status $codex_exit_code"
+fi
+
+if ! tr -d '\r' < "$out" | grep -qx 'GOVERNANCE_MCP_OK'; then
+  fail "model did not report GOVERNANCE_MCP_OK after the governance tool call"
+fi
+
+session_id="$(
+  {
+    tr 'A-Z' 'a-z' < "$out" |
+      grep -Eo 'session id:[[:space:]]*[0-9a-f-]+' |
+      sed -E 's/session id:[[:space:]]*//' |
+      tail -n 1
+  } || true
+)"
+[[ -n "$session_id" ]] || fail "unable to identify the codex exec session id"
+
+rollout=""
+if [[ -d "$CODEX_HOME/sessions" ]]; then
+  rollout="$(find "$CODEX_HOME/sessions" -type f -name "*${session_id}*.jsonl" -print 2>/dev/null | sort | tail -n 1 || true)"
+fi
+[[ -n "$rollout" && -f "$rollout" ]] || fail "unable to find rollout JSONL for session $session_id"
+
+call_id="$(
+  python3 - "$rollout" <<'PY' || true
+import json
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8"):
+    if not line.strip():
+        continue
+    try:
+        payload = json.loads(line).get("payload") or {}
+    except json.JSONDecodeError:
+        continue
+    if payload.get("type") != "function_call":
+        continue
+    name = str(payload.get("name") or "")
+    namespace = str(payload.get("namespace") or "")
+    is_attention_status = name in {
+        "mcp__governance__governance_operator_attention_status",
+        "governance_operator_attention_status",
+        "governance.operator_attention_status",
+    } or (
+        namespace == "mcp__governance__"
+        and name in {"governance_operator_attention_status", "governance.operator_attention_status"}
+    )
+    if is_attention_status:
+        call_id = str(payload.get("call_id") or "")
+        if call_id:
+            print(call_id)
+            raise SystemExit(0)
+raise SystemExit("governance_operator_attention_status call not found in rollout")
+PY
+)"
+[[ -n "$call_id" ]] || fail "governance_operator_attention_status call not found in rollout"
+
+python3 - "$rollout" "$call_id" <<'PY'
+import json
+import sys
+
+rollout, call_id = sys.argv[1:3]
+forbidden = [
+    "Transport closed",
+    "MCP startup incomplete",
+    "connection closed: initialize response",
+    "prewarmed singleton control plane is not ready",
+]
+for line in open(rollout, encoding="utf-8"):
+    if not line.strip():
+        continue
+    try:
+        payload = json.loads(line).get("payload") or {}
+    except json.JSONDecodeError:
+        continue
+    if payload.get("type") == "function_call_output" and payload.get("call_id") == call_id:
+        output = str(payload.get("output") or "")
+        lower_output = output.lower()
+        for pattern in forbidden:
+            if pattern.lower() in lower_output:
+                raise SystemExit(f"governance tool output contained forbidden warning: {pattern}")
+        raise SystemExit(0)
+raise SystemExit("governance_operator_attention_status output not found in rollout")
+PY
+
+echo ok
+`)
 }
 
 func killNativeAgentSessions(dry bool) {

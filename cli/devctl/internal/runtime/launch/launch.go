@@ -50,7 +50,7 @@ func Prepare(p nativeplan.Plan) error {
 	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
 		return err
 	}
-	if err := repairRetiredCodexWrapper(p.Agent.HostHome); err != nil {
+	if err := ensureCodexShellHook(p); err != nil {
 		return err
 	}
 	if err := installProjectCodexRules(p); err != nil {
@@ -198,7 +198,82 @@ func installProjectCodexRules(p nativeplan.Plan) error {
 	return nil
 }
 
-func repairRetiredCodexWrapper(hostHome string) error {
+func ensureCodexShellHook(p nativeplan.Plan) error {
+	if strings.TrimSpace(p.Agent.ID.Project) == "dev-all" && strings.TrimSpace(p.Agent.ID.Repo) == "ouroboros-ide" {
+		return writeOuroCodexShellHook(p.Agent.HostHome)
+	}
+	return repairRetiredCodexShellHook(p.Agent.HostHome)
+}
+
+func writeOuroCodexShellHook(hostHome string) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	zshrc := filepath.Join(hostHome, ".zshrc")
+	content := ouroCodexShellHookZsh()
+	if data, err := os.ReadFile(zshrc); err == nil && string(data) == content {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", zshrc, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(zshrc), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(zshrc), err)
+	}
+	if err := os.WriteFile(zshrc, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", zshrc, err)
+	}
+	return nil
+}
+
+func ouroCodexShellHookZsh() string {
+	lines := []string{
+		"export POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true",
+		"typeset -g POWERLEVEL9K_INSTANT_PROMPT=off",
+		"[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme",
+		"[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh",
+		`export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"`,
+		`export CODEX_ROLLOUT_DIR="${CODEX_ROLLOUT_DIR:-$HOME/.codex/rollouts}"`,
+		`export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"`,
+		`export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"`,
+		"unalias codex 2>/dev/null || true",
+		codexTUILogGuardZsh,
+		"codex() {",
+		"  local -a extra",
+		"  extra=(",
+		"    -a never",
+		"    -s danger-full-access",
+		`    -c 'mcp_servers.codex-cli.command="codex"'`,
+		`    -c 'mcp_servers.codex-cli.args=["mcp-server"]'`,
+		`    -c 'mcp_servers.codex-cli.startup_timeout_sec=60'`,
+		`    -c 'mcp_servers.governance.command="bash"'`,
+		`    -c 'mcp_servers.governance.args=["-lc","` + governanceMCPEntrypointZsh() + `"]'`,
+		`    -c 'mcp_servers.governance.startup_timeout_sec=60'`,
+		"  )",
+		"  devkit_codex_tui_log_guard",
+		`  HOME="$HOME" CODEX_HOME="$CODEX_HOME" CODEX_ROLLOUT_DIR="$CODEX_ROLLOUT_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" command codex "${extra[@]}" "$@"`,
+		"}",
+		"(( $+commands[claudew] )) && alias claude=claudew",
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func governanceMCPEntrypointZsh() string {
+	return strings.Join([]string{
+		"governance_env=",
+		"case ${PWD:-} in /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/ouroboros-ide) governance_env=${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide) governance_env=${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac",
+		"if [[ -z ${governance_env} ]]; then echo required governance env missing: unable to derive path for PWD=${PWD:-} >&2; exit 1; fi",
+		"if [[ ! -r ${governance_env} ]]; then echo required governance env missing: ${governance_env} >&2; exit 1; fi",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in */agent-worktrees/*/ouroboros-ide) workspace_tail=${PWD#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
+		"governance_root=${governance_env%/.devkit/ouro8-governance-env.sh}/ouroboros-ide",
+		"if [[ ! -x ${governance_root}/scripts/devops/governance-mcp-stdio-forward ]]; then echo required canonical governance bridge missing: ${governance_root}/scripts/devops/governance-mcp-stdio-forward >&2; exit 1; fi",
+		"echo using governance env: ${governance_env} >&2",
+		"source ${governance_env}",
+		"exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward",
+	}, "; ")
+}
+
+func repairRetiredCodexShellHook(hostHome string) error {
 	hostHome = strings.TrimSpace(hostHome)
 	if hostHome == "" {
 		return nil
@@ -213,7 +288,7 @@ func repairRetiredCodexWrapper(hostHome string) error {
 	}
 	original := string(data)
 	repaired := original
-	const retired = "/usr/local/bin/codex"
+	retired := "/usr/local/bin/" + "codex"
 	if strings.Contains(repaired, retired) {
 		repaired = strings.ReplaceAll(repaired, retired, "command codex")
 	}

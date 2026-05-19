@@ -126,7 +126,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"if [[ \\\\\\\"$PWD\\\\\\\" == /workspaces/dev/* && ! -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]]; then echo required governance env missing: /workspaces/dev/.devkit/ouro8-governance-env.sh >&2; exit 1; fi; [[ -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceMCPEntrypointSeedScript() + "\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  devkit_codex_tui_log_guard' " +
@@ -198,7 +198,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"if [[ \\\\\\\"$PWD\\\\\\\" == /workspaces/dev/* && ! -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]]; then echo required governance env missing: /workspaces/dev/.devkit/ouro8-governance-env.sh >&2; exit 1; fi; [[ -r /workspaces/dev/.devkit/ouro8-governance-env.sh ]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh; exec bash scripts/devops/governance-mcp-stdio-forward\\\"]'\" " +
+			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceMCPEntrypointSeedScript() + "\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
 			"'  )' " +
 			"'  devkit_codex_tui_log_guard' " +
@@ -221,6 +221,21 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 		)
 	}
 	return []string{strings.Join(parts, "; ")}
+}
+
+func governanceMCPEntrypointSeedScript() string {
+	return strings.Join([]string{
+		"governance_env=",
+		"case \\${PWD:-} in /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/ouroboros-ide) governance_env=\\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide) governance_env=\\${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac",
+		"if [[ -z \\${governance_env} ]]; then echo required governance env missing: unable to derive path for PWD=\\${PWD:-} >&2; exit 1; fi",
+		"if [[ ! -r \\${governance_env} ]]; then echo required governance env missing: \\${governance_env} >&2; exit 1; fi",
+		"if [[ -z \\${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case \\${PWD:-} in */agent-worktrees/*/ouroboros-ide) workspace_tail=\\${PWD#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=\\${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
+		"governance_root=\\${governance_env%/.devkit/ouro8-governance-env.sh}/ouroboros-ide",
+		"if [[ ! -x \\${governance_root}/scripts/devops/governance-mcp-stdio-forward ]]; then echo required canonical governance bridge missing: \\${governance_root}/scripts/devops/governance-mcp-stdio-forward >&2; exit 1; fi",
+		"echo using governance env: \\${governance_env} >&2",
+		"source \\${governance_env}",
+		"exec bash \\${governance_root}/scripts/devops/governance-mcp-stdio-forward",
+	}, "; ")
 }
 
 // shQuote provides the minimal quoting needed for simple POSIX-safe paths.
