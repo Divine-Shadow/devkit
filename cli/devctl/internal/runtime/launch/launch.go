@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -68,6 +69,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
 		return err
 	}
+	if err := ensureGitSSHConfig(p); err != nil {
+		return err
+	}
 	if err := ensureResolvConf(p.DNS.ResolvConf); err != nil {
 		return err
 	}
@@ -78,6 +82,136 @@ func Prepare(p nativeplan.Plan) error {
 		if _, err := os.Stat(bind.Source); err != nil {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
+	}
+	return nil
+}
+
+const (
+	gitSSHManagedBegin = "# BEGIN DEVKIT NATIVE GIT SSH"
+	gitSSHManagedEnd   = "# END DEVKIT NATIVE GIT SSH"
+)
+
+func ensureGitSSHConfig(p nativeplan.Plan) error {
+	hostHome := strings.TrimSpace(p.Agent.HostHome)
+	sandboxHome := strings.TrimSpace(p.Agent.SandboxHome)
+	if hostHome == "" || sandboxHome == "" {
+		return nil
+	}
+	sshDir := filepath.Join(hostHome, ".ssh")
+	identityNames := existingSSHIdentities(sshDir)
+	if len(identityNames) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", sshDir, err)
+	}
+	sshCommand := "ssh -F " + filepath.Join(sandboxHome, ".ssh", "config")
+	cfgPath := filepath.Join(sshDir, "config")
+	cfg := buildGitSSHConfig(sandboxHome, identityNames)
+	if err := writeManagedBlock(cfgPath, cfg, 0o600); err != nil {
+		return err
+	}
+	if err := runGitConfigFile(filepath.Join(hostHome, ".gitconfig"), "core.sshCommand", sshCommand); err != nil {
+		return err
+	}
+	if err := configureWorktreeGitSSH(p.Agent.HostWorktree, sshCommand); err != nil {
+		return err
+	}
+	return nil
+}
+
+func existingSSHIdentities(sshDir string) []string {
+	var names []string
+	for _, name := range []string{"id_ed25519", "id_rsa"} {
+		if st, err := os.Stat(filepath.Join(sshDir, name)); err == nil && st.Mode().IsRegular() {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func buildGitSSHConfig(sandboxHome string, identityNames []string) string {
+	var b strings.Builder
+	b.WriteString(gitSSHManagedBegin + "\n")
+	b.WriteString("Host github.com\n")
+	b.WriteString("  HostName github.com\n")
+	b.WriteString("  User git\n")
+	for _, name := range identityNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		b.WriteString("  IdentityFile " + filepath.Join(sandboxHome, ".ssh", name) + "\n")
+	}
+	b.WriteString("  IdentitiesOnly yes\n")
+	b.WriteString("  BatchMode yes\n")
+	b.WriteString("  StrictHostKeyChecking accept-new\n")
+	b.WriteString("  UserKnownHostsFile " + filepath.Join(sandboxHome, ".ssh", "known_hosts") + "\n")
+	b.WriteString(gitSSHManagedEnd + "\n")
+	return b.String()
+}
+
+func writeManagedBlock(path string, block string, mode os.FileMode) error {
+	original := ""
+	if data, err := os.ReadFile(path); err == nil {
+		original = string(data)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	next := block
+	if strings.TrimSpace(original) != "" {
+		if start := strings.Index(original, gitSSHManagedBegin); start >= 0 {
+			if endRel := strings.Index(original[start:], gitSSHManagedEnd); endRel >= 0 {
+				end := start + endRel + len(gitSSHManagedEnd)
+				rest := strings.TrimLeft(original[end:], "\r\n")
+				next = original[:start] + block
+				if rest != "" {
+					next += "\n" + rest
+				}
+			} else {
+				next = block + "\n" + original
+			}
+		} else {
+			next = block + "\n" + original
+		}
+	}
+	if err := os.WriteFile(path, []byte(next), mode); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+func runGitConfigFile(configPath, key, value string) error {
+	if strings.TrimSpace(configPath) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(configPath), err)
+	}
+	cmd := exec.Command("git", "config", "--file", configPath, key, value)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config --file %s %s: %w: %s", configPath, key, err, strings.TrimSpace(string(out)))
+	}
+	if err := os.Chmod(configPath, 0o600); err != nil {
+		return fmt.Errorf("chmod %s: %w", configPath, err)
+	}
+	return nil
+}
+
+func configureWorktreeGitSSH(worktree string, sshCommand string) error {
+	worktree = strings.TrimSpace(worktree)
+	if worktree == "" {
+		return nil
+	}
+	out, err := exec.Command("git", "-C", worktree, "rev-parse", "--is-inside-work-tree").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return nil
+	}
+	if out, err := exec.Command("git", "-C", worktree, "config", "extensions.worktreeConfig", "true").CombinedOutput(); err != nil {
+		return fmt.Errorf("git config extensions.worktreeConfig in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", worktree, "config", "--worktree", "core.sshCommand", sshCommand).CombinedOutput(); err != nil {
+		return fmt.Errorf("git config --worktree core.sshCommand in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

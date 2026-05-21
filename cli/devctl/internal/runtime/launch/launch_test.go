@@ -2,6 +2,7 @@ package launch
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,6 +155,70 @@ func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	}
 	if err := Prepare(p); err == nil {
 		t.Fatalf("expected missing worktree error")
+	}
+}
+
+func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.Agent.HostWorktree), 0o755); err != nil {
+		t.Fatalf("mkdir worktree parent: %v", err)
+	}
+	runTestCommand(t, "", "git", "init", p.Agent.HostWorktree)
+
+	hostUserHome := filepath.Join(tmp, "host-user")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "known_hosts"), "github.com ssh-ed25519 key")
+	t.Setenv("HOME", hostUserHome)
+
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"), "Host example.invalid\n  User keep\n")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	sshCommand := "ssh -F " + filepath.Join(p.Agent.SandboxHome, ".ssh", "config")
+	cfg := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
+	for _, want := range []string{
+		gitSSHManagedBegin,
+		"Host github.com",
+		"  IdentityFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "id_ed25519"),
+		"  IdentitiesOnly yes",
+		"  BatchMode yes",
+		"  UserKnownHostsFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "known_hosts"),
+		gitSSHManagedEnd,
+		"Host example.invalid",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("ssh config missing %q:\n%s", want, cfg)
+		}
+	}
+	if got := runTestCommand(t, "", "git", "config", "--file", filepath.Join(p.Agent.HostHome, ".gitconfig"), "--get", "core.sshCommand"); got != sshCommand {
+		t.Fatalf("global core.sshCommand = %q, want %q", got, sshCommand)
+	}
+	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--get", "extensions.worktreeConfig"); got != "true" {
+		t.Fatalf("extensions.worktreeConfig = %q, want true", got)
+	}
+	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--worktree", "--get", "core.sshCommand"); got != sshCommand {
+		t.Fatalf("worktree core.sshCommand = %q, want %q", got, sshCommand)
+	}
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("second Prepare: %v", err)
+	}
+	cfg = readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
+	if count := strings.Count(cfg, gitSSHManagedBegin); count != 1 {
+		t.Fatalf("managed block count = %d, want 1:\n%s", count, cfg)
 	}
 }
 
@@ -488,4 +553,17 @@ func countFiles(t *testing.T, root string) int {
 		t.Fatalf("walk %s: %v", root, err)
 	}
 	return count
+}
+
+func runTestCommand(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out))
 }
