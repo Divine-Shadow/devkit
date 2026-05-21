@@ -1,8 +1,10 @@
 package broker
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -42,6 +44,44 @@ func TestEnvIncludesExactPolicy(t *testing.T) {
 		if !strings.Contains(env, want) {
 			t.Fatalf("env missing %q in:\n%s", want, env)
 		}
+	}
+}
+
+func TestResolveBinaryUsesStateLocalNixCache(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "/read-only-host-cache")
+	tmp := t.TempDir()
+	devkitRoot := filepath.Join(tmp, "devkit")
+	stateRoot := filepath.Join(tmp, "state")
+	envFile := filepath.Join(tmp, "xdg-cache-home")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatalf("mkdir devkit root: %v", err)
+	}
+	nix := filepath.Join(tmp, "nix")
+	script := "#!/usr/bin/env bash\nprintf '%s' \"${XDG_CACHE_HOME:-}\" > " + strconv.Quote(envFile) + "\nprintf '/nix/store/fake-postgres-broker\\n'\n"
+	if err := os.WriteFile(nix, []byte(script), 0o755); err != nil {
+		t.Fatalf("write nix stub: %v", err)
+	}
+
+	binary, err := ResolveBinary(context.Background(), Config{
+		DevkitRoot: devkitRoot,
+		StateRoot:  stateRoot,
+		Nix:        nix,
+	})
+	if err != nil {
+		t.Fatalf("ResolveBinary: %v", err)
+	}
+	if got, want := binary, "/nix/store/fake-postgres-broker/bin/postgres-broker"; got != want {
+		t.Fatalf("binary = %q, want %q", got, want)
+	}
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	if got, want := string(data), filepath.Join(stateRoot, "cache"); got != want {
+		t.Fatalf("XDG_CACHE_HOME = %q, want %q", got, want)
+	}
+	if info, err := os.Stat(filepath.Join(stateRoot, "cache")); err != nil || !info.IsDir() {
+		t.Fatalf("cache dir was not created: info=%v err=%v", info, err)
 	}
 }
 

@@ -126,6 +126,13 @@ func Env(c Config) []string {
 	return env
 }
 
+func nixBuildEnv(c Config) []string {
+	c = Normalize(c)
+	env := append([]string{}, os.Environ()...)
+	env = append(env, "XDG_CACHE_HOME="+filepath.Join(c.StateRoot, "cache"))
+	return env
+}
+
 func ResolveBinary(ctx context.Context, c Config) (string, error) {
 	c = Normalize(c)
 	if strings.TrimSpace(c.Binary) != "" {
@@ -134,8 +141,12 @@ func ResolveBinary(ctx context.Context, c Config) (string, error) {
 	if c.DevkitRoot == "" {
 		return "", fmt.Errorf("devkit root is required to build postgres-broker")
 	}
+	if err := os.MkdirAll(filepath.Join(c.StateRoot, "cache"), 0o700); err != nil {
+		return "", fmt.Errorf("mkdir broker nix cache: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, c.Nix, "--extra-experimental-features", "nix-command flakes", "build", "--no-link", "--print-out-paths", c.DevkitRoot+"#postgres-broker")
 	cmd.Dir = c.DevkitRoot
+	cmd.Env = nixBuildEnv(c)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("build postgres-broker: %w: %s", err, strings.TrimSpace(string(out)))

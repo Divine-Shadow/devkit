@@ -30,6 +30,13 @@ readiness:
         grep -q '^\[profile ouroboros\]' "$AWS_CONFIG_FILE"
     - name: core-check
       command: terraform fmt -check -recursive
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+  upstream: unix:///var/run/docker.sock
+  allowed_images:
+    - postgres:latest
+  allow_pulls: true
+  log_level: info
 env:
   AWS_PROFILE: ouroboros
   PATH: /workspace/.local/bin:${PATH}
