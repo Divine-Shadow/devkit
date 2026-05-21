@@ -27,7 +27,8 @@ Operators need each reachable fleet worker to be ready for two Ouro development 
 - [x] (2026-05-20 20:38-04:00) SpaceQueen `ensure-ready --repo-readiness` passed for both agents.
 - [x] (2026-05-20 20:42-04:00) Both SpaceQueen agents passed Codex `ok` checks through `zsh -ic` with Codex CLI `0.130.0` and no MCP startup warning banners.
 - [x] (2026-05-21 00:56-04:00) Local devkit build passed and focused Go suites passed for native readiness, runtime planning, capacity, and readiness after the fleet rollout.
-- [ ] DrTalos remains narrow-cleanup only: controller access works, GitHub host-key trust is repaired, and the remaining bootstrap path must use authorized GitHub access or a verified non-secret repo bundle/source transfer; no private credentials have been copied.
+- [x] DrTalos non-secret bundle bootstrap completed far enough to install fresh `devkit` and `ouroboros-ide` checkouts without copying credentials; patched devctl builds and focused Go tests pass.
+- [ ] DrTalos remains blocked before runtime readiness: preflight reports missing `/home/bayesartre/.codex/auth.json` and no default SSH private key, and the red-pill farm repair path now fails because Windows can reach `DESKTOP-VV1LRGK` but `wsl.exe -d NixOS -u root` fails with `getpwnam(root)`.
 
 ## Surprises & Discoveries
 
@@ -206,8 +207,12 @@ Remaining blocker:
     - GitHub host key trust was repaired non-destructively in ~/.ssh/known_hosts.
     - repo clone still fails with `git@github.com: Permission denied (publickey)`.
     - No private key material was copied.
-    - Next remediation is either install authorized GitHub repo access on DrTalos or stream verified repo bundles/source from an already-authorized controller.
-    - If using bundle/source transfer, inspect any existing `/home/bayesartre/dev/devkit` and `/home/bayesartre/dev/ouroboros-ide` paths first, move partial failed checkouts aside under a timestamped backup directory, and do not overwrite dirty or valid repos.
+    - Verified non-secret repo bundles were streamed through red-pill.
+    - `/home/bayesartre/dev/devkit` and `/home/bayesartre/dev/ouroboros-ide` were missing before bootstrap, so fresh bundle-backed checkouts were created.
+    - Patched DrTalos devctl build and focused Go tests passed.
+    - `devkit -p dev-all preflight` is blocked by missing `/home/bayesartre/.codex/auth.json` and missing default SSH private key.
+    - `codex-farm-check-worker drtalos` can reach Windows rescue host `DESKTOP-VV1LRGK`, but repair fails at `wsl.exe -d NixOS -u root` with `getpwnam(root)`.
+    - Next remediation is to repair the DrTalos NixOS WSL root/default-user path from Windows, then install operator-authorized Codex auth and SSH bootstrap state before rerunning runtime readiness.
 
 ## Idempotence and Recovery
 
