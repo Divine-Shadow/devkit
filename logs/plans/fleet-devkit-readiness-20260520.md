@@ -29,6 +29,7 @@ Operators need each reachable fleet worker to be ready for two Ouro development 
 - [x] (2026-05-21 00:56-04:00) Local devkit build passed and focused Go suites passed for native readiness, runtime planning, capacity, and readiness after the fleet rollout.
 - [x] DrTalos non-secret bundle bootstrap completed far enough to install fresh `devkit` and `ouroboros-ide` checkouts without copying credentials; patched devctl builds and focused Go tests pass.
 - [ ] DrTalos remains blocked before runtime readiness: preflight reports missing `/home/bayesartre/.codex/auth.json` and no default SSH private key, and the red-pill farm repair path now fails because Windows can reach `DESKTOP-VV1LRGK` but `wsl.exe -d NixOS -u root` fails with `getpwnam(root)`.
+- [x] Derpinator is now operator-authorized, active in the fleet, and passed worker health, devkit build/tests, preflight, runtime matrix, two-agent up/status, full repo readiness, and both Codex `ok` probes.
 
 ## Surprises & Discoveries
 
@@ -199,6 +200,7 @@ Fleet rollout evidence from 2026-05-21:
     - gilliansandwich required copying repo-readiness fixes into native agent worktrees after the root checkout fix.
     - darksteel was on stale devkit master; its partial rollout copy was moved under .devkit-rollout-backups, devkit was switched to origin/codex/upstream-devkit-nixos-fixes, and the root ouroboros-ide checkout was normalized from branch agent1 to main so devkit could create agent1/agent2 worktrees.
     - meowlnir and shadow were missing /home/bayesartre/dev/devkit and /home/bayesartre/dev/ouroboros-ide; both repos were cloned, patched, built, and warmed successfully.
+    - derpinator was removed from game mode after explicit operator authorization. Red-pill farm manifest backups were created, the station was changed to active, the worker checked healthy, devkit was fast-forwarded to the pushed readiness branch while preserving the old heap patch in `stash@{0}`, and both native agents passed full repo readiness and Codex `ok`.
 
 Remaining blocker:
 
