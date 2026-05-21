@@ -145,6 +145,8 @@ func Build(opts BuildOptions) (Plan, error) {
 	sbtIvyHome := filepath.Join(sharedCacheRoot, "ivy2")
 	coursierCache := filepath.Join(sharedCacheRoot, "coursier")
 	sbtOpts := strings.Join([]string{
+		"-Xmx6G",
+		"-XX:+UseG1GC",
 		"-Dsbt.global.base=" + sbtGlobalBase,
 		"-Dsbt.boot.directory=" + sbtBootDir,
 		"-Dsbt.ivy.home=" + sbtIvyHome,

@@ -51,6 +51,8 @@ func TestBuildDevAllPlan(t *testing.T) {
 		t.Fatalf("COURSIER_CACHE = %q", p.Env["COURSIER_CACHE"])
 	}
 	for _, want := range []string{
+		"-Xmx6G",
+		"-XX:+UseG1GC",
 		"-Dsbt.global.base=" + p.Env["SBT_GLOBAL_BASE"],
 		"-Dsbt.boot.directory=" + p.Env["SBT_BOOT_DIR"],
 		"-Dsbt.ivy.home=" + p.Env["SBT_IVY_HOME"],

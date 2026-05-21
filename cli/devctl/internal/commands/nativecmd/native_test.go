@@ -2,6 +2,7 @@ package nativecmd
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"os"
 	"os/exec"
@@ -25,6 +26,29 @@ func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
 	}
 	if len(checks) != 1 || checks[0].Name != "repo-check" || checks[0].Command != "exit 7" {
 		t.Fatalf("checks = %#v", checks)
+	}
+}
+
+func TestParseSandboxReadinessResultsPreservesPerCheckDetails(t *testing.T) {
+	encodedOK := base64.StdEncoding.EncodeToString([]byte("tool ready\n"))
+	encodedFail := base64.StdEncoding.EncodeToString([]byte("missing playwright\n"))
+	out := strings.Join([]string{
+		"nix warning that should be ignored",
+		"__DEVKIT_READINESS_CHECK__\truntime\trequired-tools\t0\t" + encodedOK,
+		"__DEVKIT_READINESS_CHECK__\trepo\tfrontend-test\t2\t" + encodedFail,
+	}, "\n")
+	results, err := parseSandboxReadinessResults(out)
+	if err != nil {
+		t.Fatalf("parseSandboxReadinessResults: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %#v", results)
+	}
+	if results[0].Phase != readiness.PhaseRuntime || results[0].Name != "required-tools" || !results[0].OK || results[0].Detail != "tool ready" {
+		t.Fatalf("runtime result = %#v", results[0])
+	}
+	if results[1].Phase != readiness.PhaseRepo || results[1].Name != "frontend-test" || results[1].OK || !strings.Contains(results[1].Detail, "exit status 2: missing playwright") {
+		t.Fatalf("repo result = %#v", results[1])
 	}
 }
 

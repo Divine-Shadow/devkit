@@ -2,6 +2,7 @@ package nativecmd
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1830,11 +1831,6 @@ func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChe
 		`test ! -e /var/run/docker.sock`,
 		`pwd >/dev/null`,
 	}, " && ")
-	out, err := runSandboxCommand(p, []string{"bash", "-lc", runtimeScript})
-	report.AddRuntime("sandbox-command", err == nil, detail(err, out))
-	if err != nil {
-		return report
-	}
 	brokerScript := strings.Join([]string{
 		`broker="${DOCKER_HOST#unix://}"`,
 		`test -n "$broker"`,
@@ -1842,23 +1838,130 @@ func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChe
 		`test -S "$broker"`,
 		`curl --unix-socket "$broker" -fsS http://docker/_ping | grep -qx OK`,
 	}, " && ")
-	out, err = runSandboxCommand(p, []string{"bash", "-lc", brokerScript})
-	report.AddRuntime("broker-socket", err == nil, detail(err, out))
+	checks := []sandboxReadinessCheck{
+		{Phase: readiness.PhaseRuntime, Name: "sandbox-command", Command: runtimeScript},
+		{Phase: readiness.PhaseRuntime, Name: "broker-socket", Command: brokerScript},
+	}
 	for _, check := range runtimeChecks {
 		if strings.TrimSpace(check.Command) == "" {
 			continue
 		}
-		out, err = runSandboxCommand(p, []string{"bash", "-lc", check.Command})
-		report.AddRuntime(check.Name, err == nil, detail(err, out))
+		checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRuntime, Name: check.Name, Command: check.Command})
 	}
 	for _, check := range repoChecks {
 		if strings.TrimSpace(check.Command) == "" {
 			continue
 		}
-		out, err = runSandboxCommand(p, []string{"bash", "-lc", check.Command})
-		report.AddRepo(check.Name, err == nil, detail(err, out))
+		checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRepo, Name: check.Name, Command: check.Command})
+	}
+	results, err := runSandboxReadinessChecks(p, checks)
+	if err != nil {
+		report.AddRuntime("sandbox-command", false, err.Error())
+		return report
+	}
+	seen := map[string]struct{}{}
+	for _, result := range results {
+		seen[string(result.Phase)+"\x00"+result.Name] = struct{}{}
+		if result.Phase == readiness.PhaseRepo {
+			report.AddRepo(result.Name, result.OK, result.Detail)
+		} else {
+			report.AddRuntime(result.Name, result.OK, result.Detail)
+		}
+	}
+	for _, check := range checks {
+		key := string(check.Phase) + "\x00" + check.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		detail := "readiness batch did not return a result for this check"
+		if check.Phase == readiness.PhaseRepo {
+			report.AddRepo(check.Name, false, detail)
+		} else {
+			report.AddRuntime(check.Name, false, detail)
+		}
 	}
 	return report
+}
+
+type sandboxReadinessCheck struct {
+	Phase   readiness.Phase
+	Name    string
+	Command string
+}
+
+type sandboxReadinessResult struct {
+	Phase  readiness.Phase
+	Name   string
+	OK     bool
+	Detail string
+}
+
+func runSandboxReadinessChecks(p nativeplan.Plan, checks []sandboxReadinessCheck) ([]sandboxReadinessResult, error) {
+	if len(checks) == 0 {
+		return nil, nil
+	}
+	var script strings.Builder
+	script.WriteString("set +e\n")
+	script.WriteString("devkit_run_readiness_check() {\n")
+	script.WriteString("  phase=\"$1\"\n")
+	script.WriteString("  name=\"$2\"\n")
+	script.WriteString("  command=\"$3\"\n")
+	script.WriteString("  out=\"$(mktemp)\"\n")
+	script.WriteString("  timeout \"${DEVKIT_READINESS_CHECK_TIMEOUT_SECONDS:-1200}\" bash -lc \"$command\" >\"$out\" 2>&1\n")
+	script.WriteString("  rc=\"$?\"\n")
+	script.WriteString("  encoded=\"$(base64 -w0 \"$out\" 2>/dev/null || base64 \"$out\" | tr -d '\\n')\"\n")
+	script.WriteString("  rm -f \"$out\"\n")
+	script.WriteString("  printf '__DEVKIT_READINESS_CHECK__\\t%s\\t%s\\t%s\\t%s\\n' \"$phase\" \"$name\" \"$rc\" \"$encoded\"\n")
+	script.WriteString("}\n")
+	for _, check := range checks {
+		script.WriteString("devkit_run_readiness_check ")
+		script.WriteString(nativeShellQuote(string(check.Phase)))
+		script.WriteString(" ")
+		script.WriteString(nativeShellQuote(check.Name))
+		script.WriteString(" ")
+		script.WriteString(nativeShellQuote(check.Command))
+		script.WriteString("\n")
+	}
+	out, err := runSandboxCommand(p, []string{"bash", "-lc", script.String()})
+	if err != nil {
+		return nil, fmt.Errorf("%s", detail(err, out))
+	}
+	return parseSandboxReadinessResults(out)
+}
+
+func parseSandboxReadinessResults(out string) ([]sandboxReadinessResult, error) {
+	var results []sandboxReadinessResult
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "__DEVKIT_READINESS_CHECK__\t") {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) != 5 {
+			return nil, fmt.Errorf("malformed readiness result line")
+		}
+		decoded, err := base64.StdEncoding.DecodeString(parts[4])
+		if err != nil {
+			return nil, fmt.Errorf("decode readiness output for %s.%s: %w", parts[1], parts[2], err)
+		}
+		ok := parts[3] == "0"
+		results = append(results, sandboxReadinessResult{
+			Phase:  readiness.Phase(parts[1]),
+			Name:   parts[2],
+			OK:     ok,
+			Detail: readinessDetail(ok, strings.TrimSpace(string(decoded)), parts[3]),
+		})
+	}
+	return results, nil
+}
+
+func readinessDetail(ok bool, out string, rc string) string {
+	if ok {
+		return out
+	}
+	if out == "" {
+		return "exit status " + rc
+	}
+	return "exit status " + rc + ": " + out
 }
 
 func runSandboxCommand(p nativeplan.Plan, command []string) (string, error) {
@@ -1881,4 +1984,8 @@ func detail(err error, out string) string {
 		return err.Error()
 	}
 	return err.Error() + ": " + trimmed
+}
+
+func nativeShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
