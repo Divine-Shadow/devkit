@@ -37,7 +37,7 @@
           hashicorpArch = "amd64";
           goArch = "amd64";
           codexAsset = "codex-x86_64-unknown-linux-musl";
-          codexHash = "sha256-Fneee3hXUIp2ijbX1OCE7sM27COUbtcKmwlIm4+GEZA=";
+          codexHash = "sha256-0GAZq5w10oG3jcLrsq5VwruX6hG/f0Urr+OQ7dsANO8=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -48,13 +48,15 @@
           hashicorpArch = "arm64";
           goArch = "arm64";
           codexAsset = "codex-aarch64-unknown-linux-musl";
-          codexHash = "sha256-HX4A8sIsMBa1vLccYQEJR7AiqQ4pAbxrqv6CJWSSx2c=";
+          codexHash = "sha256-Jov+jPgVSUD+olbfdc1EHFSgxx5sjM1Fqz92/yi6FBM=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
+      codexVersion = "0.133.0";
+      codexReleaseTag = "rust-v${codexVersion}";
     in
     {
       devShells = forEachSystem (
@@ -63,9 +65,9 @@
           details = systemDetails.${system};
           pinnedCodex = pkgs.stdenvNoCC.mkDerivation {
             pname = "codex";
-            version = "rust-v0.130.0";
+            version = codexReleaseTag;
             src = pkgs.fetchurl {
-              url = "https://github.com/openai/codex/releases/download/rust-v0.130.0/${details.codexAsset}.tar.gz";
+              url = "https://github.com/openai/codex/releases/download/${codexReleaseTag}/${details.codexAsset}.tar.gz";
               hash = details.codexHash;
             };
             dontUnpack = true;
@@ -294,6 +296,7 @@
               inherit packages;
               shellHook = ''
                 export DEVKIT_NIX_SHELL=${name}
+                export PATH=${pkgs.lib.makeBinPath packages}:$PATH
                 export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
                 export GIT_SSL_CAINFO=$SSL_CERT_FILE
                 export TESTCONTAINERS_RYUK_DISABLED=true

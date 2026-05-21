@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
-EXPECTED_CODEX_VERSION="${DEVKIT_EXPECTED_CODEX_VERSION:-0.130.0}"
+EXPECTED_CODEX_VERSION="${DEVKIT_EXPECTED_CODEX_VERSION:-}"
 
 overlays=(
   _template
@@ -17,14 +17,18 @@ overlays=(
   pokeemerald
 )
 
-runtime_flake_for() {
+runtime_value_for() {
   local overlay="$1"
+  local field="$2"
   local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
-  awk '
+  awk -v field="$field" '
     /^[[:space:]]*runtime:[[:space:]]*$/ { in_runtime = 1; next }
     /^[^[:space:]][^:]*:/ { if (in_runtime) exit }
-    in_runtime && /^[[:space:]]+flake:[[:space:]]*/ {
-      sub(/^[[:space:]]+flake:[[:space:]]*/, "")
+    in_runtime {
+      pattern = "^[[:space:]]+" field ":[[:space:]]*"
+    }
+    in_runtime && $0 ~ pattern {
+      sub(pattern, "")
       sub(/[[:space:]]+#.*$/, "")
       gsub(/^[[:space:]]+|[[:space:]]+$/, "")
       if (substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") {
@@ -34,6 +38,14 @@ runtime_flake_for() {
       exit
     }
   ' "$yaml"
+}
+
+runtime_flake_for() {
+  runtime_value_for "$1" flake
+}
+
+runtime_codex_version_for() {
+  runtime_value_for "$1" codex_version
 }
 
 smoke_for() {
@@ -70,10 +82,15 @@ smoke_for() {
 
 run_overlay() {
   local overlay="$1"
-  local flake smoke
+  local expected flake smoke
   flake="$(runtime_flake_for "$overlay")"
   if [ -z "$flake" ]; then
     echo "missing runtime.flake for overlay runtime smoke: $overlay" >&2
+    return 2
+  fi
+  expected="${EXPECTED_CODEX_VERSION:-$(runtime_codex_version_for "$overlay")}"
+  if [ -z "$expected" ]; then
+    echo "missing runtime.codex_version for overlay runtime smoke: $overlay" >&2
     return 2
   fi
   smoke="$(smoke_for "$overlay")" || {
@@ -83,8 +100,8 @@ run_overlay() {
   printf '\n== %s (%s) ==\n' "$overlay" "$flake"
   (
     cd "$DEVKIT_ROOT"
-    nix "${NIX_FLAGS[@]}" develop "$flake" --output-lock-file /dev/null --command bash -lc \
-      "got=\"\$(codex --version | awk '{print \$NF}' | sed 's/^v//')\"; test \"\$got\" = '$EXPECTED_CODEX_VERSION'; $smoke"
+    nix "${NIX_FLAGS[@]}" develop "$flake" --output-lock-file /dev/null --command bash -c \
+      "got=\"\$(codex --version | awk '{print \$NF}' | sed 's/^v//')\"; test \"\$got\" = '$expected' || { echo \"codex version \$got, want $expected\" >&2; exit 1; }; $smoke"
   )
 }
 

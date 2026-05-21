@@ -7,7 +7,7 @@ defaults:
   branch_prefix: agent
 runtime:
   flake: ./overlays/ouroboros-terraform#default
-  codex_version: 0.130.0
+  codex_version: 0.133.0
   core_check: terraform fmt -check -recursive
   notes: AWS/HashiCorp runtime for Terraform maintenance.
 readiness:

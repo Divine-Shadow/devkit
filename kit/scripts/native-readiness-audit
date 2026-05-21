@@ -6,8 +6,28 @@ DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
 DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
 
+runtime_codex_version_for() {
+  local overlay="$1"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  awk '
+    /^[[:space:]]*runtime:[[:space:]]*$/ { in_runtime = 1; next }
+    /^[^[:space:]][^:]*:/ { if (in_runtime) exit }
+    in_runtime && /^[[:space:]]+codex_version:[[:space:]]*/ {
+      sub(/^[[:space:]]+codex_version:[[:space:]]*/, "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if (substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$yaml"
+}
+
 REPO="${DEVKIT_NATIVE_READINESS_REPO:-ouroboros-ide}"
 DEV_ALL_FLAKE="${DEVKIT_NATIVE_READINESS_DEV_ALL_FLAKE:-./overlays/dev-all#default}"
+EXPECTED_CODEX_VERSION="${DEVKIT_NATIVE_READINESS_CODEX_VERSION:-$(runtime_codex_version_for dev-all)}"
 CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.3-codex-spark}"
 CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-replay with 'Ok'}"
 GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-/workspaces/dev/ouroboros-ide/tools/subagent-governance/subagent-governance.jar}"
@@ -269,7 +289,7 @@ for idx in 1 2; do
       "DEVKIT_NATIVE_READINESS_CODEX_MODEL=$CODEX_MODEL" \
       bash -lc "$codex_exec" \
     2>&1 | tee "$audit_dir/codex-agent${idx}.txt"
-  grep_required "codex-cli 0.130.0" "$audit_dir/codex-agent${idx}.txt"
+  grep_required "codex-cli $EXPECTED_CODEX_VERSION" "$audit_dir/codex-agent${idx}.txt"
   grep_required "model: $CODEX_MODEL" "$audit_dir/codex-agent${idx}.txt"
   grep_required "codex_agent_${idx}_ok" "$audit_dir/codex-agent${idx}.txt"
 done

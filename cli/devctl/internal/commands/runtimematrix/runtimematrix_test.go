@@ -84,7 +84,7 @@ defaults:
   repo: app
 runtime:
   flake: ./overlays/native#default
-  codex_version: 0.130.0
+  codex_version: 0.133.0
   core_check: make test
 `)
 
@@ -115,7 +115,7 @@ func TestCheckAcceptsOverlayLocalFlakeRef(t *testing.T) {
 		Overlay:      "_template",
 		Repo:         "your-repo-name",
 		Flake:        "./overlays/_template#default",
-		CodexVersion: "0.130.0",
+		CodexVersion: "0.133.0",
 		CoreCheck:    "echo ok",
 		FlakePath:    flakePath,
 		Canonical:    true,
@@ -134,7 +134,7 @@ func TestCheckRejectsWrongOverlayLocalFlakeRef(t *testing.T) {
 		Overlay:      "_template",
 		Repo:         "your-repo-name",
 		Flake:        "./overlays/dev-all#default",
-		CodexVersion: "0.130.0",
+		CodexVersion: "0.133.0",
 		CoreCheck:    "echo ok",
 		FlakePath:    flakePath,
 		Canonical:    true,
@@ -153,7 +153,7 @@ func TestCheckAcceptsNonTemplateOverlayLocalFlakeRef(t *testing.T) {
 		Overlay:      "pokeemerald",
 		Repo:         "pokeemerald",
 		Flake:        "./overlays/pokeemerald#default",
-		CodexVersion: "0.130.0",
+		CodexVersion: "0.133.0",
 		CoreCheck:    "make modern",
 		FlakePath:    flakePath,
 		Canonical:    true,
@@ -193,7 +193,7 @@ func TestCheckRejectsRuntimeImageAndFlakeDrift(t *testing.T) {
 		Repo:         "pokeemerald",
 		Image:        "local/dev-agent:pokeemerald",
 		Flake:        "./overlays/wrong#default",
-		CodexVersion: "0.130.0",
+		CodexVersion: "0.133.0",
 		CoreCheck:    "make modern",
 		FlakePath:    flakePath,
 		Canonical:    true,
@@ -208,7 +208,7 @@ func TestCheckRejectsMissingOverlayLocalFlake(t *testing.T) {
 		Overlay:      "pokeemerald",
 		Repo:         "pokeemerald",
 		Flake:        "./overlays/pokeemerald#default",
-		CodexVersion: "0.130.0",
+		CodexVersion: "0.133.0",
 		CoreCheck:    "make modern",
 		FlakePath:    filepath.Join(t.TempDir(), "flake.nix"),
 		Canonical:    true,

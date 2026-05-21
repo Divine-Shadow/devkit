@@ -24,7 +24,7 @@ flake boundary.
 | `pokeemerald` | `pokeemerald` | `dev-agent` | `./overlays/pokeemerald#default` | `make modern` |
 
 Each listed runtime is expected to carry the current Codex CLI version declared
-in the overlay `runtime.codex_version`. On May 9, 2026 that value is `0.130.0`.
+in the overlay `runtime.codex_version`. On May 21, 2026 that value is `0.133.0`.
 Verify local runtimes with:
 
 ```bash

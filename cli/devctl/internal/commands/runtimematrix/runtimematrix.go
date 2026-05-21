@@ -176,7 +176,7 @@ func Check(entries []Entry, dryRun bool) error {
 		}
 		if e.Flake != "" && e.CodexVersion != "" {
 			if dryRun {
-				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --output-lock-file /dev/null --command bash -lc 'codex --version'\n", e.Flake)
+				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --output-lock-file /dev/null --command bash -c 'codex --version'\n", e.Flake)
 			} else if got, err := flakeCodexVersion(e.Flake); err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version check failed: %v", e.Overlay, e.Flake, err))
 			} else if got != e.CodexVersion {
@@ -216,7 +216,7 @@ func overlayLocalFlakeRef(overlay string) string {
 }
 
 func flakeCodexVersion(flake string) (string, error) {
-	cmd := exec.Command("nix", "--extra-experimental-features", "nix-command flakes", "develop", flake, "--output-lock-file", "/dev/null", "--command", "bash", "-lc", "codex --version")
+	cmd := exec.Command("nix", "--extra-experimental-features", "nix-command flakes", "develop", flake, "--output-lock-file", "/dev/null", "--command", "bash", "-c", "codex --version")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))

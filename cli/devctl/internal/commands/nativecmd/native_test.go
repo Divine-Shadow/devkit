@@ -105,7 +105,7 @@ readiness:
       command: command -v spago
     - command: command -v playwright
 runtime:
-  codex_version: 0.130.0
+  codex_version: 0.133.0
 `), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

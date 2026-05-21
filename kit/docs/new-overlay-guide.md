@@ -20,7 +20,7 @@ defaults:
   agents: 1
 runtime:
   flake: ./overlays/your-overlay#default
-  codex_version: 0.130.0
+  codex_version: 0.133.0
   core_check: make test
 readiness:
   default_mode: runtime-only
