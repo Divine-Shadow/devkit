@@ -168,7 +168,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
-		"DEVKIT_NATIVE_AGENT":          "1",
+		"DEVKIT_NATIVE_AGENT":          fmt.Sprintf("%d", index),
 	}
 	if proxyURL != "" {
 		env["HTTP_PROXY"] = proxyURL

@@ -1821,7 +1821,7 @@ func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChe
 	report.AddRuntime("prepare-state", true, "")
 
 	runtimeScript := strings.Join([]string{
-		`test "${DEVKIT_NATIVE_AGENT:-}" = "1"`,
+		`test "${DEVKIT_NATIVE_AGENT:-}" = "` + fmt.Sprintf("%d", p.Agent.ID.Index) + `"`,
 		`test -d "$HOME"`,
 		`test -d "$CODEX_ROLLOUT_DIR"`,
 		`test -x /usr/bin/env`,

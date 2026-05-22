@@ -473,7 +473,7 @@ func TestFlakeBackedNonDevAllSSHAndRepoHelpersUseNativeDryRun(t *testing.T) {
 		wants []string
 	}{
 		{name: "ssh-setup", args: []string{"ssh-setup", "--index", "1"}, wants: []string{"seed ssh", nativePathPart}},
-		{name: "ssh-test", args: []string{"ssh-test", "1"}, wants: []string{"ssh -T github.com", nativePathPart}},
+		{name: "ssh-test", args: []string{"ssh-test", "1"}, wants: []string{"ssh -T github.com", "-p " + project + " exec 1", "--repo " + repo}},
 		{name: "repo-config-ssh", args: []string{"repo-config-ssh", repo, "--index", "1"}, wants: []string{worktreePathPart, "git remote set-url origin"}},
 		{name: "repo-config-https", args: []string{"repo-config-https", repo, "--index", "1"}, wants: []string{worktreePathPart, "git remote set-url origin"}},
 		{name: "repo-push-ssh", args: []string{"repo-push-ssh", repo, "--index", "1"}, wants: []string{worktreePathPart, "git push -u origin HEAD"}},

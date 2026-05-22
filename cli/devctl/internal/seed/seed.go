@@ -126,8 +126,11 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
+			"'    -c \"mcp_servers.governance.cwd=\\\"$PWD\\\"\"' " +
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceMCPEntrypointSeedScript() + "\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
+			"'    -c '\\''mcp_servers.governance.default_tools_approval_mode=\"auto\"'\\''' " +
+			"'    -c '\\''mcp_servers.governance.enabled_tools=[\"run\",\"run_lint_migration\",\"submit_to_ci\",\"governance.workspace_topology\",\"governance.graph_status\",\"governance.search\",\"governance.write_yaml\",\"governance.operator_attention_opt_in\",\"governance.operator_attention_opt_out\",\"governance.operator_attention_status\",\"governance.operator_attention_inbox\",\"governance.operator_attention_record_blocker\"]'\\''' " +
 			"'  )' " +
 			"'  devkit_codex_tui_log_guard' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
@@ -198,8 +201,11 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
 			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
 			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
+			"'    -c \"mcp_servers.governance.cwd=\\\"$PWD\\\"\"' " +
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceMCPEntrypointSeedScript() + "\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
+			"'    -c '\\''mcp_servers.governance.default_tools_approval_mode=\"auto\"'\\''' " +
+			"'    -c '\\''mcp_servers.governance.enabled_tools=[\"run\",\"run_lint_migration\",\"submit_to_ci\",\"governance.workspace_topology\",\"governance.graph_status\",\"governance.search\",\"governance.write_yaml\",\"governance.operator_attention_opt_in\",\"governance.operator_attention_opt_out\",\"governance.operator_attention_status\",\"governance.operator_attention_inbox\",\"governance.operator_attention_record_blocker\"]'\\''' " +
 			"'  )' " +
 			"'  devkit_codex_tui_log_guard' " +
 			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
@@ -225,15 +231,19 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 
 func governanceMCPEntrypointSeedScript() string {
 	return strings.Join([]string{
+		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM",
 		"governance_env=",
-		"case \\${PWD:-} in /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/ouroboros-ide) governance_env=\\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide) governance_env=\\${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac",
+		"governance_root=",
+		"case \\${PWD:-} in */agent-worktrees/*/ouroboros-ide) governance_env=\\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh; governance_root=\\${PWD} ;; /workspaces/dev/ouroboros-ide) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=\\${PWD} ;; /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */ouroboros-ide) governance_env=\\${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh; governance_root=\\${PWD} ;; esac",
+		"if [[ -z \\${governance_root} && -n \\${CODEX_HOME:-} ]]; then case \\${CODEX_HOME} in */agent-worktrees/*/ouroboros-ide/.devhome-agent*/.codex) governance_root=\\${CODEX_HOME%/.devhome-agent*/.codex}; governance_env=\\${governance_root%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/.devhome-agent*/.codex) governance_agent_dir=\\${CODEX_HOME%/.devhome-agent*/.codex}; governance_root=\\${governance_agent_dir}/ouroboros-ide; governance_env=\\${governance_agent_dir%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide/.codex) governance_root=\\${CODEX_HOME%/.codex}; governance_env=\\${governance_root%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac; fi",
 		"if [[ -z \\${governance_env} ]]; then echo required governance env missing: unable to derive path for PWD=\\${PWD:-} >&2; exit 1; fi",
 		"if [[ ! -r \\${governance_env} ]]; then echo required governance env missing: \\${governance_env} >&2; exit 1; fi",
-		"if [[ -z \\${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case \\${PWD:-} in */agent-worktrees/*/ouroboros-ide) workspace_tail=\\${PWD#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=\\${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
-		"governance_root=\\${governance_env%/.devkit/ouro8-governance-env.sh}/ouroboros-ide",
-		"if [[ ! -x \\${governance_root}/scripts/devops/governance-mcp-stdio-forward ]]; then echo required canonical governance bridge missing: \\${governance_root}/scripts/devops/governance-mcp-stdio-forward >&2; exit 1; fi",
+		"if [[ -z \\${governance_root} ]]; then echo required governance root missing: unable to derive path for PWD=\\${PWD:-} >&2; exit 1; fi",
+		"if [[ ! -x \\${governance_root}/scripts/devops/governance-mcp-stdio-forward ]]; then echo required governance bridge missing: \\${governance_root}/scripts/devops/governance-mcp-stdio-forward >&2; exit 1; fi",
 		"echo using governance env: \\${governance_env} >&2",
+		"echo using governance root: \\${governance_root} >&2",
 		"source \\${governance_env}",
+		"if [[ -z \\${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case \\${governance_root} in */agent-worktrees/*/ouroboros-ide) workspace_tail=\\${governance_root#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=\\${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
 		"exec bash \\${governance_root}/scripts/devops/governance-mcp-stdio-forward",
 	}, "; ")
 }

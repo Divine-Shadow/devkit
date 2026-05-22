@@ -181,7 +181,16 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "known_hosts"), "github.com ssh-ed25519 key")
 	t.Setenv("HOME", hostUserHome)
 
-	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"), "Host example.invalid\n  User keep\n")
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"), strings.Join([]string{
+		"Host example.invalid",
+		"  User keep",
+		"Host github.com",
+		"  HostName ssh.github.com",
+		"  Port 443",
+		"  User git",
+		"  IdentityFile /old/home/.ssh/id_ed25519",
+		"",
+	}, "\n"))
 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -219,6 +228,12 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	cfg = readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
 	if count := strings.Count(cfg, gitSSHManagedBegin); count != 1 {
 		t.Fatalf("managed block count = %d, want 1:\n%s", count, cfg)
+	}
+	if strings.Contains(cfg, "ssh.github.com") || strings.Contains(cfg, "Port 443") || strings.Contains(cfg, "/old/home") {
+		t.Fatalf("legacy github host block was preserved:\n%s", cfg)
+	}
+	if count := strings.Count(cfg, "Host github.com"); count != 1 {
+		t.Fatalf("github host block count = %d, want 1:\n%s", count, cfg)
 	}
 }
 
@@ -277,11 +292,13 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 		"state_5.sqlite":                                "legacy state",
 		"logs_2.sqlite":                                 "legacy logs",
 		"auth.json":                                     "current auth",
-		"config.toml":                                   "current config",
 	} {
 		if got := readTestFile(t, filepath.Join(dstCodex, rel)); got != want {
 			t.Fatalf("%s content = %q, want %q", rel, got, want)
 		}
+	}
+	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); !strings.Contains(got, "current config") || !strings.Contains(got, codexGovernanceManagedBegin) {
+		t.Fatalf("config did not preserve existing content and add governance block: %q", got)
 	}
 	afterSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
 	if afterSessions < beforeSessions+1 {
@@ -296,6 +313,9 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	}
 	if got := readTestFile(t, filepath.Join(dstCodex, "auth.json")); got != "current auth" {
 		t.Fatalf("auth was clobbered: %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); strings.Count(got, codexGovernanceManagedBegin) != 1 {
+		t.Fatalf("second Prepare duplicated governance block:\n%s", got)
 	}
 }
 
@@ -412,7 +432,16 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
-	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), "existing config")
+	existingConfig := "personality = \"existing\"\n\n[projects.\"/workspaces/dev/agent-worktrees/agent2/ouroboros-ide\"]\ntrust_level = \"trusted\"\n"
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), existingConfig)
+	writeTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"), strings.Join([]string{
+		`approval_policy = "never"`,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		`args = ["-lc", "mkdir -p ${HOME:-/tmp}/.codex/log; set -x; exec bash scripts/devops/governance-mcp-stdio-forward"]`,
+		`startup_timeout_sec = 60`,
+		"",
+	}, "\n"))
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
 
 	if err := Prepare(p); err != nil {
@@ -423,11 +452,76 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if got := readTestFile(t, target); got != policy {
 		t.Fatalf("policy rules = %q, want %q", got, policy)
 	}
-	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")); got != "existing config" {
-		t.Fatalf("config was clobbered: %q", got)
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	for _, want := range []string{
+		`personality = "existing"`,
+		`[projects."/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"]`,
+		`cwd = "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"`,
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`args = ["-lc",`,
+		`governance-mcp-stdio-forward`,
+		`unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM`,
+		`governance.operator_attention_status`,
+	} {
+		if !strings.Contains(gotConfig, want) {
+			t.Fatalf("config missing %q:\n%s", want, gotConfig)
+		}
+	}
+	for _, forbidden := range []string{
+		"env_vars = [",
+		"mcp_servers.governance.env.",
+		`"SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM"`,
+		"SUBAGENT_GOVERNANCE_CONTROL_PLANE_BIND=0.0.0.0",
+	} {
+		if strings.Contains(gotConfig, forbidden) {
+			t.Fatalf("config contains forbidden %q:\n%s", forbidden, gotConfig)
+		}
 	}
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
 		t.Fatalf("session was clobbered: %q", got)
+	}
+	gotWorktreeConfig := readTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"))
+	for _, want := range []string{
+		`approval_policy = "never"`,
+		codexGovernanceManagedBegin,
+		`cwd = "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"`,
+		`using governance root: ${governance_root}`,
+	} {
+		if !strings.Contains(gotWorktreeConfig, want) {
+			t.Fatalf("worktree config missing %q:\n%s", want, gotWorktreeConfig)
+		}
+	}
+	for _, forbidden := range []string{
+		"set -x",
+		"mkdir -p ${HOME:-/tmp}/.codex/log",
+	} {
+		if strings.Contains(gotWorktreeConfig, forbidden) {
+			t.Fatalf("worktree config retained stale diagnostic %q:\n%s", forbidden, gotWorktreeConfig)
+		}
+	}
+	envPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh")
+	gotEnv := readTestFile(t, envPath)
+	for _, want := range []string{
+		"Shared governance MCP/control-plane environment",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=ouroboros-ide,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8",
+		"agent1=/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
+		"agent8=/workspaces/dev/agent-worktrees/agent8/ouroboros-ide",
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
+		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas"),
+		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
+	} {
+		if !strings.Contains(gotEnv, want) {
+			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
+		}
+	}
+	if strings.Contains(gotEnv, "SUBAGENT_GOVERNANCE_WORKSPACE_ID=") {
+		t.Fatalf("shared governance env must not pin a per-agent workspace id:\n%s", gotEnv)
+	}
+	if st, err := os.Stat(envPath); err != nil {
+		t.Fatalf("stat governance env: %v", err)
+	} else if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("governance env mode = %o, want 600", got)
 	}
 }
 

@@ -98,7 +98,7 @@ func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sshDir, "id_ed25519"), []byte("key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeNativeSSHConfig(home, nil); err != nil {
+	if err := writeNativeSSHConfig(home, home, nil); err != nil {
 		t.Fatalf("write default config: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(sshDir, "config"))
@@ -110,7 +110,7 @@ func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 		t.Fatalf("default config missing github host/default key:\n%s", text)
 	}
 
-	if err := writeNativeSSHConfig(home, []string{"work_key"}); err != nil {
+	if err := writeNativeSSHConfig(home, home, []string{"work_key"}); err != nil {
 		t.Fatalf("write custom config: %v", err)
 	}
 	data, err = os.ReadFile(filepath.Join(sshDir, "config"))

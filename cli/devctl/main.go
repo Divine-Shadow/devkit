@@ -1126,11 +1126,11 @@ exit 0`
 		seedNativeSSH(dryRun, paths, project, repo, mustAtoi(idx), keyfile)
 	case "ssh-test":
 		mustProject(project)
-		if project == "dev-all" {
-			runner.Host(dryRun, "bash", "-lc", "ssh -T github.com -o BatchMode=yes || true")
-			break
-		}
 		if !isNativeRuntime {
+			if project == "dev-all" {
+				runner.Host(dryRun, "bash", "-lc", "ssh -T github.com -o BatchMode=yes || true")
+				break
+			}
 			die("ssh-test requires runtime.flake")
 		}
 		idx := "1"
@@ -1138,12 +1138,8 @@ exit 0`
 			idx = sub[0]
 		}
 		repo := readDefaultRepo(project, paths)
-		resolved, err := nativeResolvedAgentPaths(paths, project, repo, mustAtoi(idx))
-		if err != nil {
-			die(err.Error())
-		}
-		cmd := "set -euo pipefail; HOME=" + shSingleQuote(resolved.HostHome) + "; cfg=\"$HOME/.ssh/config\"; if [ -s \"$cfg\" ]; then ssh -F \"$cfg\" -T github.com -o BatchMode=yes || true; else ssh -T github.com -o BatchMode=yes || true; fi"
-		runner.Host(dryRun, "bash", "-lc", cmd)
+		cmd := "set -euo pipefail; cfg=\"$HOME/.ssh/config\"; if [ -s \"$cfg\" ]; then ssh -F \"$cfg\" -T github.com -o BatchMode=yes || true; else ssh -T github.com -o BatchMode=yes || true; fi"
+		nativeExecScriptCommand(dryRun, exe, project, repo, mustAtoi(idx), cmd)
 	case "repo-config-ssh":
 		mustProject(project)
 		if !isNativeRuntime {
@@ -1911,7 +1907,7 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 		if err := nativelaunch.SeedSSH(resolved.HostHome, true); err != nil {
 			die(err.Error())
 		}
-		if err := writeNativeSSHConfig(resolved.HostHome, nil); err != nil {
+		if err := writeNativeSSHConfig(resolved.HostHome, resolved.HostHome, nil); err != nil {
 			die(err.Error())
 		}
 		return
@@ -1936,7 +1932,7 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 			}
 		}
 	}
-	if err := writeNativeSSHConfig(resolved.HostHome, []string{keyName}); err != nil {
+	if err := writeNativeSSHConfig(resolved.HostHome, resolved.HostHome, []string{keyName}); err != nil {
 		die(err.Error())
 	}
 }
@@ -1952,10 +1948,14 @@ func copyNativeSSHFile(src, dest string, mode os.FileMode) error {
 	return nil
 }
 
-func writeNativeSSHConfig(hostHome string, identityNames []string) error {
+func writeNativeSSHConfig(hostHome, configHome string, identityNames []string) error {
 	hostHome = strings.TrimSpace(hostHome)
 	if hostHome == "" {
 		return nil
+	}
+	configHome = strings.TrimSpace(configHome)
+	if configHome == "" {
+		configHome = hostHome
 	}
 	sshDir := filepath.Join(hostHome, ".ssh")
 	if len(identityNames) == 0 {
@@ -1968,26 +1968,11 @@ func writeNativeSSHConfig(hostHome string, identityNames []string) error {
 	if len(identityNames) == 0 {
 		return nil
 	}
-	var b strings.Builder
-	b.WriteString("Host github.com\n")
-	b.WriteString("  HostName github.com\n")
-	b.WriteString("  User git\n")
-	for _, name := range identityNames {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		b.WriteString("  IdentityFile " + filepath.Join(hostHome, ".ssh", name) + "\n")
-	}
-	b.WriteString("  IdentitiesOnly yes\n")
-	b.WriteString("  StrictHostKeyChecking accept-new\n")
-	b.WriteString("  UserKnownHostsFile " + filepath.Join(hostHome, ".ssh", "known_hosts") + "\n")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", sshDir, err)
 	}
-	target := filepath.Join(sshDir, "config")
-	if err := os.WriteFile(target, []byte(b.String()), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", target, err)
+	if err := nativelaunch.WriteGitSSHConfig(hostHome, configHome, identityNames); err != nil {
+		return err
 	}
 	return nil
 }

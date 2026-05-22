@@ -50,6 +50,9 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Env["COURSIER_CACHE"] != "/workspaces/dev/.cache/shared/coursier" {
 		t.Fatalf("COURSIER_CACHE = %q", p.Env["COURSIER_CACHE"])
 	}
+	if p.Env["DEVKIT_NATIVE_AGENT"] != "2" {
+		t.Fatalf("DEVKIT_NATIVE_AGENT = %q", p.Env["DEVKIT_NATIVE_AGENT"])
+	}
 	for _, want := range []string{
 		"-Xmx6G",
 		"-XX:+UseG1GC",
