@@ -129,6 +129,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'    -c \"mcp_servers.governance.cwd=\\\"$PWD\\\"\"' " +
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceMCPEntrypointSeedScript() + "\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
+			"'    -c '\\''mcp_servers.governance.tool_timeout_sec=10800'\\''' " +
 			"'    -c '\\''mcp_servers.governance.default_tools_approval_mode=\"auto\"'\\''' " +
 			"'    -c '\\''mcp_servers.governance.enabled_tools=[\"run\",\"run_lint_migration\",\"submit_to_ci\",\"governance.workspace_topology\",\"governance.graph_status\",\"governance.search\",\"governance.write_yaml\",\"governance.operator_attention_opt_in\",\"governance.operator_attention_opt_out\",\"governance.operator_attention_status\",\"governance.operator_attention_inbox\",\"governance.operator_attention_record_blocker\"]'\\''' " +
 			"'  )' " +
@@ -204,6 +205,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'    -c \"mcp_servers.governance.cwd=\\\"$PWD\\\"\"' " +
 			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceMCPEntrypointSeedScript() + "\\\"]'\" " +
 			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
+			"'    -c '\\''mcp_servers.governance.tool_timeout_sec=10800'\\''' " +
 			"'    -c '\\''mcp_servers.governance.default_tools_approval_mode=\"auto\"'\\''' " +
 			"'    -c '\\''mcp_servers.governance.enabled_tools=[\"run\",\"run_lint_migration\",\"submit_to_ci\",\"governance.workspace_topology\",\"governance.graph_status\",\"governance.search\",\"governance.write_yaml\",\"governance.operator_attention_opt_in\",\"governance.operator_attention_opt_out\",\"governance.operator_attention_status\",\"governance.operator_attention_inbox\",\"governance.operator_attention_record_blocker\"]'\\''' " +
 			"'  )' " +
