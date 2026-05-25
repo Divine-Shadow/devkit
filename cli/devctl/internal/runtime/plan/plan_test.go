@@ -50,6 +50,18 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Env["COURSIER_CACHE"] != "/workspaces/dev/.cache/shared/coursier" {
 		t.Fatalf("COURSIER_CACHE = %q", p.Env["COURSIER_CACHE"])
 	}
+	if p.Env["DEVKIT_NATIVE_AGENT"] != "2" {
+		t.Fatalf("DEVKIT_NATIVE_AGENT = %q", p.Env["DEVKIT_NATIVE_AGENT"])
+	}
+	if p.Env["AWS_CONFIG_FILE"] != filepath.Join(p.Agent.SandboxHome, ".aws", "config") {
+		t.Fatalf("AWS_CONFIG_FILE = %q", p.Env["AWS_CONFIG_FILE"])
+	}
+	if p.Env["AWS_SHARED_CREDENTIALS_FILE"] != filepath.Join(p.Agent.SandboxHome, ".aws", "credentials") {
+		t.Fatalf("AWS_SHARED_CREDENTIALS_FILE = %q", p.Env["AWS_SHARED_CREDENTIALS_FILE"])
+	}
+	if p.Env["AWS_SDK_LOAD_CONFIG"] != "1" {
+		t.Fatalf("AWS_SDK_LOAD_CONFIG = %q", p.Env["AWS_SDK_LOAD_CONFIG"])
+	}
 	for _, want := range []string{
 		"-Xmx6G",
 		"-XX:+UseG1GC",

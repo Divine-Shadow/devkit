@@ -168,7 +168,10 @@ func Build(opts BuildOptions) (Plan, error) {
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
-		"DEVKIT_NATIVE_AGENT":          "1",
+		"DEVKIT_NATIVE_AGENT":          fmt.Sprintf("%d", index),
+		"AWS_CONFIG_FILE":              filepath.Join(paths.SandboxHome, ".aws", "config"),
+		"AWS_SHARED_CREDENTIALS_FILE":  filepath.Join(paths.SandboxHome, ".aws", "credentials"),
+		"AWS_SDK_LOAD_CONFIG":          "1",
 	}
 	if proxyURL != "" {
 		env["HTTP_PROXY"] = proxyURL

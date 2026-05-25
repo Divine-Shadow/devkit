@@ -40,6 +40,14 @@ readiness:
 env:
   AWS_PROFILE: codex
 
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+  upstream: unix:///var/run/docker.sock
+  allowed_images:
+    - postgres:latest
+  allow_pulls: true
+  log_level: info
+
 hooks:
   warm: |
     set -euo pipefail
