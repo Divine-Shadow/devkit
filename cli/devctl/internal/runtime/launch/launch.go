@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -453,15 +454,33 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 	envPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh")
 	content := buildOuroGovernanceEnv(hostDevRoot)
 	if data, err := os.ReadFile(envPath); err == nil && string(data) == content {
-		return nil
+		// Keep checking the paired repo config below; it may have been generated
+		// by an older devkit and carry a stale workspace catalog.
 	} else if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read governance env %s: %w", envPath, err)
+	} else {
+		if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(envPath), err)
+		}
+		if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+			return fmt.Errorf("write governance env %s: %w", envPath, err)
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(envPath), err)
+	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-repo-env-disabled.json")
+	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("write governance env %s: %w", envPath, err)
+	if data, err := os.ReadFile(repoConfigPath); err == nil && string(data) == string(repoConfig) {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read governance repo config %s: %w", repoConfigPath, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(repoConfigPath), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(repoConfigPath), err)
+	}
+	if err := os.WriteFile(repoConfigPath, repoConfig, 0o600); err != nil {
+		return fmt.Errorf("write governance repo config %s: %w", repoConfigPath, err)
 	}
 	return nil
 }
@@ -567,15 +586,7 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 
 func buildOuroGovernanceEnv(hostDevRoot string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
-	ids := []string{"ouroboros-ide"}
-	roots := []string{
-		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
-	}
-	for i := 2; i <= 8; i++ {
-		agent := fmt.Sprintf("agent%d", i)
-		ids = append(ids, agent)
-		roots = append(roots, fmt.Sprintf("%s=/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent, agent))
-	}
+	catalog := buildOuroGovernanceCatalog()
 	jar := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar")
 	stateDir := filepath.Join(hostDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
@@ -609,8 +620,9 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 		"  echo \"[devkit-governance-env] runtime env did not provide an executable JAVA_HOME\" >&2",
 		"  return 1",
 		"fi",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(ids, ","),
-		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(roots, ","),
+		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(catalog.ids, ","),
+		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(catalog.rootBindings, ","),
 		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=" + jar,
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + jar,
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + schemaRoot,
@@ -620,6 +632,67 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + stateDir,
 		"",
 	}, "\n")
+}
+
+type ouroGovernanceCatalog struct {
+	ids          []string
+	rootBindings []string
+	rootMap      map[string]string
+}
+
+func buildOuroGovernanceCatalog() ouroGovernanceCatalog {
+	ids := []string{"dev-workspace", "ouroboros-ide"}
+	roots := map[string]string{
+		"dev-workspace": "/workspaces/dev",
+		"ouroboros-ide": "/workspaces/dev/ouroboros-ide",
+	}
+	rootBindings := []string{
+		"dev-workspace=/workspaces/dev",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+	}
+	for i := 2; i <= 8; i++ {
+		agent := fmt.Sprintf("agent%d", i)
+		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent)
+		ids = append(ids, agent)
+		roots[agent] = root
+		rootBindings = append(rootBindings, fmt.Sprintf("%s=%s", agent, root))
+	}
+	return ouroGovernanceCatalog{ids: ids, rootBindings: rootBindings, rootMap: roots}
+}
+
+func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
+	hostDevRoot = filepath.Clean(hostDevRoot)
+	catalog := buildOuroGovernanceCatalog()
+	type governanceAdapter struct {
+		KnownWorkspaceIDs    []string          `json:"knownWorkspaceIds"`
+		WorkspaceRoots       map[string]string `json:"workspaceRoots"`
+		LatestJarPath        string            `json:"latestJarPath"`
+		SchemaRoot           string            `json:"schemaRoot"`
+		ControlPlaneURL      string            `json:"controlPlaneUrl"`
+		WarmHookCommand      string            `json:"warmHookCommand"`
+		ControlPlaneStateDir string            `json:"controlPlaneStateDir"`
+	}
+	type repoConfig struct {
+		WorkspaceRoot     string            `json:"workspaceRoot"`
+		GovernanceAdapter governanceAdapter `json:"governanceAdapter"`
+	}
+	cfg := repoConfig{
+		WorkspaceRoot: "/workspaces/dev/ouroboros-ide",
+		GovernanceAdapter: governanceAdapter{
+			KnownWorkspaceIDs:    catalog.ids,
+			WorkspaceRoots:       catalog.rootMap,
+			LatestJarPath:        "/workspaces/dev/ouroboros-ide/tools/subagent-governance/subagent-governance.jar",
+			SchemaRoot:           "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
+			ControlPlaneURL:      "http://127.0.0.1:7778",
+			WarmHookCommand:      "scripts/devops/governance-control-plane warm",
+			ControlPlaneStateDir: "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane",
+		},
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("render governance repo config: %w", err)
+	}
+	return append(data, '\n'), nil
 }
 
 func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
@@ -816,8 +889,8 @@ func governanceMCPEntrypointZsh() string {
 		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM",
 		"governance_env=",
 		"governance_root=",
-		"case ${PWD:-} in /workspaces/dev) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */agent-worktrees/*/ouroboros-ide) governance_env=${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/ouroboros-ide) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */ouroboros-ide) governance_env=${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; esac",
-		"if [[ -z ${governance_root} && -n ${CODEX_HOME:-} ]]; then case ${CODEX_HOME} in */agent-worktrees/*/ouroboros-ide/.devhome-agent*/.codex) governance_root=${CODEX_HOME%/.devhome-agent*/.codex}; governance_env=${governance_root%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/.devhome-agent*/.codex) governance_agent_dir=${CODEX_HOME%/.devhome-agent*/.codex}; governance_root=${governance_agent_dir}/ouroboros-ide; governance_env=${governance_agent_dir%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide/.codex) governance_root=${CODEX_HOME%/.codex}; governance_env=${governance_root%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac; fi",
+		"case ${PWD:-} in /workspaces/dev) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */agent-worktrees/*/ouroboros-ide) governance_env=${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh; governance_root=${PWD%%/agent-worktrees/*}/ouroboros-ide ;; /workspaces/dev/ouroboros-ide) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */ouroboros-ide) governance_env=${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; esac",
+		"if [[ -z ${governance_root} && -n ${CODEX_HOME:-} ]]; then case ${CODEX_HOME} in */agent-worktrees/*/ouroboros-ide/.devhome-agent*/.codex) governance_worktree_root=${CODEX_HOME%/.devhome-agent*/.codex}; governance_root=${governance_worktree_root%%/agent-worktrees/*}/ouroboros-ide; governance_env=${governance_worktree_root%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/.devhome-agent*/.codex) governance_agent_dir=${CODEX_HOME%/.devhome-agent*/.codex}; governance_root=${governance_agent_dir%%/agent-worktrees/*}/ouroboros-ide; governance_env=${governance_agent_dir%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide/.codex) governance_root=${CODEX_HOME%/.codex}; governance_env=${governance_root%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac; fi",
 		"if [[ -z ${governance_env} ]]; then echo required governance env missing: unable to derive path for PWD=${PWD:-} >&2; exit 1; fi",
 		"if [[ ! -r ${governance_env} ]]; then echo required governance env missing: ${governance_env} >&2; exit 1; fi",
 		"if [[ -z ${governance_root} ]]; then echo required governance root missing: unable to derive path for PWD=${PWD:-} >&2; exit 1; fi",
@@ -825,8 +898,10 @@ func governanceMCPEntrypointZsh() string {
 		"echo using governance env: ${governance_env} >&2",
 		"echo using governance root: ${governance_root} >&2",
 		"source ${governance_env}",
-		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
-		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_root} in */agent-worktrees/*/ouroboros-ide) workspace_tail=${governance_root#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace ;; esac; fi",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in */agent-worktrees/*/ouroboros-ide) workspace_tail=${PWD#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; esac; fi",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} && -n ${CODEX_HOME:-} ]]; then case ${CODEX_HOME} in */agent-worktrees/*) workspace_tail=${CODEX_HOME#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; esac; fi",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_root} in */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
 		"exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward",
 	}, "; ")
 }

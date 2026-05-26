@@ -33,12 +33,13 @@ readiness:
     - name: governance-env
       command: |
         test -r /workspaces/dev/.devkit/ouro8-governance-env.sh
+        grep -q 'dev-workspace=/workspaces/dev' /workspaces/dev/.devkit/ouro8-governance-env.sh
         grep -q 'ouroboros-ide=/workspaces/dev/ouroboros-ide' /workspaces/dev/.devkit/ouro8-governance-env.sh
   repo_checks:
     - name: governance-stdio-smoke
       command: |
         cd /workspaces/dev/ouroboros-ide
-        scripts/devops/governance-mcp-stdio-smoke --json --routing-probe --workspace-id ouroboros-ide --expected-workspace-root /workspaces/dev/ouroboros-ide >/dev/null
+        scripts/devops/governance-mcp-stdio-smoke --json --routing-probe --workspace-id dev-workspace --expected-workspace-root /workspaces/dev >/dev/null
     - name: static-production-dotenv-present
       command: |
         test -f /workspaces/dev/ouroboros-static-front-end/.production.env
