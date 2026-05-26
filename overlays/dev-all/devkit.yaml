@@ -357,29 +357,29 @@ ingress:
       cert: ../../../ouroboros-ide/infra/webserver.ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/webserver.ouroboros.test-key.pem
     - host: http://static-1.localhost
-      service: dev-agent@1
-      port: 8000
+      service: 127.0.0.1
+      port: 8001
     - host: http://static-2.localhost
-      service: dev-agent@2
-      port: 8000
+      service: 127.0.0.1
+      port: 8002
     - host: http://static-3.localhost
-      service: dev-agent@3
-      port: 8000
+      service: 127.0.0.1
+      port: 8003
     - host: http://static-4.localhost
-      service: dev-agent@4
-      port: 8000
+      service: 127.0.0.1
+      port: 8004
     - host: http://static-5.localhost
-      service: dev-agent@5
-      port: 8000
+      service: 127.0.0.1
+      port: 8005
     - host: http://static-6.localhost
-      service: dev-agent@6
-      port: 8000
+      service: 127.0.0.1
+      port: 8006
     - host: http://static-7.localhost
-      service: dev-agent@7
-      port: 8000
+      service: 127.0.0.1
+      port: 8007
     - host: http://static-8.localhost
-      service: dev-agent@8
-      port: 8000
+      service: 127.0.0.1
+      port: 8008
   hosts:
     - ouroboros.test
     - webserver.ouroboros.test

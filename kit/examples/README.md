@@ -24,12 +24,16 @@ agent index; that warning is expected for this companion layout.
 From a `static-N` window, run the fixture-safe Gatsby server with:
 
 ```bash
-USE_CONTENTFUL_FIXTURE=1 GATSBY_TELEMETRY_DISABLED=1 npm run dev -- --host 0.0.0.0
+port=$((8000 + ${DEVKIT_NATIVE_AGENT:-1}))
+USE_CONTENTFUL_FIXTURE=1 GATSBY_TELEMETRY_DISABLED=1 \
+  npm run dev -- --host 127.0.0.1 --port "$port"
 ```
 
 The dev-all ingress config includes matching `http://static-N.localhost` routes
-to port `8000` for those windows. Use fixture mode by default so agents can
-inspect the marketing surface without Contentful credentials.
+to per-agent host ports `8001` through `8008` for those windows. Use fixture
+mode by default so agents can inspect the marketing surface without Contentful
+credentials. If a native ingress process is not running, use the direct
+per-agent URL, for example `http://static-1.localhost:8001`.
 
 Useful dry-run:
 

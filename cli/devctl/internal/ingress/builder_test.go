@@ -108,7 +108,7 @@ func TestBuildFragmentSupportsExplicitHTTPRouteWithoutTLS(t *testing.T) {
 	cfg := &config.IngressConfig{
 		Kind: "caddy",
 		Routes: []config.IngressRoute{
-			{Host: "http://static-1.localhost", Service: "dev-agent@1", Port: 8000},
+			{Host: "http://static-1.localhost", Service: "127.0.0.1", Port: 8001},
 		},
 	}
 	if _, err := BuildFragment(project, cfg, "", dir); err != nil {
@@ -126,8 +126,8 @@ func TestBuildFragmentSupportsExplicitHTTPRouteWithoutTLS(t *testing.T) {
 	if strings.Contains(text, "tls internal") {
 		t.Fatalf("generated HTTP route should not emit TLS directive: %s", text)
 	}
-	if !strings.Contains(text, "agent-1:8000") {
-		t.Fatalf("generated config missing agent route: %s", text)
+	if !strings.Contains(text, "127.0.0.1:8001") {
+		t.Fatalf("generated config missing loopback route: %s", text)
 	}
 }
 
