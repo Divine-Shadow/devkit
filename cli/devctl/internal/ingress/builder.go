@@ -143,7 +143,7 @@ func renderCaddyfile(routes []renderedRoute) (string, error) {
 
 func writeSimpleSite(b *strings.Builder, route renderedRoute) {
 	b.WriteString(fmt.Sprintf("%s {\n", route.host))
-	writeTLS(b, route.certPath, route.keyPath)
+	writeTLS(b, route.host, route.certPath, route.keyPath)
 	b.WriteString(fmt.Sprintf("  reverse_proxy %s:%d\n", route.service, route.port))
 	b.WriteString("}\n\n")
 }
@@ -159,7 +159,7 @@ func writeRoutedSite(b *strings.Builder, host string, routes []renderedRoute) er
 
 	fallbackCount := 0
 	b.WriteString(fmt.Sprintf("%s {\n", host))
-	writeTLS(b, certPath, keyPath)
+	writeTLS(b, host, certPath, keyPath)
 	for _, route := range routes {
 		if route.path == "" {
 			continue
@@ -184,7 +184,10 @@ func writeRoutedSite(b *strings.Builder, host string, routes []renderedRoute) er
 	return nil
 }
 
-func writeTLS(b *strings.Builder, certPath string, keyPath string) {
+func writeTLS(b *strings.Builder, host string, certPath string, keyPath string) {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(host)), "http://") {
+		return
+	}
 	if certPath != "" && keyPath != "" {
 		b.WriteString(fmt.Sprintf("  tls %s %s\n", certPath, keyPath))
 	} else {

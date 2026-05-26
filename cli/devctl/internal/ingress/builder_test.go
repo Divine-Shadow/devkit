@@ -102,6 +102,35 @@ func TestBuildFragmentGroupsPathRoutesByHost(t *testing.T) {
 	}
 }
 
+func TestBuildFragmentSupportsExplicitHTTPRouteWithoutTLS(t *testing.T) {
+	dir := t.TempDir()
+	project := "proj-http-route"
+	cfg := &config.IngressConfig{
+		Kind: "caddy",
+		Routes: []config.IngressRoute{
+			{Host: "http://static-1.localhost", Service: "dev-agent@1", Port: 8000},
+		},
+	}
+	if _, err := BuildFragment(project, cfg, "", dir); err != nil {
+		t.Fatalf("BuildFragment error: %v", err)
+	}
+	genFile := filepath.Join(os.TempDir(), "devkit-ingress", sanitize(project), "Caddyfile.generated")
+	content, err := os.ReadFile(genFile)
+	if err != nil {
+		t.Fatalf("read generated config: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "http://static-1.localhost {") {
+		t.Fatalf("generated config missing HTTP site address: %s", text)
+	}
+	if strings.Contains(text, "tls internal") {
+		t.Fatalf("generated HTTP route should not emit TLS directive: %s", text)
+	}
+	if !strings.Contains(text, "agent-1:8000") {
+		t.Fatalf("generated config missing agent route: %s", text)
+	}
+}
+
 func TestBuildFragmentRejectsDirectoryCertPath(t *testing.T) {
 	dir := t.TempDir()
 	certDir := filepath.Join(dir, "ouroboros.test.pem")

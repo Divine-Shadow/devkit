@@ -138,6 +138,23 @@ readiness:
       command: |
         test -f frontend/package.json
         npm --prefix frontend run typecheck
+    - name: static-marketing-fixture-typecheck
+      command: |
+        static_repo=/workspaces/dev/ouroboros-static-front-end
+        test -f "$static_repo/package.json"
+        npm --prefix "$static_repo" run typecheck
+    - name: static-marketing-fixture-smoke
+      command: |
+        static_repo=/workspaces/dev/ouroboros-static-front-end
+        test -f "$static_repo/package.json"
+        (
+          cd "$static_repo"
+          SMOKE_TEST_PORT=$((9010 + ${DEVKIT_NATIVE_AGENT:-0})) \
+          XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/tmp/devkit-static-gatsby-config-${DEVKIT_NATIVE_AGENT:-0}}" \
+          USE_CONTENTFUL_FIXTURE=1 \
+          GATSBY_TELEMETRY_DISABLED=1 \
+          npm run smoke
+        )
     - name: frontend-test
       command: |
         test -f frontend/package.json
@@ -339,6 +356,30 @@ ingress:
       port: 8080
       cert: ../../../ouroboros-ide/infra/webserver.ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/webserver.ouroboros.test-key.pem
+    - host: http://static-1.localhost
+      service: dev-agent@1
+      port: 8000
+    - host: http://static-2.localhost
+      service: dev-agent@2
+      port: 8000
+    - host: http://static-3.localhost
+      service: dev-agent@3
+      port: 8000
+    - host: http://static-4.localhost
+      service: dev-agent@4
+      port: 8000
+    - host: http://static-5.localhost
+      service: dev-agent@5
+      port: 8000
+    - host: http://static-6.localhost
+      service: dev-agent@6
+      port: 8000
+    - host: http://static-7.localhost
+      service: dev-agent@7
+      port: 8000
+    - host: http://static-8.localhost
+      service: dev-agent@8
+      port: 8000
   hosts:
     - ouroboros.test
     - webserver.ouroboros.test

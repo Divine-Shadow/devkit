@@ -21,6 +21,16 @@ The paired static windows intentionally target the same `dev-agent` indexes as
 the `ouro-N` windows. `layout-validate` will warn about multiple windows per
 agent index; that warning is expected for this companion layout.
 
+From a `static-N` window, run the fixture-safe Gatsby server with:
+
+```bash
+USE_CONTENTFUL_FIXTURE=1 GATSBY_TELEMETRY_DISABLED=1 npm run dev -- --host 0.0.0.0
+```
+
+The dev-all ingress config includes matching `http://static-N.localhost` routes
+to port `8000` for those windows. Use fixture mode by default so agents can
+inspect the marketing surface without Contentful credentials.
+
 Useful dry-run:
 
 ```bash
