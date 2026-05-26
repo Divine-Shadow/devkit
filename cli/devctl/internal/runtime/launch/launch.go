@@ -567,12 +567,11 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 
 func buildOuroGovernanceEnv(hostDevRoot string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
-	ids := []string{"dev-workspace", "ouroboros-ide"}
+	ids := []string{"ouroboros-ide"}
 	roots := []string{
-		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 	}
-	for i := 1; i <= 8; i++ {
+	for i := 2; i <= 8; i++ {
 		agent := fmt.Sprintf("agent%d", i)
 		ids = append(ids, agent)
 		roots = append(roots, fmt.Sprintf("%s=/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent, agent))
@@ -826,7 +825,7 @@ func governanceMCPEntrypointZsh() string {
 		"echo using governance env: ${governance_env} >&2",
 		"echo using governance root: ${governance_root} >&2",
 		"source ${governance_env}",
-		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace ;; esac; fi",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
 		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_root} in */agent-worktrees/*/ouroboros-ide) workspace_tail=${governance_root#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
 		"exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward",
 	}, "; ")

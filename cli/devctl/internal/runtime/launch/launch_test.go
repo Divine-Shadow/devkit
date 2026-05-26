@@ -515,9 +515,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
 		"runtime env did not provide an executable JAVA_HOME",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8",
-		"dev-workspace=/workspaces/dev",
-		"agent1=/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=ouroboros-ide,agent2,agent3,agent4,agent5,agent6,agent7,agent8",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 		"agent8=/workspaces/dev/agent-worktrees/agent8/ouroboros-ide",
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas"),
@@ -573,7 +572,7 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 		`[mcp_servers.governance]`,
 		`cwd = "/workspaces/dev"`,
 		`governance_root=/workspaces/dev/ouroboros-ide`,
-		`SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace`,
+		`SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide`,
 	} {
 		if !strings.Contains(gotConfig, want) {
 			t.Fatalf("config missing %q:\n%s", want, gotConfig)
@@ -598,7 +597,6 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 	}
 	gotEnv := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"))
 	for _, want := range []string{
-		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 	} {
 		if !strings.Contains(gotEnv, want) {
