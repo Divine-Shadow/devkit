@@ -49,6 +49,7 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 	if repo == "" {
 		repo = "ouroboros-ide"
 	}
+	workspaceRoot := IsWorkspaceRootRepo(repo)
 	index := cfg.Index
 	if index < 1 {
 		index = 1
@@ -64,7 +65,10 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 
 	hostWorktree := filepath.Join(devRoot, repo)
 	sandboxWorktree := filepath.Join("/workspaces/dev", repo)
-	if cfg.DedicatedWorktree || index > 1 {
+	if workspaceRoot {
+		hostWorktree = devRoot
+		sandboxWorktree = "/workspaces/dev"
+	} else if cfg.DedicatedWorktree || index > 1 {
 		hostWorktree = filepath.Join(hostWorktreeRoot, agentDir, repo)
 		sandboxWorktree = filepath.Join(sandboxWorktreeRoot, agentDir, repo)
 	}
@@ -73,7 +77,7 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 	sandboxAgentStateRoot := filepath.Join(sandboxStateRoot, agentName)
 	hostHome := filepath.Join(hostAgentStateRoot, "home")
 	sandboxHome := filepath.Join(sandboxAgentStateRoot, "home")
-	if project == "dev-all" {
+	if project == "dev-all" && !workspaceRoot {
 		suffix := fmt.Sprintf(".devhome-agent%d", index)
 		if index == 1 {
 			hostHome = filepath.Join(hostWorktree, suffix)
@@ -96,6 +100,11 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 		SandboxAgentStateRoot: sandboxAgentStateRoot,
 		SandboxHome:           sandboxHome,
 	}, nil
+}
+
+func IsWorkspaceRootRepo(repo string) bool {
+	repo = filepath.Clean(strings.TrimSpace(repo))
+	return repo == "." || repo == string(filepath.Separator)
 }
 
 func resolveHostPath(value, devkitRoot, fallback string) string {

@@ -105,7 +105,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
-		if project == "dev-all" {
+		if project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) {
 			suffix := fmt.Sprintf(".devhome-agent%d", index)
 			if index == 1 {
 				paths.SandboxHome = filepath.Join(paths.SandboxWorktree, suffix)
@@ -169,6 +169,9 @@ func Build(opts BuildOptions) (Plan, error) {
 		"DOCKER_HOST":                  "unix://" + broker,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
 		"DEVKIT_NATIVE_AGENT":          fmt.Sprintf("%d", index),
+		"AWS_CONFIG_FILE":              filepath.Join(paths.SandboxHome, ".aws", "config"),
+		"AWS_SHARED_CREDENTIALS_FILE":  filepath.Join(paths.SandboxHome, ".aws", "credentials"),
+		"AWS_SDK_LOAD_CONFIG":          "1",
 	}
 	if proxyURL != "" {
 		env["HTTP_PROXY"] = proxyURL
@@ -242,7 +245,10 @@ func BuildDevAll(opts BuildOptions) (Plan, error) {
 }
 
 func defaultRepo(project string) string {
-	if strings.TrimSpace(project) == "dev-all" {
+	switch strings.TrimSpace(project) {
+	case "dev-workspace":
+		return "."
+	case "dev-all":
 		return "ouroboros-ide"
 	}
 	if strings.TrimSpace(project) != "" {
@@ -277,8 +283,11 @@ func sandboxPathForHostWorktree(paths agent.Paths) (string, bool) {
 func projectSandboxPath(hostPath, hostRoot, sandboxRoot string) (string, bool) {
 	hostRoot = filepath.Clean(hostRoot)
 	rel, err := filepath.Rel(hostRoot, hostPath)
-	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+	if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return "", false
+	}
+	if rel == "." {
+		return filepath.Clean(sandboxRoot), true
 	}
 	return filepath.Join(sandboxRoot, rel), true
 }

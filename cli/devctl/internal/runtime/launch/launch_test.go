@@ -353,6 +353,9 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "command codex") {
 		t.Fatalf("repaired wrapper missing command codex:\n%s", got)
 	}
+	if !strings.Contains(got, "-m gpt-5.2") {
+		t.Fatalf("repaired wrapper missing fleet-safe model pin:\n%s", got)
+	}
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("repaired wrapper missing TUI log guard:\n%s", got)
 	}
@@ -399,6 +402,9 @@ codex() {
 	got := readTestFile(t, zshrc)
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("generated wrapper missing TUI log guard function:\n%s", got)
+	}
+	if !strings.Contains(got, "-m gpt-5.2") {
+		t.Fatalf("generated wrapper missing fleet-safe model pin:\n%s", got)
 	}
 	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  HOME=\"$HOME\" CODEX_HOME=") {
 		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
@@ -504,7 +510,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	gotEnv := readTestFile(t, envPath)
 	for _, want := range []string{
 		"Shared governance MCP/control-plane environment",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=ouroboros-ide,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8",
+		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='" + filepath.Join(devRoot, "devkit") + "#dev-all'",
+		"devkit_governance_load_runtime_env()",
+		"--no-warn-dirty --option eval-cache false",
+		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
+		"runtime env did not provide an executable JAVA_HOME",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8",
+		"dev-workspace=/workspaces/dev",
 		"agent1=/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
 		"agent8=/workspaces/dev/agent-worktrees/agent8/ouroboros-ide",
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
@@ -522,6 +534,76 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("stat governance env: %v", err)
 	} else if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("governance env mode = %o, want 600", got)
+	}
+}
+
+func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	policy := "prefix_rule(\n    pattern = [\"rg\"],\n    decision = \"forbidden\"\n)\n"
+	writeTestFile(t, filepath.Join(devkitRoot, "overlays", "dev-all", "codex-governed-search-policy.rules"), policy)
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "config.toml"), "top_level = true\n")
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "devkit-management", "SKILL.md"), "# devkit management\n")
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "autonomy-contract", "SKILL.md"), "# autonomy contract\n")
+	writeTestFile(t, filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "governed-search", "SKILL.md"), "# governed search\n")
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+		Project: "dev-workspace",
+		Flake:   "./overlays/dev-workspace#default",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	if got := readTestFile(t, filepath.Join(devRoot, ".codex", "config.toml")); got != "top_level = true\n" {
+		t.Fatalf("top-level config was modified:\n%s", got)
+	}
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	for _, want := range []string{
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`cwd = "/workspaces/dev"`,
+		`governance_root=/workspaces/dev/ouroboros-ide`,
+		`SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace`,
+	} {
+		if !strings.Contains(gotConfig, want) {
+			t.Fatalf("config missing %q:\n%s", want, gotConfig)
+		}
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")); got != policy {
+		t.Fatalf("policy rules = %q, want %q", got, policy)
+	}
+	for skill, wantTarget := range map[string]string{
+		"devkit-management": filepath.Join(devRoot, ".codex", "skills", "devkit-management"),
+		"autonomy-contract": filepath.Join(devRoot, ".codex", "skills", "autonomy-contract"),
+		"governed-search":   filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "governed-search"),
+	} {
+		link := filepath.Join(p.Agent.HostHome, ".codex", "skills", skill)
+		gotTarget, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("read skill link %s: %v", link, err)
+		}
+		if gotTarget != wantTarget {
+			t.Fatalf("skill link %s = %q, want %q", skill, gotTarget, wantTarget)
+		}
+	}
+	gotEnv := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"))
+	for _, want := range []string{
+		"dev-workspace=/workspaces/dev",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+	} {
+		if !strings.Contains(gotEnv, want) {
+			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
+		}
 	}
 }
 
@@ -608,6 +690,57 @@ func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 		}
 		if got := info.Mode().Perm(); got != wantMode {
 			t.Fatalf("%s mode = %v, want %v", name, got, wantMode)
+		}
+	}
+}
+
+func TestSeedAWSSyncsConfigAndCaches(t *testing.T) {
+	srcAWS := filepath.Join(t.TempDir(), ".aws")
+	for _, dir := range []string{
+		srcAWS,
+		filepath.Join(srcAWS, "sso", "cache"),
+		filepath.Join(srcAWS, "cli", "cache"),
+	} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	files := map[string]string{
+		"config":                                "[profile ouroboros]\nsso_session = mysesh\n",
+		"credentials":                           "",
+		filepath.Join("sso", "cache", "a.json"): `{"accessToken":"redacted"}`,
+		filepath.Join("cli", "cache", "b.json"): `{"Credentials":{"AccessKeyId":"redacted"}}`,
+	}
+	for rel, content := range files {
+		if err := os.WriteFile(filepath.Join(srcAWS, rel), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	t.Setenv("DEVKIT_AWS_HOME", srcAWS)
+
+	nativeHome := filepath.Join(t.TempDir(), "native-home")
+	if err := SeedAWS(nativeHome, false); err != nil {
+		t.Fatalf("SeedAWS: %v", err)
+	}
+	for rel, want := range files {
+		if got := readTestFile(t, filepath.Join(nativeHome, ".aws", rel)); got != want {
+			t.Fatalf("%s = %q, want %q", rel, got, want)
+		}
+		info, err := os.Stat(filepath.Join(nativeHome, ".aws", rel))
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("%s mode = %v, want 0600", rel, got)
+		}
+	}
+	for _, rel := range []string{".aws", filepath.Join(".aws", "sso"), filepath.Join(".aws", "sso", "cache"), filepath.Join(".aws", "cli"), filepath.Join(".aws", "cli", "cache")} {
+		info, err := os.Stat(filepath.Join(nativeHome, rel))
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("%s mode = %v, want 0700", rel, got)
 		}
 	}
 }

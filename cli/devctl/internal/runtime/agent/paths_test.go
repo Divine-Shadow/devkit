@@ -61,3 +61,28 @@ func TestResolvePathsUsesConfiguredRoots(t *testing.T) {
 		t.Fatalf("host home = %q", got.HostHome)
 	}
 }
+
+func TestResolvePathsWorkspaceRootRepo(t *testing.T) {
+	got, err := ResolvePaths(PathConfig{
+		DevkitRoot:        "/home/me/dev/devkit",
+		Project:           "dev-workspace",
+		Repo:              ".",
+		Index:             1,
+		DedicatedWorktree: true,
+	})
+	if err != nil {
+		t.Fatalf("ResolvePaths: %v", err)
+	}
+	if got.HostWorktree != "/home/me/dev" {
+		t.Fatalf("host worktree = %q", got.HostWorktree)
+	}
+	if got.SandboxWorktree != "/workspaces/dev" {
+		t.Fatalf("sandbox worktree = %q", got.SandboxWorktree)
+	}
+	if got.HostHome != "/home/me/dev/.devkit/native-agents/dev-workspace-agent1/home" {
+		t.Fatalf("host home = %q", got.HostHome)
+	}
+	if got.SandboxHome != "/agent-state/dev-workspace-agent1/home" {
+		t.Fatalf("sandbox home = %q", got.SandboxHome)
+	}
+}

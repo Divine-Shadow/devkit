@@ -331,6 +331,7 @@
           templateAgent = import ./overlays/_template/runtime.nix runtimeArgs;
           codex = import ./overlays/codex/runtime.nix runtimeArgs;
           devAll = import ./overlays/dev-all/runtime.nix runtimeArgs;
+          devWorkspace = import ./overlays/dev-workspace/runtime.nix runtimeArgs;
           dumbOnionHax = import ./overlays/dumb-onion-hax/runtime.nix runtimeArgs;
           ouroIntegration = import ./overlays/ouro-integration/runtime.nix runtimeArgs;
           ouroborosStaticFrontEnd = import ./overlays/ouroboros-static-front-end/runtime.nix runtimeArgs;
@@ -346,6 +347,7 @@
           ouroboros-dev-agent = codex;
 
           dev-all = devAll;
+          dev-workspace = devWorkspace;
           codex = codex;
           dumb-onion-hax = dumbOnionHax;
           ouro-integration = ouroIntegration;

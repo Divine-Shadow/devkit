@@ -4,6 +4,7 @@ import (
 	"context"
 	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/paths"
+	runtimeagent "devkit/cli/devctl/internal/runtime/agent"
 	"errors"
 	"fmt"
 	"os"
@@ -250,6 +251,9 @@ func SetupNative(opts NativeOptions) error {
 	repo := strings.TrimSpace(opts.Repo)
 	if repo == "" {
 		return fmt.Errorf("repo is required")
+	}
+	if runtimeagent.IsWorkspaceRootRepo(repo) {
+		return nil
 	}
 	count := opts.Count
 	if count < 1 {

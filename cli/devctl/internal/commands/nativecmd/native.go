@@ -994,6 +994,9 @@ func firstNonEmpty(values ...string) string {
 
 func defaultRepoForProject(project string) string {
 	project = strings.TrimSpace(project)
+	if project == "dev-workspace" {
+		return "."
+	}
 	if project == "" || project == "dev-all" {
 		return "ouroboros-ide"
 	}

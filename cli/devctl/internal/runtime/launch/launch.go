@@ -64,6 +64,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := installProjectCodexRules(p); err != nil {
 		return err
 	}
+	if err := ensureWorkspaceSkillLinks(p); err != nil {
+		return err
+	}
 	if err := ensureScalaCacheDirs(p); err != nil {
 		return err
 	}
@@ -74,6 +77,9 @@ func Prepare(p nativeplan.Plan) error {
 		return err
 	}
 	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
+		return err
+	}
+	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
 		return err
 	}
 	if err := ensureGitSSHConfig(p); err != nil {
@@ -124,8 +130,10 @@ func ensureGitSSHConfig(p nativeplan.Plan) error {
 	if err := runGitConfigFile(filepath.Join(hostHome, ".gitconfig"), "core.sshCommand", sshCommand); err != nil {
 		return err
 	}
-	if err := configureWorktreeGitSSH(p.Agent.HostWorktree, sshCommand); err != nil {
-		return err
+	if !isDevWorkspacePlan(p) {
+		if err := configureWorktreeGitSSH(p.Agent.HostWorktree, sshCommand); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -400,7 +408,7 @@ func capCodexTUILog(hostHome string) error {
 }
 
 func installProjectCodexRules(p nativeplan.Plan) error {
-	if strings.TrimSpace(p.Agent.ID.Project) != "dev-all" || strings.TrimSpace(p.Agent.ID.Repo) != "ouroboros-ide" {
+	if !isOuroGovernedPlan(p) {
 		return nil
 	}
 	if strings.TrimSpace(p.Agent.HostHome) == "" || strings.TrimSpace(p.DevkitHostRoot) == "" {
@@ -428,14 +436,14 @@ func installProjectCodexRules(p nativeplan.Plan) error {
 }
 
 func ensureCodexShellHook(p nativeplan.Plan) error {
-	if strings.TrimSpace(p.Agent.ID.Project) == "dev-all" && strings.TrimSpace(p.Agent.ID.Repo) == "ouroboros-ide" {
+	if isOuroGovernedPlan(p) {
 		return writeOuroCodexShellHook(p.Agent.HostHome)
 	}
 	return repairRetiredCodexShellHook(p.Agent.HostHome)
 }
 
 func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
-	if strings.TrimSpace(p.Agent.ID.Project) != "dev-all" || strings.TrimSpace(p.Agent.ID.Repo) != "ouroboros-ide" {
+	if !isOuroGovernedPlan(p) {
 		return nil
 	}
 	hostDevRoot := hostDevRootForPlan(p)
@@ -454,6 +462,85 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 	}
 	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write governance env %s: %w", envPath, err)
+	}
+	return nil
+}
+
+func isOuroGovernedPlan(p nativeplan.Plan) bool {
+	project := strings.TrimSpace(p.Agent.ID.Project)
+	repo := strings.TrimSpace(p.Agent.ID.Repo)
+	return (project == "dev-all" && repo == "ouroboros-ide") || project == "dev-workspace"
+}
+
+func isDevWorkspacePlan(p nativeplan.Plan) bool {
+	return strings.TrimSpace(p.Agent.ID.Project) == "dev-workspace"
+}
+
+func shouldWriteWorktreeGovernanceConfig(p nativeplan.Plan) bool {
+	return strings.TrimSpace(p.Agent.ID.Project) == "dev-all" && strings.TrimSpace(p.Agent.ID.Repo) == "ouroboros-ide"
+}
+
+func ensureWorkspaceSkillLinks(p nativeplan.Plan) error {
+	if !isDevWorkspacePlan(p) {
+		return nil
+	}
+	hostHome := strings.TrimSpace(p.Agent.HostHome)
+	hostDevRoot := hostDevRootForPlan(p)
+	if hostHome == "" || hostDevRoot == "" {
+		return nil
+	}
+	targetRoot := filepath.Join(hostHome, ".codex", "skills")
+	if err := os.MkdirAll(targetRoot, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", targetRoot, err)
+	}
+	seen := map[string]bool{}
+	for _, sourceRoot := range []string{
+		filepath.Join(hostDevRoot, ".codex", "skills"),
+		filepath.Join(hostDevRoot, "ouroboros-ide", ".codex", "skills"),
+	} {
+		entries, err := os.ReadDir(sourceRoot)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read skills %s: %w", sourceRoot, err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || entry.Name() == ".system" || seen[entry.Name()] {
+				continue
+			}
+			seen[entry.Name()] = true
+			source := filepath.Join(sourceRoot, entry.Name())
+			target := filepath.Join(targetRoot, entry.Name())
+			if err := ensureSkillSymlink(target, source); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func ensureSkillSymlink(target, source string) error {
+	target = filepath.Clean(target)
+	source = filepath.Clean(source)
+	if info, err := os.Lstat(target); err == nil {
+		if info.Mode()&os.ModeSymlink == 0 {
+			return nil
+		}
+		if existing, err := os.Readlink(target); err == nil && filepath.Clean(existing) == source {
+			return nil
+		}
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("remove stale skill link %s: %w", target, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat skill link %s: %w", target, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
+	}
+	if err := os.Symlink(source, target); err != nil {
+		return fmt.Errorf("symlink %s -> %s: %w", target, source, err)
 	}
 	return nil
 }
@@ -480,8 +567,11 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 
 func buildOuroGovernanceEnv(hostDevRoot string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
-	ids := []string{"ouroboros-ide"}
-	roots := []string{"ouroboros-ide=/workspaces/dev/ouroboros-ide"}
+	ids := []string{"dev-workspace", "ouroboros-ide"}
+	roots := []string{
+		"dev-workspace=/workspaces/dev",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+	}
 	for i := 1; i <= 8; i++ {
 		agent := fmt.Sprintf("agent%d", i)
 		ids = append(ids, agent)
@@ -490,9 +580,36 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 	jar := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar")
 	stateDir := filepath.Join(hostDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
+	runtimeFlake := filepath.Join(hostDevRoot, "devkit") + "#dev-all"
 	return strings.Join([]string{
-		"# Shared governance MCP/control-plane environment for native dev-all GUI agents.",
+		"# Shared governance MCP/control-plane environment for native Ouroboros GUI agents.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
+		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE=" + shellQuote(runtimeFlake),
+		"devkit_governance_load_runtime_env() {",
+		"  if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
+		"    return 0",
+		"  fi",
+		"  local nix_bin",
+		"  if command -v nix >/dev/null 2>&1; then",
+		"    nix_bin=\"$(command -v nix)\"",
+		"  elif [ -x /run/current-system/sw/bin/nix ]; then",
+		"    nix_bin=/run/current-system/sw/bin/nix",
+		"  else",
+		"    echo \"[devkit-governance-env] unable to locate nix for ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
+		"    return 1",
+		"  fi",
+		"  local runtime_env",
+		"  if ! runtime_env=\"$($nix_bin --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\")\"; then",
+		"    echo \"[devkit-governance-env] unable to load runtime env from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
+		"    return 1",
+		"  fi",
+		"  eval \"$runtime_env\"",
+		"}",
+		"devkit_governance_load_runtime_env",
+		"if [ -z \"${JAVA_HOME:-}\" ] || [ ! -x \"${JAVA_HOME}/bin/java\" ]; then",
+		"  echo \"[devkit-governance-env] runtime env did not provide an executable JAVA_HOME\" >&2",
+		"  return 1",
+		"fi",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(ids, ","),
 		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(roots, ","),
 		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=" + jar,
@@ -507,7 +624,7 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 }
 
 func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
-	if strings.TrimSpace(p.Agent.ID.Project) != "dev-all" || strings.TrimSpace(p.Agent.ID.Repo) != "ouroboros-ide" {
+	if !isOuroGovernedPlan(p) {
 		return nil
 	}
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
@@ -515,7 +632,7 @@ func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
 		return nil
 	}
 	configPaths := []string{filepath.Join(hostHome, ".codex", "config.toml")}
-	if worktree := strings.TrimSpace(p.Agent.HostWorktree); worktree != "" {
+	if worktree := strings.TrimSpace(p.Agent.HostWorktree); worktree != "" && shouldWriteWorktreeGovernanceConfig(p) {
 		configPaths = append(configPaths, filepath.Join(worktree, ".codex", "config.toml"))
 	}
 	seen := map[string]bool{}
@@ -673,6 +790,7 @@ func ouroCodexShellHookZsh() string {
 		"codex() {",
 		"  local -a extra",
 		"  extra=(",
+		"    -m gpt-5.2",
 		"    -a never",
 		"    -s danger-full-access",
 		`    -c 'mcp_servers.codex-cli.command="codex"'`,
@@ -699,7 +817,7 @@ func governanceMCPEntrypointZsh() string {
 		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM",
 		"governance_env=",
 		"governance_root=",
-		"case ${PWD:-} in */agent-worktrees/*/ouroboros-ide) governance_env=${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/ouroboros-ide) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */ouroboros-ide) governance_env=${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; esac",
+		"case ${PWD:-} in /workspaces/dev) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */agent-worktrees/*/ouroboros-ide) governance_env=${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/ouroboros-ide) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; /workspaces/dev/*) governance_env=/workspaces/dev/.devkit/ouro8-governance-env.sh; governance_root=/workspaces/dev/ouroboros-ide ;; */ouroboros-ide) governance_env=${PWD%/ouroboros-ide}/.devkit/ouro8-governance-env.sh; governance_root=${PWD} ;; esac",
 		"if [[ -z ${governance_root} && -n ${CODEX_HOME:-} ]]; then case ${CODEX_HOME} in */agent-worktrees/*/ouroboros-ide/.devhome-agent*/.codex) governance_root=${CODEX_HOME%/.devhome-agent*/.codex}; governance_env=${governance_root%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */agent-worktrees/*/.devhome-agent*/.codex) governance_agent_dir=${CODEX_HOME%/.devhome-agent*/.codex}; governance_root=${governance_agent_dir}/ouroboros-ide; governance_env=${governance_agent_dir%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh ;; */ouroboros-ide/.codex) governance_root=${CODEX_HOME%/.codex}; governance_env=${governance_root%/ouroboros-ide}/.devkit/ouro8-governance-env.sh ;; esac; fi",
 		"if [[ -z ${governance_env} ]]; then echo required governance env missing: unable to derive path for PWD=${PWD:-} >&2; exit 1; fi",
 		"if [[ ! -r ${governance_env} ]]; then echo required governance env missing: ${governance_env} >&2; exit 1; fi",
@@ -708,6 +826,7 @@ func governanceMCPEntrypointZsh() string {
 		"echo using governance env: ${governance_env} >&2",
 		"echo using governance root: ${governance_root} >&2",
 		"source ${governance_env}",
+		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${PWD:-} in /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace ;; esac; fi",
 		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_root} in */agent-worktrees/*/ouroboros-ide) workspace_tail=${governance_root#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; esac; fi",
 		"exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward",
 	}, "; ")
@@ -977,6 +1096,132 @@ func SeedCodexAuth(hostHome string, force bool) error {
 	}
 	if err := os.WriteFile(target, data, 0o600); err != nil {
 		return fmt.Errorf("write Codex auth %s: %w", target, err)
+	}
+	return nil
+}
+
+func SeedAWS(hostHome string, force bool) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	srcAWS := strings.TrimSpace(os.Getenv("DEVKIT_AWS_HOME"))
+	if srcAWS == "" {
+		if configPath := strings.TrimSpace(os.Getenv("AWS_CONFIG_FILE")); configPath != "" {
+			srcAWS = filepath.Dir(configPath)
+		}
+	}
+	if srcAWS == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			srcAWS = filepath.Join(home, ".aws")
+		}
+	}
+	if srcAWS == "" {
+		return nil
+	}
+	if st, err := os.Stat(srcAWS); err != nil || !st.IsDir() {
+		return nil
+	}
+
+	targetAWS := filepath.Join(hostHome, ".aws")
+	if err := os.MkdirAll(targetAWS, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", targetAWS, err)
+	}
+	if err := os.Chmod(targetAWS, 0o700); err != nil {
+		return fmt.Errorf("chmod %s: %w", targetAWS, err)
+	}
+	for _, rel := range []string{"sso", "cli"} {
+		if err := ensureAWSDir(filepath.Join(targetAWS, rel)); err != nil {
+			return err
+		}
+	}
+	if err := copyAWSFile(filepath.Join(srcAWS, "config"), filepath.Join(targetAWS, "config"), 0o600, force); err != nil {
+		return err
+	}
+
+	credentialsSource := filepath.Join(srcAWS, "credentials")
+	if override := strings.TrimSpace(os.Getenv("AWS_SHARED_CREDENTIALS_FILE")); override != "" {
+		credentialsSource = override
+	}
+	if err := copyAWSFile(credentialsSource, filepath.Join(targetAWS, "credentials"), 0o600, force); err != nil {
+		return err
+	}
+	for _, rel := range []string{
+		filepath.Join("sso", "cache"),
+		filepath.Join("cli", "cache"),
+	} {
+		if err := copyAWSDir(filepath.Join(srcAWS, rel), filepath.Join(targetAWS, rel), force); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureAWSDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	return nil
+}
+
+func copyAWSFile(src, dst string, mode os.FileMode, force bool) error {
+	src = strings.TrimSpace(src)
+	dst = strings.TrimSpace(dst)
+	if src == "" || dst == "" {
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read AWS state %s: %w", src, err)
+	}
+	if !force {
+		if existing, err := os.ReadFile(dst); err == nil && string(existing) == string(data) {
+			return nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read AWS state target %s: %w", dst, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, data, mode); err != nil {
+		return fmt.Errorf("write AWS state %s: %w", dst, err)
+	}
+	return nil
+}
+
+func copyAWSDir(src, dst string, force bool) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read AWS state dir %s: %w", src, err)
+	}
+	if err := ensureAWSDir(dst); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyAWSDir(srcPath, dstPath, force); err != nil {
+				return err
+			}
+			continue
+		}
+		if entry.Type()&os.ModeType != 0 {
+			continue
+		}
+		if err := copyAWSFile(srcPath, dstPath, 0o600, force); err != nil {
+			return err
+		}
 	}
 	return nil
 }

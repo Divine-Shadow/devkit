@@ -53,6 +53,15 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Env["DEVKIT_NATIVE_AGENT"] != "2" {
 		t.Fatalf("DEVKIT_NATIVE_AGENT = %q", p.Env["DEVKIT_NATIVE_AGENT"])
 	}
+	if p.Env["AWS_CONFIG_FILE"] != filepath.Join(p.Agent.SandboxHome, ".aws", "config") {
+		t.Fatalf("AWS_CONFIG_FILE = %q", p.Env["AWS_CONFIG_FILE"])
+	}
+	if p.Env["AWS_SHARED_CREDENTIALS_FILE"] != filepath.Join(p.Agent.SandboxHome, ".aws", "credentials") {
+		t.Fatalf("AWS_SHARED_CREDENTIALS_FILE = %q", p.Env["AWS_SHARED_CREDENTIALS_FILE"])
+	}
+	if p.Env["AWS_SDK_LOAD_CONFIG"] != "1" {
+		t.Fatalf("AWS_SDK_LOAD_CONFIG = %q", p.Env["AWS_SDK_LOAD_CONFIG"])
+	}
 	for _, want := range []string{
 		"-Xmx6G",
 		"-XX:+UseG1GC",
@@ -244,6 +253,41 @@ func TestBuildDevAllUsesConfiguredRoots(t *testing.T) {
 	}
 	if p.Agent.SandboxHome != "/native-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
+	}
+}
+
+func TestBuildDevWorkspaceUsesWorkspaceRoot(t *testing.T) {
+	p, err := Build(BuildOptions{
+		Paths:   devkitpaths.Paths{Root: "/repo/devkit"},
+		Project: "dev-workspace",
+		Flake:   "./overlays/dev-workspace#default",
+	})
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	if p.Agent.ID.Repo != "." {
+		t.Fatalf("repo = %q", p.Agent.ID.Repo)
+	}
+	if p.Agent.HostWorktree != "/repo" {
+		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
+	}
+	if p.Agent.SandboxWorktree != "/workspaces/dev" {
+		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
+	}
+	if p.Agent.HostHome != "/repo/.devkit/native-agents/dev-workspace-agent1/home" {
+		t.Fatalf("host home = %q", p.Agent.HostHome)
+	}
+	if p.Agent.SandboxHome != "/agent-state/dev-workspace-agent1/home" {
+		t.Fatalf("sandbox home = %q", p.Agent.SandboxHome)
+	}
+	if p.Env["CODEX_HOME"] != "/agent-state/dev-workspace-agent1/home/.codex" {
+		t.Fatalf("CODEX_HOME = %q", p.Env["CODEX_HOME"])
+	}
+	if !hasBind(p.Binds, "/repo", "/workspace") {
+		t.Fatalf("workspace-root plan must mount dev root at /workspace: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, "/repo", "/workspaces/dev") {
+		t.Fatalf("workspace-root plan must mount dev root at /workspaces/dev: %#v", p.Binds)
 	}
 }
 
