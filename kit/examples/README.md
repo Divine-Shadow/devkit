@@ -10,3 +10,21 @@ kit/scripts/devkit -p dev-all layout-apply --file kit/examples/orchestration-our
 ```
 
 `orchestration-ouro8-devall.yaml` launches the `dev-all` overlay with eight agents and prepares matching `ouroboros-ide` worktrees. Use `--tmux` to force window creation when `DEVKIT_NO_TMUX=1`; use `--attach` to attach after windows are created.
+
+`orchestration-ouro8-static-devall.yaml` keeps the same eight `dev-all`
+agents and adds paired `static-N` windows that cd into the sibling
+`/workspaces/dev/ouroboros-static-front-end` checkout. This is the preferred
+layout when one agent needs to compare app code, backend/domain docs, static
+marketing content, and Gatsby fixture data without switching runtimes.
+
+The paired static windows intentionally target the same `dev-agent` indexes as
+the `ouro-N` windows. `layout-validate` will warn about multiple windows per
+agent index; that warning is expected for this companion layout.
+
+Useful dry-run:
+
+```bash
+kit/scripts/devkit --dry-run -p dev-all layout-apply \
+  --file kit/examples/orchestration-ouro8-static-devall.yaml \
+  --skip-broker --skip-ready
+```

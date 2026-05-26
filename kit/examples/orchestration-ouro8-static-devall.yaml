@@ -1,0 +1,98 @@
+session: devkit_ouro8_static
+
+overlays:
+  # Single dev-all overlay with 8 agents; prepares 8 worktrees for ouroboros-ide.
+  # Static marketing windows intentionally reuse the same dev-agent indexes and
+  # cd into the sibling checkout mounted under /workspaces/dev.
+  - project: dev-all
+    service: dev-agent
+    count: 8
+    worktrees:
+      repo: ouroboros-ide
+      count: 8
+      # base_branch and branch_prefix fallback to overlays/dev-all/devkit.yaml defaults.
+
+windows:
+  # Agent 1 uses the root ouroboros-ide checkout plus the shared static repo.
+  - index: 1
+    project: dev-all
+    service: dev-agent
+    path: ouroboros-ide
+    name: ouro-1
+  - index: 1
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-1
+
+  # Agents 2-8 use per-agent ouroboros-ide worktrees plus the shared static repo.
+  - index: 2
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent2/ouroboros-ide
+    name: ouro-2
+  - index: 2
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-2
+  - index: 3
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent3/ouroboros-ide
+    name: ouro-3
+  - index: 3
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-3
+  - index: 4
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent4/ouroboros-ide
+    name: ouro-4
+  - index: 4
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-4
+  - index: 5
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent5/ouroboros-ide
+    name: ouro-5
+  - index: 5
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-5
+  - index: 6
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent6/ouroboros-ide
+    name: ouro-6
+  - index: 6
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-6
+  - index: 7
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent7/ouroboros-ide
+    name: ouro-7
+  - index: 7
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-7
+  - index: 8
+    project: dev-all
+    service: dev-agent
+    path: agent-worktrees/agent8/ouroboros-ide
+    name: ouro-8
+  - index: 8
+    project: dev-all
+    service: dev-agent
+    path: /workspaces/dev/ouroboros-static-front-end
+    name: static-8
