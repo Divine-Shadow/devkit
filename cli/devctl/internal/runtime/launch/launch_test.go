@@ -60,9 +60,10 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
 		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/.cache/shared/coursier'",
 		"'--setenv' 'DOCKER_HOST' 'unix://" + brokerSocket + "'",
+		"'--setenv' 'OURO_NIX_SANDBOX' '1'",
 		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
 		"'--setenv' 'TMPDIR' '/tmp'",
-		"'--setenv' 'XDG_CACHE_HOME' '/tmp/devkit-nix-cache/dev-all-agent1'",
+		"'--setenv' 'XDG_CACHE_HOME' '/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'",
 		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
 	} {
 		if !strings.Contains(joined, want) {
@@ -74,6 +75,9 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export COURSIER_CACHE='/workspaces/dev/.cache/shared/coursier'") {
 		t.Fatalf("agent shell does not export shared coursier cache:\n%#v", cmd.Args)
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export OURO_NIX_SANDBOX='1'") {
+		t.Fatalf("agent shell does not export Nix sandbox marker:\n%#v", cmd.Args)
 	}
 	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export SBT_BOOT_DIR='/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.sbt/boot'") {
 		t.Fatalf("agent shell does not export per-agent SBT boot dir:\n%#v", cmd.Args)

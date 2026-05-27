@@ -1408,11 +1408,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		value := p.Env[key]
-		if key == "XDG_CACHE_HOME" {
-			value = filepath.Join("/tmp", "devkit-nix-cache", p.Agent.ID.Name())
-		}
-		args = append(args, "--setenv", key, value)
+		args = append(args, "--setenv", key, p.Env[key])
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)

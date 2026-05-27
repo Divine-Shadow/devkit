@@ -404,6 +404,17 @@ hooks:
   # Warm frontend deps and ensure playwright/typecheck tooling exists.
   warm: |
     set -euo pipefail
+    canonical_ouro_repos() {
+      printf '%s\n' /workspaces/dev/ouroboros-ide
+      if [ -n "${DEVKIT_NATIVE_AGENT:-}" ]; then
+        printf '%s\n' "/workspaces/dev/agent-worktrees/agent${DEVKIT_NATIVE_AGENT}/ouroboros-ide"
+        return 0
+      fi
+      local index
+      for index in 1 2 3 4 5 6 7 8; do
+        printf '%s\n' "/workspaces/dev/agent-worktrees/agent${index}/ouroboros-ide"
+      done
+    }
     cleanup_governance_logs() {
       local ttl="${OURO_LOG_TTL_DAYS:-7}"
       if ! printf '%s' "$ttl" | grep -Eq '^[0-9]+$'; then
@@ -411,7 +422,7 @@ hooks:
         return 0
       fi
 
-      for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
+      canonical_ouro_repos | while IFS= read -r repo; do
         [ -d "$repo/logs" ] || continue
         if [ -x "$repo/scripts/devops/governance-retention-cleanup" ]; then
           "$repo/scripts/devops/governance-retention-cleanup" --root "$repo/logs" --ttl-days "$ttl"
@@ -463,7 +474,7 @@ hooks:
       ln -s ../../ouroboros-ide /workspaces/dev/agent-worktrees/agent1/ouroboros-ide
     fi
     if command -v sbt >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
-      for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
+      canonical_ouro_repos | while IFS= read -r repo; do
         if [ -d "$repo/tools/subagent-governance/src" ] && [ -x "$repo/scripts/subagent/set-governance-latest-jar" ]; then
           jar_input_hash="$(governance_input_hash "$repo")"
           hash_file="$repo/tools/subagent-governance/subagent-governance.jar.input.sha256"

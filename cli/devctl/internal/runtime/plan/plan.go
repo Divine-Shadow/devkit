@@ -164,6 +164,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"SBT_IVY_HOME":                 sbtIvyHome,
 		"COURSIER_CACHE":               coursierCache,
 		"SBT_OPTS":                     sbtOpts,
+		"OURO_NIX_SANDBOX":             "1",
 		"TMPDIR":                       "/tmp",
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
