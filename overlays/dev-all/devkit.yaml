@@ -70,6 +70,23 @@ readiness:
           echo "governance jar hash drift: $SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256 actual=$actual_jar_sha" >&2
           exit 1
         fi
+        state_dir="${SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR:-/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane}"
+        server_jar_path_file="$state_dir/server.jar.path"
+        server_jar_sha_file="$state_dir/server.jar.sha256"
+        if [ -e "$server_jar_path_file" ] || [ -e "$server_jar_sha_file" ]; then
+          test -r "$server_jar_path_file"
+          test -r "$server_jar_sha_file"
+          server_jar_path="$(tr -d '\r\n' < "$server_jar_path_file")"
+          server_jar_sha="$(tr -d '\r\n' < "$server_jar_sha_file")"
+          if [ "$server_jar_path" != "$DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH" ]; then
+            echo "governance singleton jar path drift: expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH actual=$server_jar_path" >&2
+            exit 1
+          fi
+          if [ "$server_jar_sha" != "$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256" ]; then
+            echo "governance singleton jar hash drift: expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256 actual=$server_jar_sha" >&2
+            exit 1
+          fi
+        fi
         test -r "${DEVKIT_GOVERNANCE_REPO_CONFIG_PATH:?}"
         test -n "${DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256:?}"
         test -n "${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256:?}"

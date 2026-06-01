@@ -771,6 +771,10 @@ func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
 		"DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH",
 		"DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
 		"governance jar hash drift",
+		"server.jar.path",
+		"server.jar.sha256",
+		"governance singleton jar path drift",
+		"governance singleton jar hash drift",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 	} {
 		if !strings.Contains(overlayConfig, want) {
