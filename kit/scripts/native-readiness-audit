@@ -303,6 +303,14 @@ if [[ -n "$model" ]]; then
 fi
 
 zsh -ic 'type codex; codex --version'
+grep -q '^# governance_mcp_entrypoint_sha256 = ' "$config" || {
+  echo "native-readiness-audit: Codex governance config missing entrypoint fingerprint stamp: $config" >&2
+  exit 1
+}
+grep -q 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=' "$config" || {
+  echo "native-readiness-audit: Codex governance config missing entrypoint fingerprint export: $config" >&2
+  exit 1
+}
 codex exec "replay with 'Ok'"
 echo "codex_agent_${idx}_ok"
 EOF
