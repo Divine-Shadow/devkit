@@ -775,6 +775,10 @@ func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
 		"server.jar.sha256",
 		"governance singleton jar path drift",
 		"governance singleton jar hash drift",
+		"governance-mcp-stdio-forward/provenance.json",
+		"governance bridge jar path drift",
+		"governance bridge catalog hash drift",
+		"governance bridge entrypoint fingerprint drift",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 	} {
 		if !strings.Contains(overlayConfig, want) {
