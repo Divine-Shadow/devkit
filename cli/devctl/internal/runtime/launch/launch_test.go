@@ -551,7 +551,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 			t.Fatalf("shared governance env retained mutable jar path %q:\n%s", forbidden, gotEnv)
 		}
 	}
-	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-repo-env-disabled.json"))
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
 	for _, want := range []string{
 		`"workspaceRoot": "/workspaces/dev/ouroboros-ide"`,
 		`"knownWorkspaceIds": [`,
@@ -568,6 +568,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	if strings.Contains(gotRepoConfig, `"agent1"`) {
 		t.Fatalf("governance repo config must not bind agent1 separately from ouroboros-ide:\n%s", gotRepoConfig)
+	}
+	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
+		t.Fatalf("governance repo config must not carry mutable jar authority:\n%s", gotRepoConfig)
 	}
 	if st, err := os.Stat(envPath); err != nil {
 		t.Fatalf("stat governance env: %v", err)
@@ -644,7 +647,7 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
 		}
 	}
-	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-repo-env-disabled.json"))
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
 	for _, want := range []string{
 		`"dev-workspace"`,
 		`"dev-workspace": "/workspaces/dev"`,
@@ -653,6 +656,9 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
 		}
+	}
+	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
+		t.Fatalf("governance repo config must not carry mutable jar authority:\n%s", gotRepoConfig)
 	}
 }
 

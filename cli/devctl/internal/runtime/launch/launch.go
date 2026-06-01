@@ -466,7 +466,7 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 			return fmt.Errorf("write governance env %s: %w", envPath, err)
 		}
 	}
-	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-repo-env-disabled.json")
+	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json")
 	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
 	if err != nil {
 		return err
@@ -765,7 +765,6 @@ func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
 	type governanceAdapter struct {
 		KnownWorkspaceIDs    []string          `json:"knownWorkspaceIds"`
 		WorkspaceRoots       map[string]string `json:"workspaceRoots"`
-		LatestJarPath        string            `json:"latestJarPath"`
 		SchemaRoot           string            `json:"schemaRoot"`
 		ControlPlaneURL      string            `json:"controlPlaneUrl"`
 		WarmHookCommand      string            `json:"warmHookCommand"`
@@ -780,7 +779,6 @@ func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
 		GovernanceAdapter: governanceAdapter{
 			KnownWorkspaceIDs:    catalog.ids,
 			WorkspaceRoots:       catalog.rootMap,
-			LatestJarPath:        "/workspaces/dev/ouroboros-ide/tools/subagent-governance/subagent-governance.jar",
 			SchemaRoot:           "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
 			ControlPlaneURL:      "http://127.0.0.1:7778",
 			WarmHookCommand:      "scripts/devops/governance-control-plane warm",
