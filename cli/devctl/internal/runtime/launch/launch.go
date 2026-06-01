@@ -498,10 +498,6 @@ func isDevWorkspacePlan(p nativeplan.Plan) bool {
 	return strings.TrimSpace(p.Agent.ID.Project) == "dev-workspace"
 }
 
-func shouldWriteWorktreeGovernanceConfig(p nativeplan.Plan) bool {
-	return strings.TrimSpace(p.Agent.ID.Project) == "dev-all" && strings.TrimSpace(p.Agent.ID.Repo) == "ouroboros-ide"
-}
-
 func ensureWorkspaceSkillLinks(p nativeplan.Plan) error {
 	if !isDevWorkspacePlan(p) {
 		return nil
@@ -808,9 +804,6 @@ func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
 		return nil
 	}
 	configPaths := []string{filepath.Join(hostHome, ".codex", "config.toml")}
-	if worktree := strings.TrimSpace(p.Agent.HostWorktree); worktree != "" && shouldWriteWorktreeGovernanceConfig(p) {
-		configPaths = append(configPaths, filepath.Join(worktree, ".codex", "config.toml"))
-	}
 	seen := map[string]bool{}
 	for _, configPath := range configPaths {
 		configPath = filepath.Clean(configPath)

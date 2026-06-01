@@ -505,24 +505,16 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
 		t.Fatalf("session was clobbered: %q", got)
 	}
-	gotWorktreeConfig := readTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"))
-	for _, want := range []string{
+	wantWorktreeConfig := strings.Join([]string{
 		`approval_policy = "never"`,
-		codexGovernanceManagedBegin,
-		`cwd = "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"`,
-		`using governance root: ${governance_root}`,
-	} {
-		if !strings.Contains(gotWorktreeConfig, want) {
-			t.Fatalf("worktree config missing %q:\n%s", want, gotWorktreeConfig)
-		}
-	}
-	for _, forbidden := range []string{
-		"set -x",
-		"mkdir -p ${HOME:-/tmp}/.codex/log",
-	} {
-		if strings.Contains(gotWorktreeConfig, forbidden) {
-			t.Fatalf("worktree config retained stale diagnostic %q:\n%s", forbidden, gotWorktreeConfig)
-		}
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		`args = ["-lc", "mkdir -p ${HOME:-/tmp}/.codex/log; set -x; exec bash scripts/devops/governance-mcp-stdio-forward"]`,
+		`startup_timeout_sec = 60`,
+		"",
+	}, "\n")
+	if gotWorktreeConfig := readTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml")); gotWorktreeConfig != wantWorktreeConfig {
+		t.Fatalf("worktree config should be preserved, got:\n%s\nwant:\n%s", gotWorktreeConfig, wantWorktreeConfig)
 	}
 	envPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh")
 	gotEnv := readTestFile(t, envPath)
