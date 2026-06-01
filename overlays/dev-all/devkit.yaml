@@ -96,7 +96,7 @@ readiness:
           exit 1
         fi
         bridge_paths="$(
-          find /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees \
+          find /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees /agent-state \
             -path '*/.codex/log/governance-mcp-stdio-forward/provenance.json' \
             -type f 2>/dev/null || true
         )"

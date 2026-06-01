@@ -775,6 +775,7 @@ func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
 		"server.jar.sha256",
 		"governance singleton jar path drift",
 		"governance singleton jar hash drift",
+		"/agent-state",
 		"governance-mcp-stdio-forward/provenance.json",
 		"governance bridge jar path drift",
 		"governance bridge catalog hash drift",
