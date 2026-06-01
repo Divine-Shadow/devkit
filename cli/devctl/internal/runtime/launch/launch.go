@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -453,7 +454,13 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 		return nil
 	}
 	envPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh")
-	content := buildOuroGovernanceEnv(hostDevRoot)
+	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json")
+	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
+	if err != nil {
+		return err
+	}
+	repoConfigSha256 := fmt.Sprintf("%x", sha256.Sum256(repoConfig))
+	content := buildOuroGovernanceEnv(hostDevRoot, repoConfigPath, repoConfigSha256)
 	if data, err := os.ReadFile(envPath); err == nil && string(data) == content {
 		// Keep checking the paired repo config below; it may have been generated
 		// by an older devkit and carry a stale workspace catalog.
@@ -466,11 +473,6 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 		if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("write governance env %s: %w", envPath, err)
 		}
-	}
-	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json")
-	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
-	if err != nil {
-		return err
 	}
 	if data, err := os.ReadFile(repoConfigPath); err == nil && string(data) == string(repoConfig) {
 		return nil
@@ -585,8 +587,9 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-func buildOuroGovernanceEnv(hostDevRoot string) string {
+func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
+	repoConfigPath = filepath.Clean(repoConfigPath)
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
 	stateDir := filepath.Join(hostDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
@@ -597,6 +600,8 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE=" + shellQuote(runtimeFlake),
 		"export DEVKIT_GOVERNANCE_JAR_FLAKE=" + shellQuote(governanceJarFlake),
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
 		"devkit_governance_load_runtime_env() {",
 		"  if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"    return 0",

@@ -1,6 +1,8 @@
 package launch
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -520,6 +522,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"Shared governance MCP/control-plane environment",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='" + filepath.Join(devRoot, "devkit") + "#dev-all'",
 		"export DEVKIT_GOVERNANCE_JAR_FLAKE='" + filepath.Join(devRoot, "ouroboros-ide") + "#governance-jar'",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='" + filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json") + "'",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
 		"devkit_governance_load_runtime_env()",
 		"devkit_governance_resolve_jar()",
 		"--no-warn-dirty --option eval-cache false",
@@ -571,6 +575,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
 		t.Fatalf("governance repo config must not carry mutable jar authority:\n%s", gotRepoConfig)
+	}
+	if wantHash := fmt.Sprintf("%x", sha256.Sum256([]byte(gotRepoConfig))); !strings.Contains(gotEnv, "export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256='"+wantHash+"'") {
+		t.Fatalf("governance env missing repo config hash %s:\n%s", wantHash, gotEnv)
 	}
 	if st, err := os.Stat(envPath); err != nil {
 		t.Fatalf("stat governance env: %v", err)
