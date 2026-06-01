@@ -303,8 +303,23 @@ if [[ -n "$model" ]]; then
 fi
 
 zsh -ic 'type codex; codex --version'
+governance_env="/workspaces/dev/.devkit/ouro8-governance-env.sh"
+test -r "$governance_env" || {
+  echo "native-readiness-audit: generated governance env missing: $governance_env" >&2
+  exit 1
+}
+# shellcheck disable=SC1090
+source "$governance_env"
+test -n "${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256:-}" || {
+  echo "native-readiness-audit: generated governance env missing expected entrypoint fingerprint: $governance_env" >&2
+  exit 1
+}
 grep -q '^# governance_mcp_entrypoint_sha256 = ' "$config" || {
   echo "native-readiness-audit: Codex governance config missing entrypoint fingerprint stamp: $config" >&2
+  exit 1
+}
+grep -q "^# governance_mcp_entrypoint_sha256 = \"${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256}\"$" "$config" || {
+  echo "native-readiness-audit: Codex governance config entrypoint fingerprint drift: $config expected=$DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256" >&2
   exit 1
 }
 grep -q 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=' "$config" || {
