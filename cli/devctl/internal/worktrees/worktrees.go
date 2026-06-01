@@ -296,7 +296,9 @@ func SetupNative(opts NativeOptions) error {
 		}
 	}
 	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "fetch", "--all", "--prune")...); err != nil {
-		return err
+		if opts.DryRun || !nativeWorktreesExist(worktreesRoot, repo, count) {
+			return err
+		}
 	}
 	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "config", "worktree.useRelativePaths", "false")...); err != nil {
 		return err
@@ -344,4 +346,18 @@ func SetupNative(opts NativeOptions) error {
 		}
 	}
 	return nil
+}
+
+func nativeWorktreesExist(worktreesRoot, repo string, count int) bool {
+	if count < 1 {
+		count = 1
+	}
+	for i := 1; i <= count; i++ {
+		wt := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i), repo)
+		ok, err := existingGitCheckout(wt)
+		if err != nil || !ok {
+			return false
+		}
+	}
+	return true
 }
