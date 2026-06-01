@@ -1,11 +1,16 @@
 package governanceentrypoint
 
-import "strings"
+import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
+)
 
-// Zsh returns the canonical governance MCP stdio entrypoint used by generated
-// Codex config and shell wrappers. Keep runtime launch and seed paths calling
-// this helper instead of copying the shell snippet into multiple packages.
-func Zsh() string {
+// Body returns the canonical governance MCP stdio entrypoint body used by
+// generated Codex config and shell wrappers. Keep runtime launch and seed paths
+// calling this package instead of copying the shell snippet into multiple
+// packages.
+func Body() string {
 	return strings.Join([]string{
 		"export PATH=/run/current-system/sw/bin:/run/wrappers/bin:/home/bayesartre/.nix-profile/bin:/etc/profiles/per-user/bayesartre/bin:${PATH:-}",
 		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM",
@@ -25,6 +30,19 @@ func Zsh() string {
 		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_root} in */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace ;; esac; fi",
 		"exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward",
 	}, "; ")
+}
+
+// SHA256 fingerprints the canonical entrypoint body so generated config,
+// wrappers, and runtime env can prove which entrypoint contract they carry.
+func SHA256() string {
+	sum := sha256.Sum256([]byte(Body()))
+	return fmt.Sprintf("%x", sum)
+}
+
+// Zsh returns the canonical governance MCP stdio entrypoint with an exported
+// provenance marker for runtime subprocesses.
+func Zsh() string {
+	return "export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + SHA256() + "; " + Body()
 }
 
 // EscapedForNestedDoubleQuotes returns the same entrypoint with braced shell

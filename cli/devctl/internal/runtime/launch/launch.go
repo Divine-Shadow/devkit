@@ -911,6 +911,7 @@ func codexGovernanceConfigBlock(p nativeplan.Plan) string {
 	}
 	var b strings.Builder
 	b.WriteString(codexGovernanceManagedBegin + "\n")
+	b.WriteString("# governance_mcp_entrypoint_sha256 = " + strconv.Quote(governanceentrypoint.SHA256()) + "\n")
 	b.WriteString("[mcp_servers.governance]\n")
 	b.WriteString("command = \"/run/current-system/sw/bin/bash\"\n")
 	if cwd := strings.TrimSpace(p.Agent.SandboxWorktree); cwd != "" {
@@ -960,6 +961,7 @@ func ouroCodexShellHookZsh() string {
 		`export CODEX_ROLLOUT_DIR="${CODEX_ROLLOUT_DIR:-$HOME/.codex/rollouts}"`,
 		`export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"`,
 		`export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"`,
+		`export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256="` + governanceentrypoint.SHA256() + `"`,
 		"unalias codex 2>/dev/null || true",
 		codexTUILogGuardZsh,
 		"codex() {",

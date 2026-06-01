@@ -365,6 +365,9 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("repaired wrapper missing TUI log guard:\n%s", got)
 	}
+	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
+		t.Fatalf("repaired wrapper missing governance entrypoint fingerprint:\n%s", got)
+	}
 	if !strings.Contains(got, "using governance env: ${governance_env}") {
 		t.Fatalf("repaired wrapper does not loudly label selected governance env:\n%s", got)
 	}
@@ -411,6 +414,9 @@ codex() {
 	}
 	if !strings.Contains(got, "-m gpt-5.2") {
 		t.Fatalf("generated wrapper missing fleet-safe model pin:\n%s", got)
+	}
+	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
+		t.Fatalf("generated wrapper missing governance entrypoint fingerprint:\n%s", got)
 	}
 	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  HOME=\"$HOME\" CODEX_HOME=") {
 		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
@@ -470,9 +476,11 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[projects."/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"]`,
 		`cwd = "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"`,
 		codexGovernanceManagedBegin,
+		`# governance_mcp_entrypoint_sha256 = "`,
 		`[mcp_servers.governance]`,
 		`command = "/run/current-system/sw/bin/bash"`,
 		`args = ["-lc",`,
+		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=`,
 		`governance-mcp-stdio-forward`,
 		`governance_root=${PWD}`,
 		`IFS=, read -ra governance_pairs`,
@@ -619,9 +627,11 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
 	for _, want := range []string{
 		codexGovernanceManagedBegin,
+		`# governance_mcp_entrypoint_sha256 = "`,
 		`[mcp_servers.governance]`,
 		`cwd = "/workspaces/dev"`,
 		`governance_root=/workspaces/dev/ouroboros-ide`,
+		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=`,
 		`SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace`,
 	} {
 		if !strings.Contains(gotConfig, want) {
