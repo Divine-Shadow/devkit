@@ -29,7 +29,7 @@ REPO="${DEVKIT_NATIVE_READINESS_REPO:-ouroboros-ide}"
 DEV_ALL_FLAKE="${DEVKIT_NATIVE_READINESS_DEV_ALL_FLAKE:-./overlays/dev-all#default}"
 EXPECTED_CODEX_VERSION="${DEVKIT_NATIVE_READINESS_CODEX_VERSION:-$(runtime_codex_version_for dev-all)}"
 CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.3-codex-spark}"
-CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-replay with 'Ok'}"
+CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-reply with exactly 'ok'}"
 GOVERNANCE_JAR_FLAKE="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR_FLAKE:-$DEV_ROOT/ouroboros-ide#governance-jar}"
 GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-}"
 BACKEND_MAIN="${DEVKIT_NATIVE_READINESS_BACKEND_MAIN:-com.crib.bills.ouroboros.apps.StartWebServerInMemoryLocal}"
@@ -326,7 +326,12 @@ grep -q 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=' "$config" || {
   echo "native-readiness-audit: Codex governance config missing entrypoint fingerprint export: $config" >&2
   exit 1
 }
-codex exec "replay with 'Ok'"
+codex_output="/tmp/devkit-codex-agent${idx}.out"
+codex exec "$CODEX_PROMPT" | tee "$codex_output"
+tr -d '\r' < "$codex_output" | grep -qx 'ok' || {
+  echo "native-readiness-audit: codex exec did not reply with exactly ok for agent ${idx}" >&2
+  exit 1
+}
 echo "codex_agent_${idx}_ok"
 EOF
 
