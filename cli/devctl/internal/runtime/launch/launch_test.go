@@ -743,6 +743,20 @@ func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 	}
 }
 
+func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
+	overlayConfig := readTestFile(t, filepath.Join("..", "..", "..", "..", "..", "overlays", "dev-all", "devkit.yaml"))
+	for _, want := range []string{
+		"name: governance-provenance",
+		"env_file=/workspaces/dev/.devkit/ouro8-governance-env.sh",
+		"/nix/store/*/share/subagent-governance/subagent-governance.jar",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+	} {
+		if !strings.Contains(overlayConfig, want) {
+			t.Fatalf("dev-all overlay missing governance provenance guard %q:\n%s", want, overlayConfig)
+		}
+	}
+}
+
 func TestSeedAWSSyncsConfigAndCaches(t *testing.T) {
 	srcAWS := filepath.Join(t.TempDir(), ".aws")
 	for _, dir := range []string{

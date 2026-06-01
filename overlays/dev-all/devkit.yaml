@@ -46,6 +46,21 @@ readiness:
           process.exit(1);
         });
         NODE
+    - name: governance-provenance
+      command: |
+        env_file=/workspaces/dev/.devkit/ouro8-governance-env.sh
+        test -r "$env_file"
+        . "$env_file"
+        case "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" in
+          /nix/store/*/share/subagent-governance/subagent-governance.jar) ;;
+          *)
+            echo "expected Nix-store governance jar, got: ${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-<unset>}" >&2
+            exit 1
+            ;;
+        esac
+        test -f "$SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR"
+        printf '%s\n' "${SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS:-}" | grep -Eq '(^|,)ouroboros-ide(,|$)'
+        printf '%s\n' "${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}" | grep -Fq 'ouroboros-ide=/workspaces/dev/ouroboros-ide'
   repo_checks:
     - name: git-remote
       command: GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null
