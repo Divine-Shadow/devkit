@@ -30,7 +30,8 @@ DEV_ALL_FLAKE="${DEVKIT_NATIVE_READINESS_DEV_ALL_FLAKE:-./overlays/dev-all#defau
 EXPECTED_CODEX_VERSION="${DEVKIT_NATIVE_READINESS_CODEX_VERSION:-$(runtime_codex_version_for dev-all)}"
 CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.3-codex-spark}"
 CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-replay with 'Ok'}"
-GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-/workspaces/dev/ouroboros-ide/tools/subagent-governance/subagent-governance.jar}"
+GOVERNANCE_JAR_FLAKE="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR_FLAKE:-$DEV_ROOT/ouroboros-ide#governance-jar}"
+GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-}"
 BACKEND_MAIN="${DEVKIT_NATIVE_READINESS_BACKEND_MAIN:-com.crib.bills.ouroboros.apps.StartWebServerInMemoryLocal}"
 
 fail() {
@@ -46,6 +47,27 @@ grep_required() {
   local pattern="$1"
   local file="$2"
   grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+resolve_governance_jar() {
+  if [[ -n "$GOVERNANCE_JAR" ]]; then
+    case "$GOVERNANCE_JAR" in
+      /nix/store/*/share/subagent-governance/subagent-governance.jar) ;;
+      *) fail "DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR must be a Nix-store governance jar, got: $GOVERNANCE_JAR" ;;
+    esac
+    test -s "$GOVERNANCE_JAR" || fail "governance jar does not exist: $GOVERNANCE_JAR"
+    return 0
+  fi
+
+  command -v nix >/dev/null 2>&1 || fail "nix is required to resolve $GOVERNANCE_JAR_FLAKE"
+  local out_path
+  out_path="$(nix --extra-experimental-features 'nix-command flakes' build --no-link --print-out-paths "$GOVERNANCE_JAR_FLAKE" | tail -n 1)"
+  GOVERNANCE_JAR="$out_path/share/subagent-governance/subagent-governance.jar"
+  case "$GOVERNANCE_JAR" in
+    /nix/store/*/share/subagent-governance/subagent-governance.jar) ;;
+    *) fail "resolved governance flake jar is not a Nix-store governance jar: $GOVERNANCE_JAR" ;;
+  esac
+  test -s "$GOVERNANCE_JAR" || fail "resolved governance jar does not exist: $GOVERNANCE_JAR"
 }
 
 wait_for_socket() {
@@ -115,6 +137,10 @@ cleanup() {
   rm -rf "$audit_dir"
 }
 trap cleanup EXIT
+
+step "resolve governance jar from flake"
+resolve_governance_jar
+printf 'governance_jar=%s\n' "$GOVERNANCE_JAR"
 
 step "native generated shell static guard"
 guard_native_shells
