@@ -768,6 +768,9 @@ func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
 		"name: governance-provenance",
 		"env_file=/workspaces/dev/.devkit/ouro8-governance-env.sh",
 		"/nix/store/*/share/subagent-governance/subagent-governance.jar",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"governance jar hash drift",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 	} {
 		if !strings.Contains(overlayConfig, want) {
