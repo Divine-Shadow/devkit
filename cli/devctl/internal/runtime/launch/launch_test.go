@@ -543,6 +543,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if strings.Contains(gotEnv, "SUBAGENT_GOVERNANCE_WORKSPACE_ID=") {
 		t.Fatalf("shared governance env must not pin a per-agent workspace id:\n%s", gotEnv)
 	}
+	for _, forbidden := range []string{
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
+		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
+	} {
+		if strings.Contains(gotEnv, forbidden) {
+			t.Fatalf("shared governance env retained mutable jar path %q:\n%s", forbidden, gotEnv)
+		}
+	}
 	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-repo-env-disabled.json"))
 	for _, want := range []string{
 		`"workspaceRoot": "/workspaces/dev/ouroboros-ide"`,
