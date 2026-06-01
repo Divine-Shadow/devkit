@@ -332,6 +332,44 @@ tr -d '\r' < "$codex_output" | grep -qx 'ok' || {
   echo "native-readiness-audit: codex exec did not reply with exactly ok for agent ${idx}" >&2
   exit 1
 }
+bridge_provenance="${CODEX_HOME:-$HOME/.codex}/log/governance-mcp-stdio-forward/provenance.json"
+test -r "$bridge_provenance" || {
+  echo "native-readiness-audit: governance MCP bridge provenance missing after codex exec: $bridge_provenance" >&2
+  exit 1
+}
+BRIDGE_PROVENANCE="$bridge_provenance" python3 - <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(os.environ["BRIDGE_PROVENANCE"])
+payload = json.loads(path.read_text(encoding="utf-8"))
+expected_jar_path = os.environ.get("DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH", "")
+expected_jar_sha = os.environ.get("DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256", "")
+expected_repo_config_path = os.environ.get("DEVKIT_GOVERNANCE_REPO_CONFIG_PATH", "")
+expected_repo_config_sha = os.environ.get("DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256", "")
+expected_entrypoint_sha = os.environ.get("DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256", "")
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(f"native-readiness-audit: {message}: {path}")
+
+selected_jar_path = str(payload.get("selectedJarPath") or "")
+selected_jar_sha = str(payload.get("selectedJarSha256") or "")
+repo_config_path = str(payload.get("repoConfigPath") or "")
+repo_config_sha = str(payload.get("repoConfigSha256") or "")
+entrypoint_sha = str(payload.get("mcpEntrypointSha256") or "")
+
+require(selected_jar_path.startswith("/nix/store/"), f"governance MCP bridge used non-Nix jar {selected_jar_path}")
+require(bool(expected_jar_path) and selected_jar_path == expected_jar_path, f"governance MCP bridge jar path drift expected={expected_jar_path} actual={selected_jar_path}")
+require(bool(expected_jar_sha) and selected_jar_sha == expected_jar_sha, f"governance MCP bridge jar SHA drift expected={expected_jar_sha} actual={selected_jar_sha}")
+require(payload.get("jarMatchesExpected") is True, "governance MCP bridge did not report jar match")
+require(bool(expected_repo_config_path) and repo_config_path == expected_repo_config_path, f"governance MCP bridge catalog path drift expected={expected_repo_config_path} actual={repo_config_path}")
+require(bool(expected_repo_config_sha) and repo_config_sha == expected_repo_config_sha, f"governance MCP bridge catalog SHA drift expected={expected_repo_config_sha} actual={repo_config_sha}")
+require(bool(expected_entrypoint_sha) and entrypoint_sha == expected_entrypoint_sha, f"governance MCP bridge entrypoint drift expected={expected_entrypoint_sha} actual={entrypoint_sha}")
+require(payload.get("mcpEntrypointMatchesExpected") is True, "governance MCP bridge did not report entrypoint match")
+PY
 echo "codex_agent_${idx}_ok"
 EOF
 
