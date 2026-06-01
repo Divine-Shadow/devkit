@@ -519,9 +519,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	for _, want := range []string{
 		"Shared governance MCP/control-plane environment",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='" + filepath.Join(devRoot, "devkit") + "#dev-all'",
+		"export DEVKIT_GOVERNANCE_JAR_FLAKE='" + filepath.Join(devRoot, "ouroboros-ide") + "#governance-jar'",
 		"devkit_governance_load_runtime_env()",
+		"devkit_governance_resolve_jar()",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
+		"build --no-link --print-out-paths \"$DEVKIT_GOVERNANCE_JAR_FLAKE\"",
+		"share/subagent-governance/subagent-governance.jar",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9",
@@ -529,7 +533,6 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 		"agent8=/workspaces/dev/agent-worktrees/agent8/ouroboros-ide",
 		"agent9=/workspaces/dev/agent-worktrees/agent9/ouroboros-ide",
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas"),
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
 	} {

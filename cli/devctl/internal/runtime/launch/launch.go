@@ -587,14 +587,15 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 func buildOuroGovernanceEnv(hostDevRoot string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
-	jar := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar")
 	stateDir := filepath.Join(hostDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
 	runtimeFlake := filepath.Join(hostDevRoot, "devkit") + "#dev-all"
+	governanceJarFlake := filepath.Join(hostDevRoot, "ouroboros-ide") + "#governance-jar"
 	return strings.Join([]string{
 		"# Shared governance MCP/control-plane environment for native Ouroboros GUI agents.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE=" + shellQuote(runtimeFlake),
+		"export DEVKIT_GOVERNANCE_JAR_FLAKE=" + shellQuote(governanceJarFlake),
 		"devkit_governance_load_runtime_env() {",
 		"  if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"    return 0",
@@ -615,7 +616,31 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 		"  fi",
 		"  eval \"$runtime_env\"",
 		"}",
+		"devkit_governance_resolve_jar() {",
+		"  local nix_bin",
+		"  if command -v nix >/dev/null 2>&1; then",
+		"    nix_bin=\"$(command -v nix)\"",
+		"  elif [ -x /run/current-system/sw/bin/nix ]; then",
+		"    nix_bin=/run/current-system/sw/bin/nix",
+		"  else",
+		"    echo \"[devkit-governance-env] unable to locate nix for ${DEVKIT_GOVERNANCE_JAR_FLAKE}\" >&2",
+		"    return 1",
+		"  fi",
+		"  local store_path",
+		"  if ! store_path=\"$($nix_bin --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false build --no-link --print-out-paths \"$DEVKIT_GOVERNANCE_JAR_FLAKE\")\"; then",
+		"    echo \"[devkit-governance-env] unable to build governance jar from ${DEVKIT_GOVERNANCE_JAR_FLAKE}\" >&2",
+		"    return 1",
+		"  fi",
+		"  local jar_path=\"${store_path}/share/subagent-governance/subagent-governance.jar\"",
+		"  if [ ! -f \"$jar_path\" ]; then",
+		"    echo \"[devkit-governance-env] governance jar missing from Nix output: $jar_path\" >&2",
+		"    return 1",
+		"  fi",
+		"  export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=\"$jar_path\"",
+		"  export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=\"$jar_path\"",
+		"}",
 		"devkit_governance_load_runtime_env",
+		"devkit_governance_resolve_jar",
 		"if [ -z \"${JAVA_HOME:-}\" ] || [ ! -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"  echo \"[devkit-governance-env] runtime env did not provide an executable JAVA_HOME\" >&2",
 		"  return 1",
@@ -623,8 +648,6 @@ func buildOuroGovernanceEnv(hostDevRoot string) string {
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(catalog.ids, ","),
 		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(catalog.rootBindings, ","),
-		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=" + jar,
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + jar,
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + schemaRoot,
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_FORWARD_SERVER_URL=http://127.0.0.1:7778",

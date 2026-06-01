@@ -446,65 +446,12 @@ hooks:
         cp -f "$source" "$target"
       done
     }
-    governance_input_hash() {
-      local repo="$1"
-      (
-        cd "$repo"
-        {
-          printf '%s\n' \
-            build.sbt \
-            project/build.properties \
-            project/plugins.sbt \
-            scripts/subagent/set-governance-latest-jar \
-            scripts/devops/governance-control-plane \
-            scripts/devops/governance-mcp-stdio-forward
-          find tools/subagent-governance/src -type f | LC_ALL=C sort
-        } | while IFS= read -r path; do
-          [ -f "$path" ] && sha256sum "$path"
-        done | sha256sum | awk '{print $1}'
-      )
-    }
     cleanup_governance_logs
     install_governed_search_policy_rules
-    governance_cache_dir=/tmp/devkit-governance-cache
-    mkdir -p "$governance_cache_dir"
     # Keep a compatibility path for workflows that expect agent1 under agent-worktrees.
     mkdir -p /workspaces/dev/agent-worktrees/agent1
     if [ -d /workspaces/dev/ouroboros-ide ] && [ ! -e /workspaces/dev/agent-worktrees/agent1/ouroboros-ide ]; then
       ln -s ../../ouroboros-ide /workspaces/dev/agent-worktrees/agent1/ouroboros-ide
-    fi
-    if command -v sbt >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
-      canonical_ouro_repos | while IFS= read -r repo; do
-        if [ -d "$repo/tools/subagent-governance/src" ] && [ -x "$repo/scripts/subagent/set-governance-latest-jar" ]; then
-          jar_input_hash="$(governance_input_hash "$repo")"
-          hash_file="$repo/tools/subagent-governance/subagent-governance.jar.input.sha256"
-          cache_jar="$governance_cache_dir/$jar_input_hash.jar"
-          existing_hash=""
-          if [ -f "$hash_file" ]; then
-            existing_hash="$(cat "$hash_file")"
-          fi
-          if [ ! -f "$repo/tools/subagent-governance/subagent-governance.jar" ] || [ "$existing_hash" != "$jar_input_hash" ]; then
-            if [ -f "$cache_jar" ]; then
-              cp -f "$cache_jar" "$repo/tools/subagent-governance/subagent-governance.jar"
-            else
-              (
-                cd "$repo"
-                sbt 'subagentGovernance/assembly'
-              )
-              if [ -f "$repo/tools/subagent-governance/subagent-governance.jar" ]; then
-                cp -f "$repo/tools/subagent-governance/subagent-governance.jar" "$cache_jar"
-              fi
-            fi
-          fi
-          if [ -f "$repo/tools/subagent-governance/subagent-governance.jar" ]; then
-            (
-              cd "$repo"
-              printf '%s\n' "$jar_input_hash" > tools/subagent-governance/subagent-governance.jar.input.sha256
-              scripts/subagent/set-governance-latest-jar --jar tools/subagent-governance/subagent-governance.jar
-            )
-          fi
-        fi
-      done
     fi
     mkdir -p /workspace/.local/bin
     if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
