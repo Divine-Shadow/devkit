@@ -602,6 +602,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export DEVKIT_GOVERNANCE_JAR_FLAKE=" + shellQuote(governanceJarFlake),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
 		"devkit_governance_load_runtime_env() {",
 		"  if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"    return 0",

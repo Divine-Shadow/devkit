@@ -532,6 +532,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_JAR_FLAKE='" + filepath.Join(devRoot, "ouroboros-ide") + "#governance-jar'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='" + filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json") + "'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=",
 		"devkit_governance_load_runtime_env()",
 		"devkit_governance_resolve_jar()",
 		"--no-warn-dirty --option eval-cache false",
