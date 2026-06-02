@@ -65,6 +65,7 @@ func TestBuildDevAllPlan(t *testing.T) {
 	for _, want := range []string{
 		"-Xmx6G",
 		"-XX:+UseG1GC",
+		"-Djava.awt.headless=true",
 		"-Dsbt.global.base=" + p.Env["SBT_GLOBAL_BASE"],
 		"-Dsbt.boot.directory=" + p.Env["SBT_BOOT_DIR"],
 		"-Dsbt.ivy.home=" + p.Env["SBT_IVY_HOME"],

@@ -147,6 +147,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	sbtOpts := strings.Join([]string{
 		"-Xmx6G",
 		"-XX:+UseG1GC",
+		"-Djava.awt.headless=true",
 		"-Dsbt.global.base=" + sbtGlobalBase,
 		"-Dsbt.boot.directory=" + sbtBootDir,
 		"-Dsbt.ivy.home=" + sbtIvyHome,
