@@ -1,7 +1,7 @@
 {
   description = "Devkit adapter for the ouroboros-terraform repo runtime";
 
-  inputs.ouroboros-terraform.url = "git+file:///workspaces/dev/ouroboros-terraform";
+  inputs.ouroboros-terraform.url = "git+file:../ouroboros-terraform";
 
   outputs =
     { ouroboros-terraform, ... }:
