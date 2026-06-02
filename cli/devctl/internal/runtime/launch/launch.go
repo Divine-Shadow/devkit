@@ -973,7 +973,7 @@ func ouroCodexShellHookZsh() string {
 		"codex() {",
 		"  local -a extra",
 		"  extra=(",
-		"    -m gpt-5.2",
+		"    -m gpt-5.5",
 		"    -a never",
 		"    -s danger-full-access",
 		`    -c 'mcp_servers.codex-cli.command="codex"'`,

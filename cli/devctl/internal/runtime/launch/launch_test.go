@@ -404,7 +404,7 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "command codex") {
 		t.Fatalf("repaired wrapper missing command codex:\n%s", got)
 	}
-	if !strings.Contains(got, "-m gpt-5.2") {
+	if !strings.Contains(got, "-m gpt-5.5") {
 		t.Fatalf("repaired wrapper missing fleet-safe model pin:\n%s", got)
 	}
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
@@ -457,7 +457,7 @@ codex() {
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("generated wrapper missing TUI log guard function:\n%s", got)
 	}
-	if !strings.Contains(got, "-m gpt-5.2") {
+	if !strings.Contains(got, "-m gpt-5.5") {
 		t.Fatalf("generated wrapper missing fleet-safe model pin:\n%s", got)
 	}
 	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
