@@ -8,7 +8,7 @@ defaults:
 runtime:
   flake: ./overlays/ouroboros-static-front-end#default
   codex_version: 0.133.0
-  core_check: npm run build
+  core_check: npm run build:fixture
   notes: Node/Gatsby runtime for the standalone static front end.
 readiness:
   default_mode: runtime-only
@@ -26,7 +26,7 @@ readiness:
       command: playwright --version >/dev/null && node -e 'require("@playwright/test")'
   repo_checks:
     - name: core-check
-      command: npm run build
+      command: npm run build:fixture
 env:
   NODE_ENV: development
   GATSBY_TELEMETRY_DISABLED: "1"
@@ -47,4 +47,4 @@ hooks:
     if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
       ln -sf "$(command -v python3)" /workspace/.local/bin/python
     fi
-    npm run build
+    npm run build:fixture
