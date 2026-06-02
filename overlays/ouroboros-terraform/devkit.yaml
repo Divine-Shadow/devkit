@@ -9,19 +9,21 @@ runtime:
   flake: ./overlays/ouroboros-terraform#default
   codex_version: 0.133.0
   core_check: terraform fmt -check -recursive
-  notes: AWS/HashiCorp runtime for Terraform maintenance.
+  notes: Thin devkit adapter; canonical tool requirements live in ../ouroboros-terraform/flake.nix and devkit.yaml.
 readiness:
   default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |
-        for tool in git ssh curl docker terraform packer aws; do
+        for tool in git ssh curl docker terraform packer aws codex; do
           command -v "$tool" >/dev/null
         done
     - name: docker-client
       command: docker --version >/dev/null
     - name: terraform-packer-aws
       command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
+    - name: codex-version
+      command: codex --version | grep -q '0.133.0'
   repo_checks:
     - name: aws-profile
       command: |
@@ -50,63 +52,13 @@ hooks:
       ln -sf "$(command -v python3)" /workspace/.local/bin/python
     fi
 
-    normalize_arch() {
-      local machine
-      machine="$(uname -m)"
-      case "$machine" in
-        x86_64|amd64) echo "amd64" ;;
-        aarch64|arm64) echo "arm64" ;;
-        *) echo "Unsupported architecture: $machine" >&2; return 1 ;;
-      esac
-    }
-
-    ensure_aws_cli() {
-      if command -v aws >/dev/null 2>&1; then
-        return 0
+    for tool in aws terraform packer codex; do
+      if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "Expected $tool from the ouroboros-terraform Nix runtime, but it was not on PATH." >&2
+        echo "Use nix develop ./overlays/ouroboros-terraform#default or repair the repo-owned flake." >&2
+        exit 1
       fi
-
-      local arch aws_arch
-      arch="$(normalize_arch)"
-      case "$arch" in
-        amd64) aws_arch="x86_64" ;;
-        arm64) aws_arch="aarch64" ;;
-      esac
-
-      local aws_url
-      aws_url="${AWSCLI_URL:-https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip}"
-      echo "Installing awscli from ${aws_url}" >&2
-      curl -fsSL "$aws_url" -o /tmp/awscliv2.zip
-      unzip -q /tmp/awscliv2.zip -d /tmp
-      /tmp/aws/install --bin-dir /workspace/.local/bin --install-dir /workspace/.local/aws-cli --update
-      rm -rf /tmp/aws /tmp/awscliv2.zip
-    }
-
-    ensure_hashicorp_tool() {
-      local tool="$1"
-      local version="$2"
-
-      if command -v "$tool" >/dev/null 2>&1; then
-        return 0
-      fi
-
-      local arch zip_arch url
-      arch="$(normalize_arch)"
-      case "$arch" in
-        amd64) zip_arch="amd64" ;;
-        arm64) zip_arch="arm64" ;;
-      esac
-
-      url="https://releases.hashicorp.com/${tool}/${version}/${tool}_${version}_linux_${zip_arch}.zip"
-      echo "Installing ${tool} ${version} from ${url}" >&2
-      curl -fsSL "$url" -o "/tmp/${tool}.zip"
-      unzip -qo "/tmp/${tool}.zip" "${tool}" -d /workspace/.local/bin
-      chmod +x "/workspace/.local/bin/${tool}"
-      rm -f "/tmp/${tool}.zip"
-    }
-
-    ensure_aws_cli
-    ensure_hashicorp_tool terraform "${TERRAFORM_VERSION:-1.9.8}"
-    ensure_hashicorp_tool packer "${PACKER_VERSION:-1.11.2}"
+    done
 
     if [ -z "${AWS_CONFIG_FILE:-}" ] || [ ! -f "${AWS_CONFIG_FILE}" ]; then
       echo "Expected AWS config file not found at AWS_CONFIG_FILE='${AWS_CONFIG_FILE:-<unset>}'." >&2

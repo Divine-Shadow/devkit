@@ -1,14 +1,16 @@
 {
-  description = "Devkit ouroboros-terraform overlay runtime shell";
+  description = "Devkit adapter for the ouroboros-terraform repo runtime";
 
-  inputs.devkit.url = "path:../..";
+  inputs.ouroboros-terraform.url = "git+file:///workspaces/dev/ouroboros-terraform";
 
   outputs =
-    { devkit, ... }:
+    { ouroboros-terraform, ... }:
     {
       devShells = builtins.mapAttrs (_system: shells: {
-        default = shells.ouroboros-terraform;
-        ouroboros-terraform = shells.ouroboros-terraform;
-      }) devkit.devShells;
+        default = shells.default;
+        ouroboros-terraform = shells.default;
+      }) ouroboros-terraform.devShells;
+
+      apps = ouroboros-terraform.apps;
     };
 }

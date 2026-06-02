@@ -335,7 +335,6 @@
           dumbOnionHax = import ./overlays/dumb-onion-hax/runtime.nix runtimeArgs;
           ouroIntegration = import ./overlays/ouro-integration/runtime.nix runtimeArgs;
           ouroborosStaticFrontEnd = import ./overlays/ouroboros-static-front-end/runtime.nix runtimeArgs;
-          ouroborosTerraform = import ./overlays/ouroboros-terraform/runtime.nix runtimeArgs;
           pokeemerald = import ./overlays/pokeemerald/runtime.nix runtimeArgs;
         in
         {
@@ -352,7 +351,6 @@
           dumb-onion-hax = dumbOnionHax;
           ouro-integration = ouroIntegration;
           ouroboros-static-front-end = ouroborosStaticFrontEnd;
-          ouroboros-terraform = ouroborosTerraform;
           pokeemerald = pokeemerald;
 
           runtime-test-agent = mkShell "runtime-test-agent" (with pkgs; [
