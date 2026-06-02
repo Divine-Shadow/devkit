@@ -1501,7 +1501,16 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
-	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--output-lock-file", "/dev/null", "--command")
+	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop")
+	names := make([]string, 0, len(p.FlakeInputOverrides))
+	for name := range p.FlakeInputOverrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		args = append(args, "--override-input", name, p.FlakeInputOverrides[name])
+	}
+	args = append(args, p.Flake, "--output-lock-file", "/dev/null", "--command")
 	args = append(args, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env)...)
 	return Command{Path: "bwrap", Args: args, Dir: p.DevkitHostRoot}, nil
 }

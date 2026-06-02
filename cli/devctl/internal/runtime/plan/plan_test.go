@@ -162,6 +162,28 @@ func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 	}
 }
 
+func TestBuildNativeCarriesFlakeInputOverrides(t *testing.T) {
+	p, err := Build(BuildOptions{
+		Paths:   devkitpaths.Paths{Root: "/repo/devkit"},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+		FlakeInputOverrides: map[string]string{
+			"ouroboros-terraform": "path:/repo/ouroboros-terraform",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build error: %v", err)
+	}
+	if p.FlakeInputOverrides["ouroboros-terraform"] != "path:/repo/ouroboros-terraform" {
+		t.Fatalf("flake input overrides = %#v", p.FlakeInputOverrides)
+	}
+	joined := strings.Join(p.LauncherArgs, " ")
+	if !strings.Contains(joined, "--override-input ouroboros-terraform path:/repo/ouroboros-terraform ./overlays/ouroboros-terraform#default") {
+		t.Fatalf("launcher args missing override before flake: %#v", p.LauncherArgs)
+	}
+}
+
 func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
 		Paths:             devkitpaths.Paths{Root: "/repo/devkit"},

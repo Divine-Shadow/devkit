@@ -393,6 +393,24 @@ func TestLifecyclePlanOptionsUsesOverlayRuntimeFlake(t *testing.T) {
 	}
 }
 
+func TestLifecyclePlanOptionsResolvesFlakeInputOverrides(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "ouroboros-terraform",
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		Runtime: config.Runtime{
+			Flake: "./overlays/ouroboros-terraform#default",
+			FlakeInputOverrides: map[string]string{
+				"ouroboros-terraform": "../ouroboros-terraform",
+			},
+		},
+	}, lifecycleArgs{}, "ouroboros-terraform", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.FlakeInputOverrides["ouroboros-terraform"] != "path:/home/me/dev/ouroboros-terraform" {
+		t.Fatalf("flake input overrides = %#v", opts.FlakeInputOverrides)
+	}
+}
+
 func TestLifecyclePlanOptionsCLIFlakeOverridesOverlayRuntimeFlake(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "pokeemerald",

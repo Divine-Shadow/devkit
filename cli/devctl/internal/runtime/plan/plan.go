@@ -44,6 +44,7 @@ type Plan struct {
 	SandboxWorktreeRoot string            `json:"sandbox_worktree_root"`
 	SandboxStateRoot    string            `json:"sandbox_state_root"`
 	Flake               string            `json:"flake"`
+	FlakeInputOverrides map[string]string `json:"flake_input_overrides,omitempty"`
 	Launcher            string            `json:"launcher"`
 	LauncherArgs        []string          `json:"launcher_args"`
 	Binds               []Bind            `json:"binds"`
@@ -62,6 +63,7 @@ type BuildOptions struct {
 	Index                 int
 	Repo                  string
 	Flake                 string
+	FlakeInputOverrides   map[string]string
 	Launcher              string
 	WorktreeRoot          string
 	StateRoot             string
@@ -201,6 +203,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		SandboxWorktreeRoot: paths.SandboxWorktreeRoot,
 		SandboxStateRoot:    paths.SandboxStateRoot,
 		Flake:               flake,
+		FlakeInputOverrides: normalizeFlakeInputOverrides(opts.FlakeInputOverrides),
 		Launcher:            launcher,
 		Binds: []Bind{
 			{Source: paths.DevRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
@@ -244,6 +247,25 @@ func Build(opts BuildOptions) (Plan, error) {
 
 func BuildDevAll(opts BuildOptions) (Plan, error) {
 	return Build(opts)
+}
+
+func normalizeFlakeInputOverrides(overrides map[string]string) map[string]string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for name, value := range overrides {
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if name == "" || value == "" {
+			continue
+		}
+		out[name] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func defaultRepo(project string) string {
@@ -297,14 +319,15 @@ func projectSandboxPath(hostPath, hostRoot, sandboxRoot string) (string, bool) {
 func launcherArgs(p Plan) []string {
 	switch p.Launcher {
 	case "systemd-run":
-		return []string{
+		nixArgs := nixDevelopArgs(p)
+		args := []string{
 			"systemd-run",
 			"--user",
 			"--scope",
 			"--unit", p.Agent.ID.Name(),
-			"nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--output-lock-file", "/dev/null", "--command", "bash", "-lc",
-			"cd " + shellQuote(p.Agent.SandboxWorktree) + " && exec ${SHELL:-bash}",
 		}
+		args = append(args, appendNixShellArgs(nixArgs, "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")...)
+		return args
 	default:
 		args := []string{"bwrap"}
 		for _, bind := range p.Binds {
@@ -331,9 +354,29 @@ func launcherArgs(p Plan) []string {
 		for _, key := range keys {
 			args = append(args, "--setenv", key, p.Env[key])
 		}
-		args = append(args, "nix", "--extra-experimental-features", "nix-command flakes", "develop", p.Flake, "--output-lock-file", "/dev/null", "--command", "bash", "-lc", "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")
+		args = append(args, appendNixShellArgs(nixDevelopArgs(p), "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")...)
 		return args
 	}
+}
+
+func nixDevelopArgs(p Plan) []string {
+	args := []string{"nix", "--extra-experimental-features", "nix-command flakes", "develop"}
+	names := make([]string, 0, len(p.FlakeInputOverrides))
+	for name := range p.FlakeInputOverrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		args = append(args, "--override-input", name, p.FlakeInputOverrides[name])
+	}
+	args = append(args, p.Flake, "--output-lock-file", "/dev/null")
+	return args
+}
+
+func appendNixShellArgs(nixArgs []string, script string) []string {
+	args := append([]string{}, nixArgs...)
+	args = append(args, "--command", "bash", "-lc", script)
+	return args
 }
 
 func shellQuote(s string) string {

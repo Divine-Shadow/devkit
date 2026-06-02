@@ -104,6 +104,51 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 }
 
+func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+		FlakeInputOverrides: map[string]string{
+			"ouroboros-terraform": "path:" + repoRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir host worktree: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostHome, 0o700); err != nil {
+		t.Fatalf("mkdir host home: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.StateRoot, 0o700); err != nil {
+		t.Fatalf("mkdir state root: %v", err)
+	}
+	if err := os.WriteFile(p.DNS.ResolvConf, []byte("nameserver 127.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("write resolv: %v", err)
+	}
+	cmd, err := BuildBubblewrap(p, []string{"true"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	want := "'develop' '--override-input' 'ouroboros-terraform' 'path:" + repoRoot + "' './overlays/ouroboros-terraform#default'"
+	if !strings.Contains(joined, want) {
+		t.Fatalf("command missing %q:\n%s", want, joined)
+	}
+}
+
 func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")

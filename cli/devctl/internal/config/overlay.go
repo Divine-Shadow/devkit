@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -37,6 +38,9 @@ type Runtime struct {
 	Image string `yaml:"image"`
 	// Flake is the native Nix runtime surface for this overlay.
 	Flake string `yaml:"flake"`
+	// FlakeInputOverrides maps flake input names to repo paths or flake refs
+	// that devkit must pass explicitly to Nix for native lifecycle commands.
+	FlakeInputOverrides map[string]string `yaml:"flake_input_overrides"`
 	// CodexVersion is the expected `codex --version` semantic version.
 	CodexVersion string `yaml:"codex_version"`
 	// CoreCheck documents the command used to prove the mounted repo still builds.
@@ -189,4 +193,55 @@ func ResolveWorkspace(cfg OverlayConfig, overlayDir string, root string) string 
 		resolved = filepath.Clean(filepath.Join(base, ws))
 	}
 	return resolved
+}
+
+// ResolveRuntimeFlakeInputOverrides normalizes runtime flake input overrides
+// declared in devkit.yaml. Relative filesystem values are resolved from the
+// devkit root and passed to Nix as path: refs; non-path flake refs are preserved.
+func ResolveRuntimeFlakeInputOverrides(devkitRoot string, overrides map[string]string) map[string]string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		cleanName := strings.TrimSpace(name)
+		value := normalizeRuntimeFlakeInputOverride(devkitRoot, overrides[name])
+		if cleanName == "" || value == "" {
+			continue
+		}
+		out[cleanName] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeRuntimeFlakeInputOverride(devkitRoot string, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "path:") {
+		pathValue := strings.TrimSpace(strings.TrimPrefix(value, "path:"))
+		if pathValue == "" {
+			return ""
+		}
+		if !filepath.IsAbs(pathValue) {
+			pathValue = filepath.Join(devkitRoot, pathValue)
+		}
+		return "path:" + filepath.Clean(pathValue)
+	}
+	if strings.Contains(value, ":") {
+		return value
+	}
+	if filepath.IsAbs(value) {
+		return "path:" + filepath.Clean(value)
+	}
+	return "path:" + filepath.Clean(filepath.Join(devkitRoot, value))
 }

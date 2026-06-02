@@ -936,6 +936,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		Project:               ctx.Project,
 		Repo:                  repo,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
+		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(ctx.Paths.Root, cfg.Runtime.FlakeInputOverrides),
 		Launcher:              "bubblewrap",
 		WorktreeRoot:          resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
 		StateRoot:             resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
@@ -959,6 +960,9 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	}
 	if strings.TrimSpace(opts.Flake) == "" {
 		opts.Flake = strings.TrimSpace(cfg.Runtime.Flake)
+	}
+	if len(opts.FlakeInputOverrides) == 0 {
+		opts.FlakeInputOverrides = config.ResolveRuntimeFlakeInputOverrides(ctx.Paths.Root, cfg.Runtime.FlakeInputOverrides)
 	}
 	if strings.TrimSpace(opts.WorktreeRoot) == "" {
 		opts.WorktreeRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.WorktreeRoot)

@@ -1,7 +1,7 @@
 {
   description = "Devkit adapter for the ouroboros-terraform repo runtime";
 
-  inputs.ouroboros-terraform.url = "git+file:../ouroboros-terraform";
+  inputs.ouroboros-terraform.url = "git+ssh://git@github.com/Divine-Shadow/ouroboros-terraform.git";
 
   outputs =
     { ouroboros-terraform, ... }:
