@@ -15,16 +15,17 @@ import (
 
 // Entry is one overlay's declared runtime pairing.
 type Entry struct {
-	Overlay      string
-	Repo         string
-	Service      string
-	Image        string
-	Flake        string
-	CodexVersion string
-	CoreCheck    string
-	Canonical    bool
-	ConfigPath   string
-	FlakePath    string
+	Overlay             string
+	Repo                string
+	Service             string
+	Image               string
+	Flake               string
+	FlakeInputOverrides map[string]string
+	CodexVersion        string
+	CoreCheck           string
+	Canonical           bool
+	ConfigPath          string
+	FlakePath           string
 }
 
 // Register adds runtime-matrix to the command registry.
@@ -103,16 +104,17 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				service = "dev-agent"
 			}
 			entries = append(entries, Entry{
-				Overlay:      overlay,
-				Repo:         repo,
-				Service:      service,
-				Image:        image,
-				Flake:        flake,
-				CodexVersion: strings.TrimSpace(cfg.Runtime.CodexVersion),
-				CoreCheck:    strings.TrimSpace(cfg.Runtime.CoreCheck),
-				Canonical:    canonical,
-				ConfigPath:   filepath.Join(cfgDir, "devkit.yaml"),
-				FlakePath:    filepath.Join(cfgDir, "flake.nix"),
+				Overlay:             overlay,
+				Repo:                repo,
+				Service:             service,
+				Image:               image,
+				Flake:               flake,
+				FlakeInputOverrides: config.ResolveRuntimeFlakeInputOverrides(filepath.Dir(root), cfg.Runtime.FlakeInputOverrides),
+				CodexVersion:        strings.TrimSpace(cfg.Runtime.CodexVersion),
+				CoreCheck:           strings.TrimSpace(cfg.Runtime.CoreCheck),
+				Canonical:           canonical,
+				ConfigPath:          filepath.Join(cfgDir, "devkit.yaml"),
+				FlakePath:           filepath.Join(cfgDir, "flake.nix"),
 			})
 		}
 	}
@@ -162,6 +164,17 @@ func Check(entries []Entry, dryRun bool) error {
 					problems = append(problems, fmt.Sprintf("%s: stat overlay-local flake: %v", e.Overlay, err))
 				}
 			}
+			for name, ref := range e.FlakeInputOverrides {
+				if path, ok := strings.CutPrefix(ref, "path:"); ok {
+					if _, err := os.Stat(path); err != nil {
+						if os.IsNotExist(err) {
+							problems = append(problems, fmt.Sprintf("%s: flake input override %s path missing: %s", e.Overlay, name, path))
+						} else {
+							problems = append(problems, fmt.Sprintf("%s: stat flake input override %s: %v", e.Overlay, name, err))
+						}
+					}
+				}
+			}
 		}
 		if e.CodexVersion == "" {
 			problems = append(problems, fmt.Sprintf("%s: runtime.codex_version is empty", e.Overlay))
@@ -176,8 +189,8 @@ func Check(entries []Entry, dryRun bool) error {
 		}
 		if e.Flake != "" && e.CodexVersion != "" {
 			if dryRun {
-				fmt.Printf("[dry-run] nix --extra-experimental-features 'nix-command flakes' develop %s --output-lock-file /dev/null --command bash -c 'codex --version'\n", e.Flake)
-			} else if got, err := flakeCodexVersion(e.Flake); err != nil {
+				fmt.Printf("[dry-run] %s\n", strings.Join(flakeCodexVersionArgs(e.Flake, e.FlakeInputOverrides), " "))
+			} else if got, err := flakeCodexVersion(e.Flake, e.FlakeInputOverrides); err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version check failed: %v", e.Overlay, e.Flake, err))
 			} else if got != e.CodexVersion {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version %s, want %s", e.Overlay, e.Flake, got, e.CodexVersion))
@@ -215,8 +228,9 @@ func overlayLocalFlakeRef(overlay string) string {
 	return "./overlays/" + overlay + "#default"
 }
 
-func flakeCodexVersion(flake string) (string, error) {
-	cmd := exec.Command("nix", "--extra-experimental-features", "nix-command flakes", "develop", flake, "--output-lock-file", "/dev/null", "--command", "bash", "-c", "codex --version")
+func flakeCodexVersion(flake string, overrides map[string]string) (string, error) {
+	args := flakeCodexVersionArgs(flake, overrides)
+	cmd := exec.Command(args[0], args[1:]...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
@@ -226,4 +240,18 @@ func flakeCodexVersion(flake string) (string, error) {
 		return "", fmt.Errorf("empty codex version output")
 	}
 	return strings.TrimPrefix(fields[len(fields)-1], "v"), nil
+}
+
+func flakeCodexVersionArgs(flake string, overrides map[string]string) []string {
+	args := []string{"nix", "--extra-experimental-features", "nix-command flakes", "develop"}
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		args = append(args, "--override-input", name, overrides[name])
+	}
+	args = append(args, flake, "--output-lock-file", "/dev/null", "--command", "bash", "-c", "codex --version")
+	return args
 }

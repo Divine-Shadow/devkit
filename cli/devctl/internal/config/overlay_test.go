@@ -122,6 +122,37 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 }
 
+func TestReadAllParsesRuntimeFlakeInputOverrides(t *testing.T) {
+	dir := t.TempDir()
+	over := filepath.Join(dir, "overlays", "proj")
+	if err := os.MkdirAll(over, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "" +
+		"runtime:\n" +
+		"  flake: ./overlays/proj#default\n" +
+		"  flake_input_overrides:\n" +
+		"    repo-runtime: ../repo-runtime\n" +
+		"    pinned: github:owner/repo\n"
+	if err := os.WriteFile(filepath.Join(over, "devkit.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := ReadAll([]string{filepath.Join(dir, "overlays")}, "proj")
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if cfg.Runtime.FlakeInputOverrides["repo-runtime"] != "../repo-runtime" {
+		t.Fatalf("flake input overrides = %#v", cfg.Runtime.FlakeInputOverrides)
+	}
+	resolved := ResolveRuntimeFlakeInputOverrides(filepath.Join(dir, "devkit"), cfg.Runtime.FlakeInputOverrides)
+	if resolved["repo-runtime"] != "path:"+filepath.Join(dir, "repo-runtime") {
+		t.Fatalf("resolved repo-runtime = %#v", resolved)
+	}
+	if resolved["pinned"] != "github:owner/repo" {
+		t.Fatalf("resolved pinned = %#v", resolved)
+	}
+}
+
 func TestReadAllSkipsMissing(t *testing.T) {
 	cfg, dirPath, err := ReadAll([]string{"/does/not/exist"}, "proj")
 	if err != nil {

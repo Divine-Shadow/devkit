@@ -106,6 +106,62 @@ runtime:
 	}
 }
 
+func TestDiscoverResolvesRuntimeFlakeInputOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "devkit", "overlays")
+	repo := filepath.Join(tmp, "repo-runtime")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeOverlay(t, root, "native", `
+service: dev-agent
+defaults:
+  repo: app
+runtime:
+  flake: ./overlays/native#default
+  flake_input_overrides:
+    app-runtime: ../repo-runtime
+  codex_version: 0.133.0
+  core_check: make test
+`)
+
+	entries, err := Discover([]string{root}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := entries[0].FlakeInputOverrides["app-runtime"]
+	if got != "path:"+repo {
+		t.Fatalf("override = %q, want path:%s", got, repo)
+	}
+	args := strings.Join(flakeCodexVersionArgs(entries[0].Flake, entries[0].FlakeInputOverrides), " ")
+	if !strings.Contains(args, "--override-input app-runtime path:"+repo+" ./overlays/native#default") {
+		t.Fatalf("codex version args missing override before flake: %s", args)
+	}
+	if err := Check(entries, true); err != nil {
+		t.Fatalf("matrix check rejected override: %v", err)
+	}
+}
+
+func TestCheckRejectsMissingRuntimeFlakeInputOverridePath(t *testing.T) {
+	flakePath := filepath.Join(t.TempDir(), "flake.nix")
+	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := Check([]Entry{{
+		Overlay:             "native",
+		Repo:                "app",
+		Flake:               "./overlays/native#default",
+		FlakeInputOverrides: map[string]string{"app-runtime": "path:/missing/repo-runtime"},
+		CodexVersion:        "0.133.0",
+		CoreCheck:           "make test",
+		FlakePath:           flakePath,
+		Canonical:           true,
+	}}, true)
+	if err == nil || !strings.Contains(err.Error(), "flake input override app-runtime path missing") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestCheckAcceptsOverlayLocalFlakeRef(t *testing.T) {
 	flakePath := filepath.Join(t.TempDir(), "flake.nix")
 	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
