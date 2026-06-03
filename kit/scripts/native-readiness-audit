@@ -28,7 +28,7 @@ runtime_codex_version_for() {
 REPO="${DEVKIT_NATIVE_READINESS_REPO:-ouroboros-ide}"
 DEV_ALL_FLAKE="${DEVKIT_NATIVE_READINESS_DEV_ALL_FLAKE:-./overlays/dev-all#default}"
 EXPECTED_CODEX_VERSION="${DEVKIT_NATIVE_READINESS_CODEX_VERSION:-$(runtime_codex_version_for dev-all)}"
-CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.3-codex-spark}"
+CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.5}"
 CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-reply with exactly 'ok'}"
 GOVERNANCE_JAR_FLAKE="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR_FLAKE:-$DEV_ROOT/ouroboros-ide#governance-jar}"
 GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-}"
@@ -274,32 +274,11 @@ done
 read -r -d '' codex_exec <<'EOF' || true
 set -euo pipefail
 idx="${DEVKIT_NATIVE_AUDIT_AGENT_INDEX:?}"
-model="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-}"
 config="${CODEX_HOME:-$HOME/.codex}/config.toml"
 mkdir -p "$(dirname "$config")"
-if [[ -n "$model" ]]; then
-  if [[ -f "$config" ]]; then
-    tmp="$(mktemp)"
-    awk -v model="$model" '
-      BEGIN { written = 0 }
-      /^model[[:space:]]*=/ {
-        if (!written) {
-          print "model = \"" model "\""
-          written = 1
-        }
-        next
-      }
-      { print }
-      END {
-        if (!written) {
-          print "model = \"" model "\""
-        }
-      }
-    ' "$config" > "$tmp"
-    mv "$tmp" "$config"
-  else
-    printf 'model = "%s"\n' "$model" > "$config"
-  fi
+if [[ -f "$config" ]] && grep -q '^model[[:space:]]*=[[:space:]]*"gpt-5\.3' "$config"; then
+  echo "native-readiness-audit: Codex config has forbidden persistent gpt-5.3 default: $config" >&2
+  exit 1
 fi
 
 zsh -ic 'type codex; codex --version'
@@ -327,7 +306,7 @@ grep -q 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=' "$config" || {
   exit 1
 }
 codex_output="/tmp/devkit-codex-agent${idx}.out"
-codex exec "$CODEX_PROMPT" | tee "$codex_output"
+codex exec -m "$CODEX_MODEL" "$CODEX_PROMPT" | tee "$codex_output"
 tr -d '\r' < "$codex_output" | grep -qx 'ok' || {
   echo "native-readiness-audit: codex exec did not reply with exactly ok for agent ${idx}" >&2
   exit 1
@@ -379,6 +358,8 @@ for idx in 1 2; do
     --broker-socket "$broker_sock" --proxy-socket "$egress_sock" -- \
     env "DEVKIT_NATIVE_AUDIT_AGENT_INDEX=$idx" \
       "DEVKIT_NATIVE_READINESS_CODEX_MODEL=$CODEX_MODEL" \
+      "CODEX_MODEL=$CODEX_MODEL" \
+      "CODEX_PROMPT=$CODEX_PROMPT" \
       bash -lc "$codex_exec" \
     2>&1 | tee "$audit_dir/codex-agent${idx}.txt"
   grep_required "codex-cli $EXPECTED_CODEX_VERSION" "$audit_dir/codex-agent${idx}.txt"
