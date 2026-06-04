@@ -149,13 +149,38 @@ ingress:
 hooks:
   warm: |
     set -euo pipefail
+    find_purs_bin() {
+      local candidate
+      if command -v purs >/dev/null 2>&1; then
+        command -v purs
+        return 0
+      fi
+      for candidate in /nix/store/*-purescript-*/bin/purs /nix/store/*purescript*/bin/purs; do
+        if [ -x "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      done
+      return 1
+    }
     if command -v npm >/dev/null 2>&1; then
       for repo in /workspace /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
         if [ -f "$repo/frontend/package.json" ]; then
-          npm --prefix "$repo/frontend" install --include=dev
-          if [ ! -x "$repo/frontend/node_modules/.bin/tsc" ]; then
-            npm --prefix "$repo/frontend" install --include=dev --no-save typescript
+          if [ -f "$repo/frontend/package-lock.json" ]; then
+            npm --prefix "$repo/frontend" ci --include=dev --ignore-scripts
+          else
+            npm --prefix "$repo/frontend" install --include=dev --ignore-scripts
           fi
+          if npm --prefix "$repo/frontend" ls purescript --depth=0 >/dev/null 2>&1; then
+            purs_bin="$(find_purs_bin)" || {
+              echo "[codex warm] purescript package is installed but no Nix purs binary is available" >&2
+              exit 1
+            }
+            ln -sf "$purs_bin" "$repo/frontend/node_modules/.bin/purs"
+          fi
+          npm --prefix "$repo/frontend" rebuild better-sqlite3 --build-from-source
+          test -x "$repo/frontend/node_modules/.bin/tsc"
+          npm --prefix "$repo/frontend" ls @playwright/test global-agent --depth=0 >/dev/null
         fi
       done
     fi
