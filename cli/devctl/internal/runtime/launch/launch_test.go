@@ -348,8 +348,8 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 			t.Fatalf("%s content = %q, want %q", rel, got, want)
 		}
 	}
-	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); !strings.Contains(got, "current config") || !strings.Contains(got, codexGovernanceManagedBegin) {
-		t.Fatalf("config did not preserve existing content and add governance block: %q", got)
+	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); strings.TrimSpace(got) != "current config" || strings.Contains(got, codexGovernanceManagedBegin) || strings.Contains(got, "[mcp_servers.governance]") {
+		t.Fatalf("config did not preserve existing content without mutable governance block: %q", got)
 	}
 	afterSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
 	if afterSessions < beforeSessions+1 {
@@ -365,8 +365,8 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	if got := readTestFile(t, filepath.Join(dstCodex, "auth.json")); got != "current auth" {
 		t.Fatalf("auth was clobbered: %q", got)
 	}
-	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); strings.Count(got, codexGovernanceManagedBegin) != 1 {
-		t.Fatalf("second Prepare duplicated governance block:\n%s", got)
+	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); strings.Contains(got, codexGovernanceManagedBegin) || strings.Contains(got, "[mcp_servers.governance]") {
+		t.Fatalf("second Prepare restored mutable governance block:\n%s", got)
 	}
 }
 
@@ -495,7 +495,18 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
-	existingConfig := "personality = \"existing\"\n\n[projects.\"/workspaces/dev/agent-worktrees/agent2/ouroboros-ide\"]\ntrust_level = \"trusted\"\n"
+	existingConfig := strings.Join([]string{
+		`personality = "existing"`,
+		``,
+		`[projects."/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"]`,
+		`trust_level = "trusted"`,
+		``,
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n")
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), existingConfig)
 	writeTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"), strings.Join([]string{
 		`approval_policy = "never"`,
@@ -516,28 +527,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("policy rules = %q, want %q", got, policy)
 	}
 	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
-	for _, want := range []string{
-		`personality = "existing"`,
-		`[projects."/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"]`,
-		`cwd = "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"`,
-		codexGovernanceManagedBegin,
-		`# governance_mcp_entrypoint_sha256 = "`,
-		`[mcp_servers.governance]`,
-		`command = "/run/current-system/sw/bin/bash"`,
-		`args = ["-lc",`,
-		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=`,
-		`governance-mcp-stdio-forward`,
-		`governance_root=${PWD}`,
-		`IFS=, read -ra governance_pairs`,
-		`workspace_tail=${governance_workspace_root#*/agent-worktrees/}`,
-		`unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM`,
-		`governance.operator_attention_status`,
-	} {
-		if !strings.Contains(gotConfig, want) {
-			t.Fatalf("config missing %q:\n%s", want, gotConfig)
-		}
+	if gotConfig != "personality = \"existing\"\n" {
+		t.Fatalf("config should keep ordinary settings and remove mutable setup policy:\n%s", gotConfig)
 	}
 	for _, forbidden := range []string{
+		"[projects.",
+		codexGovernanceManagedBegin,
+		codexGovernanceManagedEnd,
+		"[mcp_servers.governance]",
 		"env_vars = [",
 		"mcp_servers.governance.env.",
 		`"SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM"`,
@@ -552,14 +549,10 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	wantWorktreeConfig := strings.Join([]string{
 		`approval_policy = "never"`,
-		`[mcp_servers.governance]`,
-		`command = "bash"`,
-		`args = ["-lc", "mkdir -p ${HOME:-/tmp}/.codex/log; set -x; exec bash scripts/devops/governance-mcp-stdio-forward"]`,
-		`startup_timeout_sec = 60`,
 		"",
 	}, "\n")
 	if gotWorktreeConfig := readTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml")); gotWorktreeConfig != wantWorktreeConfig {
-		t.Fatalf("worktree config should be preserved, got:\n%s\nwant:\n%s", gotWorktreeConfig, wantWorktreeConfig)
+		t.Fatalf("worktree config should remove mutable governance table, got:\n%s\nwant:\n%s", gotWorktreeConfig, wantWorktreeConfig)
 	}
 	envPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh")
 	gotEnv := readTestFile(t, envPath)
@@ -567,7 +560,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"Shared governance MCP/control-plane environment",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='" + filepath.Join(devRoot, "devkit") + "#dev-all'",
 		"export DEVKIT_GOVERNANCE_JAR_FLAKE='" + filepath.Join(devRoot, "ouroboros-ide") + "#governance-jar'",
-		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='" + filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json") + "'",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=",
 		"devkit_governance_load_runtime_env()",
@@ -642,7 +635,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 }
 
-func TestPrepareOuroTerraformWritesHomeGovernanceConfig(t *testing.T) {
+func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -668,27 +661,23 @@ func TestPrepareOuroTerraformWritesHomeGovernanceConfig(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), strings.Join([]string{
+		`personality = "terraform"`,
+		``,
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n"))
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
-	for _, want := range []string{
-		codexGovernanceManagedBegin,
-		`# governance_mcp_entrypoint_sha256 = "`,
-		`[mcp_servers.governance]`,
-		`command = "/run/current-system/sw/bin/bash"`,
-		`cwd = "` + p.Agent.SandboxWorktree + `"`,
-		`governance_workspace_root=${PWD}`,
-		`governance_root=${PWD%%/agent-worktrees/*}/ouroboros-ide`,
-		`governance.workspace_topology`,
-		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=`,
-	} {
-		if !strings.Contains(gotConfig, want) {
-			t.Fatalf("Terraform config missing %q:\n%s", want, gotConfig)
-		}
+	if gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")); gotConfig != "personality = \"terraform\"\n" {
+		t.Fatalf("Terraform config should keep ordinary settings and remove mutable governance block:\n%s", gotConfig)
 	}
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
 		t.Fatalf("session was clobbered: %q", got)
@@ -716,7 +705,7 @@ func TestPrepareOuroTerraformWritesHomeGovernanceConfig(t *testing.T) {
 	}
 }
 
-func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
+func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -738,6 +727,15 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), strings.Join([]string{
+		`personality = "dev-workspace"`,
+		``,
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n"))
 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -746,19 +744,8 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 	if got := readTestFile(t, filepath.Join(devRoot, ".codex", "config.toml")); got != "top_level = true\n" {
 		t.Fatalf("top-level config was modified:\n%s", got)
 	}
-	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
-	for _, want := range []string{
-		codexGovernanceManagedBegin,
-		`# governance_mcp_entrypoint_sha256 = "`,
-		`[mcp_servers.governance]`,
-		`cwd = "/workspaces/dev"`,
-		`governance_root=/workspaces/dev/ouroboros-ide`,
-		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=`,
-		`SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace`,
-	} {
-		if !strings.Contains(gotConfig, want) {
-			t.Fatalf("config missing %q:\n%s", want, gotConfig)
-		}
+	if gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")); gotConfig != "personality = \"dev-workspace\"\n" {
+		t.Fatalf("config should keep ordinary settings and remove mutable governance block:\n%s", gotConfig)
 	}
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")); got != policy {
 		t.Fatalf("policy rules = %q, want %q", got, policy)

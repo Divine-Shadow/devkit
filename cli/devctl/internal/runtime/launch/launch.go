@@ -455,12 +455,13 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 	}
 	envPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh")
 	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json")
+	sandboxRepoConfigPath := "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"
 	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
 	if err != nil {
 		return err
 	}
 	repoConfigSha256 := fmt.Sprintf("%x", sha256.Sum256(repoConfig))
-	content := buildOuroGovernanceEnv(hostDevRoot, repoConfigPath, repoConfigSha256)
+	content := buildOuroGovernanceEnv(hostDevRoot, sandboxRepoConfigPath, repoConfigSha256)
 	if data, err := os.ReadFile(envPath); err == nil && string(data) == content {
 		// Keep checking the paired repo config below; it may have been generated
 		// by an older devkit and carry a stale workspace catalog.
@@ -832,7 +833,10 @@ func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
 	if hostHome == "" {
 		return nil
 	}
-	configPaths := []string{filepath.Join(hostHome, ".codex", "config.toml")}
+	configPaths := []string{
+		filepath.Join(hostHome, ".codex", "config.toml"),
+		filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"),
+	}
 	seen := map[string]bool{}
 	for _, configPath := range configPaths {
 		configPath = filepath.Clean(configPath)
@@ -840,28 +844,29 @@ func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
 			continue
 		}
 		seen[configPath] = true
-		if err := ensureCodexGovernanceConfigAt(configPath, p); err != nil {
+		if err := ensureCodexGovernanceConfigAt(configPath); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
+func ensureCodexGovernanceConfigAt(configPath string) error {
 	var original string
 	if data, err := os.ReadFile(configPath); err == nil {
 		original = string(data)
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		return nil
+	} else {
 		return fmt.Errorf("read Codex config %s: %w", configPath, err)
 	}
 	next := removeManagedCodexGovernanceBlock(original)
 	next = removeTomlTable(next, "mcp_servers.governance")
-	block := codexGovernanceConfigBlock(p)
+	next = removeTomlTablesWithPrefix(next, "projects.")
 	next = strings.TrimRight(next, "\r\n")
 	if strings.TrimSpace(next) != "" {
-		next += "\n\n"
+		next += "\n"
 	}
-	next += block
 	if next == original {
 		return nil
 	}
@@ -905,6 +910,22 @@ func removeTomlTable(config, table string) string {
 	return strings.Join(kept, "")
 }
 
+func removeTomlTablesWithPrefix(config, prefix string) string {
+	lines := strings.SplitAfter(config, "\n")
+	var kept []string
+	skip := false
+	for _, line := range lines {
+		if header, ok := tomlTableHeader(line); ok {
+			skip = strings.HasPrefix(header, prefix)
+		}
+		if skip {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
+}
+
 func tomlTableHeader(line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if strings.HasPrefix(trimmed, "[[") || !strings.HasPrefix(trimmed, "[") || !strings.Contains(trimmed, "]") {
@@ -915,42 +936,6 @@ func tomlTableHeader(line string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(trimmed[1:end]), true
-}
-
-func codexGovernanceConfigBlock(p nativeplan.Plan) string {
-	tools := []string{
-		"run",
-		"run_lint_migration",
-		"submit_to_ci",
-		"governance.workspace_topology",
-		"governance.graph_status",
-		"governance.search",
-		"governance.write_yaml",
-		"governance.operator_attention_opt_in",
-		"governance.operator_attention_opt_out",
-		"governance.operator_attention_status",
-		"governance.operator_attention_inbox",
-		"governance.operator_attention_record_blocker",
-	}
-	var b strings.Builder
-	b.WriteString(codexGovernanceManagedBegin + "\n")
-	b.WriteString("# governance_mcp_entrypoint_sha256 = " + strconv.Quote(governanceentrypoint.SHA256()) + "\n")
-	b.WriteString("[mcp_servers.governance]\n")
-	b.WriteString("command = \"/run/current-system/sw/bin/bash\"\n")
-	if cwd := strings.TrimSpace(p.Agent.SandboxWorktree); cwd != "" {
-		b.WriteString("cwd = " + strconv.Quote(cwd) + "\n")
-	}
-	b.WriteString("args = [\"-lc\", " + strconv.Quote(governanceentrypoint.Zsh()) + "]\n")
-	b.WriteString("default_tools_approval_mode = \"auto\"\n")
-	b.WriteString("startup_timeout_sec = 60\n")
-	b.WriteString("tool_timeout_sec = 10800\n")
-	b.WriteString("enabled_tools = [\n")
-	for _, tool := range tools {
-		b.WriteString("  " + strconv.Quote(tool) + ",\n")
-	}
-	b.WriteString("]\n")
-	b.WriteString(codexGovernanceManagedEnd + "\n")
-	return b.String()
 }
 
 func writeOuroCodexShellHook(hostHome string) error {
