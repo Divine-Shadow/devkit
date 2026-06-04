@@ -46,3 +46,10 @@ readiness:
 env:
   NODE_ENV: development
   GATSBY_TELEMETRY_DISABLED: "1"
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+  upstream: unix:///var/run/docker.sock
+  allowed_images:
+    - postgres:latest
+  allow_pulls: true
+  log_level: info
