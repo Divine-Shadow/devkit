@@ -26,6 +26,29 @@ readiness:
       command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
     - name: codex-version
       command: codex --version | grep -q '0.133.0'
+    - name: governance-mcp-config
+      command: |
+        set -euo pipefail
+        config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+        expected_cwd="$(pwd -P)"
+        require_config() {
+          if ! grep -Fq "$1" "$config"; then
+            echo "ouroboros-terraform readiness: Codex governance config missing $1 in $config" >&2
+            exit 1
+          fi
+        }
+        test -r "$config" || {
+          echo "ouroboros-terraform readiness: missing Codex config at $config" >&2
+          exit 1
+        }
+        require_config '# BEGIN DEVKIT NATIVE GOVERNANCE MCP'
+        require_config '[mcp_servers.governance]'
+        require_config 'command = "/run/current-system/sw/bin/bash"'
+        require_config "cwd = \"$expected_cwd\""
+        require_config 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256='
+        require_config 'governance.workspace_topology'
+        test -r /workspaces/dev/.devkit/ouro8-governance-env.sh
+        grep -Fq 'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' /workspaces/dev/.devkit/ouro8-governance-env.sh
   repo_checks:
     - name: aws-profile
       command: |

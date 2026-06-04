@@ -280,6 +280,27 @@ if [[ -f "$config" ]] && grep -q '^model[[:space:]]*=[[:space:]]*"gpt-5\.3' "$co
   echo "native-readiness-audit: Codex config has forbidden persistent gpt-5.3 default: $config" >&2
   exit 1
 fi
+expected_cwd="$(pwd -P)"
+grep -Fq '# BEGIN DEVKIT NATIVE GOVERNANCE MCP' "$config" || {
+  echo "native-readiness-audit: Codex governance config missing managed block: $config" >&2
+  exit 1
+}
+grep -q '^\[mcp_servers\.governance\]$' "$config" || {
+  echo "native-readiness-audit: Codex governance config missing governance MCP table: $config" >&2
+  exit 1
+}
+grep -Fq 'command = "/run/current-system/sw/bin/bash"' "$config" || {
+  echo "native-readiness-audit: Codex governance config has wrong command: $config" >&2
+  exit 1
+}
+grep -Fq "cwd = \"$expected_cwd\"" "$config" || {
+  echo "native-readiness-audit: Codex governance config has wrong cwd: $config expected=$expected_cwd" >&2
+  exit 1
+}
+grep -Fq 'governance.workspace_topology' "$config" || {
+  echo "native-readiness-audit: Codex governance config missing workspace_topology tool: $config" >&2
+  exit 1
+}
 
 zsh -ic 'type codex; codex --version'
 governance_env="/workspaces/dev/.devkit/ouro8-governance-env.sh"
@@ -291,6 +312,10 @@ test -r "$governance_env" || {
 source "$governance_env"
 test -n "${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256:-}" || {
   echo "native-readiness-audit: generated governance env missing expected entrypoint fingerprint: $governance_env" >&2
+  exit 1
+}
+printf '%s\n' "${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}" | grep -Fq 'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' || {
+  echo "native-readiness-audit: generated governance env missing ouroboros-terraform workspace root: $governance_env" >&2
   exit 1
 }
 grep -q '^# governance_mcp_entrypoint_sha256 = ' "$config" || {

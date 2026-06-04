@@ -491,7 +491,16 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 func isOuroGovernedPlan(p nativeplan.Plan) bool {
 	project := strings.TrimSpace(p.Agent.ID.Project)
 	repo := strings.TrimSpace(p.Agent.ID.Repo)
-	return (project == "dev-all" && repo == "ouroboros-ide") || project == "dev-workspace"
+	switch repo {
+	case "ouroboros-ide", "ouroboros-terraform":
+		return true
+	}
+	switch project {
+	case "dev-workspace", "ouro-integration", "ouroboros-terraform":
+		return true
+	default:
+		return false
+	}
 }
 
 func isDevWorkspacePlan(p nativeplan.Plan) bool {
@@ -683,14 +692,16 @@ func buildOuroGovernanceCatalog() ouroGovernanceCatalog {
 }
 
 func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog {
-	ids := []string{"dev-workspace", "ouroboros-ide"}
+	ids := []string{"dev-workspace", "ouroboros-ide", "ouroboros-terraform"}
 	roots := map[string]string{
-		"dev-workspace": "/workspaces/dev",
-		"ouroboros-ide": "/workspaces/dev/ouroboros-ide",
+		"dev-workspace":       "/workspaces/dev",
+		"ouroboros-ide":       "/workspaces/dev/ouroboros-ide",
+		"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform",
 	}
 	rootBindings := []string{
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
 	}
 	add := func(id, root string) {
 		if id == "" || root == "" {
@@ -707,6 +718,12 @@ func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog
 		agent := fmt.Sprintf("agent%d", i)
 		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent)
 		add(agent, root)
+	}
+	for i := 1; i <= 9; i++ {
+		agent := fmt.Sprintf("agent%d", i)
+		id := fmt.Sprintf("%s-ouroboros-terraform", agent)
+		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-terraform", agent)
+		add(id, root)
 	}
 	for _, binding := range discoverAlternateOuroGovernanceWorktrees(hostDevRoot) {
 		add(binding.id, binding.root)

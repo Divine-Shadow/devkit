@@ -529,7 +529,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`governance-mcp-stdio-forward`,
 		`governance_root=${PWD}`,
 		`IFS=, read -ra governance_pairs`,
-		`workspace_tail=${PWD#*/agent-worktrees/}`,
+		`workspace_tail=${governance_workspace_root#*/agent-worktrees/}`,
 		`unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM`,
 		`governance.operator_attention_status`,
 	} {
@@ -581,11 +581,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=\"$jar_sha\"",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform",
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
 		"agent8=/workspaces/dev/agent-worktrees/agent8/ouroboros-ide",
 		"agent9=/workspaces/dev/agent-worktrees/agent9/ouroboros-ide",
+		"agent1-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform",
+		"agent9-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent9/ouroboros-terraform",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas"),
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
 	} {
@@ -610,9 +613,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"knownWorkspaceIds": [`,
 		`"dev-workspace"`,
 		`"ouroboros-ide"`,
+		`"ouroboros-terraform"`,
 		`"agent4"`,
+		`"agent4-ouroboros-terraform"`,
 		`"dev-workspace": "/workspaces/dev"`,
+		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
 		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
+		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
@@ -632,6 +639,80 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("stat governance env: %v", err)
 	} else if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("governance env mode = %o, want 600", got)
+	}
+}
+
+func TestPrepareOuroTerraformWritesHomeGovernanceConfig(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+		FlakeInputOverrides: map[string]string{
+			"ouroboros-terraform": "path:" + repoRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	for _, want := range []string{
+		codexGovernanceManagedBegin,
+		`# governance_mcp_entrypoint_sha256 = "`,
+		`[mcp_servers.governance]`,
+		`command = "/run/current-system/sw/bin/bash"`,
+		`cwd = "` + p.Agent.SandboxWorktree + `"`,
+		`governance_workspace_root=${PWD}`,
+		`governance_root=${PWD%%/agent-worktrees/*}/ouroboros-ide`,
+		`governance.workspace_topology`,
+		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=`,
+	} {
+		if !strings.Contains(gotConfig, want) {
+			t.Fatalf("Terraform config missing %q:\n%s", want, gotConfig)
+		}
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
+		t.Fatalf("session was clobbered: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("Prepare must not create repo-local Terraform Codex config, err=%v", err)
+	}
+	gotEnv := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"))
+	for _, want := range []string{
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
+		"agent1-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform",
+	} {
+		if !strings.Contains(gotEnv, want) {
+			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
+		}
+	}
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
+	for _, want := range []string{
+		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"agent1-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform"`,
+	} {
+		if !strings.Contains(gotRepoConfig, want) {
+			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
+		}
 	}
 }
 
@@ -700,6 +781,7 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 	for _, want := range []string{
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
 	} {
 		if !strings.Contains(gotEnv, want) {
 			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
@@ -710,6 +792,7 @@ func TestPrepareDevWorkspaceWritesHomeGovernanceConfigAndSkills(t *testing.T) {
 		`"dev-workspace"`,
 		`"dev-workspace": "/workspaces/dev"`,
 		`"ouroboros-ide": "/workspaces/dev/ouroboros-ide"`,
+		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
