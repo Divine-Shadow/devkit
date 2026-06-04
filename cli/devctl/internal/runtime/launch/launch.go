@@ -596,11 +596,12 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	repoConfigPath = filepath.Clean(repoConfigPath)
+	sandboxDevRoot := "/workspaces/dev"
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
-	stateDir := filepath.Join(hostDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
-	schemaRoot := filepath.Join(hostDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
-	runtimeFlake := filepath.Join(hostDevRoot, "devkit") + "#dev-all"
-	governanceJarFlake := filepath.Join(hostDevRoot, "ouroboros-ide") + "#governance-jar"
+	stateDir := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
+	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
+	runtimeFlake := filepath.Join(sandboxDevRoot, "devkit") + "#dev-all"
+	governanceJarFlake := filepath.Join(sandboxDevRoot, "ouroboros-ide") + "#governance-jar"
 	return strings.Join([]string{
 		"# Shared governance MCP/control-plane environment for native Ouroboros GUI agents.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
@@ -878,7 +879,6 @@ func ensureCodexGovernanceConfigAt(configPath string) error {
 	}
 	return nil
 }
-
 func removeManagedCodexGovernanceBlock(config string) string {
 	for {
 		start := strings.Index(config, codexGovernanceManagedBegin)
