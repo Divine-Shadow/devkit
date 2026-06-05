@@ -527,6 +527,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	existingConfig := strings.Join([]string{
 		`personality = "existing"`,
 		``,
+		`[projects."/home/bayesartre/dev/ouroboros-ide"]`,
+		`trust_level = "trusted"`,
+		``,
 		`[projects."/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"]`,
 		`trust_level = "trusted"`,
 		``,
@@ -557,6 +560,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
 	assertSourceGeneratedGovernanceConfig(t, gotConfig, `personality = "existing"`)
+	if strings.Count(gotConfig, `[projects."/home/bayesartre/dev/ouroboros-ide"]`) > 1 {
+		t.Fatalf("config retained duplicate stale project trust table:\n%s", gotConfig)
+	}
 	for _, forbidden := range []string{
 		"env_vars = [",
 		"mcp_servers.governance.env.",

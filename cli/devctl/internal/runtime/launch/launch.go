@@ -880,6 +880,7 @@ func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
 	next := removeManagedCodexGovernanceBlock(original)
 	next = removeTomlTable(next, "mcp_servers.governance")
 	next = removeTomlTablesWithPrefix(next, "mcp_servers.governance.")
+	next = removeTomlTablesWithPrefix(next, "projects.")
 	next = strings.TrimRight(next, "\r\n")
 	if strings.TrimSpace(next) != "" {
 		next += "\n\n"
