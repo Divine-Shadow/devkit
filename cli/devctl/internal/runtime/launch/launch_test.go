@@ -104,6 +104,39 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 }
 
+func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved string) {
+	t.Helper()
+	if !strings.Contains(got, preserved) {
+		t.Fatalf("config did not preserve existing content %q:\n%s", preserved, got)
+	}
+	for _, want := range []string{
+		codexGovernanceManagedBegin,
+		"# source = devkit native launch generator",
+		"governance_mcp_entrypoint_sha256",
+		"[mcp_servers.governance]",
+		`command = "/run/current-system/sw/bin/bash"`,
+		`DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
+		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
+		"[projects.",
+		codexGovernanceManagedEnd,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("source-generated governance config missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"env_vars = [",
+		`"SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM"`,
+		"SUBAGENT_GOVERNANCE_CONTROL_PLANE_BIND=0.0.0.0",
+		`command = "bash"`,
+		`args = ["-lc", "mkdir -p ${HOME:-/tmp}/.codex/log; set -x; exec bash scripts/devops/governance-mcp-stdio-forward"]`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("source-generated governance config contains stale mutable value %q:\n%s", forbidden, got)
+		}
+	}
+}
+
 func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -348,9 +381,7 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 			t.Fatalf("%s content = %q, want %q", rel, got, want)
 		}
 	}
-	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); strings.TrimSpace(got) != "current config" || strings.Contains(got, codexGovernanceManagedBegin) || strings.Contains(got, "[mcp_servers.governance]") {
-		t.Fatalf("config did not preserve existing content without mutable governance block: %q", got)
-	}
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), "current config")
 	afterSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
 	if afterSessions < beforeSessions+1 {
 		t.Fatalf("session count did not increase as expected: before=%d after=%d", beforeSessions, afterSessions)
@@ -365,9 +396,7 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	if got := readTestFile(t, filepath.Join(dstCodex, "auth.json")); got != "current auth" {
 		t.Fatalf("auth was clobbered: %q", got)
 	}
-	if got := readTestFile(t, filepath.Join(dstCodex, "config.toml")); strings.Contains(got, codexGovernanceManagedBegin) || strings.Contains(got, "[mcp_servers.governance]") {
-		t.Fatalf("second Prepare restored mutable governance block:\n%s", got)
-	}
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), "current config")
 }
 
 func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T) {
@@ -527,14 +556,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("policy rules = %q, want %q", got, policy)
 	}
 	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
-	if gotConfig != "personality = \"existing\"\n" {
-		t.Fatalf("config should keep ordinary settings and remove mutable setup policy:\n%s", gotConfig)
-	}
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, `personality = "existing"`)
 	for _, forbidden := range []string{
-		"[projects.",
-		codexGovernanceManagedBegin,
-		codexGovernanceManagedEnd,
-		"[mcp_servers.governance]",
 		"env_vars = [",
 		"mcp_servers.governance.env.",
 		`"SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM"`,
@@ -574,10 +597,11 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=\"$jar_sha\"",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform",
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
+		"agent1=/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
 		"agent8=/workspaces/dev/agent-worktrees/agent8/ouroboros-ide",
 		"agent9=/workspaces/dev/agent-worktrees/agent9/ouroboros-ide",
 		"agent1-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform",
@@ -611,6 +635,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"agent4-ouroboros-terraform"`,
 		`"dev-workspace": "/workspaces/dev"`,
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"agent1": "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"`,
 		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
 		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
@@ -618,9 +643,6 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
 		}
-	}
-	if strings.Contains(gotRepoConfig, `"agent1"`) {
-		t.Fatalf("governance repo config must not bind agent1 separately from ouroboros-ide:\n%s", gotRepoConfig)
 	}
 	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
 		t.Fatalf("governance repo config must not carry mutable jar authority:\n%s", gotRepoConfig)
@@ -676,9 +698,7 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	if gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")); gotConfig != "personality = \"terraform\"\n" {
-		t.Fatalf("Terraform config should keep ordinary settings and remove mutable governance block:\n%s", gotConfig)
-	}
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")), `personality = "terraform"`)
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
 		t.Fatalf("session was clobbered: %q", got)
 	}
@@ -744,9 +764,7 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 	if got := readTestFile(t, filepath.Join(devRoot, ".codex", "config.toml")); got != "top_level = true\n" {
 		t.Fatalf("top-level config was modified:\n%s", got)
 	}
-	if gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")); gotConfig != "personality = \"dev-workspace\"\n" {
-		t.Fatalf("config should keep ordinary settings and remove mutable governance block:\n%s", gotConfig)
-	}
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")), `personality = "dev-workspace"`)
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")); got != policy {
 		t.Fatalf("policy rules = %q, want %q", got, policy)
 	}

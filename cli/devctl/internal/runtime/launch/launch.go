@@ -716,7 +716,7 @@ func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog
 		roots[id] = root
 		rootBindings = append(rootBindings, fmt.Sprintf("%s=%s", id, root))
 	}
-	for i := 2; i <= 9; i++ {
+	for i := 1; i <= 9; i++ {
 		agent := fmt.Sprintf("agent%d", i)
 		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent)
 		add(agent, root)
@@ -830,29 +830,19 @@ func ensureCodexGovernanceConfig(p nativeplan.Plan) error {
 	if !isOuroGovernedPlan(p) {
 		return nil
 	}
+	if worktree := strings.TrimSpace(p.Agent.HostWorktree); worktree != "" {
+		if err := cleanCodexGovernanceConfigAt(filepath.Join(worktree, ".codex", "config.toml")); err != nil {
+			return err
+		}
+	}
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
 	if hostHome == "" {
 		return nil
 	}
-	configPaths := []string{
-		filepath.Join(hostHome, ".codex", "config.toml"),
-		filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"),
-	}
-	seen := map[string]bool{}
-	for _, configPath := range configPaths {
-		configPath = filepath.Clean(configPath)
-		if seen[configPath] {
-			continue
-		}
-		seen[configPath] = true
-		if err := ensureCodexGovernanceConfigAt(configPath); err != nil {
-			return err
-		}
-	}
-	return nil
+	return ensureCodexGovernanceConfigAt(filepath.Join(hostHome, ".codex", "config.toml"), p)
 }
 
-func ensureCodexGovernanceConfigAt(configPath string) error {
+func cleanCodexGovernanceConfigAt(configPath string) error {
 	var original string
 	if data, err := os.ReadFile(configPath); err == nil {
 		original = string(data)
@@ -863,11 +853,38 @@ func ensureCodexGovernanceConfigAt(configPath string) error {
 	}
 	next := removeManagedCodexGovernanceBlock(original)
 	next = removeTomlTable(next, "mcp_servers.governance")
+	next = removeTomlTablesWithPrefix(next, "mcp_servers.governance.")
 	next = removeTomlTablesWithPrefix(next, "projects.")
 	next = strings.TrimRight(next, "\r\n")
 	if strings.TrimSpace(next) != "" {
 		next += "\n"
 	}
+	if next == original {
+		return nil
+	}
+	if err := os.WriteFile(configPath, []byte(next), 0o600); err != nil {
+		return fmt.Errorf("write Codex config %s: %w", configPath, err)
+	}
+	return nil
+}
+
+func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
+	var original string
+	if data, err := os.ReadFile(configPath); err == nil {
+		original = string(data)
+	} else if os.IsNotExist(err) {
+		original = ""
+	} else {
+		return fmt.Errorf("read Codex config %s: %w", configPath, err)
+	}
+	next := removeManagedCodexGovernanceBlock(original)
+	next = removeTomlTable(next, "mcp_servers.governance")
+	next = removeTomlTablesWithPrefix(next, "mcp_servers.governance.")
+	next = strings.TrimRight(next, "\r\n")
+	if strings.TrimSpace(next) != "" {
+		next += "\n\n"
+	}
+	next += codexGovernanceConfigBlock(p)
 	if next == original {
 		return nil
 	}
@@ -878,6 +895,117 @@ func ensureCodexGovernanceConfigAt(configPath string) error {
 		return fmt.Errorf("write Codex config %s: %w", configPath, err)
 	}
 	return nil
+}
+
+func codexGovernanceConfigBlock(p nativeplan.Plan) string {
+	cwd := strings.TrimSpace(p.Agent.SandboxWorktree)
+	if cwd == "" {
+		cwd = strings.TrimSpace(p.DevkitSandboxRoot)
+	}
+	envPath := "/workspaces/dev/.devkit/ouro8-governance-env.sh"
+	repoConfigPath := "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"
+	entrypoint := governanceentrypoint.Zsh()
+	fingerprint := governanceentrypoint.SHA256()
+	tools := []string{
+		"run",
+		"run_lint_migration",
+		"submit_to_ci",
+		"governance.workspace_topology",
+		"governance.graph_status",
+		"governance.search",
+		"governance.write_yaml",
+		"governance.operator_attention_opt_in",
+		"governance.operator_attention_opt_out",
+		"governance.operator_attention_status",
+		"governance.operator_attention_inbox",
+		"governance.operator_attention_record_blocker",
+	}
+	var b strings.Builder
+	b.WriteString(codexGovernanceManagedBegin)
+	b.WriteString("\n")
+	b.WriteString("# source = devkit native launch generator\n")
+	fmt.Fprintf(&b, "# governance_mcp_entrypoint_sha256 = %s\n", tomlQuote(fingerprint))
+	b.WriteString("[mcp_servers.governance]\n")
+	b.WriteString("command = \"/run/current-system/sw/bin/bash\"\n")
+	fmt.Fprintf(&b, "cwd = %s\n", tomlQuote(cwd))
+	fmt.Fprintf(&b, "args = [\"-lc\", %s]\n", tomlQuote(entrypoint))
+	b.WriteString("startup_timeout_sec = 60\n")
+	b.WriteString("tool_timeout_sec = 10800\n")
+	b.WriteString("default_tools_approval_mode = \"auto\"\n")
+	b.WriteString("enabled_tools = [")
+	for i, tool := range tools {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(tomlQuote(tool))
+	}
+	b.WriteString("]\n\n")
+	b.WriteString("[mcp_servers.governance.env]\n")
+	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_ENV = %s\n", tomlQuote(envPath))
+	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = %s\n", tomlQuote(repoConfigPath))
+	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256 = %s\n", tomlQuote(fingerprint))
+	for _, projectPath := range codexGovernanceProjectTrustPaths(p, cwd) {
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "[projects.%s]\n", tomlQuote(projectPath))
+		b.WriteString("trust_level = \"trusted\"\n")
+	}
+	b.WriteString(codexGovernanceManagedEnd)
+	b.WriteString("\n")
+	return b.String()
+}
+
+func codexGovernanceProjectTrustPaths(p nativeplan.Plan, cwd string) []string {
+	hostDevRoot := hostDevRootForPlan(p)
+	repo := strings.TrimSpace(p.Agent.ID.Repo)
+	candidates := []string{
+		cwd,
+		strings.TrimSpace(p.Agent.SandboxWorktree),
+		strings.TrimSpace(p.Agent.HostWorktree),
+	}
+	if hostDevRoot != "" && repo != "" {
+		candidates = append(candidates,
+			filepath.Join(hostDevRoot, repo),
+			filepath.Join("/workspaces/dev", repo),
+		)
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		value = filepath.Clean(value)
+		if !strings.HasPrefix(value, "/") || seen[value] {
+			return
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	for _, candidate := range candidates {
+		add(candidate)
+		if hostDevRoot == "" {
+			continue
+		}
+		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		switch {
+		case candidate == "/workspaces/dev":
+			add(hostDevRoot)
+		case strings.HasPrefix(candidate, "/workspaces/dev/"):
+			add(filepath.Join(hostDevRoot, strings.TrimPrefix(candidate, "/workspaces/dev/")))
+		case candidate == hostDevRoot:
+			add("/workspaces/dev")
+		case strings.HasPrefix(candidate, hostDevRoot+string(filepath.Separator)):
+			if rel, err := filepath.Rel(hostDevRoot, candidate); err == nil && rel != "." {
+				add(filepath.Join("/workspaces/dev", filepath.ToSlash(rel)))
+			}
+		}
+	}
+	return out
+}
+
+func tomlQuote(value string) string {
+	return fmt.Sprintf("%q", value)
 }
 func removeManagedCodexGovernanceBlock(config string) string {
 	for {
