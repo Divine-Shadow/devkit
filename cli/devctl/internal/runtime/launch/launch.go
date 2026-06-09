@@ -727,70 +727,10 @@ func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog
 		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-terraform", agent)
 		add(id, root)
 	}
-	for _, binding := range discoverAlternateOuroGovernanceWorktrees(hostDevRoot) {
-		add(binding.id, binding.root)
-	}
+	// Keep the shared catalog source-derived and predictable. Ad-hoc worktrees
+	// need explicit launch identity instead of being broadcast to every
+	// governed app-server, especially Terraform lanes.
 	return ouroGovernanceCatalog{ids: ids, rootBindings: rootBindings, rootMap: roots}
-}
-
-type governanceWorkspaceBinding struct {
-	id   string
-	root string
-}
-
-func discoverAlternateOuroGovernanceWorktrees(hostDevRoot string) []governanceWorkspaceBinding {
-	hostDevRoot = filepath.Clean(strings.TrimSpace(hostDevRoot))
-	if hostDevRoot == "" || hostDevRoot == "." {
-		return nil
-	}
-	agentRoot := filepath.Join(hostDevRoot, "agent-worktrees")
-	agents, err := os.ReadDir(agentRoot)
-	if err != nil {
-		return nil
-	}
-	sort.Slice(agents, func(i, j int) bool { return agents[i].Name() < agents[j].Name() })
-	var bindings []governanceWorkspaceBinding
-	for _, agent := range agents {
-		if !agent.IsDir() || !strings.HasPrefix(agent.Name(), "agent") {
-			continue
-		}
-		children, err := os.ReadDir(filepath.Join(agentRoot, agent.Name()))
-		if err != nil {
-			continue
-		}
-		sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
-		for _, child := range children {
-			if !child.IsDir() || child.Name() == "ouroboros-ide" {
-				continue
-			}
-			hostRoot := filepath.Join(agentRoot, agent.Name(), child.Name())
-			if _, err := os.Stat(filepath.Join(hostRoot, "scripts", "devops", "governance-mcp-stdio-forward")); err != nil {
-				continue
-			}
-			id := agent.Name() + "-" + governanceWorkspaceIDSegment(child.Name())
-			root := "/workspaces/dev/agent-worktrees/" + agent.Name() + "/" + child.Name()
-			bindings = append(bindings, governanceWorkspaceBinding{id: id, root: root})
-		}
-	}
-	return bindings
-}
-
-func governanceWorkspaceIDSegment(name string) string {
-	var b strings.Builder
-	lastDash := false
-	for _, r := range name {
-		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.'
-		if ok {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-	return strings.Trim(b.String(), "-")
 }
 
 func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {

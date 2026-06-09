@@ -549,6 +549,12 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"",
 	}, "\n"))
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
+	for _, altForwarder := range []string{
+		filepath.Join(devRoot, "agent-worktrees", "agent2", "ouroboros-ide-statement-classifier-submit", "scripts", "devops", "governance-mcp-stdio-forward"),
+		filepath.Join(devRoot, "agent-worktrees", "terraform-ouro-1-redaction-safe", "ouroboros-ide", "scripts", "devops", "governance-mcp-stdio-forward"),
+	} {
+		writeTestFile(t, altForwarder, "#!/usr/bin/env bash\n")
+	}
 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -619,6 +625,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
 		}
 	}
+	for _, forbidden := range []string{
+		"agent2-ouroboros-ide-statement-classifier-submit",
+		"terraform-ouro-1-redaction-safe",
+	} {
+		if strings.Contains(gotEnv, forbidden) {
+			t.Fatalf("governance env leaked ad-hoc worktree %q:\n%s", forbidden, gotEnv)
+		}
+	}
 	if strings.Contains(gotEnv, "SUBAGENT_GOVERNANCE_WORKSPACE_ID=") {
 		t.Fatalf("shared governance env must not pin a per-agent workspace id:\n%s", gotEnv)
 	}
@@ -648,6 +662,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
+		}
+	}
+	for _, forbidden := range []string{
+		`"agent2-ouroboros-ide-statement-classifier-submit"`,
+		`"terraform-ouro-1-redaction-safe"`,
+	} {
+		if strings.Contains(gotRepoConfig, forbidden) {
+			t.Fatalf("governance repo config leaked ad-hoc worktree %q:\n%s", forbidden, gotRepoConfig)
 		}
 	}
 	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
