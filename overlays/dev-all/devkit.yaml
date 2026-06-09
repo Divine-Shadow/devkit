@@ -100,10 +100,14 @@ readiness:
             -path '*/.codex/log/governance-mcp-stdio-forward/provenance.json' \
             -type f 2>/dev/null || true
         )"
+        bridge_status=0
         if [ -n "$bridge_paths" ]; then
-          printf '%s\n' "$bridge_paths" | while IFS= read -r bridge_provenance; do
-            test -r "$bridge_provenance"
-            BRIDGE_PROVENANCE="$bridge_provenance" node <<'NODE'
+          while IFS= read -r bridge_provenance; do
+            if ! test -r "$bridge_provenance"; then
+              bridge_status=1
+              continue
+            fi
+            BRIDGE_PROVENANCE="$bridge_provenance" node <<'NODE' || bridge_status=1
         const fs = require("fs");
         const path = process.env.BRIDGE_PROVENANCE;
         const payload = JSON.parse(fs.readFileSync(path, "utf8"));
@@ -136,7 +140,12 @@ readiness:
           fail(`governance bridge entrypoint fingerprint drift expected=${expectedEntrypointSha} actual=${String(payload.mcpEntrypointSha256 || "")}`);
         }
         NODE
-          done
+          done <<EOF
+        $bridge_paths
+        EOF
+        fi
+        if [ "$bridge_status" -ne 0 ]; then
+          exit "$bridge_status"
         fi
         printf '%s\n' "${SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS:-}" | grep -Eq '(^|,)ouroboros-ide(,|$)'
         printf '%s\n' "${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}" | grep -Fq 'ouroboros-ide=/workspaces/dev/ouroboros-ide'
