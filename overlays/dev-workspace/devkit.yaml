@@ -9,14 +9,14 @@ defaults:
   require_warm: false
 runtime:
   flake: ./overlays/dev-workspace#default
-  codex_version: 0.133.0
+  codex_version: 0.137.0
   notes: Native runtime for a Codex agent entered at the dev workspace root.
 readiness:
   default_mode: runtime-only
   runtime_checks:
     - name: required-tools
       command: |
-        for tool in git ssh curl docker go java sbt node npm purs spago netlify playwright deno aws make gcc; do
+        for tool in git ssh curl docker go java sbt node npm purs spago vite netlify playwright deno aws make gcc; do
           command -v "$tool" >/dev/null
         done
     - name: workspace-siblings

@@ -140,7 +140,7 @@
             pname = "devkit-npm-tools";
             version = "1.0.0";
             src = ./nix/npm-tools;
-            npmDepsHash = "sha256-51Db1LSlJv3MVG8aPYHTV0xJThYecQmyPIQizxJihEE=";
+            npmDepsHash = "sha256-GD3F9zFoliysds53NG1E/8OzsknS3V+g7duGQYj3iCA=";
             dontNpmBuild = true;
             nativeBuildInputs = with pkgs; [
               makeWrapper
@@ -160,6 +160,9 @@
 
               makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/spago" \
                 --add-flags "$tools_root/node_modules/spago/bin/bundle.js" \
+                --set NODE_PATH "$tools_root/node_modules"
+              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/vite" \
+                --add-flags "$tools_root/node_modules/vite/bin/vite.js" \
                 --set NODE_PATH "$tools_root/node_modules"
               makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/netlify" \
                 --add-flags "$tools_root/node_modules/netlify-cli/bin/run.js" \

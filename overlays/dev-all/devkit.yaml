@@ -13,7 +13,7 @@ defaults:
   require_warm: true
 runtime:
   flake: ./overlays/dev-all#default
-  codex_version: 0.133.0
+  codex_version: 0.137.0
   core_check: bash scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.
 readiness:
@@ -21,13 +21,13 @@ readiness:
   runtime_checks:
     - name: required-tools
       command: |
-        for tool in git ssh curl docker go java sbt node npm purs spago netlify playwright deno aws make gcc mgba-headless; do
+        for tool in git ssh curl docker go java sbt node npm purs spago vite netlify playwright deno aws make gcc mgba-headless; do
           command -v "$tool" >/dev/null
         done
     - name: docker-client
       command: docker --version >/dev/null
     - name: purescript-spago-netlify
-      command: purs --version >/dev/null && spago --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null
+      command: purs --version >/dev/null && spago --version >/dev/null && vite --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null
     - name: playwright-browser
       command: |
         node <<'NODE'
