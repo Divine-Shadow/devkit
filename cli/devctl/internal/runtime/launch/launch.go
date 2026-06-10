@@ -593,7 +593,7 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-const latestOuroGovernanceJarRev = "3a234bc1ff17ab80bf17404077d64fb294fef87c"
+const latestOuroGovernanceJarRev = "dcc5a3a3c4b0588768def57633eb66e73c6739c0"
 
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
