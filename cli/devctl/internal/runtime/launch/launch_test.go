@@ -599,6 +599,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=",
 		"devkit_governance_load_runtime_env()",
+		"devkit_governance_have_expected_jar()",
+		`[ -n "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" ] || return 1`,
+		`[ "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR}" = "$jar_path" ] || return 1`,
+		`[ "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH}" = "$jar_path" ] || return 1`,
+		`/nix/store/*|*/target/pinned-jars/*) ;;`,
+		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
+		`[ "$jar_sha" = "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
 		"devkit_governance_resolve_jar()",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
@@ -623,6 +630,25 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	} {
 		if !strings.Contains(gotEnv, want) {
 			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
+		}
+	}
+	guardedResolve := strings.Join([]string{
+		"devkit_governance_load_runtime_env",
+		"if ! devkit_governance_have_expected_jar; then",
+		"  devkit_governance_resolve_jar",
+		"fi",
+	}, "\n")
+	if !strings.Contains(gotEnv, guardedResolve) {
+		t.Fatalf("governance env must preserve a verified prewarmed jar before resolving from flake:\n%s", gotEnv)
+	}
+	for _, forbidden := range []string{
+		"devkit_governance_clear_inherited_jar_identity",
+		"unset SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR",
+		"unset DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH",
+	} {
+		if strings.Contains(gotEnv, forbidden) {
+			t.Fatalf("governance env must not clear verified prewarmed jar identity %q:\n%s", forbidden, gotEnv)
 		}
 	}
 	for _, forbidden := range []string{
