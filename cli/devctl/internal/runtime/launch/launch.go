@@ -593,7 +593,7 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-const latestOuroGovernanceJarRev = "dcc5a3a3c4b0588768def57633eb66e73c6739c0"
+const latestOuroGovernanceJarRev = "9b2fcb1c11bb5677de520ab26d4f8a362e31571d"
 
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
@@ -603,7 +603,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 	stateDir := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
 	runtimeFlake := filepath.Join(sandboxDevRoot, "devkit") + "#dev-all"
-	governanceJarFlake := "git+file://" + filepath.Join(sandboxDevRoot, "ouroboros-ide") + "?rev=" + latestOuroGovernanceJarRev + "#governance-jar"
+	governanceJarFlake := ouroGovernancePinnedFlakeOutput(sandboxDevRoot, "governance-jar")
 	return strings.Join([]string{
 		"# Shared governance MCP/control-plane environment for native Ouroboros GUI agents.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
@@ -710,6 +710,10 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + stateDir,
 		"",
 	}, "\n")
+}
+
+func ouroGovernancePinnedFlakeOutput(sandboxDevRoot string, output string) string {
+	return "git+file://" + filepath.Join(sandboxDevRoot, "ouroboros-ide") + "?rev=" + latestOuroGovernanceJarRev + "#" + output
 }
 
 type ouroGovernanceCatalog struct {

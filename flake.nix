@@ -158,16 +158,16 @@
               mkdir -p "$tools_root" "$out/bin"
               cp -r package.json package-lock.json node_modules "$tools_root/"
 
-              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/spago" \
+              makeWrapper ${pkgs.nodejs_22}/bin/node "$out/bin/spago" \
                 --add-flags "$tools_root/node_modules/spago/bin/bundle.js" \
                 --set NODE_PATH "$tools_root/node_modules"
-              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/vite" \
+              makeWrapper ${pkgs.nodejs_22}/bin/node "$out/bin/vite" \
                 --add-flags "$tools_root/node_modules/vite/bin/vite.js" \
                 --set NODE_PATH "$tools_root/node_modules"
-              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/netlify" \
+              makeWrapper ${pkgs.nodejs_22}/bin/node "$out/bin/netlify" \
                 --add-flags "$tools_root/node_modules/netlify-cli/bin/run.js" \
                 --set NODE_PATH "$tools_root/node_modules"
-              makeWrapper ${pkgs.nodejs_20}/bin/node "$out/bin/ntl" \
+              makeWrapper ${pkgs.nodejs_22}/bin/node "$out/bin/ntl" \
                 --add-flags "$tools_root/node_modules/netlify-cli/bin/run.js" \
                 --set NODE_PATH "$tools_root/node_modules"
 
@@ -275,7 +275,7 @@
             libzip
             lua5_2
             minizip
-            nodejs_20
+            nodejs_22
             pkg-config
             purescript
             sbt
