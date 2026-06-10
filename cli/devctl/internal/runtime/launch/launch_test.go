@@ -594,7 +594,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	for _, want := range []string{
 		"Shared governance MCP/control-plane environment",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='/workspaces/dev/devkit#dev-all'",
-		"export DEVKIT_GOVERNANCE_JAR_FLAKE='/workspaces/dev/ouroboros-ide#governance-jar'",
+		"export DEVKIT_GOVERNANCE_JAR_FLAKE='git+file:///workspaces/dev/ouroboros-ide?rev=" + latestOuroGovernanceJarRev + "#governance-jar'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=",
