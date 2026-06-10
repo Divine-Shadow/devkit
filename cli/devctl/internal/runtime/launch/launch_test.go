@@ -616,7 +616,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=\"$jar_sha\"",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform,email-policy-mcp-app",
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
@@ -625,6 +625,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"agent9=/workspaces/dev/agent-worktrees/agent9/ouroboros-ide",
 		"agent1-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform",
 		"agent9-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent9/ouroboros-terraform",
+		"email-policy-mcp-app=/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
 	} {
@@ -679,11 +680,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"ouroboros-terraform"`,
 		`"agent4"`,
 		`"agent4-ouroboros-terraform"`,
+		`"email-policy-mcp-app"`,
 		`"dev-workspace": "/workspaces/dev"`,
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
 		`"agent1": "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"`,
 		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
 		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
+		`"email-policy-mcp-app": "/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
