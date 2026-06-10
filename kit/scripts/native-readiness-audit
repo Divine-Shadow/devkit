@@ -314,6 +314,14 @@ test -n "${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256:-}" || {
   echo "native-readiness-audit: generated governance env missing expected entrypoint fingerprint: $governance_env" >&2
   exit 1
 }
+test -n "${DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256:-}" || {
+  echo "native-readiness-audit: generated governance env missing active entrypoint fingerprint: $governance_env" >&2
+  exit 1
+}
+test "${DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256}" = "${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256}" || {
+  echo "native-readiness-audit: generated governance env entrypoint fingerprint drift: $governance_env expected=$DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256 actual=$DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256" >&2
+  exit 1
+}
 printf '%s\n' "${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}" | grep -Fq 'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' || {
   echo "native-readiness-audit: generated governance env missing ouroboros-terraform workspace root: $governance_env" >&2
   exit 1

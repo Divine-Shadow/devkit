@@ -593,7 +593,7 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-const latestOuroGovernanceJarRev = "9b2fcb1c11bb5677de520ab26d4f8a362e31571d"
+const latestOuroGovernanceJarRev = "534295fa8007ba676e4eeda017c70f4185e255e2"
 
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
@@ -612,6 +612,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
+		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
 		"devkit_governance_load_runtime_env() {",
 		"  if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"    return 0",
@@ -693,9 +694,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=\"$jar_sha\"",
 		"}",
 		"devkit_governance_load_runtime_env",
-		"if ! devkit_governance_have_expected_jar; then",
-		"  devkit_governance_resolve_jar",
-		"fi",
+		"devkit_governance_resolve_jar",
 		"if [ -z \"${JAVA_HOME:-}\" ] || [ ! -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"  echo \"[devkit-governance-env] runtime env did not provide an executable JAVA_HOME\" >&2",
 		"  return 1",
