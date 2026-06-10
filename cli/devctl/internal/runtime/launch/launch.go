@@ -593,8 +593,6 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-const latestOuroGovernanceJarRev = "534295fa8007ba676e4eeda017c70f4185e255e2"
-
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	repoConfigPath = filepath.Clean(repoConfigPath)
@@ -603,16 +601,18 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 	stateDir := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
 	runtimeFlake := filepath.Join(sandboxDevRoot, "devkit") + "#dev-all"
-	governanceJarFlake := ouroGovernancePinnedFlakeOutput(sandboxDevRoot, "governance-jar")
+	governanceResolver := filepath.Join(sandboxDevRoot, "ouroboros-ide", "scripts", "devops", "resolve-pinned-jar")
 	return strings.Join([]string{
 		"# Shared governance MCP/control-plane environment for native Ouroboros GUI agents.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE=" + shellQuote(runtimeFlake),
-		"export DEVKIT_GOVERNANCE_JAR_FLAKE=" + shellQuote(governanceJarFlake),
+		"export DEVKIT_GOVERNANCE_JAR_RESOLVER=" + shellQuote(governanceResolver),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
 		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
+		"export SUBAGENT_GOVERNANCE_PINNED_ARTIFACT=1",
+		"export SUBAGENT_GOVERNANCE_FLAKE_ARTIFACT=0",
 		"devkit_governance_load_runtime_env() {",
 		"  if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"    return 0",
@@ -665,17 +665,20 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  elif [ -x /run/current-system/sw/bin/nix ]; then",
 		"    nix_bin=/run/current-system/sw/bin/nix",
 		"  else",
-		"    echo \"[devkit-governance-env] unable to locate nix for ${DEVKIT_GOVERNANCE_JAR_FLAKE}\" >&2",
+		"    echo \"[devkit-governance-env] unable to locate nix for runtime ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
 		"    return 1",
 		"  fi",
-		"  local store_path",
-		"  if ! store_path=\"$($nix_bin --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false build --no-link --print-out-paths \"$DEVKIT_GOVERNANCE_JAR_FLAKE\")\"; then",
-		"    echo \"[devkit-governance-env] unable to build governance jar from ${DEVKIT_GOVERNANCE_JAR_FLAKE}\" >&2",
+		"  if [ ! -x \"${DEVKIT_GOVERNANCE_JAR_RESOLVER}\" ]; then",
+		"    echo \"[devkit-governance-env] pinned governance jar resolver missing: ${DEVKIT_GOVERNANCE_JAR_RESOLVER}\" >&2",
 		"    return 1",
 		"  fi",
-		"  local jar_path=\"${store_path}/share/subagent-governance/subagent-governance.jar\"",
+		"  local jar_path",
+		"  if ! jar_path=\"$(${DEVKIT_GOVERNANCE_JAR_RESOLVER} --runtime subagent-governance)\"; then",
+		"    echo \"[devkit-governance-env] unable to resolve published governance jar via ${DEVKIT_GOVERNANCE_JAR_RESOLVER}\" >&2",
+		"    return 1",
+		"  fi",
 		"  if [ ! -f \"$jar_path\" ]; then",
-		"    echo \"[devkit-governance-env] governance jar missing from Nix output: $jar_path\" >&2",
+		"    echo \"[devkit-governance-env] governance jar missing from pinned resolver output: $jar_path\" >&2",
 		"    return 1",
 		"  fi",
 		"  local jar_sha",
@@ -709,10 +712,6 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + stateDir,
 		"",
 	}, "\n")
-}
-
-func ouroGovernancePinnedFlakeOutput(sandboxDevRoot string, output string) string {
-	return "git+file://" + filepath.Join(sandboxDevRoot, "ouroboros-ide") + "?rev=" + latestOuroGovernanceJarRev + "#" + output
 }
 
 type ouroGovernanceCatalog struct {
