@@ -42,9 +42,9 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "bace41ffe31e68ca35715cc486209313bc6e51f8";`,
-		`governanceJarSha256Hex = "df2fbbf84faf9f72feeede33a2c085763e41d1bc03d6e6c8fda091a431ee404c";`,
-		`governanceJarSha256Sri = "sha256-3y+7+E+vn3L+7t4zosCFdj5B0bwD1ubI/aCRpDHuQEw=";`,
+		`governanceJarVersion = "24bd05e9b294bcd2ee015f84d433203f943668a6";`,
+		`governanceJarSha256Hex = "534aea613441c0a9fcf01cb7d18503f37e8049aac1487277121e0f01fd0df254";`,
+		`governanceJarSha256Sri = "sha256-U0rqYTRBwKn88By30YUD836ASarBSHJ3Eh4PAf0N8lQ=";`,
 		`mkPinnedGovernanceJar =`,
 		`pkgs.stdenvNoCC.mkDerivation`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
