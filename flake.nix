@@ -57,6 +57,27 @@
       };
       codexVersion = "0.137.0";
       codexReleaseTag = "rust-v${codexVersion}";
+      governanceJarVersion = "bace41ffe31e68ca35715cc486209313bc6e51f8";
+      governanceJarSha256Hex = "df2fbbf84faf9f72feeede33a2c085763e41d1bc03d6e6c8fda091a431ee404c";
+      governanceJarSha256Sri = "sha256-3y+7+E+vn3L+7t4zosCFdj5B0bwD1ubI/aCRpDHuQEw=";
+      mkPinnedGovernanceJar =
+        pkgs:
+        pkgs.stdenvNoCC.mkDerivation {
+          pname = "subagent-governance-pinned";
+          version = governanceJarVersion;
+          src = pkgs.fetchurl {
+            url = "https://ouroboros-governance-jars-339713140717-us-east-2.s3.us-east-2.amazonaws.com/governance-jars/v1/${governanceJarVersion}/subagent-governance.jar";
+            hash = governanceJarSha256Sri;
+          };
+          dontUnpack = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/share/subagent-governance"
+            install -m 0444 "$src" "$out/share/subagent-governance/subagent-governance.jar"
+            printf '%s\n' '${governanceJarSha256Hex}' > "$out/share/subagent-governance/subagent-governance.jar.sha256"
+            runHook postInstall
+          '';
+        };
     in
     {
       devShells = forEachSystem (
@@ -174,6 +195,8 @@
               runHook postInstall
             '';
           };
+
+          pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;
 
           mgbaRuntimeLibs = with pkgs; [
             libedit
@@ -320,6 +343,7 @@
                 pinnedCodex
                 pinnedDockerCli
                 pinnedGo
+                pinnedGovernanceJar
                 pinnedMgbaHeadless
                 pinnedNpmTools
                 pinnedPacker
@@ -379,6 +403,8 @@
       packages = forEachSystem (
         { pkgs, ... }:
         {
+          pinned-governance-jar = mkPinnedGovernanceJar pkgs;
+
           postgres-broker = pkgs.buildGoModule {
             pname = "devkit-postgres-broker";
             version = "dev";

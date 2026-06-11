@@ -30,7 +30,7 @@ DEV_ALL_FLAKE="${DEVKIT_NATIVE_READINESS_DEV_ALL_FLAKE:-./overlays/dev-all#defau
 EXPECTED_CODEX_VERSION="${DEVKIT_NATIVE_READINESS_CODEX_VERSION:-$(runtime_codex_version_for dev-all)}"
 CODEX_MODEL="${DEVKIT_NATIVE_READINESS_CODEX_MODEL:-gpt-5.5}"
 CODEX_PROMPT="${DEVKIT_NATIVE_READINESS_CODEX_PROMPT:-reply with exactly 'ok'}"
-GOVERNANCE_JAR_RESOLVER="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR_RESOLVER:-$DEV_ROOT/ouroboros-ide/scripts/devops/resolve-pinned-jar}"
+GOVERNANCE_JAR_FLAKE="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR_FLAKE:-$DEVKIT_ROOT#pinned-governance-jar}"
 GOVERNANCE_JAR="${DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR:-}"
 BACKEND_MAIN="${DEVKIT_NATIVE_READINESS_BACKEND_MAIN:-com.crib.bills.ouroboros.apps.StartWebServerInMemoryLocal}"
 
@@ -52,18 +52,20 @@ grep_required() {
 resolve_governance_jar() {
   if [[ -n "$GOVERNANCE_JAR" ]]; then
     case "$GOVERNANCE_JAR" in
-      /nix/store/*/share/subagent-governance/subagent-governance.jar|*/target/pinned-jars/*/subagent-governance.jar) ;;
-      *) fail "DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR must be a Nix-store or pinned governance jar, got: $GOVERNANCE_JAR" ;;
+      /nix/store/*/share/subagent-governance/subagent-governance.jar) ;;
+      *) fail "DEVKIT_NATIVE_READINESS_GOVERNANCE_JAR must be a Nix-store governance jar, got: $GOVERNANCE_JAR" ;;
     esac
     test -s "$GOVERNANCE_JAR" || fail "governance jar does not exist: $GOVERNANCE_JAR"
     return 0
   fi
 
-  [[ -x "$GOVERNANCE_JAR_RESOLVER" ]] || fail "published governance jar resolver missing: $GOVERNANCE_JAR_RESOLVER"
-  GOVERNANCE_JAR="$("$GOVERNANCE_JAR_RESOLVER" --runtime subagent-governance)"
+  command -v nix >/dev/null 2>&1 || fail "nix is required to resolve $GOVERNANCE_JAR_FLAKE"
+  local out_path
+  out_path="$(nix --extra-experimental-features "nix-command flakes" build --no-link --print-out-paths "$GOVERNANCE_JAR_FLAKE")"
+  GOVERNANCE_JAR="$out_path/share/subagent-governance/subagent-governance.jar"
   case "$GOVERNANCE_JAR" in
-    */target/pinned-jars/*/subagent-governance.jar) ;;
-    *) fail "resolved governance jar is not a pinned governance jar: $GOVERNANCE_JAR" ;;
+    /nix/store/*/share/subagent-governance/subagent-governance.jar) ;;
+    *) fail "resolved governance jar is not a Nix-store governance jar: $GOVERNANCE_JAR" ;;
   esac
   test -s "$GOVERNANCE_JAR" || fail "resolved governance jar does not exist: $GOVERNANCE_JAR"
 }

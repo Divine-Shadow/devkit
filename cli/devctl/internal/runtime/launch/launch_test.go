@@ -14,6 +14,49 @@ import (
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
+func devkitRootFromPackage(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join("..", "..", "..", "..", "..")
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("resolve devkit root: %v", err)
+	}
+	return abs
+}
+
+func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
+	root := devkitRootFromPackage(t)
+	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-all", "runtime.nix"))
+	for _, want := range []string{
+		"packages.pinnedGovernanceJar",
+		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar",
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=$(cat ${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar.sha256)",
+		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
+	} {
+		if !strings.Contains(runtimeNix, want) {
+			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
+		}
+	}
+
+	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
+	for _, want := range []string{
+		`governanceJarVersion = "bace41ffe31e68ca35715cc486209313bc6e51f8";`,
+		`governanceJarSha256Hex = "df2fbbf84faf9f72feeede33a2c085763e41d1bc03d6e6c8fda091a431ee404c";`,
+		`governanceJarSha256Sri = "sha256-3y+7+E+vn3L+7t4zosCFdj5B0bwD1ubI/aCRpDHuQEw=";`,
+		`mkPinnedGovernanceJar =`,
+		`pkgs.stdenvNoCC.mkDerivation`,
+		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
+		`pinned-governance-jar = mkPinnedGovernanceJar pkgs;`,
+		`governance-jars/v1/${governanceJarVersion}/subagent-governance.jar`,
+	} {
+		if !strings.Contains(flakeNix, want) {
+			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
+		}
+	}
+}
+
 func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -594,7 +637,6 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	for _, want := range []string{
 		"Shared governance MCP/control-plane environment",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='/workspaces/dev/devkit#dev-all'",
-		"export DEVKIT_GOVERNANCE_JAR_RESOLVER='/workspaces/dev/ouroboros-ide/scripts/devops/resolve-pinned-jar'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=",
@@ -606,19 +648,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[ -n "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" ] || return 1`,
 		`[ "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR}" = "$jar_path" ] || return 1`,
 		`[ "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH}" = "$jar_path" ] || return 1`,
-		`/nix/store/*|*/target/pinned-jars/*) ;;`,
+		`/nix/store/*/share/subagent-governance/subagent-governance.jar) ;;`,
 		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
 		`[ "$jar_sha" = "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
-		"devkit_governance_resolve_jar()",
+		"devkit_governance_require_runtime_jar()",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
-		"pinned governance jar resolver missing: ${DEVKIT_GOVERNANCE_JAR_RESOLVER}",
-		"${DEVKIT_GOVERNANCE_JAR_RESOLVER} --runtime subagent-governance",
-		"unable to resolve published governance jar via ${DEVKIT_GOVERNANCE_JAR_RESOLVER}",
-		"governance jar missing from pinned resolver output",
-		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=\"$jar_path\"",
-		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=\"$jar_sha\"",
-		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=\"$jar_sha\"",
+		"runtime env did not provide pinned Nix-store governance jar",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform,email-policy-mcp-app",
@@ -640,16 +676,20 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	guardedResolve := strings.Join([]string{
 		"devkit_governance_load_runtime_env",
-		"devkit_governance_resolve_jar",
+		"devkit_governance_require_runtime_jar",
 	}, "\n")
 	if !strings.Contains(gotEnv, guardedResolve) {
-		t.Fatalf("governance env must resolve the source-pinned jar before accepting runtime state:\n%s", gotEnv)
+		t.Fatalf("governance env must require the source-derived Nix-store jar before accepting runtime state:\n%s", gotEnv)
 	}
 	for _, forbidden := range []string{
 		"devkit_governance_clear_inherited_jar_identity",
+		"DEVKIT_GOVERNANCE_JAR_RESOLVER",
 		"DEVKIT_GOVERNANCE_JAR_FLAKE",
+		"resolve-pinned-jar",
+		"target/pinned-jars",
 		"git+file:///workspaces/dev/ouroboros-ide",
 		"build --no-link --print-out-paths \"$DEVKIT_GOVERNANCE_JAR_FLAKE\"",
+		"if [ -n \"${JAVA_HOME:-}\" ] && [ -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"unset SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
 		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR",
 		"unset DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH",
