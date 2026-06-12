@@ -7,7 +7,7 @@ defaults:
   branch_prefix: agent
 runtime:
   flake: ./overlays/dumb-onion-hax#default
-  codex_version: 0.137.0
+  codex_version: 0.139.0
   core_check: sbt compile
   notes: Scala/SBT runtime for dumb-onion-hax.
 readiness:

@@ -10,7 +10,7 @@ defaults:
 
 runtime:
   flake: "./overlays/_template#default"
-  codex_version: 0.137.0
+  codex_version: 0.139.0
   core_check: echo "replace runtime.core_check with your repo validation command"
   notes: Template Nix runtime for new overlays.
 
