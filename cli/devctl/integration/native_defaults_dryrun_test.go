@@ -51,6 +51,35 @@ hooks:
 	return root
 }
 
+func writeNixCodexConfigSource(t *testing.T, root string) {
+	t.Helper()
+	config := strings.Join([]string{
+		"# source = nixos-wsl codex config",
+		`model = "gpt-5.5"`,
+		`model_provider = "custom"`,
+		"",
+		"[model_providers.custom]",
+		`name = "Custom OpenAI"`,
+		`base_url = "https://api.openai.com/v1"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		"",
+		"[profiles.custom]",
+		`model = "gpt-5.5"`,
+		`model_provider = "custom"`,
+		"",
+	}, "\n")
+	for _, base := range []string{root, filepath.Dir(root)} {
+		path := filepath.Join(base, ".devkit", "nix-codex-config.toml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(config), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func flakeOverlayRoot(t *testing.T, project, repo, flake string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -579,6 +608,7 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := nativeDefaultsRoot(t)
+			writeNixCodexConfigSource(t, root)
 			createNativeAgentWorktree(t, root)
 			cmd := exec.Command(bin, tt.args...)
 			cmd.Env = append(os.Environ(),

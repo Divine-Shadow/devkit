@@ -18,8 +18,10 @@ func TestBuildSeedScripts(t *testing.T) {
 		"/var/host-codex", // wait condition
 		"mkdir -p '/workspace/.devhome-agent1/.codex' '/workspace/.devhome-agent1/.codex/rollouts'",
 		"/var/host-codex/auth.json '/workspace/.devhome-agent1/.codex/auth.json'",
+		"/var/host-codex/config.toml '/workspace/.devhome-agent1/.codex/config.toml'",
 		"cp -f /var/auth.json '/workspace/.devhome-agent1/.codex/auth.json'",
 		"chmod 600 '/workspace/.devhome-agent1/.codex/auth.json'",
+		"chmod 600 '/workspace/.devhome-agent1/.codex/config.toml'",
 	}
 	joined := ""
 	for _, s := range scripts {
@@ -69,31 +71,26 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"tail -c \"$max\" \"$log\"",
 		"codex() {",
 		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
-		"mcp_servers.codex-cli.command=\\\"codex\\\"",
-		"mcp_servers.governance.command=\\\"bash\\\"",
-		"export PATH=/run/current-system/sw/bin",
-		"/workspaces/dev/.devkit/ouro8-governance-env.sh",
-		"case \\${PWD:-} in /workspaces/dev)",
-		"\\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh",
-		"required governance env missing",
-		"required governance root missing",
-		"SUBAGENT_GOVERNANCE_WORKSPACE_ID",
-		"IFS=, read -ra governance_pairs",
-		"export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace",
-		"governance_root=\\${PWD}",
-		"required governance bridge missing",
-		"using governance env: \\${governance_env}",
-		"exec bash \\${governance_root}/scripts/devops/governance-mcp-stdio-forward",
+		"devkit_codex_require_config()",
+		"Codex config missing [model_providers.custom]",
+		"Codex config missing [profiles.custom]",
 		"devkit_codex_tui_log_guard",
-		`command codex "${extra[@]}" "$@"`,
+		`command codex "$@"`,
 		"marker=\"$target/.codex/.seeded\"",
 		"if [ ! -f \"$marker\" ]; then",
 		"touch \"$marker\"",
 		"mkdir -p \"$target/.codex\" \"$target/.codex/rollouts\"",
 		"cp -f /var/host-codex/auth.json \"$target/.codex/auth.json\"",
+		"cp -f /var/host-codex/config.toml \"$target/.codex/config.toml\"",
+		"chmod 600 \"$target/.codex/config.toml\"",
 	} {
 		if !contains(sc, frag) {
 			t.Fatalf("combined script missing %q: %s", frag, sc)
+		}
+	}
+	for _, forbidden := range []string{"mcp_servers.", `"${extra[@]}"`, "    -c ", "    -a never", "    -s danger-full-access"} {
+		if contains(sc, forbidden) {
+			t.Fatalf("anchor script must not override Codex config with CLI fragment %q: %s", forbidden, sc)
 		}
 	}
 	joined := JoinScripts(scripts)
@@ -165,24 +162,19 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 		`devkit_codex_tui_log_guard()`,
 		`tail -c "$max" "$log"`,
 		`DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256`,
-		`export PATH=/run/current-system/sw/bin`,
-		`/workspaces/dev/.devkit/ouro8-governance-env.sh`,
-		`case \${PWD:-} in /workspaces/dev)`,
-		`\${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh`,
-		`required governance env missing`,
-		`required governance root missing`,
-		`SUBAGENT_GOVERNANCE_WORKSPACE_ID`,
-		`IFS=, read -ra governance_pairs`,
-		`export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace`,
-		`governance_root=\${PWD}`,
-		`required governance bridge missing`,
-		`using governance env: \${governance_env}`,
-		`exec bash \${governance_root}/scripts/devops/governance-mcp-stdio-forward`,
+		`devkit_codex_require_config()`,
+		`Codex config missing [model_providers.custom]`,
+		`Codex config missing [profiles.custom]`,
 		`devkit_codex_tui_log_guard`,
-		`command codex "${extra[@]}" "$@"`,
+		`command codex "$@"`,
 	} {
 		if !contains(sc, frag) {
 			t.Fatalf("direct home script missing %q: %s", frag, sc)
+		}
+	}
+	for _, forbidden := range []string{"mcp_servers.", `"${extra[@]}"`, "    -c ", "    -a never", "    -s danger-full-access"} {
+		if contains(sc, forbidden) {
+			t.Fatalf("direct home script must not override Codex config with CLI fragment %q: %s", forbidden, sc)
 		}
 	}
 	if contains(sc, "SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM=0") {

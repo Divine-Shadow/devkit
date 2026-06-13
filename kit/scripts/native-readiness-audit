@@ -280,6 +280,26 @@ if [[ -f "$config" ]] && grep -q '^model[[:space:]]*=[[:space:]]*"gpt-5\.3' "$co
   echo "native-readiness-audit: Codex config has forbidden persistent gpt-5.3 default: $config" >&2
   exit 1
 fi
+test -r "$config" || {
+  echo "native-readiness-audit: missing Codex config at $config" >&2
+  exit 1
+}
+grep -Fqx '# source = nixos-wsl codex config' "$config" || {
+  echo "native-readiness-audit: Codex config is not Nix-authored: $config" >&2
+  exit 1
+}
+grep -Fqx '[model_providers.custom]' "$config" || {
+  echo "native-readiness-audit: Codex config missing [model_providers.custom]: $config" >&2
+  exit 1
+}
+grep -Fqx '[profiles.custom]' "$config" || {
+  echo "native-readiness-audit: Codex config missing [profiles.custom]: $config" >&2
+  exit 1
+}
+grep -Fq 'model_provider = "custom"' "$config" || {
+  echo "native-readiness-audit: Codex config missing custom model_provider: $config" >&2
+  exit 1
+}
 expected_cwd="$(pwd -P)"
 grep -Fq '# BEGIN DEVKIT NATIVE GOVERNANCE MCP' "$config" || {
   echo "native-readiness-audit: Codex governance config missing managed block: $config" >&2

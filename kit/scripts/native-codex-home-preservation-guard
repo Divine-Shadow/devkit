@@ -44,6 +44,16 @@ assert_file_content() {
   [[ "$(cat "$path")" == "$expected" ]] || fail "$path content changed"
 }
 
+assert_nix_codex_config() {
+  local path="$1"
+  [[ -f "$path" ]] || fail "$path is missing"
+  grep -Fqx '# source = nixos-wsl codex config' "$path" || fail "$path is not Nix-authored"
+  grep -Fqx '[model_providers.custom]' "$path" || fail "$path missing [model_providers.custom]"
+  grep -Fqx '[profiles.custom]' "$path" || fail "$path missing [profiles.custom]"
+  grep -Fq 'model_provider = "custom"' "$path" || fail "$path missing custom model_provider"
+  ! grep -qx 'model = "preserve"' "$path" || fail "$path preserved mutable config poison instead of restoring Nix source"
+}
+
 assert_dir() {
   local path="$1"
   [[ -d "$path" ]] || fail "$path directory is missing"
@@ -97,13 +107,14 @@ legacy_codex_home="$legacy_home/.codex"
 auth_file="$codex_home/auth.json"
 rollout_file="$codex_home/rollouts/in-flight.jsonl"
 config_file="$codex_home/config.toml"
+config_source="$DEV_ROOT/.devkit/nix-codex-config.toml"
 session_file="$codex_home/sessions/2026/05/15/current.jsonl"
 legacy_session_file="$legacy_codex_home/sessions/2026/05/15/legacy.jsonl"
 legacy_shell_file="$legacy_codex_home/shell_snapshots/legacy.sh"
 legacy_state_file="$legacy_codex_home/state_5.sqlite"
 auth_sentinel='{"auth":"preserved"}'
 rollout_sentinel="rollout-preserved"
-config_sentinel='model = "preserve"'
+config_poison='model = "preserve"'
 session_sentinel="session-preserved"
 legacy_session_sentinel="legacy-session-imported"
 legacy_shell_sentinel="legacy-shell-imported"
@@ -118,6 +129,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$workroot" "$stateroot"
+assert_nix_codex_config "$config_source"
 
 step "initial native setup"
 run_up "$guard_dir/up-initial.json"
@@ -128,7 +140,7 @@ step "write Codex home sentinels"
 mkdir -p "$codex_home/rollouts" "$(dirname "$session_file")" "$(dirname "$legacy_session_file")" "$(dirname "$legacy_shell_file")"
 printf '%s' "$auth_sentinel" >"$auth_file"
 printf '%s' "$rollout_sentinel" >"$rollout_file"
-printf '%s' "$config_sentinel" >"$config_file"
+printf '%s' "$config_poison" >"$config_file"
 printf '%s' "$session_sentinel" >"$session_file"
 printf '%s' "$legacy_session_sentinel" >"$legacy_session_file"
 printf '%s' "$legacy_shell_sentinel" >"$legacy_shell_file"
@@ -143,7 +155,7 @@ grep_required '"runtime": "native"' "$guard_dir/up-repeat.json"
 
 assert_file_content "$auth_file" "$auth_sentinel"
 assert_file_content "$rollout_file" "$rollout_sentinel"
-assert_file_content "$config_file" "$config_sentinel"
+assert_nix_codex_config "$config_file"
 assert_file_content "$session_file" "$session_sentinel"
 assert_file_content "$codex_home/sessions/2026/05/15/legacy.jsonl" "$legacy_session_sentinel"
 assert_file_content "$codex_home/shell_snapshots/legacy.sh" "$legacy_shell_sentinel"
@@ -169,7 +181,11 @@ timeout 240s "$DEVKIT" -p "$PROJECT" exec 1 --repo "$REPO" \
     test "${CODEX_ROLLOUT_DIR:-}" = "$HOME/.codex/rollouts"
     grep -qx '\''{"auth":"preserved"}'\'' "$CODEX_HOME/auth.json"
     grep -qx '\''rollout-preserved'\'' "$CODEX_ROLLOUT_DIR/in-flight.jsonl"
-    grep -qx '\''model = "preserve"'\'' "$CODEX_HOME/config.toml"
+    grep -Fqx '\''# source = nixos-wsl codex config'\'' "$CODEX_HOME/config.toml"
+    grep -Fqx '\''[model_providers.custom]'\'' "$CODEX_HOME/config.toml"
+    grep -Fqx '\''[profiles.custom]'\'' "$CODEX_HOME/config.toml"
+    grep -Fq '\''model_provider = "custom"'\'' "$CODEX_HOME/config.toml"
+    ! grep -qx '\''model = "preserve"'\'' "$CODEX_HOME/config.toml"
     grep -qx '\''session-preserved'\'' "$CODEX_HOME/sessions/2026/05/15/current.jsonl"
     grep -qx '\''legacy-session-imported'\'' "$CODEX_HOME/sessions/2026/05/15/legacy.jsonl"
     grep -qx '\''legacy-shell-imported'\'' "$CODEX_HOME/shell_snapshots/legacy.sh"
@@ -181,7 +197,7 @@ grep_required "codex-home-preserved" "$guard_dir/exec.txt"
 
 assert_file_content "$auth_file" "$auth_sentinel"
 assert_file_content "$rollout_file" "$rollout_sentinel"
-assert_file_content "$config_file" "$config_sentinel"
+assert_nix_codex_config "$config_file"
 assert_file_content "$session_file" "$session_sentinel"
 assert_file_content "$codex_home/sessions/2026/05/15/legacy.jsonl" "$legacy_session_sentinel"
 

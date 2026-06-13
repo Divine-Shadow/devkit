@@ -112,6 +112,13 @@ const (
 	codexGovernanceManagedEnd   = "# END DEVKIT NATIVE GOVERNANCE MCP"
 )
 
+const (
+	codexNixManagedConfigMarker    = "# source = nixos-wsl codex config"
+	codexCustomProviderTable       = "model_providers.custom"
+	codexCustomProfileTable        = "profiles.custom"
+	codexDevkitConfigSourceRelPath = ".devkit/nix-codex-config.toml"
+)
+
 func ensureGitSSHConfig(p nativeplan.Plan) error {
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
 	sandboxHome := strings.TrimSpace(p.Agent.SandboxHome)
@@ -694,6 +701,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE=" + shellQuote(runtimeFlake),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
+		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
 		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
@@ -850,14 +858,21 @@ func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
 	}
 	type repoConfig struct {
 		WorkspaceRoot     string            `json:"workspaceRoot"`
+		SkillCatalogPath  string            `json:"skillCatalogPath"`
+		PolicyCatalogPath string            `json:"policyCatalogPath"`
+		PromptBundleRoot  string            `json:"promptBundleRoot"`
 		GovernanceAdapter governanceAdapter `json:"governanceAdapter"`
 	}
+	const governanceSourceRoot = "/workspaces/dev/ouroboros-ide/tools/subagent-governance"
 	cfg := repoConfig{
-		WorkspaceRoot: "/workspaces/dev/ouroboros-ide",
+		WorkspaceRoot:     "/workspaces/dev/ouroboros-ide",
+		SkillCatalogPath:  governanceSourceRoot + "/catalog/skills.json",
+		PolicyCatalogPath: governanceSourceRoot + "/catalog/policies.json",
+		PromptBundleRoot:  governanceSourceRoot + "/skills",
 		GovernanceAdapter: governanceAdapter{
 			KnownWorkspaceIDs:    catalog.ids,
 			WorkspaceRoots:       catalog.rootMap,
-			SchemaRoot:           "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
+			SchemaRoot:           governanceSourceRoot + "/schemas",
 			ControlPlaneURL:      "http://127.0.0.1:7778",
 			WarmHookCommand:      "scripts/devops/governance-control-plane warm",
 			ControlPlaneStateDir: "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane",
@@ -913,13 +928,12 @@ func cleanCodexGovernanceConfigAt(configPath string) error {
 }
 
 func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
-	var original string
-	if data, err := os.ReadFile(configPath); err == nil {
-		original = string(data)
-	} else if os.IsNotExist(err) {
-		original = ""
-	} else {
-		return fmt.Errorf("read Codex config %s: %w", configPath, err)
+	original, source, err := authoritativeCodexConfig(configPath, p)
+	if err != nil {
+		return err
+	}
+	if err := requireCustomCodexConfig(original, source); err != nil {
+		return err
 	}
 	next := removeManagedCodexGovernanceBlock(original)
 	next = removeTomlTable(next, "mcp_servers.governance")
@@ -940,6 +954,79 @@ func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
 		return fmt.Errorf("write Codex config %s: %w", configPath, err)
 	}
 	return nil
+}
+
+func authoritativeCodexConfig(configPath string, p nativeplan.Plan) (string, string, error) {
+	candidates := codexConfigSourceCandidates(p)
+	for _, source := range candidates {
+		data, err := os.ReadFile(source)
+		if err == nil {
+			return string(data), source, nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", "", fmt.Errorf("read authoritative Codex config %s: %w", source, err)
+		}
+	}
+	if data, err := os.ReadFile(configPath); err == nil {
+		return string(data), configPath, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", "", fmt.Errorf("read Codex config %s: %w", configPath, err)
+	}
+	return "", "", fmt.Errorf("missing Nix-authored Codex config for governed launch; checked %s and %s; refusing to synthesize a base-only config.toml",
+		strings.Join(candidates, ", "), configPath)
+}
+
+func codexConfigSourceCandidates(p nativeplan.Plan) []string {
+	var candidates []string
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		path = filepath.Clean(path)
+		for _, existing := range candidates {
+			if existing == path {
+				return
+			}
+		}
+		candidates = append(candidates, path)
+	}
+	add(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
+	if hostDevRoot := hostDevRootForPlan(p); hostDevRoot != "" {
+		add(filepath.Join(hostDevRoot, codexDevkitConfigSourceRelPath))
+	}
+	add("/etc/codex/config.toml")
+	return candidates
+}
+
+func requireCustomCodexConfig(config, source string) error {
+	var missing []string
+	if !strings.Contains(config, codexNixManagedConfigMarker) {
+		missing = append(missing, codexNixManagedConfigMarker)
+	}
+	if !hasTomlTable(config, codexCustomProviderTable) {
+		missing = append(missing, "["+codexCustomProviderTable+"]")
+	}
+	if !hasTomlTable(config, codexCustomProfileTable) {
+		missing = append(missing, "["+codexCustomProfileTable+"]")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(source) == "" {
+		source = "<missing>"
+	}
+	return fmt.Errorf("authoritative Codex config %s missing %s; Nix must provide the custom config.toml options, refusing to synthesize a base-only config.toml",
+		source, strings.Join(missing, ", "))
+}
+
+func hasTomlTable(config, table string) bool {
+	for _, line := range strings.Split(config, "\n") {
+		if header, ok := tomlTableHeader(line); ok && header == table {
+			return true
+		}
+	}
+	return false
 }
 
 func codexGovernanceConfigBlock(p nativeplan.Plan) string {
@@ -988,6 +1075,7 @@ func codexGovernanceConfigBlock(p nativeplan.Plan) string {
 	b.WriteString("[mcp_servers.governance.env]\n")
 	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_ENV = %s\n", tomlQuote(envPath))
 	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = %s\n", tomlQuote(repoConfigPath))
+	fmt.Fprintf(&b, "SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH = %s\n", tomlQuote(repoConfigPath))
 	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256 = %s\n", tomlQuote(fingerprint))
 	for _, projectPath := range codexGovernanceProjectTrustPaths(p, cwd) {
 		b.WriteString("\n")
@@ -1145,24 +1233,11 @@ func ouroCodexShellHookZsh() string {
 		`export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256="` + governanceentrypoint.SHA256() + `"`,
 		"unalias codex 2>/dev/null || true",
 		codexTUILogGuardZsh,
+		codexConfigGuardZsh,
 		"codex() {",
-		"  local -a extra",
-		"  extra=(",
-		"    -m gpt-5.5",
-		"    -a never",
-		"    -s danger-full-access",
-		`    -c 'mcp_servers.codex-cli.command="codex"'`,
-		`    -c 'mcp_servers.codex-cli.args=["mcp-server"]'`,
-		`    -c 'mcp_servers.codex-cli.startup_timeout_sec=60'`,
-		`    -c 'mcp_servers.governance.command="bash"'`,
-		`    -c "mcp_servers.governance.cwd=\"$PWD\""`,
-		`    -c 'mcp_servers.governance.startup_timeout_sec=60'`,
-		`    -c 'mcp_servers.governance.tool_timeout_sec=10800'`,
-		`    -c 'mcp_servers.governance.default_tools_approval_mode="auto"'`,
-		`    -c 'mcp_servers.governance.enabled_tools=["run","run_lint_migration","submit_to_ci","governance.workspace_topology","governance.graph_status","governance.search","governance.write_yaml","governance.operator_attention_opt_in","governance.operator_attention_opt_out","governance.operator_attention_status","governance.operator_attention_inbox","governance.operator_attention_record_blocker"]'`,
-		"  )",
 		"  devkit_codex_tui_log_guard",
-		`  HOME="$HOME" CODEX_HOME="$CODEX_HOME" CODEX_ROLLOUT_DIR="$CODEX_ROLLOUT_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" command codex "${extra[@]}" "$@"`,
+		"  devkit_codex_require_config || return",
+		`  HOME="$HOME" CODEX_HOME="$CODEX_HOME" CODEX_ROLLOUT_DIR="$CODEX_ROLLOUT_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" command codex "$@"`,
 		"}",
 		"(( $+commands[claudew] )) && alias claude=claudew",
 	}
@@ -1191,10 +1266,12 @@ func repairRetiredCodexShellHook(hostHome string) error {
 	if strings.Contains(repaired, "codex() {") && !strings.Contains(repaired, "devkit_codex_tui_log_guard()") {
 		repaired = strings.Replace(repaired, "codex() {\n", codexTUILogGuardZsh+"\ncodex() {\n", 1)
 	}
-	const codexCommand = `  HOME="$HOME" CODEX_HOME="$HOME/.codex" CODEX_ROLLOUT_DIR="$HOME/.codex/rollouts" command codex "${extra[@]}" "$@"`
-	if strings.Contains(repaired, codexCommand) && !strings.Contains(repaired, "  devkit_codex_tui_log_guard\n"+codexCommand) {
-		repaired = strings.Replace(repaired, codexCommand, "  devkit_codex_tui_log_guard\n"+codexCommand, 1)
+	oldCodexCommand := `  HOME="$HOME" CODEX_HOME="$HOME/.codex" CODEX_ROLLOUT_DIR="$HOME/.codex/rollouts" command codex "${` + `extra[@]` + `}" "$@"`
+	const codexCommand = `  HOME="$HOME" CODEX_HOME="$HOME/.codex" CODEX_ROLLOUT_DIR="$HOME/.codex/rollouts" command codex "$@"`
+	if strings.Contains(repaired, oldCodexCommand) {
+		repaired = strings.Replace(repaired, oldCodexCommand, "  devkit_codex_tui_log_guard\n"+codexCommand, 1)
 	}
+	repaired = removeLegacyCodexExtraBlock(repaired)
 	if repaired == original {
 		return nil
 	}
@@ -1202,6 +1279,22 @@ func repairRetiredCodexShellHook(hostHome string) error {
 		return fmt.Errorf("write %s: %w", zshrc, err)
 	}
 	return nil
+}
+
+func removeLegacyCodexExtraBlock(zshrc string) string {
+	for {
+		start := strings.Index(zshrc, "\n  local -a extra\n  extra=(\n")
+		if start < 0 {
+			return zshrc
+		}
+		blockStart := start + 1
+		endRel := strings.Index(zshrc[blockStart:], "\n  )\n")
+		if endRel < 0 {
+			return zshrc
+		}
+		blockEnd := blockStart + endRel + len("\n  )\n")
+		zshrc = zshrc[:blockStart] + zshrc[blockEnd:]
+	}
 }
 
 const codexTUILogGuardZsh = `devkit_codex_tui_log_guard() {
@@ -1216,6 +1309,26 @@ const codexTUILogGuardZsh = `devkit_codex_tui_log_guard() {
   tmp="${log}.tmp.$$"
   tail -c "$max" "$log" > "$tmp" 2>/dev/null && cat "$tmp" > "$log"
   rm -f "$tmp"
+}`
+
+const codexConfigGuardZsh = `devkit_codex_require_config() {
+  local config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+  if [[ ! -r "$config" ]]; then
+    echo "[devkit-codex] required Nix-authored Codex config missing: $config" >&2
+    return 1
+  fi
+  grep -Fqx '# source = nixos-wsl codex config' "$config" || {
+    echo "[devkit-codex] Codex config is not Nix-authored: $config" >&2
+    return 1
+  }
+  grep -Fqx '[model_providers.custom]' "$config" || {
+    echo "[devkit-codex] Codex config missing [model_providers.custom]: $config" >&2
+    return 1
+  }
+  grep -Fqx '[profiles.custom]' "$config" || {
+    echo "[devkit-codex] Codex config missing [profiles.custom]: $config" >&2
+    return 1
+  }
 }`
 
 func migrateMissingCodexState(dstHome, srcHome string) error {

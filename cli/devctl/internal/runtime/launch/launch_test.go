@@ -190,12 +190,16 @@ func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved s
 		t.Fatalf("config did not preserve existing content %q:\n%s", preserved, got)
 	}
 	for _, want := range []string{
+		codexNixManagedConfigMarker,
+		"[model_providers.custom]",
+		"[profiles.custom]",
 		codexGovernanceManagedBegin,
 		"# source = devkit native launch generator",
 		"governance_mcp_entrypoint_sha256",
 		"[mcp_servers.governance]",
 		`command = "/run/current-system/sw/bin/bash"`,
 		`DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
+		`SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
 		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
 		"[projects.",
 		codexGovernanceManagedEnd,
@@ -215,6 +219,42 @@ func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved s
 			t.Fatalf("source-generated governance config contains stale mutable value %q:\n%s", forbidden, got)
 		}
 	}
+}
+
+func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
+	parts := []string{
+		codexNixManagedConfigMarker,
+		`model = "gpt-5.5"`,
+		`model_provider = "custom"`,
+		`model_reasoning_effort = "xhigh"`,
+		`approval_policy = "never"`,
+		`sandbox_mode = "danger-full-access"`,
+	}
+	if strings.TrimSpace(topLevel) != "" {
+		parts = append(parts, strings.TrimRight(topLevel, "\r\n"))
+	}
+	parts = append(parts,
+		"",
+		"[model_providers.custom]",
+		`name = "Custom OpenAI"`,
+		`base_url = "https://api.openai.com/v1"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		"",
+		"[profiles.custom]",
+		`model = "gpt-5.5"`,
+		`model_provider = "custom"`,
+		`model_reasoning_effort = "xhigh"`,
+		`approval_policy = "never"`,
+		`sandbox_mode = "danger-full-access"`,
+	)
+	for _, section := range tail {
+		if strings.TrimSpace(section) == "" {
+			continue
+		}
+		parts = append(parts, "", strings.TrimRight(section, "\r\n"))
+	}
+	return strings.Join(parts, "\n") + "\n"
 }
 
 func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
@@ -344,6 +384,7 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "known_hosts"), "github.com ssh-ed25519 key")
 	t.Setenv("HOME", hostUserHome)
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"), strings.Join([]string{
 		"Host example.invalid",
@@ -434,7 +475,8 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 
 	dstCodex := filepath.Join(p.Agent.HostHome, ".codex")
 	writeTestFile(t, filepath.Join(dstCodex, "auth.json"), "current auth")
-	writeTestFile(t, filepath.Join(dstCodex, "config.toml"), "current config")
+	writeTestFile(t, filepath.Join(dstCodex, "config.toml"), `model = "stale-home"`+"\n")
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "current"`))
 	beforeSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
 
 	if err := Prepare(p); err != nil {
@@ -461,7 +503,10 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 			t.Fatalf("%s content = %q, want %q", rel, got, want)
 		}
 	}
-	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), "current config")
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), `personality = "current"`)
+	if strings.Contains(readTestFile(t, filepath.Join(dstCodex, "config.toml")), `model = "stale-home"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore")
+	}
 	afterSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
 	if afterSessions < beforeSessions+1 {
 		t.Fatalf("session count did not increase as expected: before=%d after=%d", beforeSessions, afterSessions)
@@ -476,7 +521,7 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	if got := readTestFile(t, filepath.Join(dstCodex, "auth.json")); got != "current auth" {
 		t.Fatalf("auth was clobbered: %q", got)
 	}
-	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), "current config")
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), `personality = "current"`)
 }
 
 func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T) {
@@ -494,6 +539,7 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 	sessionPath := filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")
 	writeTestFile(t, sessionPath, "past")
 	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
@@ -513,14 +559,19 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "command codex") {
 		t.Fatalf("repaired wrapper missing command codex:\n%s", got)
 	}
-	if !strings.Contains(got, "-m gpt-5.5") {
-		t.Fatalf("repaired wrapper missing fleet-safe model pin:\n%s", got)
+	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.5", "    -a never", "    -s danger-full-access"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("repaired wrapper must not override Codex config with CLI fragment %q:\n%s", forbidden, got)
+		}
 	}
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("repaired wrapper missing TUI log guard:\n%s", got)
 	}
 	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
 		t.Fatalf("repaired wrapper missing governance entrypoint fingerprint:\n%s", got)
+	}
+	if !strings.Contains(got, "devkit_codex_require_config()") || !strings.Contains(got, "Codex config missing [model_providers.custom]") {
+		t.Fatalf("repaired wrapper missing loud custom config guard:\n%s", got)
 	}
 	if strings.Contains(got, "mcp_servers.governance.args=") {
 		t.Fatalf("repaired wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
@@ -550,6 +601,7 @@ func TestPrepareAddsTUILogGuardToGeneratedCodexShellHook(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
 	writeTestFile(t, zshrc, `unalias codex 2>/dev/null || true
 codex() {
@@ -568,14 +620,19 @@ codex() {
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("generated wrapper missing TUI log guard function:\n%s", got)
 	}
-	if !strings.Contains(got, "-m gpt-5.5") {
-		t.Fatalf("generated wrapper missing fleet-safe model pin:\n%s", got)
+	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.5", "    -a never", "    -s danger-full-access"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated wrapper must not override Codex config with CLI fragment %q:\n%s", forbidden, got)
+		}
 	}
 	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
 		t.Fatalf("generated wrapper missing governance entrypoint fingerprint:\n%s", got)
 	}
-	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  HOME=\"$HOME\" CODEX_HOME=") {
+	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  devkit_codex_require_config || return\n  HOME=\"$HOME\" CODEX_HOME=") {
 		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
+	}
+	if !strings.Contains(got, "Codex config missing [profiles.custom]") {
+		t.Fatalf("generated wrapper missing loud custom profile failure:\n%s", got)
 	}
 	if strings.Contains(got, "mcp_servers.governance.args=") {
 		t.Fatalf("generated wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
@@ -607,9 +664,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
-	existingConfig := strings.Join([]string{
-		`personality = "existing"`,
-		``,
+	existingConfig := testAuthoritativeCodexConfig(`personality = "existing"`, strings.Join([]string{
 		`[projects."/home/bayesartre/dev/ouroboros-ide"]`,
 		`trust_level = "trusted"`,
 		``,
@@ -621,8 +676,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`command = "bash"`,
 		codexGovernanceManagedEnd,
 		``,
-	}, "\n")
-	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), existingConfig)
+	}, "\n"))
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), existingConfig)
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-home"`+"\n")
 	writeTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"), strings.Join([]string{
 		`approval_policy = "never"`,
 		`[mcp_servers.governance]`,
@@ -649,6 +705,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
 	assertSourceGeneratedGovernanceConfig(t, gotConfig, `personality = "existing"`)
+	if strings.Contains(gotConfig, `model = "stale-home"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore:\n%s", gotConfig)
+	}
 	if strings.Count(gotConfig, `[projects."/home/bayesartre/dev/ouroboros-ide"]`) > 1 {
 		t.Fatalf("config retained duplicate stale project trust table:\n%s", gotConfig)
 	}
@@ -678,6 +737,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"Shared governance MCP/control-plane environment",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE='/workspaces/dev/devkit#dev-all'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
+		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=",
 		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=",
@@ -764,6 +824,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
 	for _, want := range []string{
 		`"workspaceRoot": "/workspaces/dev/ouroboros-ide"`,
+		`"skillCatalogPath": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/catalog/skills.json"`,
+		`"policyCatalogPath": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/catalog/policies.json"`,
+		`"promptBundleRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/skills"`,
 		`"knownWorkspaceIds": [`,
 		`"dev-workspace"`,
 		`"ouroboros-ide"`,
@@ -777,6 +840,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
 		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
 		`"email-policy-mcp-app": "/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide"`,
+		`"schemaRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
@@ -830,22 +894,25 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
-	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), strings.Join([]string{
-		`personality = "terraform"`,
-		``,
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "terraform"`, strings.Join([]string{
 		codexGovernanceManagedBegin,
 		`[mcp_servers.governance]`,
 		`command = "bash"`,
 		codexGovernanceManagedEnd,
 		``,
-	}, "\n"))
+	}, "\n")))
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-terraform"`+"\n")
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")), `personality = "terraform"`)
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, `personality = "terraform"`)
+	if strings.Contains(gotConfig, `model = "stale-terraform"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore")
+	}
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
 		t.Fatalf("session was clobbered: %q", got)
 	}
@@ -872,6 +939,87 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareOuroTerraformRequiresAuthoritativeCustomCodexConfig(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	badSource := filepath.Join(tmp, "base-only-config.toml")
+	writeTestFile(t, badSource, `model = "base-only"`+"\n")
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", badSource)
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), testAuthoritativeCodexConfig(`personality = "stale-home"`))
+
+	err = Prepare(p)
+	if err == nil {
+		t.Fatalf("expected missing custom Codex config to fail")
+	}
+	for _, want := range []string{
+		"authoritative Codex config",
+		"[model_providers.custom]",
+		"[profiles.custom]",
+		"refusing to synthesize a base-only config.toml",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestPrepareOuroTerraformRestoresCodexConfigFromNixSource(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	sourceConfig := testAuthoritativeCodexConfig(`personality = "nix-source"`)
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), sourceConfig)
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "base-only"`+"\n")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, got, `personality = "nix-source"`)
+	if strings.Contains(got, `model = "base-only"`) {
+		t.Fatalf("base-only config survived Nix-source restore:\n%s", got)
+	}
+}
+
 func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -882,6 +1030,13 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "devkit-management", "SKILL.md"), "# devkit management\n")
 	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "autonomy-contract", "SKILL.md"), "# autonomy contract\n")
 	writeTestFile(t, filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "governed-search", "SKILL.md"), "# governed search\n")
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "dev-workspace"`, strings.Join([]string{
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n")))
 
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:   devkitpaths.Paths{Root: devkitRoot},
@@ -894,15 +1049,7 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
-	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), strings.Join([]string{
-		`personality = "dev-workspace"`,
-		``,
-		codexGovernanceManagedBegin,
-		`[mcp_servers.governance]`,
-		`command = "bash"`,
-		codexGovernanceManagedEnd,
-		``,
-	}, "\n"))
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-dev-workspace"`+"\n")
 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -911,7 +1058,11 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 	if got := readTestFile(t, filepath.Join(devRoot, ".codex", "config.toml")); got != "top_level = true\n" {
 		t.Fatalf("top-level config was modified:\n%s", got)
 	}
-	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml")), `personality = "dev-workspace"`)
+	gotAgentConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotAgentConfig, `personality = "dev-workspace"`)
+	if strings.Contains(gotAgentConfig, `model = "stale-dev-workspace"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore")
+	}
 	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")); got != policy {
 		t.Fatalf("policy rules = %q, want %q", got, policy)
 	}
@@ -971,6 +1122,7 @@ func TestPrepareCreatesSharedScalaCachesAndCapsOnlyCodexTUILog(t *testing.T) {
 	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
 		t.Fatalf("mkdir worktree: %v", err)
 	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "log", "codex-tui.log"), "0123456789abcdef")
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "keep.jsonl"), "session")
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "state.sqlite"), "sqlite")

@@ -8,6 +8,10 @@ import (
 func TestBodyPreservesVerifiedGovernanceJarIdentity(t *testing.T) {
 	body := Body()
 	for _, want := range []string{
+		"governance_normalize_canonical_pwd",
+		"normalized_pwd=/workspaces/dev${PWD#${host_dev}}",
+		"unset OLDPWD",
+		"required governance workspace path missing after cwd normalization",
 		"source ${governance_env}",
 		"governance_normalize_canonical_pwd",
 		"normalized_pwd=/workspaces/dev${PWD#${host_dev}}",

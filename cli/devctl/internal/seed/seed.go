@@ -25,6 +25,12 @@ func CopyHostAuthScript(home string) string {
 	return `if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json '` + h + `/.codex/auth.json'; fi`
 }
 
+// CopyHostConfigScript copies the host config.toml into $HOME/.codex/config.toml when present.
+func CopyHostConfigScript(home string) string {
+	h := home
+	return `if [ -r /var/host-codex/config.toml ]; then cp -f /var/host-codex/config.toml '` + h + `/.codex/config.toml'; fi`
+}
+
 // FallbackCopyAuthScript copies /var/auth.json into $HOME/.codex/auth.json if still missing.
 func FallbackCopyAuthScript(home string) string {
 	h := home
@@ -37,6 +43,12 @@ func TightenPermsScript(home string) string {
 	return `if [ -f '` + h + `/.codex/auth.json' ]; then chmod 600 '` + h + `/.codex/auth.json'; fi`
 }
 
+// TightenConfigPermsScript chmods 600 on $HOME/.codex/config.toml if present.
+func TightenConfigPermsScript(home string) string {
+	h := home
+	return `if [ -f '` + h + `/.codex/config.toml' ]; then chmod 600 '` + h + `/.codex/config.toml'; fi`
+}
+
 // BuildSeedScripts returns a sequence of small bash scripts that, when run
 // inside the agent sandbox (via `bash -lc`), refresh the per-agent Codex HOME
 // from host mounts.
@@ -45,8 +57,10 @@ func BuildSeedScripts(home string) []string {
 		WaitForHostMountsScript(),
 		ResetAndCreateDirsScript(home),
 		CopyHostAuthScript(home),
+		CopyHostConfigScript(home),
 		FallbackCopyAuthScript(home),
 		TightenPermsScript(home),
+		TightenConfigPermsScript(home),
 	}
 }
 
@@ -60,8 +74,10 @@ func BuildForceReseedScripts(home string) []string {
 		WaitForHostMountsScript(),
 		`mkdir -p '` + h + `/.codex' '` + h + `/.codex/rollouts' '` + h + `/.cache' '` + h + `/.config' '` + h + `/.local'`,
 		CopyHostAuthScript(home),
+		CopyHostConfigScript(home),
 		FallbackCopyAuthScript(home),
 		TightenPermsScript(home),
+		TightenConfigPermsScript(home),
 		`touch '` + marker + `'`,
 	}
 }
@@ -105,6 +121,7 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' " +
 			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
 			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
+			"'export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=\"" + governanceentrypoint.SHA256() + "\"' " +
 			"'unalias codex 2>/dev/null || true' " +
 			"'devkit_codex_tui_log_guard() {' " +
 			"'  local log=\"$HOME/.codex/log/codex-tui.log\"' " +
@@ -119,24 +136,29 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'  tail -c \"$max\" \"$log\" > \"$tmp\" 2>/dev/null && cat \"$tmp\" > \"$log\"' " +
 			"'  rm -f \"$tmp\"' " +
 			"'}' " +
+			"'devkit_codex_require_config() {' " +
+			"'  local config=\"${CODEX_HOME:-$HOME/.codex}/config.toml\"' " +
+			"'  if [[ ! -r \"$config\" ]]; then' " +
+			"'    echo \"[devkit-codex] required Nix-authored Codex config missing: $config\" >&2' " +
+			"'    return 1' " +
+			"'  fi' " +
+			"'  grep -Fqx '\\''# source = nixos-wsl codex config'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config is not Nix-authored: $config\" >&2' " +
+			"'    return 1' " +
+			"'  }' " +
+			"'  grep -Fqx '\\''[model_providers.custom]'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config missing [model_providers.custom]: $config\" >&2' " +
+			"'    return 1' " +
+			"'  }' " +
+			"'  grep -Fqx '\\''[profiles.custom]'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config missing [profiles.custom]: $config\" >&2' " +
+			"'    return 1' " +
+			"'  }' " +
+			"'}' " +
 			"'codex() {' " +
-			"'  local -a extra' " +
-			"'  extra=(' " +
-			"'    -a never' " +
-			"'    -s danger-full-access' " +
-			"\"    -c 'mcp_servers.codex-cli.command=\\\"codex\\\"'\" " +
-			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
-			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
-			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"'    -c \"mcp_servers.governance.cwd=\\\"$PWD\\\"\"' " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceentrypoint.EscapedForNestedDoubleQuotes() + "\\\"]'\" " +
-			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
-			"'    -c '\\''mcp_servers.governance.tool_timeout_sec=10800'\\''' " +
-			"'    -c '\\''mcp_servers.governance.default_tools_approval_mode=\"auto\"'\\''' " +
-			"'    -c '\\''mcp_servers.governance.enabled_tools=[\"run\",\"run_lint_migration\",\"submit_to_ci\",\"governance.workspace_topology\",\"governance.graph_status\",\"governance.search\",\"governance.write_yaml\",\"governance.operator_attention_opt_in\",\"governance.operator_attention_opt_out\",\"governance.operator_attention_status\",\"governance.operator_attention_inbox\",\"governance.operator_attention_record_blocker\"]'\\''' " +
-			"'  )' " +
 			"'  devkit_codex_tui_log_guard' " +
-			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
+			"'  devkit_codex_require_config || return' " +
+			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"$@\"' " +
 			"'}' > \"$target/.zshrc\"",
 	}
 	if cfg.SeedCodex {
@@ -144,8 +166,10 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			WaitForHostMountsScript(),
 			"mkdir -p \"$target/.codex\" \"$target/.codex/rollouts\" \"$target/.cache\" \"$target/.config\" \"$target/.local\"",
 			"if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json \"$target/.codex/auth.json\"; fi",
+			"if [ -r /var/host-codex/config.toml ]; then cp -f /var/host-codex/config.toml \"$target/.codex/config.toml\"; fi",
 			"if [ ! -f \"$target/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$target/.codex/auth.json\"; fi",
 			"if [ -f \"$target/.codex/auth.json\" ]; then chmod 600 \"$target/.codex/auth.json\"; fi",
+			"if [ -f \"$target/.codex/config.toml\" ]; then chmod 600 \"$target/.codex/config.toml\"; fi",
 			"touch \"$marker\"",
 		}
 		parts = append(parts,
@@ -181,6 +205,7 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' " +
 			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
 			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
+			"'export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=\"" + governanceentrypoint.SHA256() + "\"' " +
 			"'unalias codex 2>/dev/null || true' " +
 			"'devkit_codex_tui_log_guard() {' " +
 			"'  local log=\"$HOME/.codex/log/codex-tui.log\"' " +
@@ -195,24 +220,29 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'  tail -c \"$max\" \"$log\" > \"$tmp\" 2>/dev/null && cat \"$tmp\" > \"$log\"' " +
 			"'  rm -f \"$tmp\"' " +
 			"'}' " +
+			"'devkit_codex_require_config() {' " +
+			"'  local config=\"${CODEX_HOME:-$HOME/.codex}/config.toml\"' " +
+			"'  if [[ ! -r \"$config\" ]]; then' " +
+			"'    echo \"[devkit-codex] required Nix-authored Codex config missing: $config\" >&2' " +
+			"'    return 1' " +
+			"'  fi' " +
+			"'  grep -Fqx '\\''# source = nixos-wsl codex config'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config is not Nix-authored: $config\" >&2' " +
+			"'    return 1' " +
+			"'  }' " +
+			"'  grep -Fqx '\\''[model_providers.custom]'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config missing [model_providers.custom]: $config\" >&2' " +
+			"'    return 1' " +
+			"'  }' " +
+			"'  grep -Fqx '\\''[profiles.custom]'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config missing [profiles.custom]: $config\" >&2' " +
+			"'    return 1' " +
+			"'  }' " +
+			"'}' " +
 			"'codex() {' " +
-			"'  local -a extra' " +
-			"'  extra=(' " +
-			"'    -a never' " +
-			"'    -s danger-full-access' " +
-			"\"    -c 'mcp_servers.codex-cli.command=\\\"codex\\\"'\" " +
-			"\"    -c 'mcp_servers.codex-cli.args=[\\\"mcp-server\\\"]'\" " +
-			"'    -c '\\''mcp_servers.codex-cli.startup_timeout_sec=60'\\''' " +
-			"\"    -c 'mcp_servers.governance.command=\\\"bash\\\"'\" " +
-			"'    -c \"mcp_servers.governance.cwd=\\\"$PWD\\\"\"' " +
-			"\"    -c 'mcp_servers.governance.args=[\\\"-lc\\\",\\\"" + governanceentrypoint.EscapedForNestedDoubleQuotes() + "\\\"]'\" " +
-			"'    -c '\\''mcp_servers.governance.startup_timeout_sec=60'\\''' " +
-			"'    -c '\\''mcp_servers.governance.tool_timeout_sec=10800'\\''' " +
-			"'    -c '\\''mcp_servers.governance.default_tools_approval_mode=\"auto\"'\\''' " +
-			"'    -c '\\''mcp_servers.governance.enabled_tools=[\"run\",\"run_lint_migration\",\"submit_to_ci\",\"governance.workspace_topology\",\"governance.graph_status\",\"governance.search\",\"governance.write_yaml\",\"governance.operator_attention_opt_in\",\"governance.operator_attention_opt_out\",\"governance.operator_attention_status\",\"governance.operator_attention_inbox\",\"governance.operator_attention_record_blocker\"]'\\''' " +
-			"'  )' " +
 			"'  devkit_codex_tui_log_guard' " +
-			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"${extra[@]}\" \"$@\"' " +
+			"'  devkit_codex_require_config || return' " +
+			"'  HOME=\"$HOME\" CODEX_HOME=\"$HOME/.codex\" CODEX_ROLLOUT_DIR=\"$HOME/.codex/rollouts\" command codex \"$@\"' " +
 			"'}' > \"$home/.zshrc\"",
 	}
 	if seedCodex {
@@ -221,8 +251,10 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			WaitForHostMountsScript(),
 			"mkdir -p \"$home/.codex\" \"$home/.codex/rollouts\" \"$home/.cache\" \"$home/.config\" \"$home/.local\"",
 			"if [ -r /var/host-codex/auth.json ]; then cp -f /var/host-codex/auth.json \"$home/.codex/auth.json\"; fi",
+			"if [ -r /var/host-codex/config.toml ]; then cp -f /var/host-codex/config.toml \"$home/.codex/config.toml\"; fi",
 			"if [ ! -f \"$home/.codex/auth.json\" ] && [ -r /var/auth.json ]; then cp -f /var/auth.json \"$home/.codex/auth.json\"; fi",
 			"if [ -f \"$home/.codex/auth.json\" ]; then chmod 600 \"$home/.codex/auth.json\"; fi",
+			"if [ -f \"$home/.codex/config.toml\" ]; then chmod 600 \"$home/.codex/config.toml\"; fi",
 			"touch " + marker,
 		}
 		parts = append(parts,

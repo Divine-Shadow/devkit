@@ -309,7 +309,7 @@
                 export GIT_SSL_CAINFO=$SSL_CERT_FILE
                 export TESTCONTAINERS_RYUK_DISABLED=true
                 export DOCKER_HOST=''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}
-                export PLAYWRIGHT_BROWSERS_PATH=''${PLAYWRIGHT_BROWSERS_PATH:-${pkgsPlaywright.playwright-driver.browsers}}
+                export PLAYWRIGHT_BROWSERS_PATH=${pkgsPlaywright.playwright-driver.browsers}
                 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=''${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}
                 if [ -n "''${HTTP_PROXY:-}" ] && [ -z "''${HTTPS_PROXY:-}" ]; then
                   export HTTPS_PROXY="$HTTP_PROXY"
