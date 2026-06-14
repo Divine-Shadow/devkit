@@ -42,18 +42,55 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "3448e0d0cd5d7a646f40531ec65f9907a56d91c7";`,
-		`governanceJarSha256Hex = "b2a48e23e5245c775dca652135ece84ba4e5aa69def367bdad61f501da8deefb";`,
-		`governanceJarSha256Sri = "sha256-sqSOI+UkXHddymUhNezoS6Tlqmne82e9rWH1AdqN7vs=";`,
-		`mkPinnedGovernanceJar =`,
-		`pkgs.stdenvNoCC.mkDerivation`,
+		`governanceJarVersion = "8a4f4ea65c56172b3f5eb9b5d136f85ca687bf9e";`,
+		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
+		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
 		`pinned-governance-jar = mkPinnedGovernanceJar pkgs;`,
-		`governance-jars/v1/${governanceJarVersion}/subagent-governance.jar`,
 	} {
 		if !strings.Contains(flakeNix, want) {
 			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
 		}
+	}
+}
+
+func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
+	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-pinned/share/subagent-governance/subagent-governance.jar"
+	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
+	got := buildOuroGovernanceEnv(
+		"/home/bayesartre/dev",
+		"/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
+		"abc123",
+		ouroGovernanceRuntimeIdentity{
+			LatestJarPath:             jarPath,
+			ControlPlaneJar:           jarPath,
+			ExpectedJarPath:           jarPath,
+			ExpectedJarSHA256:         "deadbeef",
+			SubagentExpectedJarSHA256: "deadbeef",
+			JavaHome:                  javaHome,
+		},
+	)
+	for _, want := range []string{
+		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH='" + jarPath + "'",
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR='" + jarPath + "'",
+		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH='" + jarPath + "'",
+		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256='deadbeef'",
+		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256='deadbeef'",
+		"export JAVA_HOME='" + javaHome + "'",
+		"devkit_governance_static_runtime_env_ready()",
+		strings.Join([]string{
+			"if ! devkit_governance_static_runtime_env_ready; then",
+			"  devkit_governance_load_runtime_env",
+			"fi",
+			"devkit_governance_require_runtime_jar",
+		}, "\n"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated governance env missing %q:\n%s", want, got)
+		}
+	}
+	if staticAt, guardAt := strings.Index(got, "export JAVA_HOME="), strings.Index(got, "devkit_governance_static_runtime_env_ready()"); staticAt < 0 || guardAt < 0 || staticAt > guardAt {
+		t.Fatalf("prepared runtime identity must be exported before the static readiness guard:\n%s", got)
 	}
 }
 
@@ -485,11 +522,13 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
 		t.Fatalf("repaired wrapper missing governance entrypoint fingerprint:\n%s", got)
 	}
-	if !strings.Contains(got, "using governance env: ${governance_env}") {
-		t.Fatalf("repaired wrapper does not loudly label selected governance env:\n%s", got)
+	if strings.Contains(got, "mcp_servers.governance.args=") {
+		t.Fatalf("repaired wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
 	}
-	if strings.Contains(got, "]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh") {
-		t.Fatalf("repaired wrapper silently skips missing governance env:\n%s", got)
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, "")
+	if !strings.Contains(gotConfig, "args = [\"-lc\",") || !strings.Contains(gotConfig, "using governance env: ${governance_env}") {
+		t.Fatalf("generated config missing array-valued governance entrypoint:\n%s", gotConfig)
 	}
 	if session := readTestFile(t, sessionPath); session != "past" {
 		t.Fatalf("session was changed: %q", session)
@@ -538,14 +577,15 @@ codex() {
 	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  HOME=\"$HOME\" CODEX_HOME=") {
 		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
 	}
-	if !strings.Contains(got, "${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh") {
-		t.Fatalf("generated wrapper missing host dev-root governance env derivation:\n%s", got)
+	if strings.Contains(got, "mcp_servers.governance.args=") {
+		t.Fatalf("generated wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
 	}
-	if !strings.Contains(got, "required governance env missing") {
-		t.Fatalf("generated wrapper missing loud governance env failure:\n%s", got)
-	}
-	if strings.Contains(got, "]] && source /workspaces/dev/.devkit/ouro8-governance-env.sh") {
-		t.Fatalf("generated wrapper silently skips missing governance env:\n%s", got)
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, "")
+	if !strings.Contains(gotConfig, "args = [\"-lc\",") ||
+		!strings.Contains(gotConfig, "${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh") ||
+		!strings.Contains(gotConfig, "required governance env missing") {
+		t.Fatalf("generated config missing source-derived governance entrypoint:\n%s", gotConfig)
 	}
 }
 
@@ -652,6 +692,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
 		`[ "$jar_sha" = "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
 		"devkit_governance_require_runtime_jar()",
+		"devkit_governance_static_runtime_env_ready()",
+		"if ! devkit_governance_static_runtime_env_ready; then",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
 		"runtime env did not provide pinned Nix-store governance jar",
@@ -675,7 +717,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		}
 	}
 	guardedResolve := strings.Join([]string{
-		"devkit_governance_load_runtime_env",
+		"if ! devkit_governance_static_runtime_env_ready; then",
+		"  devkit_governance_load_runtime_env",
+		"fi",
 		"devkit_governance_require_runtime_jar",
 	}, "\n")
 	if !strings.Contains(gotEnv, guardedResolve) {

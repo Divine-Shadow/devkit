@@ -57,27 +57,9 @@
       };
       codexVersion = "0.139.0";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "3448e0d0cd5d7a646f40531ec65f9907a56d91c7";
-      governanceJarSha256Hex = "b2a48e23e5245c775dca652135ece84ba4e5aa69def367bdad61f501da8deefb";
-      governanceJarSha256Sri = "sha256-sqSOI+UkXHddymUhNezoS6Tlqmne82e9rWH1AdqN7vs=";
-      mkPinnedGovernanceJar =
-        pkgs:
-        pkgs.stdenvNoCC.mkDerivation {
-          pname = "subagent-governance-pinned";
-          version = governanceJarVersion;
-          src = pkgs.fetchurl {
-            url = "https://ouroboros-governance-jars-339713140717-us-east-2.s3.us-east-2.amazonaws.com/governance-jars/v1/${governanceJarVersion}/subagent-governance.jar";
-            hash = governanceJarSha256Sri;
-          };
-          dontUnpack = true;
-          installPhase = ''
-            runHook preInstall
-            mkdir -p "$out/share/subagent-governance"
-            install -m 0444 "$src" "$out/share/subagent-governance/subagent-governance.jar"
-            printf '%s\n' '${governanceJarSha256Hex}' > "$out/share/subagent-governance/subagent-governance.jar.sha256"
-            runHook postInstall
-          '';
-        };
+      governanceJarVersion = "8a4f4ea65c56172b3f5eb9b5d136f85ca687bf9e";
+      governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
+      mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
     in
     {
       devShells = forEachSystem (

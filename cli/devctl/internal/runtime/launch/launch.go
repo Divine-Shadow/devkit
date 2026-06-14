@@ -461,7 +461,11 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) error {
 		return err
 	}
 	repoConfigSha256 := fmt.Sprintf("%x", sha256.Sum256(repoConfig))
-	content := buildOuroGovernanceEnv(hostDevRoot, sandboxRepoConfigPath, repoConfigSha256)
+	runtimeIdentity, err := resolveOuroGovernanceRuntimeIdentity(hostDevRoot, ouroGovernanceRuntimeFlake())
+	if err != nil {
+		return err
+	}
+	content := buildOuroGovernanceEnv(hostDevRoot, sandboxRepoConfigPath, repoConfigSha256, runtimeIdentity)
 	if data, err := os.ReadFile(envPath); err == nil && string(data) == content {
 		// Keep checking the paired repo config below; it may have been generated
 		// by an older devkit and carry a stale workspace catalog.
@@ -593,15 +597,99 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
+type ouroGovernanceRuntimeIdentity struct {
+	LatestJarPath             string
+	ControlPlaneJar           string
+	ExpectedJarPath           string
+	ExpectedJarSHA256         string
+	SubagentExpectedJarSHA256 string
+	JavaHome                  string
+}
+
+func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
+	return strings.TrimSpace(identity.LatestJarPath) != "" &&
+		strings.TrimSpace(identity.ControlPlaneJar) != "" &&
+		strings.TrimSpace(identity.ExpectedJarPath) != "" &&
+		strings.TrimSpace(identity.ExpectedJarSHA256) != "" &&
+		strings.TrimSpace(identity.SubagentExpectedJarSHA256) != "" &&
+		strings.TrimSpace(identity.JavaHome) != ""
+}
+
+func ouroGovernanceRuntimeFlake() string {
+	return filepath.Join("/workspaces/dev", "devkit") + "#dev-all"
+}
+
+func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake string) (ouroGovernanceRuntimeIdentity, error) {
+	flakePath := filepath.Join(hostDevRoot, "devkit", "flake.nix")
+	if !pathExists(flakePath) {
+		return ouroGovernanceRuntimeIdentity{}, nil
+	}
+	nixBin, err := exec.LookPath("nix")
+	if err != nil {
+		if pathExists("/run/current-system/sw/bin/nix") {
+			nixBin = "/run/current-system/sw/bin/nix"
+		} else {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env: nix not found")
+		}
+	}
+	script := strings.Join([]string{
+		`set -euo pipefail`,
+		`runtime_env="$($1 --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false print-dev-env "$DEVKIT_GOVERNANCE_RUNTIME_FLAKE")"`,
+		`eval "$runtime_env"`,
+		`printf '%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${JAVA_HOME:-}"`,
+	}, "; ")
+	cmd := exec.Command("bash", "-lc", script, "resolve-governance-runtime", nixBin)
+	cmd.Env = append(os.Environ(), "DEVKIT_GOVERNANCE_RUNTIME_FLAKE="+runtimeFlake)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: %w: %s", runtimeFlake, err, strings.TrimSpace(string(out)))
+	}
+	parts := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	if len(parts) != 6 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 6 fields, got %d", runtimeFlake, len(parts))
+	}
+	identity := ouroGovernanceRuntimeIdentity{
+		LatestJarPath:             parts[0],
+		ControlPlaneJar:           parts[1],
+		ExpectedJarPath:           parts[2],
+		ExpectedJarSHA256:         parts[3],
+		SubagentExpectedJarSHA256: parts[4],
+		JavaHome:                  parts[5],
+	}
+	if !identity.Complete() {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned jar or Java identity", runtimeFlake)
+	}
+	for label, path := range map[string]string{
+		"latest governance jar":        identity.LatestJarPath,
+		"control-plane governance jar": identity.ControlPlaneJar,
+		"expected governance jar":      identity.ExpectedJarPath,
+		"JAVA_HOME":                    identity.JavaHome,
+	} {
+		if !pathExists(path) {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: missing %s %s", runtimeFlake, label, path)
+		}
+	}
+	if identity.LatestJarPath != identity.ControlPlaneJar || identity.LatestJarPath != identity.ExpectedJarPath {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned jar path mismatch", runtimeFlake)
+	}
+	if identity.ExpectedJarSHA256 != identity.SubagentExpectedJarSHA256 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected jar sha mismatch", runtimeFlake)
+	}
+	if !strings.HasPrefix(identity.LatestJarPath, "/nix/store/") {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned jar is not in /nix/store: %s", runtimeFlake, identity.LatestJarPath)
+	}
+	return identity, nil
+}
+
+func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string, runtimeIdentity ouroGovernanceRuntimeIdentity) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	repoConfigPath = filepath.Clean(repoConfigPath)
 	sandboxDevRoot := "/workspaces/dev"
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
 	stateDir := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
 	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
-	runtimeFlake := filepath.Join(sandboxDevRoot, "devkit") + "#dev-all"
-	return strings.Join([]string{
+	runtimeFlake := ouroGovernanceRuntimeFlake()
+	lines := []string{
 		"# Shared governance MCP/control-plane environment for native Ouroboros GUI agents.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
 		"export DEVKIT_GOVERNANCE_RUNTIME_FLAKE=" + shellQuote(runtimeFlake),
@@ -611,6 +699,18 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + shellQuote(governanceentrypoint.SHA256()),
 		"export SUBAGENT_GOVERNANCE_PINNED_ARTIFACT=1",
 		"export SUBAGENT_GOVERNANCE_FLAKE_ARTIFACT=0",
+	}
+	if runtimeIdentity.Complete() {
+		lines = append(lines,
+			"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH="+shellQuote(runtimeIdentity.LatestJarPath),
+			"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR="+shellQuote(runtimeIdentity.ControlPlaneJar),
+			"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH="+shellQuote(runtimeIdentity.ExpectedJarPath),
+			"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256="+shellQuote(runtimeIdentity.ExpectedJarSHA256),
+			"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256="+shellQuote(runtimeIdentity.SubagentExpectedJarSHA256),
+			"export JAVA_HOME="+shellQuote(runtimeIdentity.JavaHome),
+		)
+	}
+	lines = append(lines,
 		"devkit_governance_load_runtime_env() {",
 		"  local nix_bin",
 		"  if command -v nix >/dev/null 2>&1; then",
@@ -660,22 +760,30 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance jar from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
 		"  return 1",
 		"}",
-		"devkit_governance_load_runtime_env",
+		"devkit_governance_static_runtime_env_ready() {",
+		"  devkit_governance_have_expected_jar || return 1",
+		"  [ -n \"${JAVA_HOME:-}\" ] || return 1",
+		"  [ -x \"${JAVA_HOME}/bin/java\" ] || return 1",
+		"}",
+		"if ! devkit_governance_static_runtime_env_ready; then",
+		"  devkit_governance_load_runtime_env",
+		"fi",
 		"devkit_governance_require_runtime_jar",
 		"if [ -z \"${JAVA_HOME:-}\" ] || [ ! -x \"${JAVA_HOME}/bin/java\" ]; then",
 		"  echo \"[devkit-governance-env] runtime env did not provide an executable JAVA_HOME\" >&2",
 		"  return 1",
 		"fi",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(catalog.ids, ","),
-		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(catalog.rootBindings, ","),
-		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + schemaRoot,
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS="+strings.Join(catalog.ids, ","),
+		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS="+strings.Join(catalog.rootBindings, ","),
+		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT="+schemaRoot,
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_FORWARD_SERVER_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + stateDir,
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR="+stateDir,
 		"",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 type ouroGovernanceCatalog struct {
@@ -1048,7 +1156,6 @@ func ouroCodexShellHookZsh() string {
 		`    -c 'mcp_servers.codex-cli.startup_timeout_sec=60'`,
 		`    -c 'mcp_servers.governance.command="bash"'`,
 		`    -c "mcp_servers.governance.cwd=\"$PWD\""`,
-		`    -c 'mcp_servers.governance.args=["-lc","` + governanceentrypoint.Zsh() + `"]'`,
 		`    -c 'mcp_servers.governance.startup_timeout_sec=60'`,
 		`    -c 'mcp_servers.governance.tool_timeout_sec=10800'`,
 		`    -c 'mcp_servers.governance.default_tools_approval_mode="auto"'`,
@@ -1588,6 +1695,11 @@ func ShellString(cmd Command) string {
 		parts[i] = shellQuote(part)
 	}
 	return strings.Join(parts, " ")
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func ensureResolvConf(path string) error {
