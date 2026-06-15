@@ -146,12 +146,12 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'    echo \"[devkit-codex] Codex config is not Nix-authored: $config\" >&2' " +
 			"'    return 1' " +
 			"'  }' " +
-			"'  grep -Fqx '\\''[model_providers.custom]'\\'' \"$config\" || {' " +
-			"'    echo \"[devkit-codex] Codex config missing [model_providers.custom]: $config\" >&2' " +
+			"'  grep -Fqx '\\''model_provider = \"openai\"'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config must use model_provider = \\\"openai\\\": $config\" >&2' " +
 			"'    return 1' " +
 			"'  }' " +
-			"'  grep -Fqx '\\''[profiles.custom]'\\'' \"$config\" || {' " +
-			"'    echo \"[devkit-codex] Codex config missing [profiles.custom]: $config\" >&2' " +
+			"'  grep -Fqx '\\''[profiles.openai]'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config missing [profiles.openai]: $config\" >&2' " +
 			"'    return 1' " +
 			"'  }' " +
 			"'}' " +
@@ -230,12 +230,12 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'    echo \"[devkit-codex] Codex config is not Nix-authored: $config\" >&2' " +
 			"'    return 1' " +
 			"'  }' " +
-			"'  grep -Fqx '\\''[model_providers.custom]'\\'' \"$config\" || {' " +
-			"'    echo \"[devkit-codex] Codex config missing [model_providers.custom]: $config\" >&2' " +
+			"'  grep -Fqx '\\''model_provider = \"openai\"'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config must use model_provider = \\\"openai\\\": $config\" >&2' " +
 			"'    return 1' " +
 			"'  }' " +
-			"'  grep -Fqx '\\''[profiles.custom]'\\'' \"$config\" || {' " +
-			"'    echo \"[devkit-codex] Codex config missing [profiles.custom]: $config\" >&2' " +
+			"'  grep -Fqx '\\''[profiles.openai]'\\'' \"$config\" || {' " +
+			"'    echo \"[devkit-codex] Codex config missing [profiles.openai]: $config\" >&2' " +
 			"'    return 1' " +
 			"'  }' " +
 			"'}' " +

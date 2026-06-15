@@ -42,9 +42,8 @@ readiness:
           exit 1
         }
         require_config '# source = nixos-wsl codex config'
-        require_config '[model_providers.custom]'
-        require_config '[profiles.custom]'
-        require_config 'model_provider = "custom"'
+        require_config '[profiles.openai]'
+        require_config 'model_provider = "openai"'
         require_config '# BEGIN DEVKIT NATIVE GOVERNANCE MCP'
         require_config '[mcp_servers.governance]'
         require_config 'command = "/run/current-system/sw/bin/bash"'
@@ -53,7 +52,7 @@ readiness:
         require_config 'governance.workspace_topology'
         test -r /workspaces/dev/.devkit/ouro8-governance-env.sh
         grep -Fq 'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' /workspaces/dev/.devkit/ouro8-governance-env.sh
-    - name: codex-auth-scopes
+    - name: codex-auth-present
       command: |
         set -euo pipefail
         auth="${CODEX_HOME:-$HOME/.codex}/auth.json"
@@ -62,36 +61,19 @@ readiness:
           exit 1
         }
         python3 - "$auth" <<'PY'
-        import base64
         import json
         import sys
 
         auth_path = sys.argv[1]
-        required = {"api.model.read", "api.responses.write"}
         try:
             with open(auth_path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            token = data.get("tokens", {}).get("access_token", "")
-            payload = token.split(".")[1]
-            payload += "=" * (-len(payload) % 4)
-            claims = json.loads(base64.urlsafe_b64decode(payload))
         except Exception as exc:
-            print(f"ouroboros-terraform readiness: invalid Codex auth token in {auth_path}: {exc}", file=sys.stderr)
+            print(f"ouroboros-terraform readiness: invalid Codex auth in {auth_path}: {exc}", file=sys.stderr)
             sys.exit(1)
-        scope_claim = claims.get("scp") or claims.get("scope") or []
-        if isinstance(scope_claim, str):
-            scopes = set(scope_claim.split())
-        else:
-            scopes = set(scope_claim)
-        missing = sorted(required - scopes)
-        if missing:
-            got = ", ".join(sorted(scopes)) or "<none>"
-            print(
-                "ouroboros-terraform readiness: Codex auth token is missing required scope(s) "
-                + ", ".join(missing)
-                + f" in {auth_path}; present scopes: {got}",
-                file=sys.stderr,
-            )
+        tokens = data.get("tokens") or {}
+        if not (tokens.get("refresh_token") or data.get("OPENAI_API_KEY")):
+            print(f"ouroboros-terraform readiness: Codex auth has no refresh token or API key in {auth_path}", file=sys.stderr)
             sys.exit(1)
         PY
   repo_checks:

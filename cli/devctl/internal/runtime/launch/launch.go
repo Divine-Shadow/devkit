@@ -114,8 +114,7 @@ const (
 
 const (
 	codexNixManagedConfigMarker    = "# source = nixos-wsl codex config"
-	codexCustomProviderTable       = "model_providers.custom"
-	codexCustomProfileTable        = "profiles.custom"
+	codexOpenAIProfileTable        = "profiles.openai"
 	codexDevkitConfigSourceRelPath = ".devkit/nix-codex-config.toml"
 )
 
@@ -932,7 +931,7 @@ func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
 	if err != nil {
 		return err
 	}
-	if err := requireCustomCodexConfig(original, source); err != nil {
+	if err := requireNixCodexConfig(original, source); err != nil {
 		return err
 	}
 	next := removeManagedCodexGovernanceBlock(original)
@@ -958,19 +957,36 @@ func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
 
 func authoritativeCodexConfig(configPath string, p nativeplan.Plan) (string, string, error) {
 	candidates := codexConfigSourceCandidates(p)
-	for _, source := range candidates {
+	explicitSource := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE")) != ""
+	var invalid []string
+	for i, source := range candidates {
 		data, err := os.ReadFile(source)
 		if err == nil {
-			return string(data), source, nil
+			config := string(data)
+			if err := requireNixCodexConfig(config, source); err == nil {
+				return config, source, nil
+			} else if explicitSource && i == 0 {
+				return "", "", err
+			} else {
+				invalid = append(invalid, err.Error())
+				continue
+			}
 		}
 		if err != nil && !os.IsNotExist(err) {
 			return "", "", fmt.Errorf("read authoritative Codex config %s: %w", source, err)
 		}
 	}
 	if data, err := os.ReadFile(configPath); err == nil {
-		return string(data), configPath, nil
+		config := string(data)
+		if err := requireNixCodexConfig(config, configPath); err != nil {
+			return "", "", err
+		}
+		return config, configPath, nil
 	} else if err != nil && !os.IsNotExist(err) {
 		return "", "", fmt.Errorf("read Codex config %s: %w", configPath, err)
+	}
+	if len(invalid) > 0 {
+		return "", "", fmt.Errorf("no valid authoritative Codex config found; invalid candidate(s): %s", strings.Join(invalid, "; "))
 	}
 	return "", "", fmt.Errorf("missing Nix-authored Codex config for governed launch; checked %s and %s; refusing to synthesize a base-only config.toml",
 		strings.Join(candidates, ", "), configPath)
@@ -999,16 +1015,18 @@ func codexConfigSourceCandidates(p nativeplan.Plan) []string {
 	return candidates
 }
 
-func requireCustomCodexConfig(config, source string) error {
+func requireNixCodexConfig(config, source string) error {
 	var missing []string
 	if !strings.Contains(config, codexNixManagedConfigMarker) {
 		missing = append(missing, codexNixManagedConfigMarker)
 	}
-	if !hasTomlTable(config, codexCustomProviderTable) {
-		missing = append(missing, "["+codexCustomProviderTable+"]")
-	}
-	if !hasTomlTable(config, codexCustomProfileTable) {
-		missing = append(missing, "["+codexCustomProfileTable+"]")
+	provider, ok := topLevelTomlString(config, "model_provider")
+	if !ok {
+		missing = append(missing, "top-level model_provider")
+	} else if provider != "openai" {
+		missing = append(missing, fmt.Sprintf(`model_provider = "openai" (got %q)`, provider))
+	} else if !hasTomlTable(config, codexOpenAIProfileTable) {
+		missing = append(missing, "["+codexOpenAIProfileTable+"]")
 	}
 	if len(missing) == 0 {
 		return nil
@@ -1016,8 +1034,28 @@ func requireCustomCodexConfig(config, source string) error {
 	if strings.TrimSpace(source) == "" {
 		source = "<missing>"
 	}
-	return fmt.Errorf("authoritative Codex config %s missing %s; Nix must provide the custom config.toml options, refusing to synthesize a base-only config.toml",
+	return fmt.Errorf("authoritative Codex config %s missing %s; Nix must provide the source-derived config.toml options, refusing to synthesize a base-only config.toml",
 		source, strings.Join(missing, ", "))
+}
+
+func topLevelTomlString(config, key string) (string, bool) {
+	for _, line := range strings.Split(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			return "", false
+		}
+		name, raw, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(name) != key {
+			continue
+		}
+		value := strings.TrimSpace(raw)
+		value = strings.Trim(value, `"`)
+		return value, true
+	}
+	return "", false
 }
 
 func hasTomlTable(config, table string) bool {
@@ -1321,12 +1359,12 @@ const codexConfigGuardZsh = `devkit_codex_require_config() {
     echo "[devkit-codex] Codex config is not Nix-authored: $config" >&2
     return 1
   }
-  grep -Fqx '[model_providers.custom]' "$config" || {
-    echo "[devkit-codex] Codex config missing [model_providers.custom]: $config" >&2
+  grep -Fqx 'model_provider = "openai"' "$config" || {
+    echo "[devkit-codex] Codex config must use model_provider = \"openai\": $config" >&2
     return 1
   }
-  grep -Fqx '[profiles.custom]' "$config" || {
-    echo "[devkit-codex] Codex config missing [profiles.custom]: $config" >&2
+  grep -Fqx '[profiles.openai]' "$config" || {
+    echo "[devkit-codex] Codex config missing [profiles.openai]: $config" >&2
     return 1
   }
 }`

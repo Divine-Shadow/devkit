@@ -48,9 +48,8 @@ assert_nix_codex_config() {
   local path="$1"
   [[ -f "$path" ]] || fail "$path is missing"
   grep -Fqx '# source = nixos-wsl codex config' "$path" || fail "$path is not Nix-authored"
-  grep -Fqx '[model_providers.custom]' "$path" || fail "$path missing [model_providers.custom]"
-  grep -Fqx '[profiles.custom]' "$path" || fail "$path missing [profiles.custom]"
-  grep -Fq 'model_provider = "custom"' "$path" || fail "$path missing custom model_provider"
+  grep -Fqx 'model_provider = "openai"' "$path" || fail "$path must use model_provider = \"openai\""
+  grep -Fqx '[profiles.openai]' "$path" || fail "$path missing [profiles.openai]"
   ! grep -qx 'model = "preserve"' "$path" || fail "$path preserved mutable config poison instead of restoring Nix source"
 }
 
@@ -182,9 +181,8 @@ timeout 240s "$DEVKIT" -p "$PROJECT" exec 1 --repo "$REPO" \
     grep -qx '\''{"auth":"preserved"}'\'' "$CODEX_HOME/auth.json"
     grep -qx '\''rollout-preserved'\'' "$CODEX_ROLLOUT_DIR/in-flight.jsonl"
     grep -Fqx '\''# source = nixos-wsl codex config'\'' "$CODEX_HOME/config.toml"
-    grep -Fqx '\''[model_providers.custom]'\'' "$CODEX_HOME/config.toml"
-    grep -Fqx '\''[profiles.custom]'\'' "$CODEX_HOME/config.toml"
-    grep -Fq '\''model_provider = "custom"'\'' "$CODEX_HOME/config.toml"
+    grep -Fqx '\''model_provider = "openai"'\'' "$CODEX_HOME/config.toml"
+    grep -Fqx '\''[profiles.openai]'\'' "$CODEX_HOME/config.toml"
     ! grep -qx '\''model = "preserve"'\'' "$CODEX_HOME/config.toml"
     grep -qx '\''session-preserved'\'' "$CODEX_HOME/sessions/2026/05/15/current.jsonl"
     grep -qx '\''legacy-session-imported'\'' "$CODEX_HOME/sessions/2026/05/15/legacy.jsonl"

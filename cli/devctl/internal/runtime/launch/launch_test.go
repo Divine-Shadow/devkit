@@ -191,8 +191,8 @@ func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved s
 	}
 	for _, want := range []string{
 		codexNixManagedConfigMarker,
-		"[model_providers.custom]",
-		"[profiles.custom]",
+		`model_provider = "openai"`,
+		"[profiles.openai]",
 		codexGovernanceManagedBegin,
 		"# source = devkit native launch generator",
 		"governance_mcp_entrypoint_sha256",
@@ -225,7 +225,7 @@ func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
 	parts := []string{
 		codexNixManagedConfigMarker,
 		`model = "gpt-5.5"`,
-		`model_provider = "custom"`,
+		`model_provider = "openai"`,
 		`model_reasoning_effort = "xhigh"`,
 		`approval_policy = "never"`,
 		`sandbox_mode = "danger-full-access"`,
@@ -235,15 +235,9 @@ func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
 	}
 	parts = append(parts,
 		"",
-		"[model_providers.custom]",
-		`name = "Custom OpenAI"`,
-		`base_url = "https://api.openai.com/v1"`,
-		`wire_api = "responses"`,
-		`requires_openai_auth = true`,
-		"",
-		"[profiles.custom]",
+		"[profiles.openai]",
 		`model = "gpt-5.5"`,
-		`model_provider = "custom"`,
+		`model_provider = "openai"`,
 		`model_reasoning_effort = "xhigh"`,
 		`approval_policy = "never"`,
 		`sandbox_mode = "danger-full-access"`,
@@ -570,8 +564,8 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
 		t.Fatalf("repaired wrapper missing governance entrypoint fingerprint:\n%s", got)
 	}
-	if !strings.Contains(got, "devkit_codex_require_config()") || !strings.Contains(got, "Codex config missing [model_providers.custom]") {
-		t.Fatalf("repaired wrapper missing loud custom config guard:\n%s", got)
+	if !strings.Contains(got, "devkit_codex_require_config()") || !strings.Contains(got, "Codex config must use model_provider = \\\"openai\\\"") {
+		t.Fatalf("repaired wrapper missing loud openai config guard:\n%s", got)
 	}
 	if strings.Contains(got, "mcp_servers.governance.args=") {
 		t.Fatalf("repaired wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
@@ -631,8 +625,8 @@ codex() {
 	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  devkit_codex_require_config || return\n  HOME=\"$HOME\" CODEX_HOME=") {
 		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
 	}
-	if !strings.Contains(got, "Codex config missing [profiles.custom]") {
-		t.Fatalf("generated wrapper missing loud custom profile failure:\n%s", got)
+	if !strings.Contains(got, "Codex config missing [profiles.openai]") {
+		t.Fatalf("generated wrapper missing loud openai profile failure:\n%s", got)
 	}
 	if strings.Contains(got, "mcp_servers.governance.args=") {
 		t.Fatalf("generated wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
@@ -939,7 +933,7 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	}
 }
 
-func TestPrepareOuroTerraformRequiresAuthoritativeCustomCodexConfig(t *testing.T) {
+func TestPrepareOuroTerraformRequiresAuthoritativeOpenAICodexConfig(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -969,12 +963,12 @@ func TestPrepareOuroTerraformRequiresAuthoritativeCustomCodexConfig(t *testing.T
 
 	err = Prepare(p)
 	if err == nil {
-		t.Fatalf("expected missing custom Codex config to fail")
+		t.Fatalf("expected missing openai Codex config to fail")
 	}
 	for _, want := range []string{
 		"authoritative Codex config",
-		"[model_providers.custom]",
-		"[profiles.custom]",
+		"# source = nixos-wsl codex config",
+		"top-level model_provider",
 		"refusing to synthesize a base-only config.toml",
 	} {
 		if !strings.Contains(err.Error(), want) {

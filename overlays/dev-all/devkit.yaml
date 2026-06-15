@@ -149,6 +149,26 @@ readiness:
         fi
         printf '%s\n' "${SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS:-}" | grep -Eq '(^|,)ouroboros-ide(,|$)'
         printf '%s\n' "${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}" | grep -Fq 'ouroboros-ide=/workspaces/dev/ouroboros-ide'
+    - name: codex-provider-config
+      command: |
+        set -euo pipefail
+        config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+        test -r "$config" || {
+          echo "dev-all readiness: missing Codex config at $config" >&2
+          exit 1
+        }
+        grep -Fqx '# source = nixos-wsl codex config' "$config" || {
+          echo "dev-all readiness: Codex config is not Nix-authored: $config" >&2
+          exit 1
+        }
+        grep -Fqx 'model_provider = "openai"' "$config" || {
+          echo "dev-all readiness: Codex config must use model_provider = \"openai\": $config" >&2
+          exit 1
+        }
+        grep -Fqx '[profiles.openai]' "$config" || {
+          echo "dev-all readiness: Codex config missing [profiles.openai]: $config" >&2
+          exit 1
+        }
   repo_checks:
     - name: git-remote
       command: GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null
