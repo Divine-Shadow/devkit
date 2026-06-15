@@ -3,6 +3,7 @@ package launch
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -117,6 +118,8 @@ const (
 	codexOpenAIProfileTable        = "profiles.openai"
 	codexDevkitConfigSourceRelPath = ".devkit/nix-codex-config.toml"
 )
+
+var codexSystemConfigPath = "/etc/codex/config.toml"
 
 func ensureGitSSHConfig(p nativeplan.Plan) error {
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
@@ -956,63 +959,79 @@ func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan) error {
 }
 
 func authoritativeCodexConfig(configPath string, p nativeplan.Plan) (string, string, error) {
-	candidates := codexConfigSourceCandidates(p)
-	explicitSource := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE")) != ""
-	var invalid []string
-	for i, source := range candidates {
-		data, err := os.ReadFile(source)
-		if err == nil {
-			config := string(data)
-			if err := requireNixCodexConfig(config, source); err == nil {
-				return config, source, nil
-			} else if explicitSource && i == 0 {
-				return "", "", err
-			} else {
-				invalid = append(invalid, err.Error())
-				continue
-			}
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return "", "", fmt.Errorf("read authoritative Codex config %s: %w", source, err)
-		}
-	}
-	if data, err := os.ReadFile(configPath); err == nil {
-		config := string(data)
-		if err := requireNixCodexConfig(config, configPath); err != nil {
+	explicitSource := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
+	if explicitSource != "" {
+		config, err := readRequiredNixCodexConfig(explicitSource)
+		if err != nil {
 			return "", "", err
 		}
-		return config, configPath, nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return "", "", fmt.Errorf("read Codex config %s: %w", configPath, err)
+		return config, filepath.Clean(explicitSource), nil
 	}
-	if len(invalid) > 0 {
-		return "", "", fmt.Errorf("no valid authoritative Codex config found; invalid candidate(s): %s", strings.Join(invalid, "; "))
-	}
-	return "", "", fmt.Errorf("missing Nix-authored Codex config for governed launch; checked %s and %s; refusing to synthesize a base-only config.toml",
-		strings.Join(candidates, ", "), configPath)
-}
 
-func codexConfigSourceCandidates(p nativeplan.Plan) []string {
-	var candidates []string
-	add := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
-		path = filepath.Clean(path)
-		for _, existing := range candidates {
-			if existing == path {
-				return
+	cachePath := codexConfigCachePath(p)
+	checked := []string{codexSystemConfigPath}
+	if cachePath != "" {
+		checked = append(checked, cachePath)
+	}
+	if config, err := readRequiredNixCodexConfig(codexSystemConfigPath); err == nil {
+		if cachePath != "" {
+			if err := syncCodexConfigCache(cachePath, config); err != nil {
+				return "", "", err
 			}
 		}
-		candidates = append(candidates, path)
+		return config, codexSystemConfigPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
 	}
-	add(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
+
+	if cachePath != "" {
+		if config, err := readRequiredNixCodexConfig(cachePath); err == nil {
+			return config, cachePath, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", "", err
+		}
+	}
+	return "", "", fmt.Errorf("missing Nix-authored Codex config for governed launch; checked %s and %s; refusing to synthesize a base-only config.toml",
+		strings.Join(checked, ", "), configPath)
+}
+
+func readRequiredNixCodexConfig(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("read authoritative Codex config %s: %w", path, os.ErrNotExist)
+		}
+		return "", fmt.Errorf("read authoritative Codex config %s: %w", path, err)
+	}
+	config := string(data)
+	if err := requireNixCodexConfig(config, path); err != nil {
+		return "", err
+	}
+	return config, nil
+}
+
+func codexConfigCachePath(p nativeplan.Plan) string {
 	if hostDevRoot := hostDevRootForPlan(p); hostDevRoot != "" {
-		add(filepath.Join(hostDevRoot, codexDevkitConfigSourceRelPath))
+		return filepath.Join(hostDevRoot, codexDevkitConfigSourceRelPath)
 	}
-	add("/etc/codex/config.toml")
-	return candidates
+	return ""
+}
+
+func syncCodexConfigCache(cachePath, config string) error {
+	current, err := os.ReadFile(cachePath)
+	if err == nil && string(current) == config {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read Codex config cache %s: %w", cachePath, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return fmt.Errorf("mkdir Codex config cache dir %s: %w", filepath.Dir(cachePath), err)
+	}
+	if err := os.WriteFile(cachePath, []byte(config), 0o644); err != nil {
+		return fmt.Errorf("sync Codex config cache %s: %w", cachePath, err)
+	}
+	return nil
 }
 
 func requireNixCodexConfig(config, source string) error {

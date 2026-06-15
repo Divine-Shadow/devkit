@@ -14,6 +14,11 @@ import (
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
+func TestMain(m *testing.M) {
+	codexSystemConfigPath = filepath.Join(os.TempDir(), "devkit-launch-test-missing-codex-config.toml")
+	os.Exit(m.Run())
+}
+
 func devkitRootFromPackage(t *testing.T) string {
 	t.Helper()
 	root := filepath.Join("..", "..", "..", "..", "..")
@@ -988,7 +993,11 @@ func TestPrepareOuroTerraformRestoresCodexConfigFromNixSource(t *testing.T) {
 		}
 	}
 	sourceConfig := testAuthoritativeCodexConfig(`personality = "nix-source"`)
-	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), sourceConfig)
+	systemConfigPath := filepath.Join(tmp, "etc", "codex", "config.toml")
+	writeTestFile(t, systemConfigPath, sourceConfig)
+	setCodexSystemConfigForTest(t, systemConfigPath)
+	cachePath := filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath))
+	writeTestFile(t, cachePath, testAuthoritativeCodexConfig(`personality = "stale-cache"`))
 
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:   devkitpaths.Paths{Root: devkitRoot},
@@ -1012,6 +1021,9 @@ func TestPrepareOuroTerraformRestoresCodexConfigFromNixSource(t *testing.T) {
 	if strings.Contains(got, `model = "base-only"`) {
 		t.Fatalf("base-only config survived Nix-source restore:\n%s", got)
 	}
+	if gotCache := readTestFile(t, cachePath); gotCache != sourceConfig {
+		t.Fatalf("cache was not refreshed from system config:\n%s", gotCache)
+	}
 }
 
 func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.T) {
@@ -1024,13 +1036,16 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "devkit-management", "SKILL.md"), "# devkit management\n")
 	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "autonomy-contract", "SKILL.md"), "# autonomy contract\n")
 	writeTestFile(t, filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "governed-search", "SKILL.md"), "# governed search\n")
-	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "dev-workspace"`, strings.Join([]string{
+	systemConfigPath := filepath.Join(tmp, "etc", "codex", "config.toml")
+	writeTestFile(t, systemConfigPath, testAuthoritativeCodexConfig(`personality = "dev-workspace"`, strings.Join([]string{
 		codexGovernanceManagedBegin,
 		`[mcp_servers.governance]`,
 		`command = "bash"`,
 		codexGovernanceManagedEnd,
 		``,
 	}, "\n")))
+	setCodexSystemConfigForTest(t, systemConfigPath)
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "stale-dev-workspace-cache"`))
 
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:   devkitpaths.Paths{Root: devkitRoot},
@@ -1282,6 +1297,15 @@ func readTestFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func setCodexSystemConfigForTest(t *testing.T, path string) {
+	t.Helper()
+	previous := codexSystemConfigPath
+	codexSystemConfigPath = path
+	t.Cleanup(func() {
+		codexSystemConfigPath = previous
+	})
 }
 
 func countFiles(t *testing.T, root string) int {
