@@ -47,7 +47,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "9fb2b25089e79d57d6b68dc7cec9ca9951ecba2c";`,
+		`governanceJarVersion = "802792ac9bb9612b7b0671567d42ef491342f741";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,

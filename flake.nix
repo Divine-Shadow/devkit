@@ -57,7 +57,7 @@
       };
       codexVersion = "0.139.0";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "fe0ff60de02b8b63154ae9af4032b9bc0bcc76b7";
+      governanceJarVersion = "802792ac9bb9612b7b0671567d42ef491342f741";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
       mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
     in
