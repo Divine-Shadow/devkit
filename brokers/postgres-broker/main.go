@@ -822,7 +822,7 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		"networkMode":  payload.HostConfig.NetworkMode,
 	}).Debug("inspected container create payload")
 
-	if payload.HostConfig.Privileged {
+	if payload.HostConfig.Privileged && !allowPrivilegedContainerCreate(payload.Image) {
 		log.Warn("blocked container create: privileged requested")
 		return errForbidden
 	}
@@ -890,6 +890,11 @@ func validatePortBindings(bindings map[string][]portBinding, allowedPorts []stri
 		}
 	}
 	return nil
+}
+
+func allowPrivilegedContainerCreate(image string) bool {
+	name, _ := splitImageRef(image)
+	return normalizeImageFamily(name) == "testcontainers/ryuk"
 }
 
 func (rc *requestContext) authorizeContainerAction(cleanPath string) error {

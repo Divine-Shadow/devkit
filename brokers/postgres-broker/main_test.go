@@ -77,6 +77,32 @@ func TestAuthorizeContainerCreate_AllowsRyukPort(t *testing.T) {
 	}
 }
 
+func TestAuthorizeContainerCreate_AllowsRyukPrivilegedMode(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true)}
+	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"Privileged":true,"PortBindings":{"8080/tcp":[{"HostPort":""}]}}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksPrivilegedModeForOtherImages(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
+	body := []byte(`{"Image":"postgres:latest","HostConfig":{"Privileged":true}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for privileged non-Ryuk container")
+	}
+}
+
 func TestAuthorizeContainerCreate_BlocksRyukHostPortMismatch(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true)}
 	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"PortBindings":{"8080/tcp":[{"HostPort":"18080"}]}}}`)
