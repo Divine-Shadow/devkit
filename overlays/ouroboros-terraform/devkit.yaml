@@ -89,6 +89,7 @@ broker:
   upstream: unix:///var/run/docker.sock
   allowed_images:
     - postgres:latest
+    - testcontainers/ryuk:0.7.0
   allow_pulls: true
   log_level: info
 env:

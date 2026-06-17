@@ -64,6 +64,32 @@ func TestAuthorizeContainerCreate_AllowsMinioPorts(t *testing.T) {
 	}
 }
 
+func TestAuthorizeContainerCreate_AllowsRyukPort(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true)}
+	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"PortBindings":{"8080/tcp":[{"HostPort":""}]}}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksRyukHostPortMismatch(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true)}
+	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"PortBindings":{"8080/tcp":[{"HostPort":"18080"}]}}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block when host port is forced")
+	}
+}
+
 func TestAuthorizeContainerCreate_BlocksMinioHostPortOverride(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"minio/minio:latest"}, true)}
 	body := []byte(`{"Image":"minio/minio:latest","HostConfig":{"PortBindings":{"9000/tcp":[{"HostPort":"1234"}],"9001/tcp":[{"HostPort":""}]}}}`)
@@ -82,6 +108,17 @@ func TestAuthorizeImageCreate_AllowsWhitelistedPull(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "http://unix/images/create", nil)
 	req.URL = &url.URL{RawQuery: "fromImage=postgres&tag=latest"}
+
+	if err := rc.authorizeImageCreate(req); err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+}
+
+func TestAuthorizeImageCreate_AllowsRyukPull(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true)}
+
+	req, _ := http.NewRequest(http.MethodPost, "http://unix/images/create", nil)
+	req.URL = &url.URL{RawQuery: "fromImage=testcontainers/ryuk&tag=0.7.0"}
 
 	if err := rc.authorizeImageCreate(req); err != nil {
 		t.Fatalf("expected allow, got %v", err)

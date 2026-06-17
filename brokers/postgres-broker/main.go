@@ -210,6 +210,8 @@ func defaultAllowedPorts(name string) []string {
 	switch family {
 	case "minio/minio":
 		return []string{"9000/tcp", "9001/tcp"}
+	case "testcontainers/ryuk":
+		return []string{"8080/tcp"}
 	case "postgres":
 		fallthrough
 	default:
