@@ -90,6 +90,22 @@ func TestAuthorizeContainerCreate_AllowsRyukPrivilegedMode(t *testing.T) {
 	}
 }
 
+func TestAuthorizeContainerCreate_AllowsRyukBrokerSocketBind(t *testing.T) {
+	rc := &requestContext{
+		policy:     mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true),
+		brokerSock: "/workspaces/dev/.devkit/native-broker/broker.sock",
+	}
+	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"Privileged":true,"Binds":["/workspaces/dev/.devkit/native-broker/broker.sock:/var/run/docker.sock:rw"],"PortBindings":{"8080/tcp":[{"HostPort":""}]}}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+}
+
 func TestAuthorizeContainerCreate_BlocksPrivilegedModeForOtherImages(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
 	body := []byte(`{"Image":"postgres:latest","HostConfig":{"Privileged":true}}`)
@@ -100,6 +116,54 @@ func TestAuthorizeContainerCreate_BlocksPrivilegedModeForOtherImages(t *testing.
 
 	if err := rc.authorizeContainerCreate(req); err == nil {
 		t.Fatal("expected block for privileged non-Ryuk container")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksRawDockerSocketBindForRyuk(t *testing.T) {
+	rc := &requestContext{
+		policy:     mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true),
+		brokerSock: "/workspaces/dev/.devkit/native-broker/broker.sock",
+	}
+	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"Privileged":true,"Binds":["/var/run/docker.sock:/var/run/docker.sock:rw"],"PortBindings":{"8080/tcp":[{"HostPort":""}]}}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for raw Docker socket bind")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksExtraRyukBind(t *testing.T) {
+	rc := &requestContext{
+		policy:     mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true),
+		brokerSock: "/workspaces/dev/.devkit/native-broker/broker.sock",
+	}
+	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"Privileged":true,"Binds":["/workspaces/dev/.devkit/native-broker/broker.sock:/var/run/docker.sock:rw","/tmp:/tmp:rw"],"PortBindings":{"8080/tcp":[{"HostPort":""}]}}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for extra Ryuk bind")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksBrokerSocketBindForOtherImages(t *testing.T) {
+	rc := &requestContext{
+		policy:     mustPolicy(t, []string{"postgres:latest"}, true),
+		brokerSock: "/workspaces/dev/.devkit/native-broker/broker.sock",
+	}
+	body := []byte(`{"Image":"postgres:latest","HostConfig":{"Binds":["/workspaces/dev/.devkit/native-broker/broker.sock:/var/run/docker.sock:rw"]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for non-Ryuk broker socket bind")
 	}
 }
 

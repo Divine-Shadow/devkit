@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -88,6 +89,7 @@ type requestContext struct {
 	target     *url.URL
 	containers *containerRegistry
 	attachNets []string
+	brokerSock string
 }
 
 type policy struct {
@@ -504,6 +506,7 @@ func main() {
 		target:     targetURL,
 		containers: newContainerRegistry(),
 		attachNets: cfg.AttachNetworks,
+		brokerSock: listenAddr,
 	}
 
 	log.WithField("allowed_images", policy.allowedImages()).Info("policy initialised")
@@ -832,7 +835,12 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return errForbidden
 	}
 
-	if len(payload.HostConfig.Binds) > 0 || len(payload.HostConfig.CapAdd) > 0 || payload.HostConfig.PublishAllPorts {
+	if len(payload.HostConfig.Binds) > 0 && !allowRyukBrokerSocketBind(payload.Image, payload.HostConfig.Binds, rc.brokerSock) {
+		log.WithField("binds", payload.HostConfig.Binds).Warn("blocked container create: binds detected")
+		return errForbidden
+	}
+
+	if len(payload.HostConfig.CapAdd) > 0 || payload.HostConfig.PublishAllPorts {
 		log.Warn("blocked container create: binds/caps/publish detected")
 		return errForbidden
 	}
@@ -895,6 +903,41 @@ func validatePortBindings(bindings map[string][]portBinding, allowedPorts []stri
 func allowPrivilegedContainerCreate(image string) bool {
 	name, _ := splitImageRef(image)
 	return normalizeImageFamily(name) == "testcontainers/ryuk"
+}
+
+func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string) bool {
+	if !allowPrivilegedContainerCreate(image) || len(binds) != 1 {
+		return false
+	}
+	source, target, ok := splitBindMount(binds[0])
+	if !ok || target != "/var/run/docker.sock" {
+		return false
+	}
+	return samePath(source, brokerSocket)
+}
+
+func splitBindMount(bind string) (source, target string, ok bool) {
+	parts := strings.Split(bind, ":")
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	source = strings.TrimSpace(parts[0])
+	target = strings.TrimSpace(parts[1])
+	if source == "" || target == "" {
+		return "", "", false
+	}
+	return source, target, true
+}
+
+func samePath(a, b string) bool {
+	cleanA := filepath.Clean(a)
+	cleanB := filepath.Clean(b)
+	if cleanA == cleanB {
+		return true
+	}
+	resolvedA, errA := filepath.EvalSymlinks(cleanA)
+	resolvedB, errB := filepath.EvalSymlinks(cleanB)
+	return errA == nil && errB == nil && resolvedA == resolvedB
 }
 
 func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
