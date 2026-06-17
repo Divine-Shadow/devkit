@@ -171,6 +171,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"TMPDIR":                       "/tmp",
 		"NO_PROXY":                     "localhost,127.0.0.1",
 		"DOCKER_HOST":                  "unix://" + broker,
+		"DOCKER_API_VERSION":           "1.40",
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
 		"DEVKIT_NATIVE_AGENT":          fmt.Sprintf("%d", index),
 		"AWS_CONFIG_FILE":              filepath.Join(paths.SandboxHome, ".aws", "config"),

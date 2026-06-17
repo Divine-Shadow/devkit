@@ -59,7 +59,7 @@ func TestBuildAnchorScripts(t *testing.T) {
 		"dev_home_ok=0; if mkdir -p /home/dev 2>/dev/null; then dev_home_ok=1; elif [ -d /home/dev ]; then dev_home_ok=1; fi",
 		"ln -sfn \"$target\" \"/workspace/.devhome\"",
 		"mkdir -p \"$target/.sbt\"",
-		"if [ \"$dev_home_ok\" = 1 ] && [ -n \"${DOCKER_HOST:-}\" ]; then printf \"docker.host=%s\\n\" \"$DOCKER_HOST\" > \"$target/.testcontainers.properties\"; ln -sfn \"$target/.testcontainers.properties\" /home/dev/.testcontainers.properties; fi",
+		"if [ \"$dev_home_ok\" = 1 ] && [ -n \"${DOCKER_HOST:-}\" ]; then docker_api_version=\"${DOCKER_API_VERSION:-1.40}\"; printf \"docker.host=%s\\n\" \"$DOCKER_HOST\" > \"$target/.testcontainers.properties\"; printf \"DOCKER_HOST=%s\\napi.version=%s\\n\" \"$DOCKER_HOST\" \"$docker_api_version\" > \"$target/.docker-java.properties\"; ln -sfn \"$target/.testcontainers.properties\" /home/dev/.testcontainers.properties; ln -sfn \"$target/.docker-java.properties\" /home/dev/.docker-java.properties; fi",
 		"ln -sfn \"$target/.sbt\" /home/dev/.sbt",
 		"if [ -r /var/host-home/.p10k.zsh ]; then cp -f /var/host-home/.p10k.zsh \"$target/.p10k.zsh\"; sed -i 's/^\\([[:space:]]*typeset -g POWERLEVEL9K_INSTANT_PROMPT=\\).*/\\1off/' \"$target/.p10k.zsh\"; fi",
 		"POWERLEVEL9K_INSTANT_PROMPT=off",
@@ -167,6 +167,8 @@ func TestBuildDirectHomeScripts(t *testing.T) {
 		`Codex config missing [profiles.openai]`,
 		`devkit_codex_tui_log_guard`,
 		`command codex "$@"`,
+		`api.version=%s\n`,
+		`/home/dev/.docker-java.properties`,
 	} {
 		if !contains(sc, frag) {
 			t.Fatalf("direct home script missing %q: %s", frag, sc)
