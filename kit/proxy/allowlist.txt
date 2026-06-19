@@ -117,3 +117,7 @@ kms.us-east-2.amazonaws.com
 api.ecr.us-east-2.amazonaws.com
 ecr.us-east-2.amazonaws.com
 developers.openai.com
+box.com
+account.box.com
+app.box.com
+api.box.com
