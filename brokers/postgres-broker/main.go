@@ -29,13 +29,14 @@ var (
 )
 
 type brokerConfig struct {
-	ListenAddr      string
-	UpstreamAddr    string
-	AllowedImages   []string
-	AllowedEnv      []string
-	AllowImagePulls bool
-	LogLevel        string
-	AttachNetworks  []string
+	ListenAddr        string
+	UpstreamAddr      string
+	AllowedImages     []string
+	AllowedEnv        []string
+	AllowImagePulls   bool
+	LogLevel          string
+	AttachNetworks    []string
+	SocketBindAliases []string
 }
 
 type containerRegistry struct {
@@ -84,12 +85,13 @@ func (c *containerRegistry) match(identifier string) (containerRecord, bool) {
 }
 
 type requestContext struct {
-	policy     *policy
-	client     *http.Client
-	target     *url.URL
-	containers *containerRegistry
-	attachNets []string
-	brokerSock string
+	policy            *policy
+	client            *http.Client
+	target            *url.URL
+	containers        *containerRegistry
+	attachNets        []string
+	brokerSock        string
+	brokerSockAliases []string
 }
 
 type policy struct {
@@ -395,6 +397,7 @@ func loadConfig() brokerConfig {
 	if env := os.Getenv("BROKER_ALLOWED_ENV"); env != "" {
 		cfg.AllowedEnv = strings.Split(env, ",")
 	}
+	cfg.SocketBindAliases = uniqueStrings(splitAndTrim(os.Getenv("BROKER_SOCKET_BIND_ALIASES")))
 	if nets := os.Getenv("BROKER_ATTACH_NETWORKS"); nets != "" {
 		for _, part := range strings.Split(nets, ",") {
 			if trimmed := strings.TrimSpace(part); trimmed != "" {
@@ -501,12 +504,13 @@ func main() {
 	}
 
 	rc := &requestContext{
-		policy:     policy,
-		client:     client,
-		target:     targetURL,
-		containers: newContainerRegistry(),
-		attachNets: cfg.AttachNetworks,
-		brokerSock: listenAddr,
+		policy:            policy,
+		client:            client,
+		target:            targetURL,
+		containers:        newContainerRegistry(),
+		attachNets:        cfg.AttachNetworks,
+		brokerSock:        listenAddr,
+		brokerSockAliases: cfg.SocketBindAliases,
 	}
 
 	log.WithField("allowed_images", policy.allowedImages()).Info("policy initialised")
@@ -835,7 +839,7 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return errForbidden
 	}
 
-	if len(payload.HostConfig.Binds) > 0 && !allowRyukBrokerSocketBind(payload.Image, payload.HostConfig.Binds, rc.brokerSock) {
+	if len(payload.HostConfig.Binds) > 0 && !allowRyukBrokerSocketBind(payload.Image, payload.HostConfig.Binds, rc.brokerSock, rc.brokerSockAliases) {
 		log.WithField("binds", payload.HostConfig.Binds).Warn("blocked container create: binds detected")
 		return errForbidden
 	}
@@ -905,7 +909,7 @@ func allowPrivilegedContainerCreate(image string) bool {
 	return normalizeImageFamily(name) == "testcontainers/ryuk"
 }
 
-func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string) bool {
+func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string, brokerSocketAliases []string) bool {
 	if !allowPrivilegedContainerCreate(image) || len(binds) != 1 {
 		return false
 	}
@@ -913,7 +917,15 @@ func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string
 	if !ok || target != "/var/run/docker.sock" {
 		return false
 	}
-	return samePath(source, brokerSocket)
+	if samePath(source, brokerSocket) {
+		return true
+	}
+	for _, alias := range brokerSocketAliases {
+		if samePath(source, alias) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitBindMount(bind string) (source, target string, ok bool) {

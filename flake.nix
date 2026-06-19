@@ -309,7 +309,11 @@
                 export GIT_SSL_CAINFO=$SSL_CERT_FILE
                 export TESTCONTAINERS_RYUK_DISABLED=true
                 export DOCKER_HOST=''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}
-                export DOCKER_API_VERSION=''${DOCKER_API_VERSION:-1.40}
+                export DOCKER_API_VERSION=''${DOCKER_API_VERSION:-1.52}
+                case " ''${JAVA_TOOL_OPTIONS:-} " in
+                  *" -Ddocker.api.version="*) ;;
+                  *) export JAVA_TOOL_OPTIONS="''${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Dapi.version=$DOCKER_API_VERSION -Ddocker.api.version=$DOCKER_API_VERSION" ;;
+                esac
                 export PLAYWRIGHT_BROWSERS_PATH=${pkgsPlaywright.playwright-driver.browsers}
                 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=''${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}
                 if [ -n "''${HTTP_PROXY:-}" ] && [ -z "''${HTTPS_PROXY:-}" ]; then

@@ -131,6 +131,13 @@ func Build(opts BuildOptions) (Plan, error) {
 	if broker == "" {
 		broker = "/run/devkit/test-container-broker.sock"
 	}
+	dockerHost := "unix://" + broker
+	dockerAPIVersion := "1.52"
+	javaToolOptions := strings.Join([]string{
+		"-Dapi.version=" + dockerAPIVersion,
+		"-Ddocker.api.version=" + dockerAPIVersion,
+		"-Ddocker.host=" + dockerHost,
+	}, " ")
 	proxyURL := strings.TrimSpace(opts.Proxy)
 	proxySocket := strings.TrimSpace(opts.ProxySocket)
 	if proxySocket != "" && proxyURL == "" {
@@ -170,8 +177,9 @@ func Build(opts BuildOptions) (Plan, error) {
 		"OURO_NIX_SANDBOX":             "1",
 		"TMPDIR":                       "/tmp",
 		"NO_PROXY":                     "localhost,127.0.0.1",
-		"DOCKER_HOST":                  "unix://" + broker,
-		"DOCKER_API_VERSION":           "1.40",
+		"DOCKER_HOST":                  dockerHost,
+		"DOCKER_API_VERSION":           dockerAPIVersion,
+		"JAVA_TOOL_OPTIONS":            javaToolOptions,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
 		"DEVKIT_NATIVE_AGENT":          fmt.Sprintf("%d", index),
 		"AWS_CONFIG_FILE":              filepath.Join(paths.SandboxHome, ".aws", "config"),

@@ -21,28 +21,30 @@ const (
 )
 
 type Config struct {
-	DevkitRoot    string
-	StateRoot     string
-	Socket        string
-	Upstream      string
-	AllowedImages []string
-	AllowPulls    bool
-	LogLevel      string
-	Binary        string
-	Nix           string
-	StartTimeout  time.Duration
+	DevkitRoot        string
+	StateRoot         string
+	Socket            string
+	Upstream          string
+	AllowedImages     []string
+	SocketBindAliases []string
+	AllowPulls        bool
+	LogLevel          string
+	Binary            string
+	Nix               string
+	StartTimeout      time.Duration
 }
 
 type State struct {
-	PID           int       `json:"pid"`
-	Socket        string    `json:"socket"`
-	Upstream      string    `json:"upstream"`
-	AllowedImages []string  `json:"allowed_images"`
-	AllowPulls    bool      `json:"allow_pulls"`
-	LogLevel      string    `json:"log_level"`
-	Binary        string    `json:"binary"`
-	LogPath       string    `json:"log_path"`
-	StartedAt     time.Time `json:"started_at"`
+	PID               int       `json:"pid"`
+	Socket            string    `json:"socket"`
+	Upstream          string    `json:"upstream"`
+	AllowedImages     []string  `json:"allowed_images"`
+	SocketBindAliases []string  `json:"socket_bind_aliases,omitempty"`
+	AllowPulls        bool      `json:"allow_pulls"`
+	LogLevel          string    `json:"log_level"`
+	Binary            string    `json:"binary"`
+	LogPath           string    `json:"log_path"`
+	StartedAt         time.Time `json:"started_at"`
 }
 
 type Status struct {
@@ -86,6 +88,7 @@ func Normalize(c Config) Config {
 	if len(c.AllowedImages) == 0 {
 		c.AllowedImages = []string{"postgres:latest"}
 	}
+	c.SocketBindAliases = normalizeSocketBindAliases(c)
 	if strings.TrimSpace(c.LogLevel) == "" {
 		c.LogLevel = "info"
 	}
@@ -96,6 +99,45 @@ func Normalize(c Config) Config {
 		c.StartTimeout = 5 * time.Second
 	}
 	return c
+}
+
+func normalizeSocketBindAliases(c Config) []string {
+	aliases := append([]string{}, c.SocketBindAliases...)
+	if alias := sandboxSocketAlias(c.DevkitRoot, c.Socket); alias != "" {
+		aliases = append(aliases, alias)
+	}
+	return uniqueCleanPaths(aliases)
+}
+
+func sandboxSocketAlias(devkitRoot, socket string) string {
+	devkitRoot = filepath.Clean(strings.TrimSpace(devkitRoot))
+	socket = filepath.Clean(strings.TrimSpace(socket))
+	if devkitRoot == "" || devkitRoot == "." || socket == "" || socket == "." {
+		return ""
+	}
+	devRoot := filepath.Dir(devkitRoot)
+	rel, err := filepath.Rel(devRoot, socket)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Join("/workspaces/dev", rel))
+}
+
+func uniqueCleanPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		cleaned := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+		if cleaned == "" || cleaned == "." {
+			continue
+		}
+		if _, ok := seen[cleaned]; ok {
+			continue
+		}
+		seen[cleaned] = struct{}{}
+		out = append(out, cleaned)
+	}
+	return out
 }
 
 func PIDFile(c Config) string {
@@ -123,6 +165,9 @@ func Env(c Config) []string {
 		"BROKER_ALLOW_PULLS="+strconv.FormatBool(c.AllowPulls),
 		"BROKER_LOG_LEVEL="+c.LogLevel,
 	)
+	if len(c.SocketBindAliases) > 0 {
+		env = append(env, "BROKER_SOCKET_BIND_ALIASES="+strings.Join(c.SocketBindAliases, ","))
+	}
 	return env
 }
 
@@ -260,15 +305,16 @@ func Start(ctx context.Context, c Config, dryRun bool) (Status, error) {
 	}
 
 	state := State{
-		PID:           cmd.Process.Pid,
-		Socket:        c.Socket,
-		Upstream:      c.Upstream,
-		AllowedImages: append([]string{}, c.AllowedImages...),
-		AllowPulls:    c.AllowPulls,
-		LogLevel:      c.LogLevel,
-		Binary:        binary,
-		LogPath:       LogPath(c),
-		StartedAt:     time.Now(),
+		PID:               cmd.Process.Pid,
+		Socket:            c.Socket,
+		Upstream:          c.Upstream,
+		AllowedImages:     append([]string{}, c.AllowedImages...),
+		SocketBindAliases: append([]string{}, c.SocketBindAliases...),
+		AllowPulls:        c.AllowPulls,
+		LogLevel:          c.LogLevel,
+		Binary:            binary,
+		LogPath:           LogPath(c),
+		StartedAt:         time.Now(),
 	}
 	if err := writeState(c, state); err != nil {
 		_ = cmd.Process.Signal(syscall.SIGTERM)

@@ -78,8 +78,11 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Env["DOCKER_HOST"] != "unix:///run/devkit/test-container-broker.sock" {
 		t.Fatalf("DOCKER_HOST = %q", p.Env["DOCKER_HOST"])
 	}
-	if p.Env["DOCKER_API_VERSION"] != "1.40" {
+	if p.Env["DOCKER_API_VERSION"] != "1.52" {
 		t.Fatalf("DOCKER_API_VERSION = %q", p.Env["DOCKER_API_VERSION"])
+	}
+	if p.Env["JAVA_TOOL_OPTIONS"] != "-Dapi.version=1.52 -Ddocker.api.version=1.52 -Ddocker.host=unix:///run/devkit/test-container-broker.sock" {
+		t.Fatalf("JAVA_TOOL_OPTIONS = %q", p.Env["JAVA_TOOL_OPTIONS"])
 	}
 	if p.Env["HTTP_PROXY"] != "" || p.Env["HTTPS_PROXY"] != "" {
 		t.Fatalf("native plan should not default to retired proxy env: %#v", p.Env)

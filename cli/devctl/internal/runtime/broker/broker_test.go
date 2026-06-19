@@ -47,6 +47,31 @@ func TestEnvIncludesExactPolicy(t *testing.T) {
 	}
 }
 
+func TestEnvIncludesSandboxBrokerSocketAlias(t *testing.T) {
+	cfg := Config{
+		DevkitRoot: "/home/bayesartre/dev/devkit",
+		Socket:     "/home/bayesartre/dev/.devkit/native-broker/broker.sock",
+	}
+	env := strings.Join(Env(cfg), "\n")
+	want := "BROKER_SOCKET_BIND_ALIASES=/workspaces/dev/.devkit/native-broker/broker.sock"
+	if !strings.Contains(env, want) {
+		t.Fatalf("env missing %q in:\n%s", want, env)
+	}
+}
+
+func TestNormalizePreservesExplicitSocketBindAliases(t *testing.T) {
+	cfg := Normalize(Config{
+		DevkitRoot:        "/home/bayesartre/dev/devkit",
+		Socket:            "/home/bayesartre/dev/.devkit/native-broker/broker.sock",
+		SocketBindAliases: []string{"/custom/broker.sock", "/custom/broker.sock"},
+	})
+	got := strings.Join(cfg.SocketBindAliases, ",")
+	want := "/custom/broker.sock,/workspaces/dev/.devkit/native-broker/broker.sock"
+	if got != want {
+		t.Fatalf("socket bind aliases = %q, want %q", got, want)
+	}
+}
+
 func TestResolveBinaryUsesStateLocalNixCache(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", "/read-only-host-cache")
 	tmp := t.TempDir()
