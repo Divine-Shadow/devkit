@@ -615,6 +615,8 @@ type ouroGovernanceRuntimeIdentity struct {
 	JavaHome                  string
 }
 
+const ouroGovernanceRuntimeIdentityMarker = "__DEVKIT_GOVERNANCE_RUNTIME_IDENTITY__"
+
 func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
 	return strings.TrimSpace(identity.LatestJarPath) != "" &&
 		strings.TrimSpace(identity.ControlPlaneJar) != "" &&
@@ -645,7 +647,7 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		`set -euo pipefail`,
 		`runtime_env="$($1 --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false print-dev-env "$DEVKIT_GOVERNANCE_RUNTIME_FLAKE")"`,
 		`eval "$runtime_env"`,
-		`printf '%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${JAVA_HOME:-}"`,
+		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${JAVA_HOME:-}"`,
 	}, "; ")
 	cmd := exec.Command("bash", "-lc", script, "resolve-governance-runtime", nixBin)
 	cmd.Env = append(os.Environ(), "DEVKIT_GOVERNANCE_RUNTIME_FLAKE="+runtimeFlake)
@@ -653,17 +655,9 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 	if err != nil {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: %w: %s", runtimeFlake, err, strings.TrimSpace(string(out)))
 	}
-	parts := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
-	if len(parts) != 6 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 6 fields, got %d", runtimeFlake, len(parts))
-	}
-	identity := ouroGovernanceRuntimeIdentity{
-		LatestJarPath:             parts[0],
-		ControlPlaneJar:           parts[1],
-		ExpectedJarPath:           parts[2],
-		ExpectedJarSHA256:         parts[3],
-		SubagentExpectedJarSHA256: parts[4],
-		JavaHome:                  parts[5],
+	identity, err := parseOuroGovernanceRuntimeIdentityOutput(out, runtimeFlake)
+	if err != nil {
+		return ouroGovernanceRuntimeIdentity{}, err
 	}
 	if !identity.Complete() {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned jar or Java identity", runtimeFlake)
@@ -688,6 +682,28 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned jar is not in /nix/store: %s", runtimeFlake, identity.LatestJarPath)
 	}
 	return identity, nil
+}
+
+func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (ouroGovernanceRuntimeIdentity, error) {
+	marker := ouroGovernanceRuntimeIdentityMarker + "\x00"
+	text := string(out)
+	index := strings.LastIndex(text, marker)
+	if index < 0 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: missing identity marker", runtimeFlake)
+	}
+	payload := text[index+len(marker):]
+	parts := strings.Split(strings.TrimSuffix(payload, "\x00"), "\x00")
+	if len(parts) != 6 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 6 fields, got %d", runtimeFlake, len(parts))
+	}
+	return ouroGovernanceRuntimeIdentity{
+		LatestJarPath:             parts[0],
+		ControlPlaneJar:           parts[1],
+		ExpectedJarPath:           parts[2],
+		ExpectedJarSHA256:         parts[3],
+		SubagentExpectedJarSHA256: parts[4],
+		JavaHome:                  parts[5],
+	}, nil
 }
 
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string, runtimeIdentity ouroGovernanceRuntimeIdentity) string {

@@ -47,7 +47,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "802792ac9bb9612b7b0671567d42ef491342f741";`,
+		`governanceJarVersion = "f977eb3434220ac27e7a60e2152103a2199155ba";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
@@ -56,6 +56,33 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 		if !strings.Contains(flakeNix, want) {
 			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
 		}
+	}
+}
+
+func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T) {
+	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-dev/share/subagent-governance/subagent-governance.jar"
+	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
+	out := "building '/nix/store/example.drv'...\n" +
+		ouroGovernanceRuntimeIdentityMarker + "\x00" +
+		jarPath + "\x00" +
+		jarPath + "\x00" +
+		jarPath + "\x00" +
+		"deadbeef\x00" +
+		"deadbeef\x00" +
+		javaHome + "\x00"
+
+	identity, err := parseOuroGovernanceRuntimeIdentityOutput([]byte(out), "/workspaces/dev/devkit#dev-all")
+	if err != nil {
+		t.Fatalf("parse runtime identity: %v", err)
+	}
+	if identity.LatestJarPath != jarPath || identity.ControlPlaneJar != jarPath || identity.ExpectedJarPath != jarPath {
+		t.Fatalf("jar identity parsed incorrectly: %#v", identity)
+	}
+	if identity.ExpectedJarSHA256 != "deadbeef" || identity.SubagentExpectedJarSHA256 != "deadbeef" {
+		t.Fatalf("sha identity parsed incorrectly: %#v", identity)
+	}
+	if identity.JavaHome != javaHome {
+		t.Fatalf("java home parsed incorrectly: %#v", identity)
 	}
 }
 
