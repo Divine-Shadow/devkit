@@ -612,6 +612,10 @@ type ouroGovernanceRuntimeIdentity struct {
 	ExpectedJarPath           string
 	ExpectedJarSHA256         string
 	SubagentExpectedJarSHA256 string
+	SubmitToCiJarPath         string
+	SubmitToCiHashPath        string
+	SubmitToCiExpectedJarPath string
+	SubmitToCiExpectedSHA256  string
 	JavaHome                  string
 }
 
@@ -623,6 +627,10 @@ func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
 		strings.TrimSpace(identity.ExpectedJarPath) != "" &&
 		strings.TrimSpace(identity.ExpectedJarSHA256) != "" &&
 		strings.TrimSpace(identity.SubagentExpectedJarSHA256) != "" &&
+		strings.TrimSpace(identity.SubmitToCiJarPath) != "" &&
+		strings.TrimSpace(identity.SubmitToCiHashPath) != "" &&
+		strings.TrimSpace(identity.SubmitToCiExpectedJarPath) != "" &&
+		strings.TrimSpace(identity.SubmitToCiExpectedSHA256) != "" &&
 		strings.TrimSpace(identity.JavaHome) != ""
 }
 
@@ -647,7 +655,7 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		`set -euo pipefail`,
 		`runtime_env="$($1 --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false print-dev-env "$DEVKIT_GOVERNANCE_RUNTIME_FLAKE")"`,
 		`eval "$runtime_env"`,
-		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${JAVA_HOME:-}"`,
+		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBMIT_TO_CI_JAR:-}" "${SUBMIT_TO_CI_HASH_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256:-}" "${JAVA_HOME:-}"`,
 	}, "; ")
 	cmd := exec.Command("bash", "-lc", script, "resolve-governance-runtime", nixBin)
 	cmd.Env = append(os.Environ(), "DEVKIT_GOVERNANCE_RUNTIME_FLAKE="+runtimeFlake)
@@ -660,12 +668,14 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
 	if !identity.Complete() {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned jar or Java identity", runtimeFlake)
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci jar or Java identity", runtimeFlake)
 	}
 	for label, path := range map[string]string{
 		"latest governance jar":        identity.LatestJarPath,
 		"control-plane governance jar": identity.ControlPlaneJar,
 		"expected governance jar":      identity.ExpectedJarPath,
+		"submit-to-ci jar":             identity.SubmitToCiJarPath,
+		"submit-to-ci jar hash":        identity.SubmitToCiHashPath,
 		"JAVA_HOME":                    identity.JavaHome,
 	} {
 		if !pathExists(path) {
@@ -681,6 +691,30 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 	if !strings.HasPrefix(identity.LatestJarPath, "/nix/store/") {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned jar is not in /nix/store: %s", runtimeFlake, identity.LatestJarPath)
 	}
+	if identity.SubmitToCiJarPath != identity.SubmitToCiExpectedJarPath {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned submit-to-ci jar path mismatch", runtimeFlake)
+	}
+	if identity.SubmitToCiHashPath != identity.SubmitToCiJarPath+".sha256" {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci hash path mismatch", runtimeFlake)
+	}
+	if !strings.HasPrefix(identity.SubmitToCiJarPath, "/nix/store/") || !strings.HasSuffix(identity.SubmitToCiJarPath, "/share/submit-to-ci/submit-to-ci.jar") {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned submit-to-ci jar is not a Nix-store submit jar: %s", runtimeFlake, identity.SubmitToCiJarPath)
+	}
+	submitJarData, err := os.ReadFile(identity.SubmitToCiJarPath)
+	if err != nil {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read submit-to-ci jar %s: %w", runtimeFlake, identity.SubmitToCiJarPath, err)
+	}
+	submitJarSHA := fmt.Sprintf("%x", sha256.Sum256(submitJarData))
+	if !strings.EqualFold(submitJarSHA, identity.SubmitToCiExpectedSHA256) {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci jar sha mismatch", runtimeFlake)
+	}
+	submitHashData, err := os.ReadFile(identity.SubmitToCiHashPath)
+	if err != nil {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read submit-to-ci hash %s: %w", runtimeFlake, identity.SubmitToCiHashPath, err)
+	}
+	if strings.TrimSpace(string(submitHashData)) != identity.SubmitToCiExpectedSHA256 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci hash file mismatch", runtimeFlake)
+	}
 	return identity, nil
 }
 
@@ -693,8 +727,8 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 	}
 	payload := text[index+len(marker):]
 	parts := strings.Split(strings.TrimSuffix(payload, "\x00"), "\x00")
-	if len(parts) != 6 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 6 fields, got %d", runtimeFlake, len(parts))
+	if len(parts) != 10 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 10 fields, got %d", runtimeFlake, len(parts))
 	}
 	return ouroGovernanceRuntimeIdentity{
 		LatestJarPath:             parts[0],
@@ -702,7 +736,11 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 		ExpectedJarPath:           parts[2],
 		ExpectedJarSHA256:         parts[3],
 		SubagentExpectedJarSHA256: parts[4],
-		JavaHome:                  parts[5],
+		SubmitToCiJarPath:         parts[5],
+		SubmitToCiHashPath:        parts[6],
+		SubmitToCiExpectedJarPath: parts[7],
+		SubmitToCiExpectedSHA256:  parts[8],
+		JavaHome:                  parts[9],
 	}, nil
 }
 
@@ -733,6 +771,14 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 			"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH="+shellQuote(runtimeIdentity.ExpectedJarPath),
 			"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256="+shellQuote(runtimeIdentity.ExpectedJarSHA256),
 			"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256="+shellQuote(runtimeIdentity.SubagentExpectedJarSHA256),
+			"export SUBMIT_TO_CI_JAR="+shellQuote(runtimeIdentity.SubmitToCiJarPath),
+			"export SUBMIT_TO_CI_HASH_PATH="+shellQuote(runtimeIdentity.SubmitToCiHashPath),
+			"export SUBMIT_TO_CI_BUILD_POLICY='reuse'",
+			"export SUBMIT_TO_CI_EXTERNAL_JAR=1",
+			"export SUBMIT_TO_CI_FLAKE_ARTIFACT=0",
+			"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
+			"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH="+shellQuote(runtimeIdentity.SubmitToCiExpectedJarPath),
+			"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256="+shellQuote(runtimeIdentity.SubmitToCiExpectedSHA256),
 			"export JAVA_HOME="+shellQuote(runtimeIdentity.JavaHome),
 		)
 	}
@@ -779,15 +825,45 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  [ \"$jar_sha\" = \"${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}\" ] || return 1",
 		"  [ \"$jar_sha\" = \"${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}\" ] || return 1",
 		"}",
+		"devkit_governance_have_expected_submit_to_ci_jar() {",
+		"  [ -n \"${SUBMIT_TO_CI_JAR:-}\" ] || return 1",
+		"  [ -n \"${SUBMIT_TO_CI_HASH_PATH:-}\" ] || return 1",
+		"  [ -n \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH:-}\" ] || return 1",
+		"  [ -n \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256:-}\" ] || return 1",
+		"  [ \"${SUBMIT_TO_CI_BUILD_POLICY:-}\" = \"reuse\" ] || return 1",
+		"  [ \"${SUBMIT_TO_CI_EXTERNAL_JAR:-}\" = \"1\" ] || return 1",
+		"  [ \"${SUBMIT_TO_CI_FLAKE_ARTIFACT:-}\" = \"0\" ] || return 1",
+		"  [ \"${SUBMIT_TO_CI_PINNED_ARTIFACT:-}\" = \"0\" ] || return 1",
+		"  local jar_path=\"${SUBMIT_TO_CI_JAR}\"",
+		"  [ \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH}\" = \"$jar_path\" ] || return 1",
+		"  [ \"${SUBMIT_TO_CI_HASH_PATH}\" = \"${jar_path}.sha256\" ] || return 1",
+		"  case \"$jar_path\" in",
+		"    /nix/store/*/share/submit-to-ci/submit-to-ci.jar) ;;",
+		"    *) return 1 ;;",
+		"  esac",
+		"  [ -f \"$jar_path\" ] || return 1",
+		"  [ -f \"$SUBMIT_TO_CI_HASH_PATH\" ] || return 1",
+		"  local jar_sha",
+		"  if command -v sha256sum >/dev/null 2>&1; then",
+		"    jar_sha=\"$(sha256sum \"$jar_path\" | awk '{print $1}')\"",
+		"  elif command -v shasum >/dev/null 2>&1; then",
+		"    jar_sha=\"$(shasum -a 256 \"$jar_path\" | awk '{print $1}')\"",
+		"  else",
+		"    return 1",
+		"  fi",
+		"  [ \"$jar_sha\" = \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}\" ] || return 1",
+		"  [ \"$(tr -d '[:space:]' < \"$SUBMIT_TO_CI_HASH_PATH\")\" = \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}\" ] || return 1",
+		"}",
 		"devkit_governance_require_runtime_jar() {",
-		"  if devkit_governance_have_expected_jar; then",
+		"  if devkit_governance_have_expected_jar && devkit_governance_have_expected_submit_to_ci_jar; then",
 		"    return 0",
 		"  fi",
-		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance jar from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
+		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance and submit-to-ci jars from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
 		"  return 1",
 		"}",
 		"devkit_governance_static_runtime_env_ready() {",
 		"  devkit_governance_have_expected_jar || return 1",
+		"  devkit_governance_have_expected_submit_to_ci_jar || return 1",
 		"  [ -n \"${JAVA_HOME:-}\" ] || return 1",
 		"  [ -x \"${JAVA_HOME}/bin/java\" ] || return 1",
 		"}",

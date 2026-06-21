@@ -29,7 +29,7 @@ func devkitRootFromPackage(t *testing.T) string {
 	return abs
 }
 
-func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
+func TestDevAllRuntimeExportsPinnedGovernanceAndSubmitToCiJars(t *testing.T) {
 	root := devkitRootFromPackage(t)
 	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-all", "runtime.nix"))
 	for _, want := range []string{
@@ -39,6 +39,15 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
 		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=$(cat ${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar.sha256)",
 		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"packages.pinnedSubmitToCiJar",
+		"export SUBMIT_TO_CI_JAR=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar",
+		"export SUBMIT_TO_CI_HASH_PATH=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar.sha256",
+		"export SUBMIT_TO_CI_BUILD_POLICY=reuse",
+		"export SUBMIT_TO_CI_EXTERNAL_JAR=1",
+		"export SUBMIT_TO_CI_FLAKE_ARTIFACT=0",
+		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
+		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=$SUBMIT_TO_CI_JAR",
+		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=$(cat \"$SUBMIT_TO_CI_HASH_PATH\")",
 	} {
 		if !strings.Contains(runtimeNix, want) {
 			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
@@ -47,11 +56,14 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "f977eb3434220ac27e7a60e2152103a2199155ba";`,
+		`governanceJarVersion = "ecc16076c30168a5b347d5a14e540d7674cfa9c8";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
+		`mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
+		`pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;`,
 		`pinned-governance-jar = mkPinnedGovernanceJar pkgs;`,
+		`pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;`,
 	} {
 		if !strings.Contains(flakeNix, want) {
 			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
@@ -61,6 +73,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceJar(t *testing.T) {
 
 func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T) {
 	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-dev/share/subagent-governance/subagent-governance.jar"
+	submitJarPath := "/nix/store/cccccccccccccccccccccccccccccccc-submit-to-ci-dev/share/submit-to-ci/submit-to-ci.jar"
 	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
 	out := "building '/nix/store/example.drv'...\n" +
 		ouroGovernanceRuntimeIdentityMarker + "\x00" +
@@ -69,6 +82,10 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		jarPath + "\x00" +
 		"deadbeef\x00" +
 		"deadbeef\x00" +
+		submitJarPath + "\x00" +
+		submitJarPath + ".sha256\x00" +
+		submitJarPath + "\x00" +
+		"facefeed\x00" +
 		javaHome + "\x00"
 
 	identity, err := parseOuroGovernanceRuntimeIdentityOutput([]byte(out), "/workspaces/dev/devkit#dev-all")
@@ -81,6 +98,12 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	if identity.ExpectedJarSHA256 != "deadbeef" || identity.SubagentExpectedJarSHA256 != "deadbeef" {
 		t.Fatalf("sha identity parsed incorrectly: %#v", identity)
 	}
+	if identity.SubmitToCiJarPath != submitJarPath || identity.SubmitToCiHashPath != submitJarPath+".sha256" || identity.SubmitToCiExpectedJarPath != submitJarPath {
+		t.Fatalf("submit-to-ci identity parsed incorrectly: %#v", identity)
+	}
+	if identity.SubmitToCiExpectedSHA256 != "facefeed" {
+		t.Fatalf("submit-to-ci sha parsed incorrectly: %#v", identity)
+	}
 	if identity.JavaHome != javaHome {
 		t.Fatalf("java home parsed incorrectly: %#v", identity)
 	}
@@ -88,6 +111,7 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 
 func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-pinned/share/subagent-governance/subagent-governance.jar"
+	submitJarPath := "/nix/store/cccccccccccccccccccccccccccccccc-submit-to-ci-pinned/share/submit-to-ci/submit-to-ci.jar"
 	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
 	got := buildOuroGovernanceEnv(
 		"/home/bayesartre/dev",
@@ -99,6 +123,10 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 			ExpectedJarPath:           jarPath,
 			ExpectedJarSHA256:         "deadbeef",
 			SubagentExpectedJarSHA256: "deadbeef",
+			SubmitToCiJarPath:         submitJarPath,
+			SubmitToCiHashPath:        submitJarPath + ".sha256",
+			SubmitToCiExpectedJarPath: submitJarPath,
+			SubmitToCiExpectedSHA256:  "facefeed",
 			JavaHome:                  javaHome,
 		},
 	)
@@ -108,7 +136,16 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH='" + jarPath + "'",
 		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256='deadbeef'",
 		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256='deadbeef'",
+		"export SUBMIT_TO_CI_JAR='" + submitJarPath + "'",
+		"export SUBMIT_TO_CI_HASH_PATH='" + submitJarPath + ".sha256'",
+		"export SUBMIT_TO_CI_BUILD_POLICY='reuse'",
+		"export SUBMIT_TO_CI_EXTERNAL_JAR=1",
+		"export SUBMIT_TO_CI_FLAKE_ARTIFACT=0",
+		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
+		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH='" + submitJarPath + "'",
+		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256='facefeed'",
 		"export JAVA_HOME='" + javaHome + "'",
+		"devkit_governance_have_expected_submit_to_ci_jar()",
 		"devkit_governance_static_runtime_env_ready()",
 		strings.Join([]string{
 			"if ! devkit_governance_static_runtime_env_ready; then",
@@ -777,12 +814,20 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`/nix/store/*/share/subagent-governance/subagent-governance.jar) ;;`,
 		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
 		`[ "$jar_sha" = "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
+		"devkit_governance_have_expected_submit_to_ci_jar()",
+		`[ -n "${SUBMIT_TO_CI_JAR:-}" ] || return 1`,
+		`[ "${SUBMIT_TO_CI_BUILD_POLICY:-}" = "reuse" ] || return 1`,
+		`[ "${SUBMIT_TO_CI_EXTERNAL_JAR:-}" = "1" ] || return 1`,
+		`[ "${SUBMIT_TO_CI_FLAKE_ARTIFACT:-}" = "0" ] || return 1`,
+		`[ "${SUBMIT_TO_CI_PINNED_ARTIFACT:-}" = "0" ] || return 1`,
+		`/nix/store/*/share/submit-to-ci/submit-to-ci.jar) ;;`,
+		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}" ] || return 1`,
 		"devkit_governance_require_runtime_jar()",
 		"devkit_governance_static_runtime_env_ready()",
 		"if ! devkit_governance_static_runtime_env_ready; then",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
-		"runtime env did not provide pinned Nix-store governance jar",
+		"runtime env did not provide pinned Nix-store governance and submit-to-ci jars",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform,email-policy-mcp-app",

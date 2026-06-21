@@ -14,4 +14,12 @@ mkShell "dev-all" toolsets.ouroborosAgentTools ''
   export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH
   export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=$(cat ${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar.sha256)
   export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256
+  export SUBMIT_TO_CI_JAR=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar
+  export SUBMIT_TO_CI_HASH_PATH=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar.sha256
+  export SUBMIT_TO_CI_BUILD_POLICY=reuse
+  export SUBMIT_TO_CI_EXTERNAL_JAR=1
+  export SUBMIT_TO_CI_FLAKE_ARTIFACT=0
+  export SUBMIT_TO_CI_PINNED_ARTIFACT=0
+  export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=$SUBMIT_TO_CI_JAR
+  export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=$(cat "$SUBMIT_TO_CI_HASH_PATH")
 ''

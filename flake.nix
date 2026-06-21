@@ -60,6 +60,7 @@
       governanceJarVersion = "ecc16076c30168a5b347d5a14e540d7674cfa9c8";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
       mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
+      mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
     in
     {
       devShells = forEachSystem (
@@ -179,6 +180,7 @@
           };
 
           pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;
+          pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;
 
           mgbaRuntimeLibs = with pkgs; [
             libedit
@@ -334,6 +336,7 @@
                 pinnedMgbaHeadless
                 pinnedNpmTools
                 pinnedPacker
+                pinnedSubmitToCiJar
                 pinnedTerraform
                 ;
             };
@@ -391,6 +394,7 @@
         { pkgs, ... }:
         {
           pinned-governance-jar = mkPinnedGovernanceJar pkgs;
+          pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;
 
           postgres-broker = pkgs.buildGoModule {
             pname = "devkit-postgres-broker";
