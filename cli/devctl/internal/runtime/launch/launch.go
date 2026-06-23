@@ -616,6 +616,9 @@ type ouroGovernanceRuntimeIdentity struct {
 	SubmitToCiHashPath        string
 	SubmitToCiExpectedJarPath string
 	SubmitToCiExpectedSHA256  string
+	SubmitSbt2ClientMode      string
+	SubmitSbt2JavaXmx         string
+	LintInvarianceSbt2Mode    string
 	JavaHome                  string
 }
 
@@ -631,7 +634,36 @@ func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
 		strings.TrimSpace(identity.SubmitToCiHashPath) != "" &&
 		strings.TrimSpace(identity.SubmitToCiExpectedJarPath) != "" &&
 		strings.TrimSpace(identity.SubmitToCiExpectedSHA256) != "" &&
+		strings.TrimSpace(identity.SubmitSbt2ClientMode) != "" &&
+		strings.TrimSpace(identity.SubmitSbt2JavaXmx) != "" &&
+		strings.TrimSpace(identity.LintInvarianceSbt2Mode) != "" &&
 		strings.TrimSpace(identity.JavaHome) != ""
+}
+
+func validOuroGovernanceSbtClientMode(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "force", "off":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOuroGovernanceJavaXmx(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 {
+		return false
+	}
+	unit := value[len(value)-1]
+	if unit != 'm' && unit != 'M' && unit != 'g' && unit != 'G' {
+		return false
+	}
+	for _, ch := range value[:len(value)-1] {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func ouroGovernanceRuntimeFlake() string {
@@ -655,7 +687,7 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		`set -euo pipefail`,
 		`runtime_env="$($1 --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false print-dev-env "$DEVKIT_GOVERNANCE_RUNTIME_FLAKE")"`,
 		`eval "$runtime_env"`,
-		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBMIT_TO_CI_JAR:-}" "${SUBMIT_TO_CI_HASH_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256:-}" "${JAVA_HOME:-}"`,
+		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBMIT_TO_CI_JAR:-}" "${SUBMIT_TO_CI_HASH_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256:-}" "${SBT2_CLIENT_MODE:-}" "${SBT2_JAVA_XMX:-}" "${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}" "${JAVA_HOME:-}"`,
 	}, "; ")
 	cmd := exec.Command("bash", "-lc", script, "resolve-governance-runtime", nixBin)
 	cmd.Env = append(os.Environ(), "DEVKIT_GOVERNANCE_RUNTIME_FLAKE="+runtimeFlake)
@@ -668,7 +700,16 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
 	if !identity.Complete() {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci jar or Java identity", runtimeFlake)
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci jar, Java, or submit runtime authority identity", runtimeFlake)
+	}
+	if !validOuroGovernanceSbtClientMode(identity.SubmitSbt2ClientMode) {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT2_CLIENT_MODE must be force or off, got %q", runtimeFlake, identity.SubmitSbt2ClientMode)
+	}
+	if !validOuroGovernanceJavaXmx(identity.SubmitSbt2JavaXmx) {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT2_JAVA_XMX must match scripts/sbt2 heap syntax, got %q", runtimeFlake, identity.SubmitSbt2JavaXmx)
+	}
+	if !validOuroGovernanceSbtClientMode(identity.LintInvarianceSbt2Mode) {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE must be force or off, got %q", runtimeFlake, identity.LintInvarianceSbt2Mode)
 	}
 	for label, path := range map[string]string{
 		"latest governance jar":        identity.LatestJarPath,
@@ -727,8 +768,8 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 	}
 	payload := text[index+len(marker):]
 	parts := strings.Split(strings.TrimSuffix(payload, "\x00"), "\x00")
-	if len(parts) != 10 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 10 fields, got %d", runtimeFlake, len(parts))
+	if len(parts) != 13 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 13 fields, got %d", runtimeFlake, len(parts))
 	}
 	return ouroGovernanceRuntimeIdentity{
 		LatestJarPath:             parts[0],
@@ -740,7 +781,10 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 		SubmitToCiHashPath:        parts[6],
 		SubmitToCiExpectedJarPath: parts[7],
 		SubmitToCiExpectedSHA256:  parts[8],
-		JavaHome:                  parts[9],
+		SubmitSbt2ClientMode:      parts[9],
+		SubmitSbt2JavaXmx:         parts[10],
+		LintInvarianceSbt2Mode:    parts[11],
+		JavaHome:                  parts[12],
 	}, nil
 }
 
@@ -779,6 +823,9 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 			"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
 			"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH="+shellQuote(runtimeIdentity.SubmitToCiExpectedJarPath),
 			"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256="+shellQuote(runtimeIdentity.SubmitToCiExpectedSHA256),
+			"export SBT2_CLIENT_MODE="+shellQuote(runtimeIdentity.SubmitSbt2ClientMode),
+			"export SBT2_JAVA_XMX="+shellQuote(runtimeIdentity.SubmitSbt2JavaXmx),
+			"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE="+shellQuote(runtimeIdentity.LintInvarianceSbt2Mode),
 			"export JAVA_HOME="+shellQuote(runtimeIdentity.JavaHome),
 		)
 	}
@@ -854,16 +901,28 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  [ \"$jar_sha\" = \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}\" ] || return 1",
 		"  [ \"$(tr -d '[:space:]' < \"$SUBMIT_TO_CI_HASH_PATH\")\" = \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}\" ] || return 1",
 		"}",
+		"devkit_governance_have_submit_runtime_authority() {",
+		"  case \"${SBT2_CLIENT_MODE:-}\" in force|off) ;; *) return 1 ;; esac",
+		"  case \"${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}\" in force|off) ;; *) return 1 ;; esac",
+		"  local java_xmx=\"${SBT2_JAVA_XMX:-}\"",
+		"  [ -n \"$java_xmx\" ] || return 1",
+		"  case \"$java_xmx\" in *[!0123456789mMgG]*) return 1 ;; esac",
+		"  case \"$java_xmx\" in *[mMgG]) ;; *) return 1 ;; esac",
+		"  local java_xmx_digits=\"${java_xmx%?}\"",
+		"  [ -n \"$java_xmx_digits\" ] || return 1",
+		"  case \"$java_xmx_digits\" in *[!0123456789]*) return 1 ;; esac",
+		"}",
 		"devkit_governance_require_runtime_jar() {",
-		"  if devkit_governance_have_expected_jar && devkit_governance_have_expected_submit_to_ci_jar; then",
+		"  if devkit_governance_have_expected_jar && devkit_governance_have_expected_submit_to_ci_jar && devkit_governance_have_submit_runtime_authority; then",
 		"    return 0",
 		"  fi",
-		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance and submit-to-ci jars from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
+		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance and submit-to-ci jars plus submit runtime authority from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
 		"  return 1",
 		"}",
 		"devkit_governance_static_runtime_env_ready() {",
 		"  devkit_governance_have_expected_jar || return 1",
 		"  devkit_governance_have_expected_submit_to_ci_jar || return 1",
+		"  devkit_governance_have_submit_runtime_authority || return 1",
 		"  [ -n \"${JAVA_HOME:-}\" ] || return 1",
 		"  [ -x \"${JAVA_HOME}/bin/java\" ] || return 1",
 		"}",

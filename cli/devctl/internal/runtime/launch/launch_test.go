@@ -48,6 +48,9 @@ func TestDevAllRuntimeExportsPinnedGovernanceAndSubmitToCiJars(t *testing.T) {
 		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=$SUBMIT_TO_CI_JAR",
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=$(cat \"$SUBMIT_TO_CI_HASH_PATH\")",
+		"export SBT2_CLIENT_MODE=force",
+		"export SBT2_JAVA_XMX=6g",
+		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off",
 	} {
 		if !strings.Contains(runtimeNix, want) {
 			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
@@ -86,6 +89,9 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		submitJarPath + ".sha256\x00" +
 		submitJarPath + "\x00" +
 		"facefeed\x00" +
+		"force\x00" +
+		"6g\x00" +
+		"off\x00" +
 		javaHome + "\x00"
 
 	identity, err := parseOuroGovernanceRuntimeIdentityOutput([]byte(out), "/workspaces/dev/devkit#dev-all")
@@ -103,6 +109,9 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	}
 	if identity.SubmitToCiExpectedSHA256 != "facefeed" {
 		t.Fatalf("submit-to-ci sha parsed incorrectly: %#v", identity)
+	}
+	if identity.SubmitSbt2ClientMode != "force" || identity.SubmitSbt2JavaXmx != "6g" || identity.LintInvarianceSbt2Mode != "off" {
+		t.Fatalf("submit runtime authority parsed incorrectly: %#v", identity)
 	}
 	if identity.JavaHome != javaHome {
 		t.Fatalf("java home parsed incorrectly: %#v", identity)
@@ -127,6 +136,9 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 			SubmitToCiHashPath:        submitJarPath + ".sha256",
 			SubmitToCiExpectedJarPath: submitJarPath,
 			SubmitToCiExpectedSHA256:  "facefeed",
+			SubmitSbt2ClientMode:      "force",
+			SubmitSbt2JavaXmx:         "6g",
+			LintInvarianceSbt2Mode:    "off",
 			JavaHome:                  javaHome,
 		},
 	)
@@ -144,8 +156,12 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH='" + submitJarPath + "'",
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256='facefeed'",
+		"export SBT2_CLIENT_MODE='force'",
+		"export SBT2_JAVA_XMX='6g'",
+		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE='off'",
 		"export JAVA_HOME='" + javaHome + "'",
 		"devkit_governance_have_expected_submit_to_ci_jar()",
+		"devkit_governance_have_submit_runtime_authority()",
 		"devkit_governance_static_runtime_env_ready()",
 		strings.Join([]string{
 			"if ! devkit_governance_static_runtime_env_ready; then",
@@ -822,12 +838,16 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[ "${SUBMIT_TO_CI_PINNED_ARTIFACT:-}" = "0" ] || return 1`,
 		`/nix/store/*/share/submit-to-ci/submit-to-ci.jar) ;;`,
 		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}" ] || return 1`,
+		"devkit_governance_have_submit_runtime_authority()",
+		`case "${SBT2_CLIENT_MODE:-}" in force|off) ;; *) return 1 ;; esac`,
+		`case "${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}" in force|off) ;; *) return 1 ;; esac`,
+		`local java_xmx="${SBT2_JAVA_XMX:-}"`,
 		"devkit_governance_require_runtime_jar()",
 		"devkit_governance_static_runtime_env_ready()",
 		"if ! devkit_governance_static_runtime_env_ready; then",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
-		"runtime env did not provide pinned Nix-store governance and submit-to-ci jars",
+		"runtime env did not provide pinned Nix-store governance and submit-to-ci jars plus submit runtime authority",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform,email-policy-mcp-app",
