@@ -11,6 +11,8 @@
         ouroboros-terraform = shells.default;
       }) ouroboros-terraform.devShells;
 
+      packages = ouroboros-terraform.packages;
+      checks = ouroboros-terraform.checks;
       apps = ouroboros-terraform.apps;
     };
 }

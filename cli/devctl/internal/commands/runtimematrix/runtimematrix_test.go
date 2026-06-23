@@ -101,8 +101,41 @@ runtime:
 	if entries[0].FlakePath == "" {
 		t.Fatalf("missing overlay-local flake path: %+v", entries[0])
 	}
+	if entries[0].RuntimeWorkDir != filepath.Dir(root) {
+		t.Fatalf("runtime work dir = %q, want %q", entries[0].RuntimeWorkDir, filepath.Dir(root))
+	}
 	if err := Check(entries, true); err != nil {
 		t.Fatalf("native flake check failed: %v", err)
+	}
+}
+
+func TestFilterSelectsRepoOrOverlay(t *testing.T) {
+	entries := []Entry{
+		{Overlay: "dev-all", Repo: "ouroboros-ide"},
+		{Overlay: "ouroboros-terraform", Repo: "ouroboros-terraform"},
+		{Overlay: "pokeemerald", Repo: "pokeemerald"},
+	}
+	filtered, err := Filter(entries, []string{"ouroboros-terraform"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Overlay != "ouroboros-terraform" {
+		t.Fatalf("repo filtered entries=%+v", filtered)
+	}
+
+	filtered, err = Filter(entries, nil, []string{"pokeemerald"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Repo != "pokeemerald" {
+		t.Fatalf("overlay filtered entries=%+v", filtered)
+	}
+}
+
+func TestFilterRejectsNoMatch(t *testing.T) {
+	_, err := Filter([]Entry{{Overlay: "dev-all", Repo: "ouroboros-ide"}}, []string{"missing"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no runtime pairings matched") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

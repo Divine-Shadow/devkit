@@ -423,7 +423,7 @@ Commands:
   worktrees-tmux <repo> <count> [--plain]    (flake-backed overlays)
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (flake-backed overlays)
-  runtime-matrix [--check] [--all]           (repo to runtime pairing report)
+  runtime-matrix [--check] [--all] [--repo NAME|--overlay NAME] (repo to runtime pairing report)
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
   preflight                                  (host checks: nix, bubblewrap, tmux, ssh keys, ~/.codex, broker Docker)

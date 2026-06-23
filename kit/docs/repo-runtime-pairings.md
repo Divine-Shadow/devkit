@@ -31,6 +31,14 @@ Verify local runtimes with:
 devkit/kit/scripts/devkit runtime-matrix --all --check
 ```
 
+For a focused check while unrelated overlays are under active custody, filter by
+repo or overlay:
+
+```bash
+devkit/kit/scripts/devkit runtime-matrix --repo ouroboros-terraform --check
+devkit/kit/scripts/devkit runtime-matrix --overlay ouroboros-terraform --check
+```
+
 Use `--all` when you need to include non-canonical overlays. The `codex`
 overlay is not a second runtime pairing for `ouroboros-ide`.
 

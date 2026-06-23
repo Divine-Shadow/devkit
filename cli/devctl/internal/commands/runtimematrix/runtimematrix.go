@@ -26,6 +26,7 @@ type Entry struct {
 	Canonical           bool
 	ConfigPath          string
 	FlakePath           string
+	RuntimeWorkDir      string
 }
 
 // Register adds runtime-matrix to the command registry.
@@ -36,17 +37,44 @@ func Register(r *cmdregistry.Registry) {
 func handle(ctx *cmdregistry.Context) error {
 	includeAll := false
 	check := false
-	for _, arg := range ctx.Args {
+	var overlays []string
+	var repos []string
+	for i := 0; i < len(ctx.Args); i++ {
+		arg := ctx.Args[i]
 		switch arg {
 		case "--all":
 			includeAll = true
 		case "--check":
 			check = true
+		case "--overlay":
+			value, err := nextRuntimeMatrixArg(ctx.Args, &i, "--overlay")
+			if err != nil {
+				return err
+			}
+			overlays = append(overlays, value)
+		case "--repo":
+			value, err := nextRuntimeMatrixArg(ctx.Args, &i, "--repo")
+			if err != nil {
+				return err
+			}
+			repos = append(repos, value)
 		default:
+			if value, ok := strings.CutPrefix(arg, "--overlay="); ok {
+				overlays = append(overlays, strings.TrimSpace(value))
+				continue
+			}
+			if value, ok := strings.CutPrefix(arg, "--repo="); ok {
+				repos = append(repos, strings.TrimSpace(value))
+				continue
+			}
 			return fmt.Errorf("unknown runtime-matrix argument %q", arg)
 		}
 	}
 	entries, err := Discover(ctx.Paths.OverlayPaths, includeAll)
+	if err != nil {
+		return err
+	}
+	entries, err = Filter(entries, repos, overlays)
 	if err != nil {
 		return err
 	}
@@ -58,6 +86,18 @@ func handle(ctx *cmdregistry.Context) error {
 		return Check(entries, ctx.DryRun)
 	}
 	return nil
+}
+
+func nextRuntimeMatrixArg(args []string, index *int, flag string) (string, error) {
+	if *index+1 >= len(args) {
+		return "", fmt.Errorf("%s requires a value", flag)
+	}
+	*index = *index + 1
+	value := strings.TrimSpace(args[*index])
+	if value == "" {
+		return "", fmt.Errorf("%s requires a non-empty value", flag)
+	}
+	return value, nil
 }
 
 // Discover reads overlay devkit.yaml files and returns runtime entries.
@@ -115,6 +155,7 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				Canonical:           canonical,
 				ConfigPath:          filepath.Join(cfgDir, "devkit.yaml"),
 				FlakePath:           filepath.Join(cfgDir, "flake.nix"),
+				RuntimeWorkDir:      filepath.Dir(root),
 			})
 		}
 	}
@@ -125,6 +166,48 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 		return entries[i].Repo < entries[j].Repo
 	})
 	return entries, nil
+}
+
+// Filter selects discovered entries by repo or overlay.
+func Filter(entries []Entry, repos, overlays []string) ([]Entry, error) {
+	repoSet := stringSet(repos)
+	overlaySet := stringSet(overlays)
+	if len(repoSet) == 0 && len(overlaySet) == 0 {
+		return entries, nil
+	}
+	var filtered []Entry
+	for _, entry := range entries {
+		if repoSet[entry.Repo] || overlaySet[entry.Overlay] {
+			filtered = append(filtered, entry)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("no runtime pairings matched repo %s or overlay %s", selectorSummary(repoSet), selectorSummary(overlaySet))
+	}
+	return filtered, nil
+}
+
+func stringSet(values []string) map[string]bool {
+	set := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			set[value] = true
+		}
+	}
+	return set
+}
+
+func selectorSummary(values map[string]bool) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	keys := make([]string, 0, len(values))
+	for value := range values {
+		keys = append(keys, value)
+	}
+	sort.Strings(keys)
+	return "[" + strings.Join(keys, ",") + "]"
 }
 
 // Print writes a compact operator-facing matrix to stdout.
@@ -190,7 +273,7 @@ func Check(entries []Entry, dryRun bool) error {
 		if e.Flake != "" && e.CodexVersion != "" {
 			if dryRun {
 				fmt.Printf("[dry-run] %s\n", strings.Join(flakeCodexVersionArgs(e.Flake, e.FlakeInputOverrides), " "))
-			} else if got, err := flakeCodexVersion(e.Flake, e.FlakeInputOverrides); err != nil {
+			} else if got, err := flakeCodexVersion(e.Flake, e.FlakeInputOverrides, e.RuntimeWorkDir); err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version check failed: %v", e.Overlay, e.Flake, err))
 			} else if got != e.CodexVersion {
 				problems = append(problems, fmt.Sprintf("%s: %s codex version %s, want %s", e.Overlay, e.Flake, got, e.CodexVersion))
@@ -228,9 +311,12 @@ func overlayLocalFlakeRef(overlay string) string {
 	return "./overlays/" + overlay + "#default"
 }
 
-func flakeCodexVersion(flake string, overrides map[string]string) (string, error) {
+func flakeCodexVersion(flake string, overrides map[string]string, workDir string) (string, error) {
 	args := flakeCodexVersionArgs(flake, overrides)
 	cmd := exec.Command(args[0], args[1:]...)
+	if strings.TrimSpace(workDir) != "" {
+		cmd.Dir = workDir
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
