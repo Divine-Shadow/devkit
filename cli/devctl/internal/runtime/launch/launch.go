@@ -1269,9 +1269,9 @@ func codexGovernanceConfigBlock(p nativeplan.Plan) string {
 	b.WriteString("command = \"/run/current-system/sw/bin/bash\"\n")
 	fmt.Fprintf(&b, "cwd = %s\n", tomlQuote(cwd))
 	fmt.Fprintf(&b, "args = [\"-lc\", %s]\n", tomlQuote(entrypoint))
-	b.WriteString("startup_timeout_sec = 60\n")
+	b.WriteString("startup_timeout_sec = 240\n")
 	b.WriteString("tool_timeout_sec = 10800\n")
-	b.WriteString("default_tools_approval_mode = \"auto\"\n")
+	b.WriteString("default_tools_approval_mode = \"approve\"\n")
 	b.WriteString("enabled_tools = [")
 	for i, tool := range tools {
 		if i > 0 {
