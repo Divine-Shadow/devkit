@@ -66,7 +66,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 		"export SBT_CONTROL_PLANE_FLAKE_ARTIFACT=0",
 		"export SBT2_CLIENT_MODE=force",
 		"export SBT2_JAVA_XMX=6g",
-		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off",
+		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=force",
 	} {
 		if !strings.Contains(runtimeNix, want) {
 			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
@@ -117,7 +117,7 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		"facefeed\x00" +
 		"force\x00" +
 		"6g\x00" +
-		"off\x00" +
+		"force\x00" +
 		artifactRepoPath + "\x00" +
 		artifactRepoPath + "\x00" +
 		artifactMetadataPath + "\x00" +
@@ -150,7 +150,7 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	if identity.SubmitToCiExpectedSHA256 != "facefeed" {
 		t.Fatalf("submit-to-ci sha parsed incorrectly: %#v", identity)
 	}
-	if identity.SubmitSbt2ClientMode != "force" || identity.SubmitSbt2JavaXmx != "6g" || identity.LintInvarianceSbt2Mode != "off" {
+	if identity.SubmitSbt2ClientMode != "force" || identity.SubmitSbt2JavaXmx != "6g" || identity.LintInvarianceSbt2Mode != "force" {
 		t.Fatalf("submit runtime authority parsed incorrectly: %#v", identity)
 	}
 	if identity.ArtifactColumnRepositoryPath != artifactRepoPath ||
@@ -200,7 +200,7 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 			SubmitToCiExpectedSHA256:        "facefeed",
 			SubmitSbt2ClientMode:            "force",
 			SubmitSbt2JavaXmx:               "6g",
-			LintInvarianceSbt2Mode:          "off",
+			LintInvarianceSbt2Mode:          "force",
 			ArtifactColumnRepositoryPath:    artifactRepoPath,
 			ArtifactColumnRepositoryAlias:   artifactRepoPath,
 			ArtifactColumnMetadataEnv:       artifactMetadataPath,
@@ -234,7 +234,7 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256='facefeed'",
 		"export SBT2_CLIENT_MODE='force'",
 		"export SBT2_JAVA_XMX='6g'",
-		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE='off'",
+		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE='force'",
 		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH='" + artifactRepoPath + "'",
 		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY='" + artifactRepoPath + "'",
 		"export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV='" + artifactMetadataPath + "'",
