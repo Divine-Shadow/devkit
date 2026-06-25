@@ -607,19 +607,29 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 }
 
 type ouroGovernanceRuntimeIdentity struct {
-	LatestJarPath             string
-	ControlPlaneJar           string
-	ExpectedJarPath           string
-	ExpectedJarSHA256         string
-	SubagentExpectedJarSHA256 string
-	SubmitToCiJarPath         string
-	SubmitToCiHashPath        string
-	SubmitToCiExpectedJarPath string
-	SubmitToCiExpectedSHA256  string
-	SubmitSbt2ClientMode      string
-	SubmitSbt2JavaXmx         string
-	LintInvarianceSbt2Mode    string
-	JavaHome                  string
+	LatestJarPath                 string
+	ControlPlaneJar               string
+	ExpectedJarPath               string
+	ExpectedJarSHA256             string
+	SubagentExpectedJarSHA256     string
+	SubmitToCiJarPath             string
+	SubmitToCiHashPath            string
+	SubmitToCiExpectedJarPath     string
+	SubmitToCiExpectedSHA256      string
+	SubmitSbt2ClientMode          string
+	SubmitSbt2JavaXmx             string
+	LintInvarianceSbt2Mode        string
+	ArtifactColumnRepositoryPath  string
+	ArtifactColumnRepositoryAlias string
+	ArtifactColumnMetadataEnv     string
+	ArtifactColumnVersion         string
+	ArtifactColumnSourceRev       string
+	ArtifactColumnSourceShortRev  string
+	ArtifactColumnIvyPath         string
+	ArtifactColumnJarSHA256       string
+	ArtifactColumnPinnedArtifact  string
+	ArtifactColumnFlakeArtifact   string
+	JavaHome                      string
 }
 
 const ouroGovernanceRuntimeIdentityMarker = "__DEVKIT_GOVERNANCE_RUNTIME_IDENTITY__"
@@ -637,6 +647,16 @@ func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
 		strings.TrimSpace(identity.SubmitSbt2ClientMode) != "" &&
 		strings.TrimSpace(identity.SubmitSbt2JavaXmx) != "" &&
 		strings.TrimSpace(identity.LintInvarianceSbt2Mode) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnRepositoryPath) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnRepositoryAlias) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnMetadataEnv) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnVersion) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnSourceRev) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnSourceShortRev) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnIvyPath) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnJarSHA256) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnPinnedArtifact) != "" &&
+		strings.TrimSpace(identity.ArtifactColumnFlakeArtifact) != "" &&
 		strings.TrimSpace(identity.JavaHome) != ""
 }
 
@@ -687,7 +707,7 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		`set -euo pipefail`,
 		`runtime_env="$($1 --extra-experimental-features 'nix-command flakes' --no-warn-dirty --option eval-cache false print-dev-env "$DEVKIT_GOVERNANCE_RUNTIME_FLAKE")"`,
 		`eval "$runtime_env"`,
-		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBMIT_TO_CI_JAR:-}" "${SUBMIT_TO_CI_HASH_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256:-}" "${SBT2_CLIENT_MODE:-}" "${SBT2_JAVA_XMX:-}" "${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}" "${JAVA_HOME:-}"`,
+		`printf '` + ouroGovernanceRuntimeIdentityMarker + `\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0%s\0' "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256:-}" "${SUBMIT_TO_CI_JAR:-}" "${SUBMIT_TO_CI_HASH_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH:-}" "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256:-}" "${SBT2_CLIENT_MODE:-}" "${SBT2_JAVA_XMX:-}" "${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}" "${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH:-}" "${ARTIFACT_COLUMN_PLUGIN_REPOSITORY:-}" "${ARTIFACT_COLUMN_PLUGIN_METADATA_ENV:-}" "${ARTIFACT_COLUMN_PLUGIN_VERSION:-}" "${ARTIFACT_COLUMN_PLUGIN_SOURCE_REV:-}" "${ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV:-}" "${ARTIFACT_COLUMN_PLUGIN_IVY_PATH:-}" "${ARTIFACT_COLUMN_PLUGIN_JAR_SHA256:-}" "${ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT:-}" "${ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT:-}" "${JAVA_HOME:-}"`,
 	}, "; ")
 	cmd := exec.Command("bash", "-lc", script, "resolve-governance-runtime", nixBin)
 	cmd.Env = append(os.Environ(), "DEVKIT_GOVERNANCE_RUNTIME_FLAKE="+runtimeFlake)
@@ -700,7 +720,7 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
 	if !identity.Complete() {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci jar, Java, or submit runtime authority identity", runtimeFlake)
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci jar, artifact-column plugin repository, Java, or submit runtime authority identity", runtimeFlake)
 	}
 	if !validOuroGovernanceSbtClientMode(identity.SubmitSbt2ClientMode) {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT2_CLIENT_MODE must be force or off, got %q", runtimeFlake, identity.SubmitSbt2ClientMode)
@@ -712,12 +732,14 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE must be force or off, got %q", runtimeFlake, identity.LintInvarianceSbt2Mode)
 	}
 	for label, path := range map[string]string{
-		"latest governance jar":        identity.LatestJarPath,
-		"control-plane governance jar": identity.ControlPlaneJar,
-		"expected governance jar":      identity.ExpectedJarPath,
-		"submit-to-ci jar":             identity.SubmitToCiJarPath,
-		"submit-to-ci jar hash":        identity.SubmitToCiHashPath,
-		"JAVA_HOME":                    identity.JavaHome,
+		"latest governance jar":             identity.LatestJarPath,
+		"control-plane governance jar":      identity.ControlPlaneJar,
+		"expected governance jar":           identity.ExpectedJarPath,
+		"submit-to-ci jar":                  identity.SubmitToCiJarPath,
+		"submit-to-ci jar hash":             identity.SubmitToCiHashPath,
+		"artifact-column plugin repository": identity.ArtifactColumnRepositoryPath,
+		"artifact-column plugin metadata":   identity.ArtifactColumnMetadataEnv,
+		"JAVA_HOME":                         identity.JavaHome,
 	} {
 		if !pathExists(path) {
 			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: missing %s %s", runtimeFlake, label, path)
@@ -756,7 +778,61 @@ func resolveOuroGovernanceRuntimeIdentity(hostDevRoot string, runtimeFlake strin
 	if strings.TrimSpace(string(submitHashData)) != identity.SubmitToCiExpectedSHA256 {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci hash file mismatch", runtimeFlake)
 	}
+	if identity.ArtifactColumnRepositoryAlias != identity.ArtifactColumnRepositoryPath {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin repository path mismatch", runtimeFlake)
+	}
+	if !strings.HasPrefix(identity.ArtifactColumnRepositoryPath, "/nix/store/") {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin repository is not in /nix/store: %s", runtimeFlake, identity.ArtifactColumnRepositoryPath)
+	}
+	artifactMetadataPath := filepath.Join(identity.ArtifactColumnRepositoryPath, "share", "artifact-column-plugin", "metadata.env")
+	if identity.ArtifactColumnMetadataEnv != artifactMetadataPath {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin metadata path drift: expected %s got %s", runtimeFlake, artifactMetadataPath, identity.ArtifactColumnMetadataEnv)
+	}
+	if strings.Contains(strings.ToUpper(identity.ArtifactColumnVersion), "SNAPSHOT") {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin version must be a pinned non-SNAPSHOT version, got %q", runtimeFlake, identity.ArtifactColumnVersion)
+	}
+	if !strings.HasPrefix(identity.ArtifactColumnIvyPath, "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/") {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin Ivy path is not canonical: %s", runtimeFlake, identity.ArtifactColumnIvyPath)
+	}
+	if identity.ArtifactColumnPinnedArtifact != "1" || identity.ArtifactColumnFlakeArtifact != "0" {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin must be pinned artifact=1 flake artifact=0", runtimeFlake)
+	}
+	artifactMetadataData, err := os.ReadFile(identity.ArtifactColumnMetadataEnv)
+	if err != nil {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read artifact-column plugin metadata %s: %w", runtimeFlake, identity.ArtifactColumnMetadataEnv, err)
+	}
+	for key, want := range map[string]string{
+		"ARTIFACT_COLUMN_PLUGIN_VERSION":          identity.ArtifactColumnVersion,
+		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV":       identity.ArtifactColumnSourceRev,
+		"ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV": identity.ArtifactColumnSourceShortRev,
+		"ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH":  identity.ArtifactColumnRepositoryPath,
+		"ARTIFACT_COLUMN_PLUGIN_IVY_PATH":         identity.ArtifactColumnIvyPath,
+		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256":       identity.ArtifactColumnJarSHA256,
+	} {
+		if got := metadataEnvValue(string(artifactMetadataData), key); got != want {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin metadata %s mismatch: expected %q got %q", runtimeFlake, key, want, got)
+		}
+	}
+	artifactHashPath := filepath.Join(identity.ArtifactColumnRepositoryPath, "share", "artifact-column-plugin", "artifact-column-plugin.jar.sha256")
+	artifactHashData, err := os.ReadFile(artifactHashPath)
+	if err != nil {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read artifact-column plugin hash %s: %w", runtimeFlake, artifactHashPath, err)
+	}
+	if strings.TrimSpace(string(artifactHashData)) != identity.ArtifactColumnJarSHA256 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin hash file mismatch", runtimeFlake)
+	}
 	return identity, nil
+}
+
+func metadataEnvValue(text string, key string) string {
+	prefix := key + "="
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
 }
 
 func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (ouroGovernanceRuntimeIdentity, error) {
@@ -768,23 +844,33 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 	}
 	payload := text[index+len(marker):]
 	parts := strings.Split(strings.TrimSuffix(payload, "\x00"), "\x00")
-	if len(parts) != 13 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 13 fields, got %d", runtimeFlake, len(parts))
+	if len(parts) != 23 {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 23 fields, got %d", runtimeFlake, len(parts))
 	}
 	return ouroGovernanceRuntimeIdentity{
-		LatestJarPath:             parts[0],
-		ControlPlaneJar:           parts[1],
-		ExpectedJarPath:           parts[2],
-		ExpectedJarSHA256:         parts[3],
-		SubagentExpectedJarSHA256: parts[4],
-		SubmitToCiJarPath:         parts[5],
-		SubmitToCiHashPath:        parts[6],
-		SubmitToCiExpectedJarPath: parts[7],
-		SubmitToCiExpectedSHA256:  parts[8],
-		SubmitSbt2ClientMode:      parts[9],
-		SubmitSbt2JavaXmx:         parts[10],
-		LintInvarianceSbt2Mode:    parts[11],
-		JavaHome:                  parts[12],
+		LatestJarPath:                 parts[0],
+		ControlPlaneJar:               parts[1],
+		ExpectedJarPath:               parts[2],
+		ExpectedJarSHA256:             parts[3],
+		SubagentExpectedJarSHA256:     parts[4],
+		SubmitToCiJarPath:             parts[5],
+		SubmitToCiHashPath:            parts[6],
+		SubmitToCiExpectedJarPath:     parts[7],
+		SubmitToCiExpectedSHA256:      parts[8],
+		SubmitSbt2ClientMode:          parts[9],
+		SubmitSbt2JavaXmx:             parts[10],
+		LintInvarianceSbt2Mode:        parts[11],
+		ArtifactColumnRepositoryPath:  parts[12],
+		ArtifactColumnRepositoryAlias: parts[13],
+		ArtifactColumnMetadataEnv:     parts[14],
+		ArtifactColumnVersion:         parts[15],
+		ArtifactColumnSourceRev:       parts[16],
+		ArtifactColumnSourceShortRev:  parts[17],
+		ArtifactColumnIvyPath:         parts[18],
+		ArtifactColumnJarSHA256:       parts[19],
+		ArtifactColumnPinnedArtifact:  parts[20],
+		ArtifactColumnFlakeArtifact:   parts[21],
+		JavaHome:                      parts[22],
 	}, nil
 }
 
@@ -826,6 +912,16 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 			"export SBT2_CLIENT_MODE="+shellQuote(runtimeIdentity.SubmitSbt2ClientMode),
 			"export SBT2_JAVA_XMX="+shellQuote(runtimeIdentity.SubmitSbt2JavaXmx),
 			"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE="+shellQuote(runtimeIdentity.LintInvarianceSbt2Mode),
+			"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH="+shellQuote(runtimeIdentity.ArtifactColumnRepositoryPath),
+			"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY="+shellQuote(runtimeIdentity.ArtifactColumnRepositoryAlias),
+			"export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV="+shellQuote(runtimeIdentity.ArtifactColumnMetadataEnv),
+			"export ARTIFACT_COLUMN_PLUGIN_VERSION="+shellQuote(runtimeIdentity.ArtifactColumnVersion),
+			"export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV="+shellQuote(runtimeIdentity.ArtifactColumnSourceRev),
+			"export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV="+shellQuote(runtimeIdentity.ArtifactColumnSourceShortRev),
+			"export ARTIFACT_COLUMN_PLUGIN_IVY_PATH="+shellQuote(runtimeIdentity.ArtifactColumnIvyPath),
+			"export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256="+shellQuote(runtimeIdentity.ArtifactColumnJarSHA256),
+			"export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT="+shellQuote(runtimeIdentity.ArtifactColumnPinnedArtifact),
+			"export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT="+shellQuote(runtimeIdentity.ArtifactColumnFlakeArtifact),
 			"export JAVA_HOME="+shellQuote(runtimeIdentity.JavaHome),
 		)
 	}
@@ -901,6 +997,34 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  [ \"$jar_sha\" = \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}\" ] || return 1",
 		"  [ \"$(tr -d '[:space:]' < \"$SUBMIT_TO_CI_HASH_PATH\")\" = \"${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}\" ] || return 1",
 		"}",
+		"devkit_governance_have_expected_artifact_column_plugin_repository() {",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_METADATA_ENV:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_VERSION:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_SOURCE_REV:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_IVY_PATH:-}\" ] || return 1",
+		"  [ -n \"${ARTIFACT_COLUMN_PLUGIN_JAR_SHA256:-}\" ] || return 1",
+		"  [ \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY}\" = \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH}\" ] || return 1",
+		"  [ \"${ARTIFACT_COLUMN_PLUGIN_METADATA_ENV}\" = \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH}/share/artifact-column-plugin/metadata.env\" ] || return 1",
+		"  [ \"${ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT:-}\" = \"1\" ] || return 1",
+		"  [ \"${ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT:-}\" = \"0\" ] || return 1",
+		"  case \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH}\" in",
+		"    /nix/store/*) ;;",
+		"    *) return 1 ;;",
+		"  esac",
+		"  case \"${ARTIFACT_COLUMN_PLUGIN_VERSION}\" in",
+		"    *SNAPSHOT*|*snapshot*) return 1 ;;",
+		"  esac",
+		"  case \"${ARTIFACT_COLUMN_PLUGIN_IVY_PATH}\" in",
+		"    ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/*) ;;",
+		"    *) return 1 ;;",
+		"  esac",
+		"  [ -f \"${ARTIFACT_COLUMN_PLUGIN_METADATA_ENV}\" ] || return 1",
+		"  [ -f \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH}/share/artifact-column-plugin/artifact-column-plugin.jar.sha256\" ] || return 1",
+		"  [ \"$(tr -d '[:space:]' < \"${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH}/share/artifact-column-plugin/artifact-column-plugin.jar.sha256\")\" = \"${ARTIFACT_COLUMN_PLUGIN_JAR_SHA256}\" ] || return 1",
+		"}",
 		"devkit_governance_have_submit_runtime_authority() {",
 		"  case \"${SBT2_CLIENT_MODE:-}\" in force|off) ;; *) return 1 ;; esac",
 		"  case \"${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}\" in force|off) ;; *) return 1 ;; esac",
@@ -913,15 +1037,16 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"  case \"$java_xmx_digits\" in *[!0123456789]*) return 1 ;; esac",
 		"}",
 		"devkit_governance_require_runtime_jar() {",
-		"  if devkit_governance_have_expected_jar && devkit_governance_have_expected_submit_to_ci_jar && devkit_governance_have_submit_runtime_authority; then",
+		"  if devkit_governance_have_expected_jar && devkit_governance_have_expected_submit_to_ci_jar && devkit_governance_have_expected_artifact_column_plugin_repository && devkit_governance_have_submit_runtime_authority; then",
 		"    return 0",
 		"  fi",
-		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance and submit-to-ci jars plus submit runtime authority from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
+		"  echo \"[devkit-governance-env] runtime env did not provide pinned Nix-store governance and submit-to-ci jars, artifact-column plugin repository, plus submit runtime authority from ${DEVKIT_GOVERNANCE_RUNTIME_FLAKE}\" >&2",
 		"  return 1",
 		"}",
 		"devkit_governance_static_runtime_env_ready() {",
 		"  devkit_governance_have_expected_jar || return 1",
 		"  devkit_governance_have_expected_submit_to_ci_jar || return 1",
+		"  devkit_governance_have_expected_artifact_column_plugin_repository || return 1",
 		"  devkit_governance_have_submit_runtime_authority || return 1",
 		"  [ -n \"${JAVA_HOME:-}\" ] || return 1",
 		"  [ -x \"${JAVA_HOME}/bin/java\" ] || return 1",

@@ -57,10 +57,11 @@
       };
       codexVersion = "0.141.0";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "844131b3fb285dbe21e2ebff39630fc80d38597b";
+      governanceJarVersion = "1468ed69608b8d5e95268058da016ff02312bae3";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
       mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
       mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
+      mkPinnedArtifactColumnPluginRepository = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
     in
     {
       devShells = forEachSystem (
@@ -181,6 +182,7 @@
 
           pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;
           pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;
+          pinnedArtifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;
 
           mgbaRuntimeLibs = with pkgs; [
             libedit
@@ -330,6 +332,7 @@
             packages = {
               inherit
                 pinnedCodex
+                pinnedArtifactColumnPluginRepository
                 pinnedDockerCli
                 pinnedGo
                 pinnedGovernanceJar
@@ -393,6 +396,7 @@
       packages = forEachSystem (
         { pkgs, ... }:
         {
+          pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;
           pinned-governance-jar = mkPinnedGovernanceJar pkgs;
           pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;
 

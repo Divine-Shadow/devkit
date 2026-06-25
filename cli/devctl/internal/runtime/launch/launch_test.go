@@ -29,11 +29,12 @@ func devkitRootFromPackage(t *testing.T) string {
 	return abs
 }
 
-func TestDevAllRuntimeExportsPinnedGovernanceAndSubmitToCiJars(t *testing.T) {
+func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnRepository(t *testing.T) {
 	root := devkitRootFromPackage(t)
 	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-all", "runtime.nix"))
 	for _, want := range []string{
 		"packages.pinnedGovernanceJar",
+		"packages.pinnedArtifactColumnPluginRepository",
 		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar",
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
 		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
@@ -48,6 +49,16 @@ func TestDevAllRuntimeExportsPinnedGovernanceAndSubmitToCiJars(t *testing.T) {
 		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=$SUBMIT_TO_CI_JAR",
 		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=$(cat \"$SUBMIT_TO_CI_HASH_PATH\")",
+		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH=${packages.pinnedArtifactColumnPluginRepository}",
+		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY=$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH",
+		"export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV=$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH/share/artifact-column-plugin/metadata.env",
+		"export ARTIFACT_COLUMN_PLUGIN_VERSION=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_VERSION=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_IVY_PATH=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_IVY_PATH=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=$(cat ${packages.pinnedArtifactColumnPluginRepository}/share/artifact-column-plugin/artifact-column-plugin.jar.sha256)",
+		"export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT=1",
+		"export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT=0",
 		"export SBT2_CLIENT_MODE=force",
 		"export SBT2_JAVA_XMX=6g",
 		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off",
@@ -59,14 +70,17 @@ func TestDevAllRuntimeExportsPinnedGovernanceAndSubmitToCiJars(t *testing.T) {
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "844131b3fb285dbe21e2ebff39630fc80d38597b";`,
+		`governanceJarVersion = "1468ed69608b8d5e95268058da016ff02312bae3";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
 		`mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
+		`mkPinnedArtifactColumnPluginRepository = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
 		`pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;`,
+		`pinnedArtifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;`,
 		`pinned-governance-jar = mkPinnedGovernanceJar pkgs;`,
 		`pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;`,
+		`pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;`,
 	} {
 		if !strings.Contains(flakeNix, want) {
 			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
@@ -77,6 +91,9 @@ func TestDevAllRuntimeExportsPinnedGovernanceAndSubmitToCiJars(t *testing.T) {
 func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T) {
 	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-dev/share/subagent-governance/subagent-governance.jar"
 	submitJarPath := "/nix/store/cccccccccccccccccccccccccccccccc-submit-to-ci-dev/share/submit-to-ci/submit-to-ci.jar"
+	artifactRepoPath := "/nix/store/dddddddddddddddddddddddddddddddd-artifact-column-plugin-repository-0.1.0-artifact-column-fleet-pin-20260624"
+	artifactMetadataPath := artifactRepoPath + "/share/artifact-column-plugin/metadata.env"
+	artifactIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/0.1.0-artifact-column-fleet-pin-20260624"
 	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
 	out := "building '/nix/store/example.drv'...\n" +
 		ouroGovernanceRuntimeIdentityMarker + "\x00" +
@@ -92,6 +109,16 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		"force\x00" +
 		"6g\x00" +
 		"off\x00" +
+		artifactRepoPath + "\x00" +
+		artifactRepoPath + "\x00" +
+		artifactMetadataPath + "\x00" +
+		"0.1.0-artifact-column-fleet-pin-20260624\x00" +
+		"1468ed69608b8d5e95268058da016ff02312bae3\x00" +
+		"1468ed6\x00" +
+		artifactIvyPath + "\x00" +
+		"bebab16526b5eac0ec3f0e60bc108ec92181b2b982ac6c46393a8cf57e263194\x00" +
+		"1\x00" +
+		"0\x00" +
 		javaHome + "\x00"
 
 	identity, err := parseOuroGovernanceRuntimeIdentityOutput([]byte(out), "/workspaces/dev/devkit#dev-all")
@@ -113,6 +140,18 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	if identity.SubmitSbt2ClientMode != "force" || identity.SubmitSbt2JavaXmx != "6g" || identity.LintInvarianceSbt2Mode != "off" {
 		t.Fatalf("submit runtime authority parsed incorrectly: %#v", identity)
 	}
+	if identity.ArtifactColumnRepositoryPath != artifactRepoPath ||
+		identity.ArtifactColumnRepositoryAlias != artifactRepoPath ||
+		identity.ArtifactColumnMetadataEnv != artifactMetadataPath ||
+		identity.ArtifactColumnVersion != "0.1.0-artifact-column-fleet-pin-20260624" ||
+		identity.ArtifactColumnSourceRev != "1468ed69608b8d5e95268058da016ff02312bae3" ||
+		identity.ArtifactColumnSourceShortRev != "1468ed6" ||
+		identity.ArtifactColumnIvyPath != artifactIvyPath ||
+		identity.ArtifactColumnJarSHA256 != "bebab16526b5eac0ec3f0e60bc108ec92181b2b982ac6c46393a8cf57e263194" ||
+		identity.ArtifactColumnPinnedArtifact != "1" ||
+		identity.ArtifactColumnFlakeArtifact != "0" {
+		t.Fatalf("artifact-column plugin repository identity parsed incorrectly: %#v", identity)
+	}
 	if identity.JavaHome != javaHome {
 		t.Fatalf("java home parsed incorrectly: %#v", identity)
 	}
@@ -121,25 +160,38 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-pinned/share/subagent-governance/subagent-governance.jar"
 	submitJarPath := "/nix/store/cccccccccccccccccccccccccccccccc-submit-to-ci-pinned/share/submit-to-ci/submit-to-ci.jar"
+	artifactRepoPath := "/nix/store/dddddddddddddddddddddddddddddddd-artifact-column-plugin-repository-0.1.0-artifact-column-fleet-pin-20260624"
+	artifactMetadataPath := artifactRepoPath + "/share/artifact-column-plugin/metadata.env"
+	artifactIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/0.1.0-artifact-column-fleet-pin-20260624"
 	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
 	got := buildOuroGovernanceEnv(
 		"/home/bayesartre/dev",
 		"/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
 		"abc123",
 		ouroGovernanceRuntimeIdentity{
-			LatestJarPath:             jarPath,
-			ControlPlaneJar:           jarPath,
-			ExpectedJarPath:           jarPath,
-			ExpectedJarSHA256:         "deadbeef",
-			SubagentExpectedJarSHA256: "deadbeef",
-			SubmitToCiJarPath:         submitJarPath,
-			SubmitToCiHashPath:        submitJarPath + ".sha256",
-			SubmitToCiExpectedJarPath: submitJarPath,
-			SubmitToCiExpectedSHA256:  "facefeed",
-			SubmitSbt2ClientMode:      "force",
-			SubmitSbt2JavaXmx:         "6g",
-			LintInvarianceSbt2Mode:    "off",
-			JavaHome:                  javaHome,
+			LatestJarPath:                 jarPath,
+			ControlPlaneJar:               jarPath,
+			ExpectedJarPath:               jarPath,
+			ExpectedJarSHA256:             "deadbeef",
+			SubagentExpectedJarSHA256:     "deadbeef",
+			SubmitToCiJarPath:             submitJarPath,
+			SubmitToCiHashPath:            submitJarPath + ".sha256",
+			SubmitToCiExpectedJarPath:     submitJarPath,
+			SubmitToCiExpectedSHA256:      "facefeed",
+			SubmitSbt2ClientMode:          "force",
+			SubmitSbt2JavaXmx:             "6g",
+			LintInvarianceSbt2Mode:        "off",
+			ArtifactColumnRepositoryPath:  artifactRepoPath,
+			ArtifactColumnRepositoryAlias: artifactRepoPath,
+			ArtifactColumnMetadataEnv:     artifactMetadataPath,
+			ArtifactColumnVersion:         "0.1.0-artifact-column-fleet-pin-20260624",
+			ArtifactColumnSourceRev:       "1468ed69608b8d5e95268058da016ff02312bae3",
+			ArtifactColumnSourceShortRev:  "1468ed6",
+			ArtifactColumnIvyPath:         artifactIvyPath,
+			ArtifactColumnJarSHA256:       "bebab16526b5eac0ec3f0e60bc108ec92181b2b982ac6c46393a8cf57e263194",
+			ArtifactColumnPinnedArtifact:  "1",
+			ArtifactColumnFlakeArtifact:   "0",
+			JavaHome:                      javaHome,
 		},
 	)
 	for _, want := range []string{
@@ -159,10 +211,22 @@ func TestBuildOuroGovernanceEnvUsesPreparedRuntimeIdentity(t *testing.T) {
 		"export SBT2_CLIENT_MODE='force'",
 		"export SBT2_JAVA_XMX='6g'",
 		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE='off'",
+		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH='" + artifactRepoPath + "'",
+		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY='" + artifactRepoPath + "'",
+		"export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV='" + artifactMetadataPath + "'",
+		"export ARTIFACT_COLUMN_PLUGIN_VERSION='0.1.0-artifact-column-fleet-pin-20260624'",
+		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV='1468ed69608b8d5e95268058da016ff02312bae3'",
+		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV='1468ed6'",
+		"export ARTIFACT_COLUMN_PLUGIN_IVY_PATH='" + artifactIvyPath + "'",
+		"export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256='bebab16526b5eac0ec3f0e60bc108ec92181b2b982ac6c46393a8cf57e263194'",
+		"export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT='1'",
+		"export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT='0'",
 		"export JAVA_HOME='" + javaHome + "'",
 		"devkit_governance_have_expected_submit_to_ci_jar()",
+		"devkit_governance_have_expected_artifact_column_plugin_repository()",
 		"devkit_governance_have_submit_runtime_authority()",
 		"devkit_governance_static_runtime_env_ready()",
+		"runtime env did not provide pinned Nix-store governance and submit-to-ci jars, artifact-column plugin repository",
 		strings.Join([]string{
 			"if ! devkit_governance_static_runtime_env_ready; then",
 			"  devkit_governance_load_runtime_env",
@@ -841,6 +905,10 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[ "${SUBMIT_TO_CI_PINNED_ARTIFACT:-}" = "0" ] || return 1`,
 		`/nix/store/*/share/submit-to-ci/submit-to-ci.jar) ;;`,
 		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}" ] || return 1`,
+		"devkit_governance_have_expected_artifact_column_plugin_repository()",
+		`[ -n "${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH:-}" ] || return 1`,
+		`[ "${ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT:-}" = "1" ] || return 1`,
+		`ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/*) ;;`,
 		"devkit_governance_have_submit_runtime_authority()",
 		`case "${SBT2_CLIENT_MODE:-}" in force|off) ;; *) return 1 ;; esac`,
 		`case "${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}" in force|off) ;; *) return 1 ;; esac`,
@@ -850,7 +918,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"if ! devkit_governance_static_runtime_env_ready; then",
 		"--no-warn-dirty --option eval-cache false",
 		"print-dev-env \"$DEVKIT_GOVERNANCE_RUNTIME_FLAKE\"",
-		"runtime env did not provide pinned Nix-store governance and submit-to-ci jars plus submit runtime authority",
+		"runtime env did not provide pinned Nix-store governance and submit-to-ci jars, artifact-column plugin repository, plus submit runtime authority",
 		"runtime env did not provide an executable JAVA_HOME",
 		"export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV=1",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=dev-workspace,ouroboros-ide,ouroboros-terraform,agent1,agent2,agent3,agent4,agent5,agent6,agent7,agent8,agent9,agent1-ouroboros-terraform,agent2-ouroboros-terraform,agent3-ouroboros-terraform,agent4-ouroboros-terraform,agent5-ouroboros-terraform,agent6-ouroboros-terraform,agent7-ouroboros-terraform,agent8-ouroboros-terraform,agent9-ouroboros-terraform,email-policy-mcp-app",
