@@ -57,11 +57,12 @@
       };
       codexVersion = "0.141.0";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "1468ed69608b8d5e95268058da016ff02312bae3";
+      governanceJarVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
       mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
       mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
       mkPinnedArtifactColumnPluginRepository = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
+      mkPinnedSbtControlPlaneRuntimeJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-jar;
     in
     {
       devShells = forEachSystem (
@@ -183,6 +184,7 @@
           pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;
           pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;
           pinnedArtifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;
+          pinnedSbtControlPlaneRuntimeJar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
 
           mgbaRuntimeLibs = with pkgs; [
             libedit
@@ -339,6 +341,7 @@
                 pinnedMgbaHeadless
                 pinnedNpmTools
                 pinnedPacker
+                pinnedSbtControlPlaneRuntimeJar
                 pinnedSubmitToCiJar
                 pinnedTerraform
                 ;
@@ -398,6 +401,7 @@
         {
           pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;
           pinned-governance-jar = mkPinnedGovernanceJar pkgs;
+          pinned-sbt-control-plane-runtime-jar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
           pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;
 
           postgres-broker = pkgs.buildGoModule {

@@ -32,6 +32,10 @@ mkShell "dev-all" toolsets.ouroborosAgentTools ''
   export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=$(cat ${packages.pinnedArtifactColumnPluginRepository}/share/artifact-column-plugin/artifact-column-plugin.jar.sha256)
   export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT=1
   export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT=0
+  export SBT_CONTROL_PLANE_RUNTIME_JAR=${packages.pinnedSbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar
+  export SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256=$(cat ${packages.pinnedSbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar.sha256)
+  export SBT_CONTROL_PLANE_PINNED_ARTIFACT=1
+  export SBT_CONTROL_PLANE_FLAKE_ARTIFACT=0
   export SBT2_CLIENT_MODE=force
   export SBT2_JAVA_XMX=6g
   export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off
