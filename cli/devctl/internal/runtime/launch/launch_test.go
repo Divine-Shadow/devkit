@@ -75,13 +75,15 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";`,
+		`governanceJarVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
+		`submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";`,
 		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
+		`submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";`,
 		`sbtControlPlaneRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${sbtControlPlaneRuntimeVersion}";`,
 		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
-		`mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
-		`mkPinnedArtifactColumnPluginRepository = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
+		`mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
+		`mkPinnedArtifactColumnPluginRepository = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
 		`mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-jar;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
 		`pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;`,
@@ -921,13 +923,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"export SUBAGENT_GOVERNANCE_PINNED_ARTIFACT=1",
 		"export SUBAGENT_GOVERNANCE_FLAKE_ARTIFACT=0",
 		"devkit_governance_load_runtime_env()",
+		`sed '/^LINENO=/d'`,
 		"devkit_governance_have_expected_jar()",
 		`[ -n "${SUBAGENT_GOVERNANCE_LATEST_JAR_PATH:-}" ] || return 1`,
-		`[ "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR}" = "$jar_path" ] || return 1`,
-		`[ "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH}" = "$jar_path" ] || return 1`,
+		`[ "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR}" = "$devkit_governance_jar_path" ] || return 1`,
+		`[ "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH}" = "$devkit_governance_jar_path" ] || return 1`,
 		`/nix/store/*/share/subagent-governance/subagent-governance.jar) ;;`,
-		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
-		`[ "$jar_sha" = "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
+		`[ "$devkit_governance_jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
+		`[ "$devkit_governance_jar_sha" = "${SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256}" ] || return 1`,
 		"devkit_governance_have_expected_submit_to_ci_jar()",
 		`[ -n "${SUBMIT_TO_CI_JAR:-}" ] || return 1`,
 		`[ "${SUBMIT_TO_CI_BUILD_POLICY:-}" = "reuse" ] || return 1`,
@@ -935,7 +938,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[ "${SUBMIT_TO_CI_FLAKE_ARTIFACT:-}" = "0" ] || return 1`,
 		`[ "${SUBMIT_TO_CI_PINNED_ARTIFACT:-}" = "0" ] || return 1`,
 		`/nix/store/*/share/submit-to-ci/submit-to-ci.jar) ;;`,
-		`[ "$jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}" ] || return 1`,
+		`[ "$devkit_governance_submit_jar_sha" = "${DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256}" ] || return 1`,
 		"devkit_governance_have_expected_artifact_column_plugin_repository()",
 		`[ -n "${ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH:-}" ] || return 1`,
 		`[ "${ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT:-}" = "1" ] || return 1`,
@@ -944,11 +947,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`[ -n "${SBT_CONTROL_PLANE_RUNTIME_JAR:-}" ] || return 1`,
 		`[ "${SBT_CONTROL_PLANE_PINNED_ARTIFACT:-}" = "1" ] || return 1`,
 		`/nix/store/*/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar) ;;`,
-		`[ "$jar_sha" = "${SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256}" ] || return 1`,
+		`[ "$devkit_governance_sbt_runtime_jar_sha" = "${SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256}" ] || return 1`,
 		"devkit_governance_have_submit_runtime_authority()",
 		`case "${SBT2_CLIENT_MODE:-}" in force|off) ;; *) return 1 ;; esac`,
 		`case "${OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE:-}" in force|off) ;; *) return 1 ;; esac`,
-		`local java_xmx="${SBT2_JAVA_XMX:-}"`,
+		`devkit_governance_java_xmx="${SBT2_JAVA_XMX:-}"`,
+		"devkit_governance_runtime_identity_fingerprint()",
+		"devkit_governance_static_runtime_env_fresh()",
+		`devkit_governance_fresh_fingerprint="$(devkit_governance_load_runtime_env >/dev/null && devkit_governance_require_runtime_jar >/dev/null && devkit_governance_runtime_identity_fingerprint)" || return 1`,
 		"devkit_governance_require_runtime_jar()",
 		"devkit_governance_static_runtime_env_ready()",
 		"if ! devkit_governance_static_runtime_env_ready; then",
@@ -1011,6 +1017,9 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if strings.Contains(gotEnv, "SUBAGENT_GOVERNANCE_WORKSPACE_ID=") {
 		t.Fatalf("shared governance env must not pin a per-agent workspace id:\n%s", gotEnv)
 	}
+	if strings.Contains(gotEnv, "\n  local ") {
+		t.Fatalf("shared governance env must avoid local declarations for remote eval compatibility:\n%s", gotEnv)
+	}
 	for _, forbidden := range []string{
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
 		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
@@ -1063,6 +1072,26 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("stat governance env: %v", err)
 	} else if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("governance env mode = %o, want 600", got)
+	}
+	repoConfigPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json")
+	if err := os.Chmod(envPath, 0o644); err != nil {
+		t.Fatalf("loosen governance env mode: %v", err)
+	}
+	if err := os.Chmod(repoConfigPath, 0o644); err != nil {
+		t.Fatalf("loosen governance repo config mode: %v", err)
+	}
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare should repair generated governance file modes: %v", err)
+	}
+	if st, err := os.Stat(envPath); err != nil {
+		t.Fatalf("stat repaired governance env: %v", err)
+	} else if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("repaired governance env mode = %o, want 600", got)
+	}
+	if st, err := os.Stat(repoConfigPath); err != nil {
+		t.Fatalf("stat repaired governance repo config: %v", err)
+	} else if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("repaired governance repo config mode = %o, want 600", got)
 	}
 }
 
