@@ -75,7 +75,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
+		`governanceJarVersion = "b8ef3a17052a341645f842f05582f1dbc4c14bb0";`,
 		`submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";`,
 		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
@@ -328,7 +328,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
 		"'--setenv' 'TMPDIR' '/tmp'",
 		"'--setenv' 'XDG_CACHE_HOME' '/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'",
-		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
+		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' '--option' 'flake-registry' '' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command missing %q:\n%s", want, joined)
@@ -524,6 +524,60 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 	}
 	if strings.Contains(joined, "'--share-net'") {
 		t.Fatalf("proxy socket launches must not share host network:\n%s", joined)
+	}
+}
+
+func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	hostWorktree := filepath.Join(devRoot, "agent-worktrees", "agent3", "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, hostWorktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            3,
+		Repo:             "ouroboros-ide",
+		Flake:            ".#runtime-test-agent",
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devRoot, "ouroboros-ide", "infra", "docker", "dev", "tinyproxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	cmd, err := BuildBubblewrap(p, []string{"true"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	for _, want := range []string{
+		"'--unshare-net'",
+		"'--bind' '" + hostWorktree + "' '/workspace'",
+		"'--bind' '" + hostWorktree + "' '/workspaces/dev/agent-worktrees/agent3/ouroboros-ide'",
+		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3") + "' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3'",
+		"'--ro-bind' '" + devkitRoot + "' '/workspaces/dev/devkit'",
+		"native proxy-bridge --listen 127.0.0.1:18888",
+		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3/.cache/coursier'",
+		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3/.cache/ivy2'",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing %q:\n%s", want, joined)
+		}
+	}
+	for _, forbidden := range []string{
+		"'--share-net'",
+		"'--bind' '" + devRoot + "' '/workspaces/dev'",
+		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees") + "' '/workspaces/dev/agent-worktrees'",
+		"'--bind' '" + filepath.Join(devRoot, ".devkit", "native-agents") + "' '/agent-state'",
+		"/workspaces/dev/.cache/shared",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("workspace-egress command contains forbidden %q:\n%s", forbidden, joined)
+		}
 	}
 }
 

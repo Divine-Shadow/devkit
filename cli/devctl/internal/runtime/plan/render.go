@@ -33,6 +33,8 @@ func RenderText(p Plan) string {
 	fmt.Fprintf(&b, "broker_endpoint: %s\n", p.BrokerEndpoint)
 	fmt.Fprintf(&b, "direct_docker_socket: %t\n", p.DirectDockerSocket)
 	fmt.Fprintf(&b, "proxy: %s\n", p.Proxy.HTTPProxy)
+	fmt.Fprintf(&b, "proxy_socket: %s\n", p.Proxy.UnixSocket)
+	fmt.Fprintf(&b, "proxy_allowlist: %s\n", p.Proxy.AllowlistPath)
 	fmt.Fprintf(&b, "resolv_conf: %s\n", p.DNS.ResolvConf)
 	fmt.Fprintf(&b, "binds:\n")
 	for _, bind := range p.Binds {

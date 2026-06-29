@@ -2231,17 +2231,22 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
-	args = append(args, "/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "develop")
+	nixArgs := []string{"/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "--option", "flake-registry", "", "develop"}
 	names := make([]string, 0, len(p.FlakeInputOverrides))
 	for name := range p.FlakeInputOverrides {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		args = append(args, "--override-input", name, p.FlakeInputOverrides[name])
+		nixArgs = append(nixArgs, "--override-input", name, p.FlakeInputOverrides[name])
 	}
-	args = append(args, p.Flake, "--output-lock-file", "/dev/null", "--command")
-	args = append(args, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env)...)
+	nixArgs = append(nixArgs, p.Flake, "--output-lock-file", "/dev/null", "--command")
+	nixArgs = append(nixArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
+	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
+		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyNixCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, nixArgs, p.Proxy))
+	} else {
+		args = append(args, nixArgs...)
+	}
 	return Command{Path: "bwrap", Args: args, Dir: p.DevkitHostRoot}, nil
 }
 
@@ -2281,7 +2286,13 @@ func ensureResolvConf(path string) error {
 	return nil
 }
 
-func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig, env map[string]string) []string {
+func outerProxyNixCommand(devkitRoot string, project string, nixArgs []string, proxy nativeplan.ProxyConfig) string {
+	script := proxyBridgeScript(devkitRoot, project, proxy)
+	script += " && " + shellJoin(nixArgs)
+	return script
+}
+
+func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig, env map[string]string, bridgeProxy bool) []string {
 	exports := make([]string, 0, len(env))
 	for key, value := range env {
 		exports = append(exports, "export "+key+"="+shellQuote(value))
@@ -2292,23 +2303,8 @@ func shellCommand(devkitRoot string, project string, workdir string, command []s
 		script += "; "
 	}
 	script += "cd " + shellQuote(workdir)
-	bridgeProxy := strings.TrimSpace(proxy.UnixSocket) != ""
 	if bridgeProxy {
-		proxyURL := strings.TrimSpace(proxy.HTTPProxy)
-		if proxyURL == "" {
-			proxyURL = "http://127.0.0.1:18888"
-		}
-		devctlPath := filepath.Join(devkitRoot, "kit", "bin", "devctl")
-		script += " && { " + shellQuote(devctlPath) + " -p " + shellQuote(project) + " native proxy-bridge --listen 127.0.0.1:18888 --socket " + shellQuote(proxy.UnixSocket) + " & devkit_proxy_bridge_pid=$!; }"
-		script += " && trap 'kill \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || true; wait \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || true' EXIT"
-		script += " && sleep 0.1"
-		script += " && { kill -0 \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || { echo 'native proxy bridge failed to start' >&2; exit 1; }; }"
-		script += " && export HTTP_PROXY=" + shellQuote(proxyURL)
-		script += " HTTPS_PROXY=" + shellQuote(proxyURL)
-		script += " http_proxy=" + shellQuote(proxyURL)
-		script += " https_proxy=" + shellQuote(proxyURL)
-		script += " NO_PROXY=" + shellQuote(proxy.NoProxy)
-		script += " no_proxy=" + shellQuote(proxy.NoProxy)
+		script += " && " + proxyBridgeScript(devkitRoot, project, proxy)
 	}
 	if len(command) == 0 {
 		if bridgeProxy {
@@ -2328,6 +2324,33 @@ func shellCommand(devkitRoot string, project string, workdir string, command []s
 		}
 	}
 	return []string{"bash", "-lc", script}
+}
+
+func proxyBridgeScript(devkitRoot string, project string, proxy nativeplan.ProxyConfig) string {
+	proxyURL := strings.TrimSpace(proxy.HTTPProxy)
+	if proxyURL == "" {
+		proxyURL = "http://127.0.0.1:18888"
+	}
+	devctlPath := filepath.Join(devkitRoot, "kit", "bin", "devctl")
+	script := "{ " + shellQuote(devctlPath) + " -p " + shellQuote(project) + " native proxy-bridge --listen 127.0.0.1:18888 --socket " + shellQuote(proxy.UnixSocket) + " & devkit_proxy_bridge_pid=$!; }"
+	script += " && trap 'kill \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || true; wait \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || true' EXIT"
+	script += " && sleep 0.1"
+	script += " && { kill -0 \"$devkit_proxy_bridge_pid\" >/dev/null 2>&1 || { echo 'native proxy bridge failed to start' >&2; exit 1; }; }"
+	script += " && export HTTP_PROXY=" + shellQuote(proxyURL)
+	script += " HTTPS_PROXY=" + shellQuote(proxyURL)
+	script += " http_proxy=" + shellQuote(proxyURL)
+	script += " https_proxy=" + shellQuote(proxyURL)
+	script += " NO_PROXY=" + shellQuote(proxy.NoProxy)
+	script += " no_proxy=" + shellQuote(proxy.NoProxy)
+	return script
+}
+
+func shellJoin(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
 }
 
 func shellQuote(s string) string {

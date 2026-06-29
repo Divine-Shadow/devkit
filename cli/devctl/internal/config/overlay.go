@@ -92,13 +92,22 @@ func NormalizeReadinessMode(value string) (string, bool) {
 }
 
 type Native struct {
-	WorktreeRoot          string `yaml:"worktree_root"`
-	StateRoot             string `yaml:"state_root"`
-	WorktreeContainerRoot string `yaml:"worktree_container_root"`
-	StateContainerRoot    string `yaml:"state_container_root"`
+	WorktreeRoot          string                      `yaml:"worktree_root"`
+	StateRoot             string                      `yaml:"state_root"`
+	WorktreeContainerRoot string                      `yaml:"worktree_container_root"`
+	StateContainerRoot    string                      `yaml:"state_container_root"`
+	IsolationProfiles     map[string]IsolationProfile `yaml:"isolation_profiles"`
+}
+
+type IsolationProfile struct {
+	Filesystem      string `yaml:"filesystem"`
+	EgressAllowlist string `yaml:"egress_allowlist"`
+	ProxySocket     string `yaml:"proxy_socket"`
+	Proxy           string `yaml:"proxy"`
 }
 
 type OverlayConfig struct {
+	SourceDir string            `yaml:"-"`
 	Workspace string            `yaml:"workspace"`
 	Env       map[string]string `yaml:"env"`
 	EnvFiles  []string          `yaml:"env_files"`
@@ -164,6 +173,7 @@ func ReadAll(overlays []string, project string) (OverlayConfig, string, error) {
 		if err := yaml.Unmarshal(data, &out); err != nil {
 			return out, filepath.Dir(candidate), err
 		}
+		out.SourceDir = filepath.Dir(candidate)
 		if out.Env == nil {
 			out.Env = map[string]string{}
 		}

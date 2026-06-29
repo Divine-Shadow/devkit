@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
@@ -92,6 +94,8 @@ type lifecycleArgs struct {
 	brokerAllowImage        []string
 	proxy                   string
 	proxySocket             string
+	isolationProfile        string
+	egressAllowlist         string
 	worktreeRoot            string
 	agentStateRoot          string
 	worktreeContainerRoot   string
@@ -116,6 +120,8 @@ type topExecArgs struct {
 	brokerSocket            string
 	proxy                   string
 	proxySocket             string
+	isolationProfile        string
+	egressAllowlist         string
 	worktreeRoot            string
 	agentStateRoot          string
 	worktreeContainerRoot   string
@@ -340,6 +346,18 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			}
 			parsed.opts.ProxySocket = ctx.Args[i+1]
 			i++
+		case "--isolation-profile":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--isolation-profile requires a value")
+			}
+			parsed.opts.IsolationProfile = ctx.Args[i+1]
+			i++
+		case "--egress-allowlist":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--egress-allowlist requires a value")
+			}
+			parsed.opts.EgressAllowlist = ctx.Args[i+1]
+			i++
 		case "--resolv-conf":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--resolv-conf requires a value")
@@ -485,6 +503,18 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 				return parsed, fmt.Errorf("--proxy-socket requires a value")
 			}
 			parsed.proxySocket = ctx.Args[i+1]
+			i++
+		case "--isolation-profile":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--isolation-profile requires a value")
+			}
+			parsed.isolationProfile = ctx.Args[i+1]
+			i++
+		case "--egress-allowlist":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--egress-allowlist requires a value")
+			}
+			parsed.egressAllowlist = ctx.Args[i+1]
 			i++
 		case "--allow-image":
 			if i+1 >= len(ctx.Args) {
@@ -774,6 +804,18 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.proxySocket = ctx.Args[i+1]
 			i++
+		case "--isolation-profile":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--isolation-profile requires a value")
+			}
+			parsed.isolationProfile = ctx.Args[i+1]
+			i++
+		case "--egress-allowlist":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--egress-allowlist requires a value")
+			}
+			parsed.egressAllowlist = ctx.Args[i+1]
+			i++
 		case "--worktree-root":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--worktree-root requires a value")
@@ -810,6 +852,8 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		brokerSocket:            parsed.brokerSocket,
 		proxy:                   parsed.proxy,
 		proxySocket:             parsed.proxySocket,
+		isolationProfile:        parsed.isolationProfile,
+		egressAllowlist:         parsed.egressAllowlist,
 		worktreeRoot:            parsed.worktreeRoot,
 		agentStateRoot:          parsed.agentStateRoot,
 		worktreeContainerRoot:   parsed.worktreeContainerRoot,
@@ -827,6 +871,11 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
+	cleanupProxy, err := ensureManagedEgressProxy(p, ctx.DryRun)
+	if err != nil {
+		return err
+	}
+	defer cleanupProxy()
 	if !ctx.DryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
@@ -931,6 +980,7 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 }
 
 func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs, repo string, brokerCfg runtimebroker.Config) nativeplan.BuildOptions {
+	isolationProfile, egressAllowlist, proxy, proxySocket := nativeIsolationOptions(ctx, cfg, repo, parsed.isolationProfile, parsed.egressAllowlist, parsed.proxy, parsed.proxySocket)
 	return nativeplan.BuildOptions{
 		Paths:                 ctx.Paths,
 		Project:               ctx.Project,
@@ -945,13 +995,15 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		BaseBranch:            strings.TrimSpace(parsed.baseBranch),
 		BranchPrefix:          strings.TrimSpace(parsed.branchPrefix),
 		BrokerEndpoint:        brokerCfg.Socket,
-		Proxy:                 strings.TrimSpace(parsed.proxy),
-		ProxySocket:           resolveNativeRoot(ctx.Paths.Root, parsed.proxySocket),
+		Proxy:                 proxy,
+		ProxySocket:           proxySocket,
+		IsolationProfile:      isolationProfile,
+		EgressAllowlist:       egressAllowlist,
 		DedicatedWorktree:     true,
 	}
 }
 
-func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) {
+func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) error {
 	if strings.TrimSpace(opts.Repo) == "" {
 		opts.Repo = strings.TrimSpace(cfg.Defaults.Repo)
 	}
@@ -985,6 +1037,76 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	if strings.TrimSpace(opts.BranchPrefix) == "" {
 		opts.BranchPrefix = strings.TrimSpace(cfg.Defaults.BranchPrefix)
 	}
+	isolationProfile, egressAllowlist, proxy, proxySocket := nativeIsolationOptions(ctx, cfg, opts.Repo, opts.IsolationProfile, opts.EgressAllowlist, opts.Proxy, opts.ProxySocket)
+	opts.IsolationProfile = isolationProfile
+	opts.EgressAllowlist = egressAllowlist
+	opts.Proxy = proxy
+	opts.ProxySocket = proxySocket
+	return nil
+}
+
+func nativeIsolationOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, repo string, requestedProfile string, requestedAllowlist string, requestedProxy string, requestedProxySocket string) (string, string, string, string) {
+	profileName := strings.TrimSpace(requestedProfile)
+	profileCfg := config.IsolationProfile{}
+	profileSourceDir := cfg.SourceDir
+	if profileName != "" && cfg.Native.IsolationProfiles != nil {
+		if found, ok := cfg.Native.IsolationProfiles[profileName]; ok {
+			profileCfg = found
+		}
+	}
+	if profileName != "" && isZeroIsolationProfile(profileCfg) {
+		if found, sourceDir, ok := repoIsolationProfile(ctx, repo, profileName); ok {
+			profileCfg = found
+			profileSourceDir = sourceDir
+		}
+	}
+	allowlist := firstNonEmpty(requestedAllowlist, profileCfg.EgressAllowlist)
+	if strings.TrimSpace(allowlist) != "" {
+		allowlist = resolveOverlayPath(ctx.Paths.Root, profileSourceDir, allowlist)
+	}
+	proxy := firstNonEmpty(requestedProxy, profileCfg.Proxy)
+	proxySocket := firstNonEmpty(requestedProxySocket, profileCfg.ProxySocket)
+	if strings.TrimSpace(proxySocket) != "" {
+		proxySocket = resolveNativeRoot(ctx.Paths.Root, proxySocket)
+	}
+	return profileName, allowlist, strings.TrimSpace(proxy), proxySocket
+}
+
+func isZeroIsolationProfile(profile config.IsolationProfile) bool {
+	return strings.TrimSpace(profile.Filesystem) == "" &&
+		strings.TrimSpace(profile.EgressAllowlist) == "" &&
+		strings.TrimSpace(profile.ProxySocket) == "" &&
+		strings.TrimSpace(profile.Proxy) == ""
+}
+
+func repoIsolationProfile(ctx *cmdregistry.Context, repo string, profileName string) (config.IsolationProfile, string, bool) {
+	repo = strings.TrimSpace(repo)
+	profileName = strings.TrimSpace(profileName)
+	if repo == "" || repo == "." || profileName == "" {
+		return config.IsolationProfile{}, "", false
+	}
+	devRoot := filepath.Dir(filepath.Clean(ctx.Paths.Root))
+	overlayRoot := filepath.Join(devRoot, repo, "infra", "ourchitect")
+	cfg, _, err := config.ReadAll([]string{overlayRoot}, "overlay")
+	if err != nil {
+		return config.IsolationProfile{}, "", false
+	}
+	if cfg.Native.IsolationProfiles == nil {
+		return config.IsolationProfile{}, "", false
+	}
+	found, ok := cfg.Native.IsolationProfiles[profileName]
+	return found, cfg.SourceDir, ok
+}
+
+func resolveOverlayPath(devkitRoot, overlayDir, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	if strings.TrimSpace(overlayDir) != "" {
+		return filepath.Clean(filepath.Join(overlayDir, value))
+	}
+	return resolveNativeRoot(devkitRoot, value)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1360,7 +1482,9 @@ func handlePlan(ctx *cmdregistry.Context) error {
 	}
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
-	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
+	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
+		return err
+	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -1430,7 +1554,9 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	parsed.opts.Repo = repo
 	parsed.opts.BaseBranch = baseBranch
 	parsed.opts.BranchPrefix = branchPrefix
-	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
+	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
+		return err
+	}
 	if err := wtx.SetupNative(wtx.NativeOptions{
 		DevkitRoot:   ctx.Paths.Root,
 		Repo:         repo,
@@ -1524,7 +1650,9 @@ func handleExec(ctx *cmdregistry.Context) error {
 	}
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
-	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
+	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
+		return err
+	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -1533,6 +1661,11 @@ func handleExec(ctx *cmdregistry.Context) error {
 		return fmt.Errorf("native exec currently supports --launcher bubblewrap only")
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
+	cleanupProxy, err := ensureManagedEgressProxy(p, dryRun)
+	if err != nil {
+		return err
+	}
+	defer cleanupProxy()
 	if !dryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
@@ -1565,6 +1698,75 @@ func runCommandPreservingExit(cmd *exec.Cmd) error {
 	return err
 }
 
+func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func(), error) {
+	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
+	allowlistPath := strings.TrimSpace(p.Proxy.AllowlistPath)
+	if allowlistPath == "" {
+		return func() {}, nil
+	}
+	if socketPath == "" {
+		return nil, fmt.Errorf("managed native egress proxy requires a proxy socket")
+	}
+	if dryRun {
+		fmt.Fprintf(os.Stdout, "native egress proxy socket=%s allowlist=%s\n", socketPath, allowlistPath)
+		return func() {}, nil
+	}
+	if unixSocketAccepts(socketPath) {
+		return func() {}, nil
+	}
+	proxyCtx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- egressproxy.Serve(proxyCtx, egressproxy.Config{
+			SocketPath:    socketPath,
+			AllowlistPath: allowlistPath,
+		})
+	}()
+	if err := waitForUnixSocketOrExit(socketPath, errCh, 5*time.Second); err != nil {
+		cancel()
+		return nil, err
+	}
+	return func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+		}
+	}, nil
+}
+
+func unixSocketAccepts(path string) bool {
+	conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func waitForUnixSocketOrExit(path string, errCh <-chan error, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			if err == nil {
+				return fmt.Errorf("native egress proxy exited before socket became ready")
+			}
+			return fmt.Errorf("start native egress proxy: %w", err)
+		default:
+		}
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("native egress proxy socket %s did not become ready within %s: %w", path, timeout, lastErr)
+}
+
 func exitCodeFromError(err error) (int, bool) {
 	if err == nil {
 		return 0, false
@@ -1590,7 +1792,9 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	}
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
-	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
+	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
+		return err
+	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -1682,7 +1886,9 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 	parsed.opts.Repo = repo
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
-	applyNativeConfigDefaults(ctx, cfg, &parsed.opts)
+	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
+		return err
+	}
 	runtimeChecks, repoChecks, err := readinessChecksFor(ctx, parsed)
 	if err != nil {
 		return err

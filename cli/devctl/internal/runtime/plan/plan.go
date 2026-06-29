@@ -2,6 +2,8 @@ package plan
 
 import (
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,10 +20,11 @@ type Bind struct {
 }
 
 type ProxyConfig struct {
-	HTTPProxy  string `json:"http_proxy"`
-	HTTPSProxy string `json:"https_proxy"`
-	NoProxy    string `json:"no_proxy"`
-	UnixSocket string `json:"unix_socket,omitempty"`
+	HTTPProxy     string `json:"http_proxy"`
+	HTTPSProxy    string `json:"https_proxy"`
+	NoProxy       string `json:"no_proxy"`
+	UnixSocket    string `json:"unix_socket,omitempty"`
+	AllowlistPath string `json:"allowlist_path,omitempty"`
 }
 
 type DNSConfig struct {
@@ -74,9 +77,13 @@ type BuildOptions struct {
 	BrokerEndpoint        string
 	Proxy                 string
 	ProxySocket           string
+	IsolationProfile      string
+	EgressAllowlist       string
 	DNSResolvConf         string
 	DedicatedWorktree     bool
 }
+
+const IsolationProfileWorkspaceEgress = "workspace-egress"
 
 func Build(opts BuildOptions) (Plan, error) {
 	project := strings.TrimSpace(opts.Project)
@@ -133,16 +140,37 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	dockerHost := "unix://" + broker
 	dockerAPIVersion := "1.52"
-	javaToolOptions := strings.Join([]string{
+	javaOptions := []string{
 		"-Dapi.version=" + dockerAPIVersion,
 		"-Ddocker.api.version=" + dockerAPIVersion,
 		"-Ddocker.host=" + dockerHost,
-	}, " ")
+	}
 	proxyURL := strings.TrimSpace(opts.Proxy)
 	proxySocket := strings.TrimSpace(opts.ProxySocket)
+	isolationProfile := normalizeIsolationProfile(opts.IsolationProfile)
+	if isolationProfile != "" && isolationProfile != IsolationProfileWorkspaceEgress {
+		return Plan{}, fmt.Errorf("unknown isolation profile %q", opts.IsolationProfile)
+	}
+	egressAllowlist := strings.TrimSpace(opts.EgressAllowlist)
+	if isolationProfile == "" && egressAllowlist != "" {
+		return Plan{}, fmt.Errorf("egress allowlist requires an isolation profile")
+	}
+	if isolationProfile == IsolationProfileWorkspaceEgress {
+		if egressAllowlist == "" {
+			return Plan{}, fmt.Errorf("workspace-egress isolation requires an egress allowlist")
+		}
+		if proxySocket == "" {
+			agentName := agent.ID{Project: project, Index: index, Repo: repo}.Name()
+			proxySocket = filepath.Join(paths.DevRoot, ".devkit", "native-egress", agentName+"-"+IsolationProfileWorkspaceEgress+".sock")
+		}
+	}
 	if proxySocket != "" && proxyURL == "" {
 		proxyURL = "http://127.0.0.1:18888"
 	}
+	if proxyURL != "" {
+		javaOptions = append(javaOptions, javaProxyOptions(proxyURL)...)
+	}
+	javaToolOptions := strings.Join(javaOptions, " ")
 	resolvConf := strings.TrimSpace(opts.DNSResolvConf)
 	if resolvConf == "" {
 		resolvConf = filepath.Join(paths.HostAgentStateRoot, "resolv.conf")
@@ -153,6 +181,10 @@ func Build(opts BuildOptions) (Plan, error) {
 	sbtBootDir := filepath.Join(sbtGlobalBase, "boot")
 	sbtIvyHome := filepath.Join(sharedCacheRoot, "ivy2")
 	coursierCache := filepath.Join(sharedCacheRoot, "coursier")
+	if isolationProfile == IsolationProfileWorkspaceEgress {
+		sbtIvyHome = filepath.Join(paths.SandboxHome, ".cache", "ivy2")
+		coursierCache = filepath.Join(paths.SandboxHome, ".cache", "coursier")
+	}
 	sbtOpts := strings.Join([]string{
 		"-Xmx6G",
 		"-XX:+UseG1GC",
@@ -189,6 +221,34 @@ func Build(opts BuildOptions) (Plan, error) {
 	if proxyURL != "" {
 		env["HTTP_PROXY"] = proxyURL
 		env["HTTPS_PROXY"] = proxyURL
+		env["http_proxy"] = proxyURL
+		env["https_proxy"] = proxyURL
+		env["no_proxy"] = env["NO_PROXY"]
+	}
+	if isolationProfile != "" {
+		env["DEVKIT_NATIVE_ISOLATION_PROFILE"] = isolationProfile
+	}
+
+	binds := []Bind{
+		{Source: paths.DevRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
+		{Source: paths.DevRoot, Target: paths.DevRoot, Mode: "rw", Required: true},
+		{Source: paths.HostWorktree, Target: "/workspace", Mode: "rw", Required: true},
+		{Source: paths.HostWorktreeRoot, Target: paths.SandboxWorktreeRoot, Mode: "rw", Required: false},
+		{Source: paths.HostStateRoot, Target: paths.SandboxStateRoot, Mode: "rw", Required: true},
+		{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
+		{Source: broker, Target: broker, Mode: "rw", Required: false},
+		{Source: resolvConf, Target: "/etc/resolv.conf", Mode: "ro", Required: false},
+	}
+	notes := []string{
+		"plan only: no sandbox is launched by this command",
+		"standard agents must use brokered OCI access only",
+	}
+	if isolationProfile == IsolationProfileWorkspaceEgress {
+		binds = workspaceEgressBinds(paths, opts.Paths.Root, repo, broker, resolvConf)
+		notes = append(notes,
+			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
+			"isolation profile workspace-egress: filesystem binds are limited to the worktree, per-agent home, exact Git metadata, runtime support, and capability sockets",
+		)
 	}
 
 	p := Plan{
@@ -214,22 +274,14 @@ func Build(opts BuildOptions) (Plan, error) {
 		Flake:               flake,
 		FlakeInputOverrides: normalizeFlakeInputOverrides(opts.FlakeInputOverrides),
 		Launcher:            launcher,
-		Binds: []Bind{
-			{Source: paths.DevRoot, Target: "/workspaces/dev", Mode: "rw", Required: true},
-			{Source: paths.DevRoot, Target: paths.DevRoot, Mode: "rw", Required: true},
-			{Source: paths.HostWorktree, Target: "/workspace", Mode: "rw", Required: true},
-			{Source: paths.HostWorktreeRoot, Target: paths.SandboxWorktreeRoot, Mode: "rw", Required: false},
-			{Source: paths.HostStateRoot, Target: paths.SandboxStateRoot, Mode: "rw", Required: true},
-			{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
-			{Source: broker, Target: broker, Mode: "rw", Required: false},
-			{Source: resolvConf, Target: "/etc/resolv.conf", Mode: "ro", Required: false},
-		},
-		Env: env,
+		Binds:               binds,
+		Env:                 env,
 		Proxy: ProxyConfig{
-			HTTPProxy:  proxyURL,
-			HTTPSProxy: proxyURL,
-			NoProxy:    env["NO_PROXY"],
-			UnixSocket: proxySocket,
+			HTTPProxy:     proxyURL,
+			HTTPSProxy:    proxyURL,
+			NoProxy:       env["NO_PROXY"],
+			UnixSocket:    proxySocket,
+			AllowlistPath: egressAllowlist,
 		},
 		DNS: DNSConfig{
 			ResolvConf: resolvConf,
@@ -242,16 +294,133 @@ func Build(opts BuildOptions) (Plan, error) {
 			Memory: "4G",
 			Pids:   "1024",
 		},
-		Notes: []string{
-			"plan only: no sandbox is launched by this command",
-			"standard agents must use brokered OCI access only",
-		},
+		Notes: notes,
 	}
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})
 	}
 	p.LauncherArgs = launcherArgs(p)
 	return p, nil
+}
+
+func normalizeIsolationProfile(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "", "none", "default":
+		return ""
+	case "workspace-egress", "workspace_egress":
+		return IsolationProfileWorkspaceEgress
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func javaProxyOptions(proxyURL string) []string {
+	u, err := url.Parse(proxyURL)
+	if err != nil || strings.TrimSpace(u.Hostname()) == "" {
+		return nil
+	}
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		default:
+			port = "80"
+		}
+	}
+	host := u.Hostname()
+	return []string{
+		"-Dhttp.proxyHost=" + host,
+		"-Dhttp.proxyPort=" + port,
+		"-Dhttps.proxyHost=" + host,
+		"-Dhttps.proxyPort=" + port,
+	}
+}
+
+func workspaceEgressBinds(paths agent.Paths, devkitRoot string, repo string, broker string, resolvConf string) []Bind {
+	binds := []Bind{}
+	add := func(source, target, mode string, required bool) {
+		source = filepath.Clean(strings.TrimSpace(source))
+		target = filepath.Clean(strings.TrimSpace(target))
+		if source == "" || source == "." || target == "" || target == "." {
+			return
+		}
+		for _, bind := range binds {
+			if bind.Source == source && bind.Target == target {
+				return
+			}
+		}
+		binds = append(binds, Bind{Source: source, Target: target, Mode: mode, Required: required})
+	}
+	add(paths.HostWorktree, "/workspace", "rw", true)
+	add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
+	add(paths.HostHome, paths.SandboxHome, "rw", true)
+	add(devkitRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
+	for _, bind := range gitMetadataBinds(paths.HostWorktree) {
+		add(bind.Source, bind.Target, bind.Mode, bind.Required)
+	}
+	add(filepath.Join(paths.DevRoot, repo, ".git"), filepath.Join("/workspaces/dev", repo, ".git"), "ro", false)
+	add("/nix/store", "/nix/store", "ro", true)
+	add(broker, broker, "rw", false)
+	add(resolvConf, "/etc/resolv.conf", "ro", false)
+	return binds
+}
+
+func gitMetadataBinds(hostWorktree string) []Bind {
+	gitPath := filepath.Join(hostWorktree, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return nil
+	}
+	if info.IsDir() {
+		return nil
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return nil
+	}
+	gitDir := parseGitdirFile(string(data), hostWorktree)
+	if gitDir == "" {
+		return nil
+	}
+	commonDir := commonGitDir(gitDir)
+	if commonDir != "" {
+		return []Bind{{Source: commonDir, Target: commonDir, Mode: "rw", Required: true}}
+	}
+	return []Bind{{Source: gitDir, Target: gitDir, Mode: "rw", Required: true}}
+}
+
+func parseGitdirFile(data string, hostWorktree string) string {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(strings.ToLower(line), "gitdir:") {
+			continue
+		}
+		value := strings.TrimSpace(line[len("gitdir:"):])
+		if value == "" {
+			return ""
+		}
+		if filepath.IsAbs(value) {
+			return filepath.Clean(value)
+		}
+		return filepath.Clean(filepath.Join(hostWorktree, value))
+	}
+	return ""
+}
+
+func commonGitDir(gitDir string) string {
+	data, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return ""
+	}
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(filepath.Join(gitDir, value))
 }
 
 func BuildDevAll(opts BuildOptions) (Plan, error) {
@@ -369,7 +538,7 @@ func launcherArgs(p Plan) []string {
 }
 
 func nixDevelopArgs(p Plan) []string {
-	args := []string{"nix", "--extra-experimental-features", "nix-command flakes", "develop"}
+	args := []string{"nix", "--extra-experimental-features", "nix-command flakes", "--option", "flake-registry", "", "develop"}
 	names := make([]string, 0, len(p.FlakeInputOverrides))
 	for name := range p.FlakeInputOverrides {
 		names = append(names, name)

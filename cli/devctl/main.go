@@ -389,7 +389,7 @@ Commands:
   broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]
   scale N [--repo REPO] [--broker-socket PATH] [--runtime-only|--repo-readiness] [--skip-ready]
   ensure-ready [--count N] [--repo REPO] [--runtime-only|--repo-readiness] [--broker-socket PATH] [--skip-broker]
-  exec <n> <cmd...>, attach <n>              (native for overlays with runtime.flake)
+  exec <n> [--isolation-profile NAME] <cmd...>, attach <n>              (native for overlays with runtime.flake)
   codex-auth reseed <n> [--service NAME]
   codex-auth reseed-all [indexes...] [--service NAME]
   allow <domain>, warm, maintain, check-net, check-codex, check-sts
@@ -403,9 +403,9 @@ Commands:
   wt-open [--session NAME] [--plain] [--index N|--count N] [--service NAME] [--cd PATH], wt-release [--session NAME]
   tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
-  native plan --repo REPO [--index N] [--flake REF] [--launcher bubblewrap|systemd-run] [--format text|json]
+  native plan --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--launcher bubblewrap|systemd-run] [--format text|json]
   native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX] [--format text|json]
-  native exec --repo REPO [--index N] [--flake REF] [--proxy-socket SOCK] [--dry-run] [-- COMMAND...]
+  native exec --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
   native capacity --repo REPO [--count N] [--flake REF] [--runtime-only|--repo-readiness] [--format text|json]
   native egress-proxy [--socket SOCK] [--allowlist FILE]

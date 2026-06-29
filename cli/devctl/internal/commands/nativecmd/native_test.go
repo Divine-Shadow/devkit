@@ -448,6 +448,87 @@ func TestLifecyclePlanOptionsCLIOverridesOverlayNativeRoots(t *testing.T) {
 	}
 }
 
+func TestLifecyclePlanOptionsResolvesWorkspaceEgressProfileFromOverlay(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		SourceDir: "/home/me/dev/ouroboros-ide/infra/ourchitect/overlay",
+		Native: config.Native{
+			IsolationProfiles: map[string]config.IsolationProfile{
+				"workspace-egress": {
+					Filesystem:      "workspace-only",
+					EgressAllowlist: "../../docker/dev/tinyproxy/allowlist.txt",
+					ProxySocket:     "../.devkit/native-egress/ouro-agent3.sock",
+					Proxy:           "http://127.0.0.1:18888",
+				},
+			},
+		},
+	}, lifecycleArgs{isolationProfile: "workspace-egress"}, "ouroboros-ide", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.IsolationProfile != "workspace-egress" {
+		t.Fatalf("isolation profile = %q", opts.IsolationProfile)
+	}
+	wantAllowlist := "/home/me/dev/ouroboros-ide/infra/docker/dev/tinyproxy/allowlist.txt"
+	if opts.EgressAllowlist != wantAllowlist {
+		t.Fatalf("egress allowlist = %q, want %q", opts.EgressAllowlist, wantAllowlist)
+	}
+	if opts.ProxySocket != "/home/me/dev/.devkit/native-egress/ouro-agent3.sock" {
+		t.Fatalf("proxy socket = %q", opts.ProxySocket)
+	}
+	if opts.Proxy != "http://127.0.0.1:18888" {
+		t.Fatalf("proxy = %q", opts.Proxy)
+	}
+}
+
+func TestLifecyclePlanOptionsCLIAllowlistOverridesProfileAllowlist(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		SourceDir: "/home/me/dev/ouroboros-ide/infra/ourchitect/overlay",
+		Native: config.Native{
+			IsolationProfiles: map[string]config.IsolationProfile{
+				"workspace-egress": {EgressAllowlist: "../../docker/dev/tinyproxy/allowlist.txt"},
+			},
+		},
+	}, lifecycleArgs{
+		isolationProfile: "workspace-egress",
+		egressAllowlist:  "/tmp/custom-allowlist.txt",
+	}, "ouroboros-ide", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.EgressAllowlist != "/tmp/custom-allowlist.txt" {
+		t.Fatalf("egress allowlist = %q", opts.EgressAllowlist)
+	}
+}
+
+func TestLifecyclePlanOptionsDiscoversRepoOwnedIsolationProfile(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	overlayDir := filepath.Join(devRoot, "ouroboros-ide", "infra", "ourchitect", "overlay")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(overlayDir, "devkit.yaml"), []byte(""+
+		"native:\n"+
+		"  isolation_profiles:\n"+
+		"    workspace-egress:\n"+
+		"      filesystem: workspace-only\n"+
+		"      egress_allowlist: ../../docker/dev/tinyproxy/allowlist.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cmdregistry.Context{
+		Project: "dev-all",
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{}, lifecycleArgs{isolationProfile: "workspace-egress"}, "ouroboros-ide", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	want := filepath.Join(devRoot, "ouroboros-ide", "infra", "docker", "dev", "tinyproxy", "allowlist.txt")
+	if opts.EgressAllowlist != want {
+		t.Fatalf("egress allowlist = %q, want %q", opts.EgressAllowlist, want)
+	}
+}
+
 func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
 	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	cfg := config.OverlayConfig{Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"}}
@@ -484,9 +565,11 @@ func TestLifecycleBrokerConfigHonorsExplicitStateRootWithSocket(t *testing.T) {
 func TestApplyNativeConfigDefaultsUsesOverlayBrokerSocket(t *testing.T) {
 	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	opts := nativeplan.BuildOptions{}
-	applyNativeConfigDefaults(ctx, config.OverlayConfig{
+	if err := applyNativeConfigDefaults(ctx, config.OverlayConfig{
 		Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"},
-	}, &opts)
+	}, &opts); err != nil {
+		t.Fatalf("applyNativeConfigDefaults: %v", err)
+	}
 	if opts.BrokerEndpoint != "/home/me/dev/.devkit/native-broker/broker.sock" {
 		t.Fatalf("broker endpoint = %q", opts.BrokerEndpoint)
 	}

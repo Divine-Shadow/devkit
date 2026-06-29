@@ -84,6 +84,12 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"  state_root: ../.devkit/native-agents\n" +
 		"  worktree_container_root: /worktrees\n" +
 		"  state_container_root: /agent-state\n" +
+		"  isolation_profiles:\n" +
+		"    workspace-egress:\n" +
+		"      filesystem: workspace-only\n" +
+		"      egress_allowlist: ../../docker/dev/tinyproxy/allowlist.txt\n" +
+		"      proxy_socket: ../.devkit/native-egress/ouro.sock\n" +
+		"      proxy: http://127.0.0.1:18888\n" +
 		"runtime:\n" +
 		"  flake: ./overlays/dev-all#default\n"
 	if err := os.WriteFile(filepath.Join(over, "devkit.yaml"), []byte(yaml), 0o644); err != nil {
@@ -116,6 +122,13 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if cfg.Native.WorktreeContainerRoot != "/worktrees" || cfg.Native.StateContainerRoot != "/agent-state" {
 		t.Fatalf("native container roots = %#v", cfg.Native)
+	}
+	profile := cfg.Native.IsolationProfiles["workspace-egress"]
+	if profile.Filesystem != "workspace-only" || profile.EgressAllowlist != "../../docker/dev/tinyproxy/allowlist.txt" {
+		t.Fatalf("workspace-egress profile = %#v", profile)
+	}
+	if profile.ProxySocket != "../.devkit/native-egress/ouro.sock" || profile.Proxy != "http://127.0.0.1:18888" {
+		t.Fatalf("workspace-egress proxy = %#v", profile)
 	}
 	if cfg.Runtime.Flake != "./overlays/dev-all#default" {
 		t.Fatalf("runtime flake = %q", cfg.Runtime.Flake)

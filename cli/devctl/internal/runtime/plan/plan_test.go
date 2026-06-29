@@ -144,6 +144,106 @@ func TestBuildDevAllProxySocketUsesLocalProxy(t *testing.T) {
 	}
 }
 
+func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	hostWorktree := filepath.Join(devRoot, "agent-worktrees", "agent3", "ouroboros-ide")
+	commonGitDir := filepath.Join(devRoot, "ouroboros-ide", ".git")
+	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "agent3")
+	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+worktreeGitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := BuildDevAll(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            3,
+		Repo:             "ouroboros-ide",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devRoot, "ouroboros-ide", "infra", "docker", "dev", "tinyproxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if !hasBind(p.Binds, hostWorktree, "/workspace") {
+		t.Fatalf("workspace-egress must mount worktree at /workspace: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, hostWorktree, "/workspaces/dev/agent-worktrees/agent3/ouroboros-ide") {
+		t.Fatalf("workspace-egress must preserve canonical worktree path: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3"), "/workspaces/dev/agent-worktrees/agent3/.devhome-agent3") {
+		t.Fatalf("workspace-egress must mount exact agent home: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, devkitRoot, "/workspaces/dev/devkit") {
+		t.Fatalf("workspace-egress must mount exact devkit runtime root: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, commonGitDir, commonGitDir) {
+		t.Fatalf("workspace-egress must mount exact git common dir: %#v", p.Binds)
+	}
+	for _, forbidden := range [][2]string{
+		{devRoot, "/workspaces/dev"},
+		{devRoot, devRoot},
+		{filepath.Join(devRoot, "agent-worktrees"), "/workspaces/dev/agent-worktrees"},
+		{filepath.Join(devRoot, ".devkit", "native-agents"), "/agent-state"},
+	} {
+		if hasBind(p.Binds, forbidden[0], forbidden[1]) {
+			t.Fatalf("workspace-egress must not include broad bind %s -> %s: %#v", forbidden[0], forbidden[1], p.Binds)
+		}
+	}
+	if p.Env["SBT_IVY_HOME"] != filepath.Join(p.Agent.SandboxHome, ".cache", "ivy2") {
+		t.Fatalf("SBT_IVY_HOME = %q", p.Env["SBT_IVY_HOME"])
+	}
+	if p.Env["COURSIER_CACHE"] != filepath.Join(p.Agent.SandboxHome, ".cache", "coursier") {
+		t.Fatalf("COURSIER_CACHE = %q", p.Env["COURSIER_CACHE"])
+	}
+	if strings.Contains(strings.Join([]string{p.Env["SBT_OPTS"], p.Env["SBT_IVY_HOME"], p.Env["COURSIER_CACHE"]}, " "), "/workspaces/dev/.cache/shared") {
+		t.Fatalf("workspace-egress env must not reference shared host caches: %#v", p.Env)
+	}
+	wantSocket := filepath.Join(devRoot, ".devkit", "native-egress", "dev-all-agent3-workspace-egress.sock")
+	if p.Proxy.UnixSocket != wantSocket {
+		t.Fatalf("proxy socket = %q, want %q", p.Proxy.UnixSocket, wantSocket)
+	}
+	if p.Proxy.AllowlistPath == "" {
+		t.Fatalf("proxy allowlist not set")
+	}
+	if p.Env["HTTP_PROXY"] != "http://127.0.0.1:18888" || p.Env["http_proxy"] != "http://127.0.0.1:18888" {
+		t.Fatalf("proxy env = %#v", p.Env)
+	}
+	if p.Env["DEVKIT_NATIVE_ISOLATION_PROFILE"] != "workspace-egress" {
+		t.Fatalf("DEVKIT_NATIVE_ISOLATION_PROFILE = %q", p.Env["DEVKIT_NATIVE_ISOLATION_PROFILE"])
+	}
+	for _, want := range []string{
+		"-Dhttp.proxyHost=127.0.0.1",
+		"-Dhttp.proxyPort=18888",
+		"-Dhttps.proxyHost=127.0.0.1",
+		"-Dhttps.proxyPort=18888",
+	} {
+		if !strings.Contains(p.Env["JAVA_TOOL_OPTIONS"], want) {
+			t.Fatalf("JAVA_TOOL_OPTIONS missing %q: %q", want, p.Env["JAVA_TOOL_OPTIONS"])
+		}
+	}
+}
+
+func TestBuildWorkspaceEgressRequiresAllowlist(t *testing.T) {
+	_, err := BuildDevAll(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: "/repo/devkit"},
+		Project:          "dev-all",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires an egress allowlist") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 	p, err := Build(BuildOptions{
 		Paths:   devkitpaths.Paths{Root: "/repo/devkit"},
