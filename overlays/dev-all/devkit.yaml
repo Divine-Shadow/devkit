@@ -13,7 +13,7 @@ defaults:
   require_warm: true
 runtime:
   flake: ./overlays/dev-all#default
-  codex_version: 0.141.0
+  codex_version: 0.142.4
   core_check: bash scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.
 readiness:

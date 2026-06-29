@@ -37,7 +37,7 @@
           hashicorpArch = "amd64";
           goArch = "amd64";
           codexAsset = "codex-x86_64-unknown-linux-musl";
-          codexHash = "sha256-8eK/n6C6brghGdYhtrcbw47dM8BtwoZ7MaAnBSNYlX0=";
+          codexHash = "sha256-8KxDdRxtOympc6hgqN5SitecsgzBKWYRkwo9XJHd75U=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -48,22 +48,24 @@
           hashicorpArch = "arm64";
           goArch = "arm64";
           codexAsset = "codex-aarch64-unknown-linux-musl";
-          codexHash = "sha256-jJ8xgR1ln8wXxfGiG8CXGYRGnJ46Y8Kzm2HMdpTzoQE=";
+          codexHash = "sha256-pUbuBZFTE/6jQPgxW1T0PQd/Q5Cvu1ry3pRNSAE9RH8=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
-      codexVersion = "0.141.0";
+      codexVersion = "0.142.4";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";
+      governanceJarVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";
+      submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";
       sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
+      submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";
       sbtControlPlaneRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${sbtControlPlaneRuntimeVersion}";
       mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
-      mkPinnedSubmitToCiJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
-      mkPinnedArtifactColumnPluginRepository = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
+      mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
+      mkPinnedArtifactColumnPluginRepository = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
       mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-jar;
     in
     {
