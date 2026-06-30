@@ -1227,6 +1227,7 @@ func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog
 		add(id, root)
 	}
 	add("email-policy-mcp-app", "/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide")
+	add("shadow1-workbook-patch-mcp-localcontext", "/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide")
 	// Keep the shared catalog source-derived and predictable. Ad-hoc worktrees
 	// need explicit launch identity instead of being broadcast to every
 	// governed app-server, especially Terraform lanes.

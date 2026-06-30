@@ -1029,6 +1029,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"agent1-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform",
 		"agent9-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent9/ouroboros-terraform",
 		"email-policy-mcp-app=/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide",
+		"shadow1-workbook-patch-mcp-localcontext=/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
 	} {
@@ -1103,6 +1104,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
 		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
 		`"email-policy-mcp-app": "/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide"`,
+		`"shadow1-workbook-patch-mcp-localcontext": "/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide"`,
 		`"schemaRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
 	} {
