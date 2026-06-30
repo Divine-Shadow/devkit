@@ -925,6 +925,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 	sandboxDevRoot := "/workspaces/dev"
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
 	stateDir := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
+	decisionLogPath := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "execution-graph-decisions.jsonl")
 	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
 	runtimeFlake := ouroGovernanceRuntimeFlake()
 	lines := []string{
@@ -1177,6 +1178,7 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export SUBAGENT_GOVERNANCE_FORWARD_SERVER_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR="+stateDir,
+		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH="+decisionLogPath,
 		"",
 	)
 	return strings.Join(lines, "\n")
@@ -1238,12 +1240,13 @@ func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
 	type governanceAdapter struct {
-		KnownWorkspaceIDs    []string          `json:"knownWorkspaceIds"`
-		WorkspaceRoots       map[string]string `json:"workspaceRoots"`
-		SchemaRoot           string            `json:"schemaRoot"`
-		ControlPlaneURL      string            `json:"controlPlaneUrl"`
-		WarmHookCommand      string            `json:"warmHookCommand"`
-		ControlPlaneStateDir string            `json:"controlPlaneStateDir"`
+		KnownWorkspaceIDs             []string          `json:"knownWorkspaceIds"`
+		WorkspaceRoots                map[string]string `json:"workspaceRoots"`
+		SchemaRoot                    string            `json:"schemaRoot"`
+		ControlPlaneURL               string            `json:"controlPlaneUrl"`
+		WarmHookCommand               string            `json:"warmHookCommand"`
+		ControlPlaneStateDir          string            `json:"controlPlaneStateDir"`
+		ExecutionGraphDecisionLogPath string            `json:"executionGraphDecisionLogPath"`
 	}
 	type repoConfig struct {
 		WorkspaceRoot     string            `json:"workspaceRoot"`
@@ -1259,12 +1262,13 @@ func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
 		PolicyCatalogPath: governanceSourceRoot + "/catalog/policies.json",
 		PromptBundleRoot:  governanceSourceRoot + "/skills",
 		GovernanceAdapter: governanceAdapter{
-			KnownWorkspaceIDs:    catalog.ids,
-			WorkspaceRoots:       catalog.rootMap,
-			SchemaRoot:           governanceSourceRoot + "/schemas",
-			ControlPlaneURL:      "http://127.0.0.1:7778",
-			WarmHookCommand:      "scripts/devops/governance-control-plane warm",
-			ControlPlaneStateDir: "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane",
+			KnownWorkspaceIDs:             catalog.ids,
+			WorkspaceRoots:                catalog.rootMap,
+			SchemaRoot:                    governanceSourceRoot + "/schemas",
+			ControlPlaneURL:               "http://127.0.0.1:7778",
+			WarmHookCommand:               "scripts/devops/governance-control-plane warm",
+			ControlPlaneStateDir:          "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane",
+			ExecutionGraphDecisionLogPath: "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl",
 		},
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")

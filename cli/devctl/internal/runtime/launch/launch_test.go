@@ -1032,6 +1032,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"shadow1-workbook-patch-mcp-localcontext=/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
+		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl",
 	} {
 		if !strings.Contains(gotEnv, want) {
 			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
@@ -1107,6 +1108,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"shadow1-workbook-patch-mcp-localcontext": "/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide"`,
 		`"schemaRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
+		`"controlPlaneStateDir": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
@@ -1217,6 +1220,7 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	for _, want := range []string{
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
 		`"agent1-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
@@ -1391,6 +1395,7 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 		`"dev-workspace": "/workspaces/dev"`,
 		`"ouroboros-ide": "/workspaces/dev/ouroboros-ide"`,
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
