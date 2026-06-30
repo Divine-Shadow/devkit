@@ -383,6 +383,8 @@ func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved s
 		`startup_timeout_sec = 240`,
 		`tool_timeout_sec = 10800`,
 		`default_tools_approval_mode = "approve"`,
+		`"governance.get_run_status"`,
+		`"governance.cancel_run"`,
 		`DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
 		`SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
 		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
