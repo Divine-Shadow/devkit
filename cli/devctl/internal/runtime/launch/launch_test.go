@@ -75,7 +75,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "ce8b8d12aa2cf5e5385d5ffec0309a4fd7ae5dd3";`,
+		`governanceJarVersion = "0e3a0196993a21686ad3581f8cae96dd58f52053";`,
 		`submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";`,
 		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
@@ -383,8 +383,8 @@ func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved s
 		`startup_timeout_sec = 240`,
 		`tool_timeout_sec = 10800`,
 		`default_tools_approval_mode = "approve"`,
-		`"governance.get_run_status"`,
-		`"governance.cancel_run"`,
+		`"get_run_status"`,
+		`"cancel_run"`,
 		`DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
 		`SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
 		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
