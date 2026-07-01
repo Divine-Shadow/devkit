@@ -9,7 +9,7 @@ runtime:
   flake: ./overlays/ouroboros-terraform#default
   flake_input_overrides:
     ouroboros-terraform: ../ouroboros-terraform
-  codex_version: 0.139.0
+  codex_version: 0.142.5
   core_check: terraform fmt -check -recursive
   notes: Thin devkit adapter; canonical tool requirements live in ../ouroboros-terraform/flake.nix and devkit.yaml, and devkit must pass the ouroboros-terraform flake input override explicitly.
 readiness:

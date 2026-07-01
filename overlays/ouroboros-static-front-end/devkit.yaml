@@ -7,7 +7,7 @@ defaults:
   branch_prefix: agent
 runtime:
   flake: ./overlays/ouroboros-static-front-end#default
-  codex_version: 0.139.0
+  codex_version: 0.142.5
   core_check: npm run build:fixture
   notes: Node/Gatsby runtime for the standalone static front end.
 readiness:

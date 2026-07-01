@@ -37,7 +37,7 @@
           hashicorpArch = "amd64";
           goArch = "amd64";
           codexAsset = "codex-x86_64-unknown-linux-musl";
-          codexHash = "sha256-8KxDdRxtOympc6hgqN5SitecsgzBKWYRkwo9XJHd75U=";
+          codexHash = "sha256-y5M+w8thv0tfyI7s9eYUmCn6phclNbbvCvsBVL60qrg=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -48,14 +48,14 @@
           hashicorpArch = "arm64";
           goArch = "arm64";
           codexAsset = "codex-aarch64-unknown-linux-musl";
-          codexHash = "sha256-pUbuBZFTE/6jQPgxW1T0PQd/Q5Cvu1ry3pRNSAE9RH8=";
+          codexHash = "sha256-sYx1xJZFkY+uI766CrQcBfB5QWAVEKJFG6l/5RlXPDg=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
-      codexVersion = "0.142.4";
+      codexVersion = "0.142.5";
       codexReleaseTag = "rust-v${codexVersion}";
       governanceJarVersion = "b3f081db035cfab4a3ee699a353d5f0e35e8ff62";
       submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";
