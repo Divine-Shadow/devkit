@@ -52,6 +52,29 @@ func TestParseSandboxReadinessResultsPreservesPerCheckDetails(t *testing.T) {
 	}
 }
 
+func TestGovernanceEnvHostDevRootPrefersWorkspaceBind(t *testing.T) {
+	plan := nativeplan.Plan{
+		DevkitHostRoot: "/tmp/devkit-worktree/devkit",
+		Binds: []nativeplan.Bind{{
+			Source:   "/workspaces/dev",
+			Target:   "/workspaces/dev",
+			Required: true,
+		}},
+	}
+
+	if got := governanceEnvHostDevRoot(plan); got != "/workspaces/dev" {
+		t.Fatalf("host dev root = %q, want /workspaces/dev", got)
+	}
+}
+
+func TestGovernanceEnvHostDevRootFallsBackToDevkitParent(t *testing.T) {
+	plan := nativeplan.Plan{DevkitHostRoot: "/workspaces/dev/devkit"}
+
+	if got := governanceEnvHostDevRoot(plan); got != "/workspaces/dev" {
+		t.Fatalf("host dev root = %q, want /workspaces/dev", got)
+	}
+}
+
 func TestRepoChecksForUsesStructuredOverlayChecks(t *testing.T) {
 	tmp := t.TempDir()
 	overlay := filepath.Join(tmp, "overlays", "dev-all")

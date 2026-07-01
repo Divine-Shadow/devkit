@@ -16,6 +16,9 @@ the Ouroboros governance jar that canonicalizes equivalent
 - The built jar's `Main$` bytecode shows `canonicalWorkspaceRootString` maps
   through the fleet alias canonicalization helper rather than only normalizing
   the input path.
+- `devkit native governance-env` can regenerate the shared Ouro governance env
+  and repo-config without invoking full native prepare or mutating per-agent
+  homes, `.codex`, shell snapshots, or live app-server processes.
 - Deployment remains separate: live app-server/governance restart requires the
   promoted fleet deploy lane and operator authority for disruptive restart.
 
@@ -33,6 +36,10 @@ the Ouroboros governance jar that canonicalizes equivalent
   so the pin was advanced there.
 - 2026-07-01: `nix build .#pinned-governance-jar --no-warn-dirty` passed and
   produced `/nix/store/qpy95b39qm44vwbj24rs1znwviwn2za8-subagent-governance-dev`.
+- 2026-07-01: Added `native governance-env --repo ouroboros-ide` as an
+  env-only regeneration command. It calls the existing Ouro governance env
+  generator directly and avoids the broader `native prepare` path that also
+  writes per-agent home and Codex state.
 
 ## Decision Log
 
@@ -40,6 +47,10 @@ the Ouroboros governance jar that canonicalizes equivalent
   checkout already contains unrelated Codex-version changes. Mixing this pin
   refresh into that dirty checkout would obscure custody and weaken convergence
   evidence.
+- Expose a source-owned env-only command rather than telling operators or
+  agents to run full `native prepare` for a governance jar/env refresh. That
+  preserves the fleet invariant while avoiding unrelated `.codex` and
+  per-agent-home mutations.
 
 ## Verification
 
@@ -50,9 +61,16 @@ the Ouroboros governance jar that canonicalizes equivalent
 - `javap` on the built `Main$` class shows `canonicalWorkspaceRootString`
   invoking `canonicalFleetDevRootAlias`, with constants `/home/bayesartre/dev`
   and `/workspaces/dev`.
+- `go test ./internal/commands/nativecmd ./internal/runtime/launch` passed from
+  `cli/devctl`.
+- `make build` passed from `cli/devctl` and produced the updated devctl binary.
+- `DEVKIT_ROOT=/workspaces/dev/devkit .../kit/bin/devctl -p dev-all native governance-env --repo ouroboros-ide --dry-run --format json`
+  reported planned writes only to `/workspaces/dev/.devkit/ouro8-governance-env.sh`
+  and `/workspaces/dev/.devkit/ouro8-governance-repo-env.json`.
 
 ## Outcomes & Retrospective
 
-- Source pin is ready for integration into the canonical devkit checkout and
-  later fleet deployment. Live app-server convergence remains a separate,
-  operator-authorized action through `bin/fleet governance deploy-jar`.
+- Source pin and env-only regeneration tooling are ready for integration into
+  the canonical devkit checkout and later fleet deployment. Live app-server
+  convergence remains a separate, operator-authorized action through
+  `bin/fleet governance deploy-jar`.

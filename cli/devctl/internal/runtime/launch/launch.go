@@ -103,6 +103,29 @@ func Prepare(p nativeplan.Plan) error {
 	return nil
 }
 
+type OuroGovernanceEnvPaths struct {
+	EnvPath        string
+	RepoConfigPath string
+}
+
+func PrepareOuroGovernanceEnv(p nativeplan.Plan) (OuroGovernanceEnvPaths, error) {
+	if !isOuroGovernedPlan(p) {
+		return OuroGovernanceEnvPaths{}, fmt.Errorf("native governance-env only supports ouroboros-ide and ouroboros-terraform plans")
+	}
+	hostDevRoot := hostDevRootForPlan(p)
+	if hostDevRoot == "" {
+		return OuroGovernanceEnvPaths{}, fmt.Errorf("native governance-env could not resolve host dev root")
+	}
+	paths := OuroGovernanceEnvPaths{
+		EnvPath:        filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh"),
+		RepoConfigPath: filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json"),
+	}
+	if err := ensureOuroGovernanceEnv(p); err != nil {
+		return paths, err
+	}
+	return paths, nil
+}
+
 const (
 	gitSSHManagedBegin = "# BEGIN DEVKIT NATIVE GIT SSH"
 	gitSSHManagedEnd   = "# END DEVKIT NATIVE GIT SSH"

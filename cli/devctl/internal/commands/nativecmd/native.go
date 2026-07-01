@@ -50,6 +50,8 @@ func handle(ctx *cmdregistry.Context) error {
 		return handlePlan(ctx)
 	case "prepare":
 		return handlePrepare(ctx)
+	case "governance-env":
+		return handleGovernanceEnv(ctx)
 	case "exec":
 		return handleExec(ctx)
 	case "readiness":
@@ -1509,6 +1511,90 @@ func handlePlan(ctx *cmdregistry.Context) error {
 		return fmt.Errorf("--format must be text or json")
 	}
 	return nil
+}
+
+func handleGovernanceEnv(ctx *cmdregistry.Context) error {
+	parsed, err := parsePlanArgs(ctx, false, false)
+	if err != nil {
+		return err
+	}
+	if parsed.repoCheck != "" {
+		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
+	}
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	parsed.opts.BaseBranch = parsed.baseBranch
+	parsed.opts.BranchPrefix = parsed.branchPrefix
+	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
+		return err
+	}
+	p, err := nativeplan.BuildDevAll(parsed.opts)
+	if err != nil {
+		return err
+	}
+	repo := strings.TrimSpace(p.Agent.ID.Repo)
+	if repo != "ouroboros-ide" && repo != "ouroboros-terraform" {
+		return fmt.Errorf("native governance-env only supports ouroboros-ide and ouroboros-terraform plans")
+	}
+	hostDevRoot := governanceEnvHostDevRoot(p)
+	if hostDevRoot == "" {
+		return fmt.Errorf("native governance-env could not resolve host dev root")
+	}
+	envPaths := launch.OuroGovernanceEnvPaths{
+		EnvPath:        filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh"),
+		RepoConfigPath: filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json"),
+	}
+	status := "planned"
+	if !ctx.DryRun && !parsed.dryRun {
+		envPaths, err = launch.PrepareOuroGovernanceEnv(p)
+		if err != nil {
+			return err
+		}
+		status = "updated"
+	}
+	out := struct {
+		Repo           string `json:"repo"`
+		Status         string `json:"status"`
+		EnvPath        string `json:"env_path"`
+		RepoConfigPath string `json:"repo_config_path"`
+	}{
+		Repo:           repo,
+		Status:         status,
+		EnvPath:        envPaths.EnvPath,
+		RepoConfigPath: envPaths.RepoConfigPath,
+	}
+	switch parsed.format {
+	case "", "text":
+		fmt.Fprintf(os.Stdout, "repo: %s\nstatus: %s\nenv: %s\nrepo_config: %s\n", out.Repo, out.Status, out.EnvPath, out.RepoConfigPath)
+	case "json":
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(data))
+	default:
+		return fmt.Errorf("--format must be text or json")
+	}
+	return nil
+}
+
+func governanceEnvHostDevRoot(p nativeplan.Plan) string {
+	for _, bind := range p.Binds {
+		if filepath.Clean(strings.TrimSpace(bind.Target)) == "/workspaces/dev" {
+			source := strings.TrimSpace(bind.Source)
+			if source != "" {
+				return filepath.Clean(source)
+			}
+		}
+	}
+	devkitRoot := strings.TrimSpace(p.DevkitHostRoot)
+	if devkitRoot == "" {
+		return ""
+	}
+	devkitRoot = filepath.Clean(devkitRoot)
+	return filepath.Dir(devkitRoot)
 }
 
 func handlePrepare(ctx *cmdregistry.Context) error {
