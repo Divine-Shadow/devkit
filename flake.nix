@@ -57,7 +57,7 @@
       };
       codexVersion = "0.142.5";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "a580b040538328a59fee533d034a624505e2de9c";
+      governanceJarVersion = "e203a9b32e28a263580c1d400b7f6e3c6e44e61d";
       submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";
       sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
