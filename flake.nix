@@ -36,8 +36,8 @@
           dockerArch = "x86_64";
           hashicorpArch = "amd64";
           goArch = "amd64";
-          codexAsset = "codex-x86_64-unknown-linux-musl";
-          codexHash = "sha256-cliD/CCrSvMHKCmqoO320SwhYjj59zFaZla5UPsFyLs=";
+          codexAsset = "codex-package-x86_64-unknown-linux-musl";
+          codexHash = "sha256-awPS2JkQh0+lvie2F2Iddjj5BuiR/Yy0CvPSh2qKNv0=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -47,8 +47,8 @@
           dockerArch = "aarch64";
           hashicorpArch = "arm64";
           goArch = "arm64";
-          codexAsset = "codex-aarch64-unknown-linux-musl";
-          codexHash = "sha256-x8RKeVC9tVXHQ/W7X3rD7C7nwxGXDv/pL9OeguzMa1E=";
+          codexAsset = "codex-package-aarch64-unknown-linux-musl";
+          codexHash = "sha256-1YvgTm7oBIM8JbWGhp8fpn8n8L3D85EFoqm6zvFnrkI=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
@@ -84,8 +84,12 @@
             installPhase = ''
               runHook preInstall
               mkdir -p "$out/bin"
-              tar -xzf "$src" -C "$TMPDIR"
-              install -m 0755 "$TMPDIR/${details.codexAsset}" "$out/bin/codex"
+              tar --no-same-owner -xzf "$src" -C "$out"
+              test -x "$out/bin/codex"
+              test -x "$out/bin/codex-code-mode-host"
+              test -x "$out/codex-path/rg"
+              test -x "$out/codex-resources/bwrap"
+              test -x "$out/codex-resources/zsh/bin/zsh"
               runHook postInstall
             '';
           };
