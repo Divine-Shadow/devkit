@@ -10,7 +10,7 @@ runtime:
   # dev-all is the canonical ouroboros-ide runtime pairing.
   canonical: false
   flake: ./overlays/codex#default
-  codex_version: 0.142.5
+  codex_version: 0.144.0
   core_check: scripts/sbt2 "Compile / compile"
 readiness:
   default_mode: runtime-only

@@ -9,7 +9,7 @@ defaults:
   require_warm: false
 runtime:
   flake: ./overlays/dev-workspace#default
-  codex_version: 0.142.5
+  codex_version: 0.144.0
   notes: Native runtime for a Codex agent entered at the dev workspace root.
 readiness:
   default_mode: runtime-only
