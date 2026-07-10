@@ -75,8 +75,8 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "e203a9b32e28a263580c1d400b7f6e3c6e44e61d";`,
-		`submitRuntimeVersion = "a95db2da7c7f1f565918f726f962c3e779031e27";`,
+		`governanceJarVersion = "c70370f2478c39e4f65c611a9953e835cfb661b3";`,
+		`submitRuntimeVersion = "899c119bf2a7439023c7134844571b10279036f3";`,
 		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";`,
