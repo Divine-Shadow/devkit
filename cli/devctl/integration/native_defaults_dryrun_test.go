@@ -55,11 +55,11 @@ func writeNixCodexConfigSource(t *testing.T, root string) {
 	t.Helper()
 	config := strings.Join([]string{
 		"# source = nixos-wsl codex config",
-		`model = "gpt-5.5"`,
+		`model = "gpt-5.6-sol"`,
 		`model_provider = "openai"`,
 		"",
 		"[profiles.openai]",
-		`model = "gpt-5.5"`,
+		`model = "gpt-5.6-sol"`,
 		`model_provider = "openai"`,
 		"",
 	}, "\n")

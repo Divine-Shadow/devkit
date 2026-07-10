@@ -411,7 +411,7 @@ func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved s
 func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
 	parts := []string{
 		codexNixManagedConfigMarker,
-		`model = "gpt-5.5"`,
+		`model = "gpt-5.6-sol"`,
 		`model_provider = "openai"`,
 		`model_reasoning_effort = "xhigh"`,
 		`approval_policy = "never"`,
@@ -423,7 +423,7 @@ func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
 	parts = append(parts,
 		"",
 		"[profiles.openai]",
-		`model = "gpt-5.5"`,
+		`model = "gpt-5.6-sol"`,
 		`model_provider = "openai"`,
 		`model_reasoning_effort = "xhigh"`,
 		`approval_policy = "never"`,
@@ -794,7 +794,7 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if !strings.Contains(got, "command codex") {
 		t.Fatalf("repaired wrapper missing command codex:\n%s", got)
 	}
-	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.5", "    -a never", "    -s danger-full-access"} {
+	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.6-sol", "    -a never", "    -s danger-full-access"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("repaired wrapper must not override Codex config with CLI fragment %q:\n%s", forbidden, got)
 		}
@@ -855,7 +855,7 @@ codex() {
 	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
 		t.Fatalf("generated wrapper missing TUI log guard function:\n%s", got)
 	}
-	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.5", "    -a never", "    -s danger-full-access"} {
+	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.6-sol", "    -a never", "    -s danger-full-access"} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("generated wrapper must not override Codex config with CLI fragment %q:\n%s", forbidden, got)
 		}
