@@ -39,25 +39,26 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
-	Agent               agent.Spec        `json:"agent"`
-	DevkitHostRoot      string            `json:"devkit_host_root"`
-	DevkitSandboxRoot   string            `json:"devkit_sandbox_root"`
-	HostWorktreeRoot    string            `json:"host_worktree_root"`
-	HostStateRoot       string            `json:"host_state_root"`
-	SandboxWorktreeRoot string            `json:"sandbox_worktree_root"`
-	SandboxStateRoot    string            `json:"sandbox_state_root"`
-	Flake               string            `json:"flake"`
-	FlakeInputOverrides map[string]string `json:"flake_input_overrides,omitempty"`
-	Launcher            string            `json:"launcher"`
-	LauncherArgs        []string          `json:"launcher_args"`
-	Binds               []Bind            `json:"binds"`
-	Env                 map[string]string `json:"env"`
-	Proxy               ProxyConfig       `json:"proxy"`
-	DNS                 DNSConfig         `json:"dns"`
-	BrokerEndpoint      string            `json:"broker_endpoint"`
-	DirectDockerSocket  bool              `json:"direct_docker_socket"`
-	ResourceLimits      ResourceLimits    `json:"resource_limits"`
-	Notes               []string          `json:"notes,omitempty"`
+	Agent                agent.Spec        `json:"agent"`
+	DevkitHostRoot       string            `json:"devkit_host_root"`
+	RuntimeAuthorityRoot string            `json:"runtime_authority_root"`
+	DevkitSandboxRoot    string            `json:"devkit_sandbox_root"`
+	HostWorktreeRoot     string            `json:"host_worktree_root"`
+	HostStateRoot        string            `json:"host_state_root"`
+	SandboxWorktreeRoot  string            `json:"sandbox_worktree_root"`
+	SandboxStateRoot     string            `json:"sandbox_state_root"`
+	Flake                string            `json:"flake"`
+	FlakeInputOverrides  map[string]string `json:"flake_input_overrides,omitempty"`
+	Launcher             string            `json:"launcher"`
+	LauncherArgs         []string          `json:"launcher_args"`
+	Binds                []Bind            `json:"binds"`
+	Env                  map[string]string `json:"env"`
+	Proxy                ProxyConfig       `json:"proxy"`
+	DNS                  DNSConfig         `json:"dns"`
+	BrokerEndpoint       string            `json:"broker_endpoint"`
+	DirectDockerSocket   bool              `json:"direct_docker_socket"`
+	ResourceLimits       ResourceLimits    `json:"resource_limits"`
+	Notes                []string          `json:"notes,omitempty"`
 }
 
 type BuildOptions struct {
@@ -133,6 +134,10 @@ func Build(opts BuildOptions) (Plan, error) {
 	launcher := strings.TrimSpace(opts.Launcher)
 	if launcher == "" {
 		launcher = "bubblewrap"
+	}
+	runtimeAuthorityRoot := strings.TrimSpace(opts.Paths.RuntimeAuthorityRoot)
+	if runtimeAuthorityRoot != "" {
+		runtimeAuthorityRoot = filepath.Clean(runtimeAuthorityRoot)
 	}
 	broker := strings.TrimSpace(opts.BrokerEndpoint)
 	if broker == "" {
@@ -265,17 +270,18 @@ func Build(opts BuildOptions) (Plan, error) {
 			StateRoot:        paths.HostAgentStateRoot,
 			SandboxStateRoot: paths.SandboxAgentStateRoot,
 		},
-		DevkitHostRoot:      opts.Paths.Root,
-		DevkitSandboxRoot:   filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
-		HostWorktreeRoot:    paths.HostWorktreeRoot,
-		HostStateRoot:       paths.HostStateRoot,
-		SandboxWorktreeRoot: paths.SandboxWorktreeRoot,
-		SandboxStateRoot:    paths.SandboxStateRoot,
-		Flake:               flake,
-		FlakeInputOverrides: normalizeFlakeInputOverrides(opts.FlakeInputOverrides),
-		Launcher:            launcher,
-		Binds:               binds,
-		Env:                 env,
+		DevkitHostRoot:       opts.Paths.Root,
+		RuntimeAuthorityRoot: runtimeAuthorityRoot,
+		DevkitSandboxRoot:    filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
+		HostWorktreeRoot:     paths.HostWorktreeRoot,
+		HostStateRoot:        paths.HostStateRoot,
+		SandboxWorktreeRoot:  paths.SandboxWorktreeRoot,
+		SandboxStateRoot:     paths.SandboxStateRoot,
+		Flake:                flake,
+		FlakeInputOverrides:  normalizeFlakeInputOverrides(opts.FlakeInputOverrides),
+		Launcher:             launcher,
+		Binds:                binds,
+		Env:                  env,
 		Proxy: ProxyConfig{
 			HTTPProxy:     proxyURL,
 			HTTPSProxy:    proxyURL,

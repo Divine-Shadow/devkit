@@ -493,8 +493,16 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	exe, _ := os.Executable()
-	paths, _ := devkitpaths.DetectPathsFromExe(exe)
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "devctl: resolve executable path: %v\n", err)
+		os.Exit(2)
+	}
+	paths, err := devkitpaths.DetectPathsFromExe(exe)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "devctl: detect source-derived runtime authority: %v\n", err)
+		os.Exit(2)
+	}
 	hostCfg, hostCfgDir, hostErr := config.ReadHostConfig()
 	if hostErr != nil {
 		fmt.Fprintf(os.Stderr, "[devctl] warning: failed to parse host config: %v\n", hostErr)

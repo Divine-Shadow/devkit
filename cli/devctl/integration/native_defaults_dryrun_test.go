@@ -126,9 +126,13 @@ func nonFlakeRoot(t *testing.T) string {
 }
 
 func createNativeAgentWorktree(t *testing.T, root string) {
+	createNativeAgentWorktreeForRepo(t, root, "ouroboros-ide")
+}
+
+func createNativeAgentWorktreeForRepo(t *testing.T, root string, repo string) {
 	t.Helper()
 	devRoot := filepath.Clean(filepath.Join(root, ".."))
-	worktree := filepath.Join(devRoot, "agent-worktrees", "agent1", "ouroboros-ide")
+	worktree := filepath.Join(devRoot, "agent-worktrees", "agent1", repo)
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -596,14 +600,14 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "exec", args: []string{"-p", "dev-all", "exec", "1", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent", "--", "true"}},
-		{name: "attach", args: []string{"-p", "dev-all", "attach", "1", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent"}},
+		{name: "exec", args: []string{"-p", "dev-all", "exec", "1", "--repo", "test-repo", "--flake", ".#runtime-test-agent", "--", "true"}},
+		{name: "attach", args: []string{"-p", "dev-all", "attach", "1", "--repo", "test-repo", "--flake", ".#runtime-test-agent"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := nativeDefaultsRoot(t)
 			writeNixCodexConfigSource(t, root)
-			createNativeAgentWorktree(t, root)
+			createNativeAgentWorktreeForRepo(t, root, "test-repo")
 			cmd := exec.Command(bin, tt.args...)
 			cmd.Env = append(os.Environ(),
 				"DEVKIT_ROOT="+root,

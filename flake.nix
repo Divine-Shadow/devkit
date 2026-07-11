@@ -59,14 +59,52 @@
       codexReleaseTag = "rust-v${codexVersion}";
       governanceJarVersion = "c70370f2478c39e4f65c611a9953e835cfb661b3";
       submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";
+      artifactColumnRuntimeVersion = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7";
       sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
       submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";
+      artifactColumnRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${artifactColumnRuntimeVersion}";
       sbtControlPlaneRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${sbtControlPlaneRuntimeVersion}";
       mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
       mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
-      mkPinnedArtifactColumnPluginRepository = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
+      mkPinnedArtifactColumnPluginRepository = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
+      mkPinnedArtifactColumnPluginSmoke = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-adoption-check;
       mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-jar;
+      mkDevAllRuntimeBundle =
+        pkgs:
+        let
+          submitToCiJar = mkPinnedSubmitToCiJar pkgs;
+          x86SubmitBaselineIsExact =
+            if pkgs.system == "x86_64-linux" then
+              assert toString submitToCiJar == "/nix/store/4xxf15fa8ajm60np3d9vnmiinmb53zd2-submit-to-ci-dev";
+              assert submitToCiJar.drvPath == "/nix/store/k9jfshsf7pl3zk87szjdzw3jqzxivz05-submit-to-ci-dev.drv";
+              true
+            else
+              true;
+        in
+        assert x86SubmitBaselineIsExact;
+        import ./nix/dev-all-runtime-bundle.nix {
+          inherit
+            artifactColumnRuntimeVersion
+            governanceJarVersion
+            pkgs
+            sbtControlPlaneRuntimeVersion
+            submitRuntimeVersion
+            ;
+          artifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;
+          artifactColumnPluginSmoke = mkPinnedArtifactColumnPluginSmoke pkgs;
+          governanceJar = mkPinnedGovernanceJar pkgs;
+          java = pkgs.jdk21;
+          sbtControlPlaneRuntimeJar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
+          inherit submitToCiJar;
+        };
+      mkDevAllRuntimeBundleBridgeSmoke =
+        pkgs:
+        import ./nix/dev-all-runtime-bundle-bridge-smoke.nix {
+          bundle = mkDevAllRuntimeBundle pkgs;
+          governanceSource = governanceJarSourceFlake.outPath;
+          inherit pkgs;
+        };
     in
     {
       devShells = forEachSystem (
@@ -407,6 +445,7 @@
       packages = forEachSystem (
         { pkgs, ... }:
         {
+          dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
           pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;
           pinned-governance-jar = mkPinnedGovernanceJar pkgs;
           pinned-sbt-control-plane-runtime-jar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
@@ -428,6 +467,9 @@
       checks = forEachSystem (
         { pkgs, ... }:
         {
+          dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
+          dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
+
           runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" { } ''
             mkdir -p "$out"
             cat > "$out/README" <<'EOF'

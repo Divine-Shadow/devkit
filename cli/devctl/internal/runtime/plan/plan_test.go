@@ -11,7 +11,11 @@ import (
 )
 
 func TestBuildDevAllPlan(t *testing.T) {
-	paths := devkitpaths.Paths{Root: "/home/bayesartre/dev/devkit", Kit: "/home/bayesartre/dev/devkit/kit"}
+	paths := devkitpaths.Paths{
+		Root:                 "/home/bayesartre/dev/devkit",
+		Kit:                  "/home/bayesartre/dev/devkit/kit",
+		RuntimeAuthorityRoot: "/nix/store/source-derived-devkit",
+	}
 	p, err := BuildDevAll(BuildOptions{
 		Paths:    paths,
 		Project:  "dev-all",
@@ -22,6 +26,9 @@ func TestBuildDevAllPlan(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if p.RuntimeAuthorityRoot != paths.RuntimeAuthorityRoot {
+		t.Fatalf("runtime authority root = %q, want independent source authority %q", p.RuntimeAuthorityRoot, paths.RuntimeAuthorityRoot)
 	}
 	if p.Agent.HostWorktree != "/home/bayesartre/dev/agent-worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
@@ -98,6 +105,41 @@ func TestBuildDevAllPlan(t *testing.T) {
 	}
 	if len(p.LauncherArgs) == 0 || p.LauncherArgs[0] != "bwrap" {
 		t.Fatalf("launcher args = %#v", p.LauncherArgs)
+	}
+}
+
+func TestBuildDoesNotFallBackRuntimeAuthorityToConfigRoot(t *testing.T) {
+	p, err := BuildDevAll(BuildOptions{
+		Paths: devkitpaths.Paths{Root: "/caller-controlled/devkit"},
+		Repo:  "ouroboros-ide",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if p.RuntimeAuthorityRoot != "" {
+		t.Fatalf("runtime authority root = %q, want no fallback to config root", p.RuntimeAuthorityRoot)
+	}
+}
+
+func TestBuildDevAllPreservesExecutableRuntimeAuthorityAgainstHostileConfigRoot(t *testing.T) {
+	trustedRoot := "/trusted/source/devkit"
+	hostileRoot := "/tmp/hostile-devkit"
+	p, err := BuildDevAll(BuildOptions{
+		Paths: devkitpaths.Paths{
+			Root:                 hostileRoot,
+			Kit:                  filepath.Join(hostileRoot, "kit"),
+			RuntimeAuthorityRoot: trustedRoot,
+		},
+		Repo: "ouroboros-ide",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if p.DevkitHostRoot != hostileRoot {
+		t.Fatalf("config root = %q, want %q", p.DevkitHostRoot, hostileRoot)
+	}
+	if p.RuntimeAuthorityRoot != trustedRoot {
+		t.Fatalf("runtime authority root = %q, want %q", p.RuntimeAuthorityRoot, trustedRoot)
 	}
 }
 

@@ -11,6 +11,26 @@ import (
 // calling this package instead of copying the shell snippet into multiple
 // packages.
 func Body() string {
+	return body("")
+}
+
+// BodyForRuntimeBundle returns the canonical entrypoint with runtime identity
+// applied by an exact immutable bundle launcher after mutable workspace routing
+// has been loaded.
+func BodyForRuntimeBundle(runtimeBundlePath string) string {
+	runtimeBundlePath = strings.TrimSpace(runtimeBundlePath)
+	if runtimeBundlePath == "" {
+		return ""
+	}
+	return body(runtimeBundlePath)
+}
+
+func body(runtimeBundlePath string) string {
+	finalCommand := "exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward"
+	if runtimeBundlePath != "" {
+		launcher := shellSingleQuote(strings.TrimRight(runtimeBundlePath, "/") + "/bin/dev-all-runtime-bundle")
+		finalCommand = "exec " + launcher + " governance-forward ${governance_root}/scripts/devops/governance-mcp-stdio-forward"
+	}
 	return strings.Join([]string{
 		"export PATH=/run/current-system/sw/bin:/run/wrappers/bin:${PATH:-}",
 		"unset SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM",
@@ -32,12 +52,17 @@ func Body() string {
 		"source ${governance_env}",
 		"if [[ -z ${governance_entrypoint_sha} ]]; then echo required governance MCP entrypoint fingerprint missing before env load >&2; exit 1; fi",
 		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=${governance_entrypoint_sha}",
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=${governance_entrypoint_sha}",
 		"governance_sanitize_runtime_env",
 		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then governance_match_root=${governance_workspace_root:-${governance_root}}; IFS=, read -ra governance_pairs <<< ${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}; for governance_pair in ${governance_pairs[@]}; do governance_pair_id=${governance_pair%%=*}; governance_pair_root=${governance_pair#*=}; if [[ ${governance_pair_root} == ${governance_match_root} ]]; then export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${governance_pair_id}; break; fi; done; fi",
 		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_workspace_root:-${PWD:-}} in /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace ;; /workspaces/dev/ouroboros-terraform) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-terraform ;; */agent-worktrees/*/ouroboros-ide) workspace_tail=${governance_workspace_root#*/agent-worktrees/}; export SUBAGENT_GOVERNANCE_WORKSPACE_ID=${workspace_tail%%/*} ;; esac; fi",
 		"if [[ -z ${SUBAGENT_GOVERNANCE_WORKSPACE_ID:-} ]]; then case ${governance_root} in */ouroboros-ide) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=ouroboros-ide ;; /workspaces/dev) export SUBAGENT_GOVERNANCE_WORKSPACE_ID=dev-workspace ;; esac; fi",
-		"exec bash ${governance_root}/scripts/devops/governance-mcp-stdio-forward",
+		finalCommand,
 	}, "; ")
+}
+
+func shellSingleQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 // SHA256 fingerprints the canonical entrypoint body so generated config,
@@ -47,10 +72,23 @@ func SHA256() string {
 	return fmt.Sprintf("%x", sum)
 }
 
+// SHA256ForRuntimeBundle fingerprints the entrypoint including its immutable
+// runtime-bundle selection.
+func SHA256ForRuntimeBundle(runtimeBundlePath string) string {
+	sum := sha256.Sum256([]byte(BodyForRuntimeBundle(runtimeBundlePath)))
+	return fmt.Sprintf("%x", sum)
+}
+
 // Zsh returns the canonical governance MCP stdio entrypoint with an exported
 // provenance marker for runtime subprocesses.
 func Zsh() string {
 	return "export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + SHA256() + "; " + Body()
+}
+
+// ZshForRuntimeBundle returns the immutable-bundle entrypoint with its exact
+// provenance fingerprint exported before mutable workspace routing is loaded.
+func ZshForRuntimeBundle(runtimeBundlePath string) string {
+	return "export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=" + SHA256ForRuntimeBundle(runtimeBundlePath) + "; " + BodyForRuntimeBundle(runtimeBundlePath)
 }
 
 // EscapedForNestedDoubleQuotes returns the same entrypoint with braced shell

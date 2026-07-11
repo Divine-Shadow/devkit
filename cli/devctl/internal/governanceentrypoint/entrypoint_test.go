@@ -16,6 +16,7 @@ func TestBodyPreservesVerifiedGovernanceJarIdentity(t *testing.T) {
 		"governance_entrypoint_sha=${DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256:-}",
 		"required governance MCP entrypoint fingerprint missing before env load",
 		"export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=${governance_entrypoint_sha}",
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=${governance_entrypoint_sha}",
 		"governance_normalize_canonical_pwd",
 		"normalized_pwd=/workspaces/dev${PWD#${host_dev}}",
 		"unset OLDPWD",
@@ -43,5 +44,29 @@ func TestBodyPreservesVerifiedGovernanceJarIdentity(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("governance entrypoint must preserve verified prewarmed jar identity %q:\n%s", forbidden, body)
 		}
+	}
+}
+
+func TestRuntimeBundleEntrypointAppliesExactImmutableAuthorityAfterRouting(t *testing.T) {
+	bundle := "/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle"
+	body := BodyForRuntimeBundle(bundle)
+	launcher := "exec '" + bundle + "/bin/dev-all-runtime-bundle' governance-forward ${governance_root}/scripts/devops/governance-mcp-stdio-forward"
+	if !strings.Contains(body, "source ${governance_env}; if [[ -z ${governance_entrypoint_sha}") {
+		t.Fatalf("runtime entrypoint must load routing before applying immutable identity:\n%s", body)
+	}
+	if !strings.Contains(body, launcher) {
+		t.Fatalf("runtime entrypoint missing exact immutable bundle launcher %q:\n%s", launcher, body)
+	}
+	if strings.Contains(body, "DEVKIT_GOVERNANCE_RUNTIME_BUNDLE") || strings.Contains(body, "print-dev-env") {
+		t.Fatalf("runtime entrypoint must not select authority from mutable environment:\n%s", body)
+	}
+	if got, want := ZshForRuntimeBundle(bundle), "export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256="+SHA256ForRuntimeBundle(bundle)+"; "+body; got != want {
+		t.Fatalf("runtime entrypoint wrapper mismatch:\n%s", got)
+	}
+	if SHA256ForRuntimeBundle(bundle) == SHA256ForRuntimeBundle(bundle+"-other") {
+		t.Fatal("runtime entrypoint fingerprint must bind the exact bundle path")
+	}
+	if BodyForRuntimeBundle("") != "" {
+		t.Fatal("empty immutable bundle path must not fall back to the legacy entrypoint")
 	}
 }

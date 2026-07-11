@@ -1,23 +1,37 @@
 package devkitpaths
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
 type Paths struct {
-	Root         string
-	Kit          string
-	OverlayPaths []string
+	Root                 string
+	Kit                  string
+	RuntimeAuthorityRoot string
+	OverlayPaths         []string
 }
 
 func DetectPathsFromExe(exePath string) (Paths, error) {
+	executablePath := strings.TrimSpace(exePath)
+	if executablePath == "" {
+		return Paths{}, fmt.Errorf("detect devkit paths: executable path is required")
+	}
+	absolute, err := filepath.Abs(executablePath)
+	if err != nil {
+		return Paths{}, fmt.Errorf("detect devkit paths: resolve executable path %q: %w", executablePath, err)
+	}
+	executablePath, err = filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return Paths{}, fmt.Errorf("detect devkit paths: canonicalize executable path %q: %w", absolute, err)
+	}
+	runtimeAuthorityRoot := filepath.Clean(filepath.Join(filepath.Dir(executablePath), "..", ".."))
 	root := os.Getenv("DEVKIT_ROOT")
 	if root == "" {
 		// Binary is expected under devkit/kit/bin/devctl
-		binDir := filepath.Dir(exePath)
-		root = filepath.Clean(filepath.Join(binDir, "..", ".."))
+		root = runtimeAuthorityRoot
 	}
 	root = filepath.Clean(root)
 	kit := filepath.Join(root, "kit")
@@ -28,7 +42,12 @@ func DetectPathsFromExe(exePath string) (Paths, error) {
 	} else {
 		overlays = append(overlays, filepath.Join(root, "overlays"))
 	}
-	return Paths{Root: root, Kit: kit, OverlayPaths: uniquePaths(overlays)}, nil
+	return Paths{
+		Root:                 root,
+		Kit:                  kit,
+		RuntimeAuthorityRoot: runtimeAuthorityRoot,
+		OverlayPaths:         uniquePaths(overlays),
+	}, nil
 }
 
 func splitOverlayPaths(root, override string) []string {

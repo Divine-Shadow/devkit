@@ -18,6 +18,7 @@ func RenderText(p Plan) string {
 	fmt.Fprintf(&b, "index: %d\n", p.Agent.ID.Index)
 	fmt.Fprintf(&b, "repo: %s\n", p.Agent.ID.Repo)
 	fmt.Fprintf(&b, "devkit_host_root: %s\n", p.DevkitHostRoot)
+	fmt.Fprintf(&b, "runtime_authority_root: %s\n", p.RuntimeAuthorityRoot)
 	fmt.Fprintf(&b, "devkit_sandbox_root: %s\n", p.DevkitSandboxRoot)
 	fmt.Fprintf(&b, "host_worktree_root: %s\n", p.HostWorktreeRoot)
 	fmt.Fprintf(&b, "host_state_root: %s\n", p.HostStateRoot)
