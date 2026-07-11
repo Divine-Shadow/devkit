@@ -774,6 +774,8 @@ func (rc *requestContext) authorize(r *http.Request) error {
 		return rc.authorizeContainerCreate(r)
 	case strings.HasPrefix(cleanPath, "/containers/"):
 		return rc.authorizeContainerAction(cleanPath)
+	case cleanPath == "/networks" && r.Method == http.MethodGet:
+		return nil
 	case strings.HasPrefix(cleanPath, "/networks/") && r.Method == http.MethodGet:
 		return rc.authorizeNetworkInspect(cleanPath)
 	default:
