@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
@@ -587,6 +588,10 @@ func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if shouldProxyStreamingRequest(r) {
+		rc.proxyStreaming(w, r)
+		return
+	}
 
 	resp, err := rc.forward(r)
 	if err != nil {
@@ -1085,6 +1090,24 @@ func copyResponse(w http.ResponseWriter, resp *http.Response) {
 		writer = &flushWriter{w: w, fl: fl}
 	}
 	_, _ = io.Copy(writer, resp.Body)
+}
+
+func shouldProxyStreamingRequest(r *http.Request) bool {
+	cleanPath := stripVersionPrefix(r.URL.Path)
+	return r.Method == http.MethodPost &&
+		strings.HasPrefix(cleanPath, "/containers/") &&
+		strings.HasSuffix(cleanPath, "/attach")
+}
+
+func (rc *requestContext) proxyStreaming(w http.ResponseWriter, r *http.Request) {
+	proxy := httputil.NewSingleHostReverseProxy(rc.target)
+	proxy.Transport = rc.client.Transport
+	proxy.Director = func(req *http.Request) {
+		req.URL = rc.target.ResolveReference(&url.URL{Path: r.URL.Path, RawQuery: r.URL.RawQuery})
+		req.Host = "docker"
+		req.RequestURI = ""
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 func getEnv(key, def string) string {

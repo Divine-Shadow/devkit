@@ -23,6 +23,32 @@ func TestStripVersionPrefix(t *testing.T) {
 	}
 }
 
+func TestShouldProxyStreamingRequest_OnlyContainerAttach(t *testing.T) {
+	attachReq, err := http.NewRequest(http.MethodPost, "http://unix/v1.52/containers/abc123/attach?stream=1&stdout=1&stderr=1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !shouldProxyStreamingRequest(attachReq) {
+		t.Fatal("expected container attach to use streaming proxy")
+	}
+
+	startReq, err := http.NewRequest(http.MethodPost, "http://unix/v1.52/containers/abc123/start", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shouldProxyStreamingRequest(startReq) {
+		t.Fatal("expected container start to use normal forwarding path")
+	}
+
+	logsReq, err := http.NewRequest(http.MethodGet, "http://unix/v1.52/containers/abc123/logs?follow=1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if shouldProxyStreamingRequest(logsReq) {
+		t.Fatal("expected container logs to use normal forwarding path")
+	}
+}
+
 func TestAuthorizeContainerCreate_AllowsWhitelistedImage(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
 
