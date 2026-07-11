@@ -184,6 +184,62 @@ func TestAuthorizeContainerCreate_BlocksBrokerSocketBindForOtherImages(t *testin
 	}
 }
 
+func TestAuthorizeContainerCreate_AllowsSAMPythonBuildBinds(t *testing.T) {
+	image := "public.ecr.aws/sam/build-python3.12@sha256:e1c008f2626266024c538c9c31cbeb122e9c1c42e1a3ccd4e7b1380f6e9b7497"
+	rc := &requestContext{policy: mustPolicy(t, []string{image}, true)}
+	body := []byte(`{"Image":"` + image + `","HostConfig":{"Binds":["/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/modules/db_credentials_rotation/lambda_artifact:/src:ro","/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/.local/db_credentials_rotation_lambda:/out"]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksSAMPythonWritableSource(t *testing.T) {
+	image := "public.ecr.aws/sam/build-python3.12@sha256:e1c008f2626266024c538c9c31cbeb122e9c1c42e1a3ccd4e7b1380f6e9b7497"
+	rc := &requestContext{policy: mustPolicy(t, []string{image}, true)}
+	body := []byte(`{"Image":"` + image + `","HostConfig":{"Binds":["/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/modules/db_credentials_rotation/lambda_artifact:/src:rw","/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/.local/db_credentials_rotation_lambda:/out"]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for writable source bind")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksSAMPythonOutputOutsideRepo(t *testing.T) {
+	image := "public.ecr.aws/sam/build-python3.12@sha256:e1c008f2626266024c538c9c31cbeb122e9c1c42e1a3ccd4e7b1380f6e9b7497"
+	rc := &requestContext{policy: mustPolicy(t, []string{image}, true)}
+	body := []byte(`{"Image":"` + image + `","HostConfig":{"Binds":["/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/modules/db_credentials_rotation/lambda_artifact:/src:ro","/tmp/db_credentials_rotation_lambda:/out"]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for output outside repo")
+	}
+}
+
+func TestAuthorizeContainerCreate_BlocksSAMPythonExtraBind(t *testing.T) {
+	image := "public.ecr.aws/sam/build-python3.12@sha256:e1c008f2626266024c538c9c31cbeb122e9c1c42e1a3ccd4e7b1380f6e9b7497"
+	rc := &requestContext{policy: mustPolicy(t, []string{image}, true)}
+	body := []byte(`{"Image":"` + image + `","HostConfig":{"Binds":["/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/modules/db_credentials_rotation/lambda_artifact:/src:ro","/workspaces/dev/agent-worktrees/agent2/ouroboros-terraform-track3-rotation-encryption-prep-20260711/.local/db_credentials_rotation_lambda:/out","/tmp:/tmp:rw"]}}`)
+	req, err := http.NewRequest(http.MethodPost, "http://unix/containers/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorizeContainerCreate(req); err == nil {
+		t.Fatal("expected block for extra SAM bind")
+	}
+}
+
 func TestAuthorizeContainerCreate_BlocksRyukHostPortMismatch(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"testcontainers/ryuk:0.7.0"}, true)}
 	body := []byte(`{"Image":"testcontainers/ryuk:0.7.0","HostConfig":{"PortBindings":{"8080/tcp":[{"HostPort":"18080"}]}}}`)

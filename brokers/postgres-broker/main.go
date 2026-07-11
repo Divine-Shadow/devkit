@@ -839,7 +839,9 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return errForbidden
 	}
 
-	if len(payload.HostConfig.Binds) > 0 && !allowRyukBrokerSocketBind(payload.Image, payload.HostConfig.Binds, rc.brokerSock, rc.brokerSockAliases) {
+	if len(payload.HostConfig.Binds) > 0 &&
+		!allowRyukBrokerSocketBind(payload.Image, payload.HostConfig.Binds, rc.brokerSock, rc.brokerSockAliases) &&
+		!allowSAMPythonBuildBinds(payload.Image, payload.HostConfig.Binds) {
 		log.WithField("binds", payload.HostConfig.Binds).Warn("blocked container create: binds detected")
 		return errForbidden
 	}
@@ -913,7 +915,7 @@ func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string
 	if !allowPrivilegedContainerCreate(image) || len(binds) != 1 {
 		return false
 	}
-	source, target, ok := splitBindMount(binds[0])
+	source, target, _, ok := splitBindMount(binds[0])
 	if !ok || target != "/var/run/docker.sock" {
 		return false
 	}
@@ -928,17 +930,66 @@ func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string
 	return false
 }
 
-func splitBindMount(bind string) (source, target string, ok bool) {
+func allowSAMPythonBuildBinds(image string, binds []string) bool {
+	if !isSAMPython312BuildImage(image) || len(binds) != 2 {
+		return false
+	}
+
+	var sourceRoot string
+	var outputRoot string
+	for _, bind := range binds {
+		source, target, mode, ok := splitBindMount(bind)
+		if !ok {
+			return false
+		}
+		switch target {
+		case "/src":
+			if mode != "ro" {
+				return false
+			}
+			const suffix = "/modules/db_credentials_rotation/lambda_artifact"
+			clean := filepath.ToSlash(filepath.Clean(source))
+			if !strings.HasSuffix(clean, suffix) {
+				return false
+			}
+			sourceRoot = strings.TrimSuffix(clean, suffix)
+		case "/out":
+			if mode != "" && mode != "rw" {
+				return false
+			}
+			const suffix = "/.local/db_credentials_rotation_lambda"
+			clean := filepath.ToSlash(filepath.Clean(source))
+			if !strings.HasSuffix(clean, suffix) {
+				return false
+			}
+			outputRoot = strings.TrimSuffix(clean, suffix)
+		default:
+			return false
+		}
+	}
+	return sourceRoot != "" && outputRoot != "" && sourceRoot == outputRoot
+}
+
+func isSAMPython312BuildImage(image string) bool {
+	name, _ := splitImageRef(image)
+	name = strings.TrimSpace(strings.SplitN(name, "@", 2)[0])
+	return normalizeImageFamily(name) == "public.ecr.aws/sam/build-python3.12"
+}
+
+func splitBindMount(bind string) (source, target, mode string, ok bool) {
 	parts := strings.Split(bind, ":")
 	if len(parts) < 2 {
-		return "", "", false
+		return "", "", "", false
 	}
 	source = strings.TrimSpace(parts[0])
 	target = strings.TrimSpace(parts[1])
 	if source == "" || target == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return source, target, true
+	if len(parts) > 2 {
+		mode = strings.TrimSpace(parts[2])
+	}
+	return source, target, mode, true
 }
 
 func samePath(a, b string) bool {
