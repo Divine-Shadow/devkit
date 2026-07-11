@@ -1019,13 +1019,11 @@ func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
 
 func (rc *requestContext) authorizeNetworkInspect(cleanPath string) error {
 	identifier := resourceIDFromPath(cleanPath)
-	switch identifier {
-	case "bridge", "host", "none":
-		log.WithField("network", identifier).Debug("allowing network inspect")
-		return nil
-	default:
+	if identifier == "" {
 		return errForbidden
 	}
+	log.WithField("network", identifier).Debug("allowing network inspect")
+	return nil
 }
 
 func (rc *requestContext) authorizeImageInspect(cleanPath string) error {

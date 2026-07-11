@@ -278,6 +278,18 @@ func TestAuthorizeAllowsNetworkList(t *testing.T) {
 	}
 }
 
+func TestAuthorizeAllowsNetworkInspectByID(t *testing.T) {
+	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
+	req, err := http.NewRequest(http.MethodGet, "http://unix/networks/04209c657e69", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := rc.authorize(req); err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+}
+
 func TestAuthorizeImageCreate_AllowsWhitelistedPull(t *testing.T) {
 	rc := &requestContext{policy: mustPolicy(t, []string{"postgres:latest"}, true)}
 
