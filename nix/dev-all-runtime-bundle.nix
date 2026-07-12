@@ -14,8 +14,8 @@
 
 let
   identitySchema = "devkit-dev-all-runtime-identity/v1";
-  artifactColumnVersion = "0.1.0-artifact-column-v2-package-derived-ownership-20260711";
-  artifactColumnJarSha256 = "948d70381978242d5da4288368622e365b1d746546606c183d3cc321f41c00d2";
+  artifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712";
+  artifactColumnJarSha256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347";
   submitJarSha256 = "f3fd06efc9b92ffbda400fa5c5bbe3cc88bc46743a347e22c5f20d16441f531c";
   artifactColumnIvyPath =
     "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/${artifactColumnVersion}";
@@ -82,7 +82,7 @@ let
       [ "$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV" = "$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH/share/artifact-column-plugin/metadata.env" ] || fail "Artifact Column metadata path mismatch"
       [ "$ARTIFACT_COLUMN_PLUGIN_VERSION" = '${artifactColumnVersion}' ] || fail "Artifact Column version mismatch"
       [ "$ARTIFACT_COLUMN_PLUGIN_SOURCE_REV" = '${artifactColumnRuntimeVersion}' ] || fail "Artifact Column metadata source revision mismatch"
-      [ "$ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV" = '4eaf59e' ] || fail "Artifact Column short source revision mismatch"
+      [ "$ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV" = '8e23ded' ] || fail "Artifact Column short source revision mismatch"
       [ "$ARTIFACT_COLUMN_PLUGIN_IVY_PATH" = '${artifactColumnIvyPath}' ] || fail "Artifact Column Ivy path mismatch"
       [ "$ARTIFACT_COLUMN_PLUGIN_JAR_SHA256" = '${artifactColumnJarSha256}' ] || fail "Artifact Column jar sha256 identity mismatch"
       [ "$ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT" = 1 ] || fail "Artifact Column pinned-artifact identity mismatch"
@@ -249,7 +249,7 @@ pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
   test "$artifact_sha" = '${artifactColumnJarSha256}'
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_VERSION=${artifactColumnVersion}' "$artifact_metadata" >/dev/null
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=${artifactColumnRuntimeVersion}' "$artifact_metadata" >/dev/null
-  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=4eaf59e' "$artifact_metadata" >/dev/null
+  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=8e23ded' "$artifact_metadata" >/dev/null
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH=${artifactColumnPluginRepository}' "$artifact_metadata" >/dev/null
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_IVY_PATH=${artifactColumnIvyPath}' "$artifact_metadata" >/dev/null
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=${artifactColumnJarSha256}' "$artifact_metadata" >/dev/null
@@ -301,7 +301,7 @@ pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
   export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV='$artifact_metadata'
   export ARTIFACT_COLUMN_PLUGIN_VERSION='${artifactColumnVersion}'
   export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV='${artifactColumnRuntimeVersion}'
-  export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV='4eaf59e'
+  export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV='8e23ded'
   export ARTIFACT_COLUMN_PLUGIN_IVY_PATH='${artifactColumnIvyPath}'
   export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256='$artifact_sha'
   export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT='1'

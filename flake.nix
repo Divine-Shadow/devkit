@@ -59,7 +59,7 @@
       codexReleaseTag = "rust-v${codexVersion}";
       governanceJarVersion = "38ec4f97e2f699d2e84110d01c877971d1e8bd97";
       submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";
-      artifactColumnRuntimeVersion = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7";
+      artifactColumnRuntimeVersion = "8e23ded5579e896c95b5a751f4d4a18da70049a9";
       sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";
       governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
       submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";

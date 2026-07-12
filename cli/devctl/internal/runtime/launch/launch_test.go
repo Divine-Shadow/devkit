@@ -82,7 +82,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 	for _, want := range []string{
 		`governanceJarVersion = "38ec4f97e2f699d2e84110d01c877971d1e8bd97";`,
 		`submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";`,
-		`artifactColumnRuntimeVersion = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7";`,
+		`artifactColumnRuntimeVersion = "8e23ded5579e896c95b5a751f4d4a18da70049a9";`,
 		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";`,
@@ -122,8 +122,8 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 	bundleNix := readTestFile(t, filepath.Join(root, "nix", "dev-all-runtime-bundle.nix"))
 	for _, want := range []string{
 		`identitySchema = "devkit-dev-all-runtime-identity/v1";`,
-		`artifactColumnVersion = "0.1.0-artifact-column-v2-package-derived-ownership-20260711";`,
-		`artifactColumnJarSha256 = "948d70381978242d5da4288368622e365b1d746546606c183d3cc321f41c00d2";`,
+		`artifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712";`,
+		`artifactColumnJarSha256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347";`,
 		`submitJarSha256 = "f3fd06efc9b92ffbda400fa5c5bbe3cc88bc46743a347e22c5f20d16441f531c";`,
 		`identity.env`,
 		`identity.json`,
@@ -185,7 +185,7 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		submitJarPath, submitJarPath + ".sha256", submitJarPath, "facefeed",
 		"force", "6g", "force",
 		artifactRepoPath, artifactMetadataPath,
-		ouroGovernanceArtifactColumnVersion, ouroGovernanceArtifactColumnSourceRev, "4eaf59e",
+		ouroGovernanceArtifactColumnVersion, ouroGovernanceArtifactColumnSourceRev, "8e23ded",
 		artifactIvyPath, ouroGovernanceArtifactColumnJarSHA256, "1", "0",
 		sbtRuntimeJarPath, "54907ebe40a4cc7598dba7774a2d793fc7ca83d9c11811cc98fe96d189413872", "1", "0",
 		javaHome,
@@ -220,7 +220,7 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		identity.ArtifactColumnMetadataEnv != artifactMetadataPath ||
 		identity.ArtifactColumnVersion != ouroGovernanceArtifactColumnVersion ||
 		identity.ArtifactColumnSourceRev != ouroGovernanceArtifactColumnSourceRev ||
-		identity.ArtifactColumnSourceShortRev != "4eaf59e" ||
+		identity.ArtifactColumnSourceShortRev != "8e23ded" ||
 		identity.ArtifactColumnIvyPath != artifactIvyPath ||
 		identity.ArtifactColumnJarSHA256 != ouroGovernanceArtifactColumnJarSHA256 ||
 		identity.ArtifactColumnPinnedArtifact != "1" ||

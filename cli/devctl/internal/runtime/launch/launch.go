@@ -743,9 +743,9 @@ func validOuroGovernanceJavaXmx(value string) bool {
 const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
 const ouroGovernanceSourceRev = "38ec4f97e2f699d2e84110d01c877971d1e8bd97"
 const ouroGovernanceSubmitRuntimeSourceRev = "d15715adeadc8881b08ac7a05f19fec15fd29986"
-const ouroGovernanceArtifactColumnSourceRev = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7"
-const ouroGovernanceArtifactColumnVersion = "0.1.0-artifact-column-v2-package-derived-ownership-20260711"
-const ouroGovernanceArtifactColumnJarSHA256 = "948d70381978242d5da4288368622e365b1d746546606c183d3cc321f41c00d2"
+const ouroGovernanceArtifactColumnSourceRev = "8e23ded5579e896c95b5a751f4d4a18da70049a9"
+const ouroGovernanceArtifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712"
+const ouroGovernanceArtifactColumnJarSHA256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347"
 const ouroGovernanceSbtControlPlaneSourceRev = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e"
 
 func ouroGovernanceRuntimeBundleFlake(devkitRoot string) string {
