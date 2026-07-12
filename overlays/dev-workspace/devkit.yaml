@@ -10,6 +10,7 @@ defaults:
 runtime:
   flake: ./overlays/dev-workspace#default
   codex_version: 0.144.0
+  core_check: git diff --check
   notes: Native runtime for a Codex agent entered at the dev workspace root.
 readiness:
   default_mode: runtime-only

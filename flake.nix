@@ -105,6 +105,12 @@
           governanceSource = governanceJarSourceFlake.outPath;
           inherit pkgs;
         };
+      mkDevAllRuntimeBundleProfileSmoke =
+        pkgs:
+        import ./nix/dev-all-runtime-bundle-profile-smoke.nix {
+          bundle = mkDevAllRuntimeBundle pkgs;
+          inherit pkgs;
+        };
     in
     {
       devShells = forEachSystem (
@@ -469,6 +475,7 @@
         {
           dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
+          dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
 
           runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" { } ''
             mkdir -p "$out"
@@ -483,10 +490,29 @@
           '';
 
           overlay-runtime-metadata = pkgs.runCommand "devkit-overlay-runtime-metadata" {
-            nativeBuildInputs = [ pkgs.python3 ];
+            nativeBuildInputs = [ pkgs.gnugrep pkgs.python3 ];
           } ''
             mkdir -p "$out"
             python3 ${./nix/validate-overlay-runtimes.py} ${./overlays} > "$out/overlay-runtimes.json"
+
+            empty="$TMPDIR/empty-delegation/example"
+            mkdir -p "$empty"
+            cat > "$empty/devkit.yaml" <<'EOF'
+            runtime:
+              flake: ./overlays/example#default
+              flake_input_overrides:
+              codex_version: 0.144.0
+              core_check: true
+            EOF
+            cat > "$empty/flake.nix" <<'EOF'
+            { outputs = _: { }; }
+            EOF
+            if python3 ${./nix/validate-overlay-runtimes.py} "$TMPDIR/empty-delegation" > /dev/null 2> "$TMPDIR/empty.err"; then
+              echo "empty flake_input_overrides unexpectedly bypassed runtime.nix requirement" >&2
+              exit 1
+            fi
+            grep -Fx 'example: missing per-overlay runtime.nix' "$TMPDIR/empty.err" >/dev/null
+            cp "$TMPDIR/empty.err" "$out/empty-delegation-sabotage.err"
           '';
 
           retired-runtime-static = pkgs.runCommand "devkit-retired-runtime-static" {

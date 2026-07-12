@@ -109,7 +109,7 @@ hooks:
     for tool in aws terraform packer codex; do
       if ! command -v "$tool" >/dev/null 2>&1; then
         echo "Expected $tool from the ouroboros-terraform Nix runtime, but it was not on PATH." >&2
-        echo "Use nix develop ./overlays/ouroboros-terraform#default or repair the repo-owned flake." >&2
+        echo "Use nix develop --output-lock-file /dev/null ./overlays/ouroboros-terraform#default or repair the repo-owned flake." >&2
         exit 1
       fi
     done

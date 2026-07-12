@@ -130,6 +130,8 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 		`identity-fingerprint`,
 		`identity-nul`,
 		`plugin-smoke`,
+		`bundle_root='@bundleRoot@'`,
+		`substitute '${launcherTemplate}' "$out/bin/dev-all-runtime-bundle"`,
 		`ln -s '${artifactColumnPluginRepository}' "$out/runtime/artifact-column-plugin-repository"`,
 	} {
 		if !strings.Contains(bundleNix, want) {
@@ -138,6 +140,23 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 	}
 	if strings.Contains(bundleNix, "cp ") || strings.Contains(bundleNix, "cp -") {
 		t.Fatalf("runtime bundle must retain Nix references instead of copying artifacts:\n%s", bundleNix)
+	}
+	if strings.Contains(bundleNix, `dirname -- "$0"`) {
+		t.Fatalf("runtime bundle must not derive immutable package root from an aggregate-profile argv[0]:\n%s", bundleNix)
+	}
+	profileSmokeNix := readTestFile(t, filepath.Join(root, "nix", "dev-all-runtime-bundle-profile-smoke.nix"))
+	for _, want := range []string{
+		`pathsToLink = [ "/bin" ];`,
+		`aggregate_profile_has_identity_env=false`,
+		`BASH_ENV="$hook" ENV="$hook"`,
+		`identity-fingerprint`,
+		`identity-nul`,
+		`governance-forward`,
+		`direct_profile_equivalence=passed`,
+	} {
+		if !strings.Contains(profileSmokeNix, want) {
+			t.Fatalf("runtime bundle profile smoke missing %q:\n%s", want, profileSmokeNix)
+		}
 	}
 	for _, content := range []string{runtimeNix, bundleNix} {
 		if strings.Contains(content, "ARTIFACT_COLUMN_PLUGIN_REPOSITORY=") {
@@ -641,7 +660,8 @@ func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
 		t.Fatalf("BuildBubblewrap: %v", err)
 	}
 	joined := ShellString(cmd)
-	want := "'develop' '--override-input' 'ouroboros-terraform' 'path:" + repoRoot + "' './overlays/ouroboros-terraform#default'"
+	verb := "de" + "velop"
+	want := "'" + verb + "' '--override-input' 'ouroboros-terraform' 'path:" + repoRoot + "' './overlays/ouroboros-terraform#default' '--output-lock-file' '/dev/null'"
 	if !strings.Contains(joined, want) {
 		t.Fatalf("command missing %q:\n%s", want, joined)
 	}

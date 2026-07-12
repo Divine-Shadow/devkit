@@ -19,13 +19,16 @@ let
   submitJarSha256 = "f3fd06efc9b92ffbda400fa5c5bbe3cc88bc46743a347e22c5f20d16441f531c";
   artifactColumnIvyPath =
     "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/${artifactColumnVersion}";
-  launcher = pkgs.writeScript "dev-all-runtime-bundle" ''
+  launcherTemplate = pkgs.writeText "dev-all-runtime-bundle-template" ''
     #!${pkgs.dash}/bin/dash
     set -eu
     caller_path="''${PATH:-}"
     export PATH='${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.gawk}/bin:${pkgs.gnugrep}/bin:${pkgs.jq}/bin'
 
-    bundle_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+    # The immutable package root is substituted while the outer derivation is
+    # built. Never derive it from $0: aggregate profiles invoke this script
+    # through a symlink whose parent is the profile, not the bundle.
+    bundle_root='@bundleRoot@'
     identity_dir="$bundle_root/share/dev-all-runtime-bundle"
     identity_env="$identity_dir/identity.env"
     identity_json="$identity_dir/identity.json"
@@ -252,7 +255,9 @@ pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=${artifactColumnJarSha256}' "$artifact_metadata" >/dev/null
 
   mkdir -p "$out/bin" "$out/runtime" "$out/share/dev-all-runtime-bundle/plugin-smoke"
-  ln -s '${launcher}' "$out/bin/dev-all-runtime-bundle"
+  substitute '${launcherTemplate}' "$out/bin/dev-all-runtime-bundle" \
+    --replace-fail '@bundleRoot@' "$out"
+  chmod 0555 "$out/bin/dev-all-runtime-bundle"
   ln -s '${governanceJar}' "$out/runtime/governance"
   ln -s '${submitToCiJar}' "$out/runtime/submit-to-ci"
   ln -s '${artifactColumnPluginRepository}' "$out/runtime/artifact-column-plugin-repository"
