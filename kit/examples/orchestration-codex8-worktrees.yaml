@@ -1,14 +1,11 @@
-session: devkit_codex8
+# Legacy filename retained for compatibility. This layout now uses the
+# canonical ouro8 native session.
+session: devkit_ouro8
 
 overlays:
   - project: dev-all
     service: dev-agent
     count: 8
-    profiles: dns
-    compose_project: devkit-codex8
-    network:
-      subnet: 172.31.155.0/24
-      dns_ip: 172.31.155.3
     worktrees:
       repo: ouroboros-ide
       count: 8
@@ -18,39 +15,39 @@ windows:
     project: dev-all
     service: dev-agent
     path: ouroboros-ide
-    name: codex-1
+    name: ouro-1
   - index: 2
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent2/ouroboros-ide
-    name: codex-2
+    name: ouro-2
   - index: 3
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent3/ouroboros-ide
-    name: codex-3
+    name: ouro-3
   - index: 4
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent4/ouroboros-ide
-    name: codex-4
+    name: ouro-4
   - index: 5
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent5/ouroboros-ide
-    name: codex-5
+    name: ouro-5
   - index: 6
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent6/ouroboros-ide
-    name: codex-6
+    name: ouro-6
   - index: 7
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent7/ouroboros-ide
-    name: codex-7
+    name: ouro-7
   - index: 8
     project: dev-all
     service: dev-agent
     path: agent-worktrees/agent8/ouroboros-ide
-    name: codex-8
+    name: ouro-8

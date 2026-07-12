@@ -14,10 +14,6 @@ import (
 	"devkit/cli/devctl/internal/execx"
 )
 
-type routeEntry struct {
-	Dst string `json:"dst"`
-}
-
 const dnsHostOffset = 53
 
 // PickInternalSubnet returns a non-overlapping /24 CIDR and a DNS IP reserved away from the first few auto-assigned addresses.

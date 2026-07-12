@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
+DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+
+REPO="${DEVKIT_NATIVE_DEGRADED_REPO:-ouroboros-ide}"
+FLAKE="${DEVKIT_NATIVE_DEGRADED_FLAKE:-./overlays/dev-all#default}"
+OK_PROJECT="degraded-guard-ok"
+MISSING_TOOL_PROJECT="degraded-guard-missing-tool"
+
+fail() {
+  echo "native-readiness-degraded-guard: $*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n== %s ==\n' "$*"
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+grep_required() {
+  local pattern="$1"
+  local file="$2"
+  grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+require_repo() {
+  local repo="$1"
+  local path="$DEV_ROOT/$repo"
+  git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    fail "$path must be an existing Git checkout"
+}
+
+json_assert() {
+  local file="$1"
+  local expr="$2"
+  python3 - "$file" "$expr" <<'PY'
+import json
+import sys
+
+path, expr = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    raw = handle.read()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise
+    data = json.loads(raw[start : end + 1])
+allowed = {
+    "data": data,
+    "any": any,
+    "all": all,
+    "len": len,
+    "str": str,
+}
+try:
+    ok = bool(eval(expr, {"__builtins__": {}}, allowed))
+except Exception as exc:
+    print(f"json assertion raised: {expr}: {exc}", file=sys.stderr)
+    sys.exit(1)
+if not ok:
+    print(f"json assertion failed: {expr}", file=sys.stderr)
+    print(json.dumps(data, indent=2, sort_keys=True), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+run_expect_fail() {
+  local out="$1"
+  local err="$2"
+  shift 2
+  set +e
+  "$@" >"$out" 2>"$err"
+  local code=$?
+  set -e
+  if [[ "$code" -eq 0 ]]; then
+    cat "$out" >&2 || true
+    cat "$err" >&2 || true
+    fail "expected command to fail: $*"
+  fi
+}
+
+run_json() {
+  local out="$1"
+  shift
+  "$@" | tee "$out"
+}
+
+write_fixture_overlays() {
+  local root="$1"
+  mkdir -p "$root/$OK_PROJECT" "$root/$MISSING_TOOL_PROJECT"
+  cat >"$root/$OK_PROJECT/devkit.yaml" <<EOF
+service: dev-agent
+defaults:
+  agents: 1
+  repo: $REPO
+  base_branch: main
+  branch_prefix: degraded-guard
+runtime:
+  flake: $FLAKE
+readiness:
+  default_mode: runtime-only
+broker:
+  allowed_images:
+    - postgres:latest
+  allow_pulls: false
+  log_level: info
+EOF
+  cat >"$root/$MISSING_TOOL_PROJECT/devkit.yaml" <<EOF
+service: dev-agent
+defaults:
+  agents: 1
+  repo: $REPO
+  base_branch: main
+  branch_prefix: degraded-guard
+runtime:
+  flake: $FLAKE
+readiness:
+  default_mode: runtime-only
+  runtime_checks:
+    - name: missing-tool
+      command: command -v devkit-definitely-missing-tool
+broker:
+  allowed_images:
+    - postgres:latest
+  allow_pulls: false
+  log_level: info
+EOF
+}
+
+devkit_fixture() {
+  env DEVKIT_OVERLAYS_DIR="$fixture_overlays" "$DEVKIT" "$@"
+}
+
+cleanup_cycle() {
+  local project="$1"
+  local count="$2"
+  devkit_fixture -p "$project" down --repo "$REPO" --count "$count" \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >/dev/null 2>&1 || true
+}
+
+cleanup_worktrees() {
+  for idx in 1 2; do
+    git -C "$DEV_ROOT/$REPO" worktree remove -f "$workroot/agent$idx/$REPO" >/dev/null 2>&1 || true
+  done
+  git -C "$DEV_ROOT/$REPO" worktree prune >/dev/null 2>&1 || true
+  for idx in 1 2; do
+    git -C "$DEV_ROOT/$REPO" branch -D "${branch_prefix}${idx}" >/dev/null 2>&1 || true
+  done
+}
+
+require_command git
+require_command python3
+require_repo "$REPO"
+
+guard_dir="$(mktemp -d /tmp/devkit-native-degraded.XXXXXX)"
+fixture_overlays="$guard_dir/overlays"
+workroot="$guard_dir/worktrees"
+stateroot="$guard_dir/agents"
+broker_sock="$guard_dir/broker.sock"
+broker_state="$guard_dir/broker-state"
+branch_prefix="devkit-degraded-guard-$(date +%s)-$$-agent"
+
+cleanup() {
+  set +e
+  cleanup_cycle "$OK_PROJECT" 2
+  cleanup_cycle "$MISSING_TOOL_PROJECT" 1
+  cleanup_worktrees
+  rm -rf "$guard_dir"
+}
+trap cleanup EXIT
+
+write_fixture_overlays "$fixture_overlays"
+
+step "missing worktree JSON output"
+run_expect_fail "$guard_dir/missing-worktree.json" "$guard_dir/missing-worktree.err" \
+  devkit_fixture -p "$OK_PROJECT" native capacity --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --worktree-root "$guard_dir/missing-worktrees" \
+    --state-root "$guard_dir/missing-agents" \
+    --broker-endpoint "$broker_sock" \
+    --runtime-only \
+    --format json
+json_assert "$guard_dir/missing-worktree.json" "data['status'] == 'blocked'"
+json_assert "$guard_dir/missing-worktree.json" "data['usable_capacity'] == 0"
+json_assert "$guard_dir/missing-worktree.json" "data['blocked_agents'] == [1]"
+json_assert "$guard_dir/missing-worktree.json" "data['agents'][0]['worktree_state'] == 'blocked'"
+json_assert "$guard_dir/missing-worktree.json" "data['agents'][0]['failed_checks'][0]['component'] == 'worktree'"
+json_assert "$guard_dir/missing-worktree.json" "'prepare or repair' in data['action']"
+grep_required "native capacity is not fully available" "$guard_dir/missing-worktree.err"
+
+step "missing worktree text output"
+run_expect_fail "$guard_dir/missing-worktree.txt" "$guard_dir/missing-worktree-text.err" \
+  devkit_fixture -p "$OK_PROJECT" native capacity --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --worktree-root "$guard_dir/missing-worktrees" \
+    --state-root "$guard_dir/missing-agents" \
+    --broker-endpoint "$broker_sock" \
+    --runtime-only \
+    --format text
+grep_required "status: blocked" "$guard_dir/missing-worktree.txt"
+grep_required "usable_capacity: 0" "$guard_dir/missing-worktree.txt"
+grep_required "agent1: status=blocked" "$guard_dir/missing-worktree.txt"
+grep_required "worktree=blocked" "$guard_dir/missing-worktree.txt"
+
+step "broker stopped status"
+run_json "$guard_dir/broker-stopped.json" \
+  devkit_fixture -p "$OK_PROJECT" status --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --format json
+json_assert "$guard_dir/broker-stopped.json" "data['status'] == 'stopped'"
+json_assert "$guard_dir/broker-stopped.json" "data['broker']['running'] is False"
+json_assert "$guard_dir/broker-stopped.json" "data['broker']['stale_state'] is False"
+json_assert "$guard_dir/broker-stopped.json" "'run up or ensure-ready' in data['action']"
+
+step "broker stale status"
+mkdir -p "$broker_state"
+printf '999999\n' >"$broker_state/broker.pid"
+run_json "$guard_dir/broker-stale.json" \
+  devkit_fixture -p "$OK_PROJECT" status --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --format json
+json_assert "$guard_dir/broker-stale.json" "data['status'] == 'degraded'"
+json_assert "$guard_dir/broker-stale.json" "data['broker']['stale_state'] is True"
+json_assert "$guard_dir/broker-stale.json" "'broker pid/state files' in data['action']"
+rm -f "$broker_state/broker.pid"
+
+step "prepare one usable agent"
+mkdir -p "$workroot" "$stateroot"
+devkit_fixture -p "$OK_PROJECT" up --repo "$REPO" --count 1 \
+  --flake "$FLAKE" \
+  --base-branch main \
+  --branch-prefix "$branch_prefix" \
+  --broker-socket "$broker_sock" \
+  --broker-state-root "$broker_state" \
+  --worktree-root "$workroot" \
+  --agent-state-root "$stateroot" \
+  --skip-ready \
+  --format json \
+  | tee "$guard_dir/up-skip-ready.json"
+json_assert "$guard_dir/up-skip-ready.json" "data['status'] == 'running'"
+json_assert "$guard_dir/up-skip-ready.json" "data['broker']['running'] is True"
+json_assert "$guard_dir/up-skip-ready.json" "len(data['agents']) == 1"
+
+step "partial capacity JSON output"
+run_json "$guard_dir/partial-capacity.json" \
+  devkit_fixture -p "$OK_PROJECT" status --repo "$REPO" --count 2 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --ready \
+    --runtime-only \
+    --format json
+json_assert "$guard_dir/partial-capacity.json" "data['status'] == 'degraded'"
+json_assert "$guard_dir/partial-capacity.json" "data['capacity']['usable_capacity'] == 1"
+json_assert "$guard_dir/partial-capacity.json" "data['capacity']['blocked_agents'] == [2]"
+json_assert "$guard_dir/partial-capacity.json" "data['capacity']['agents'][0]['status'] == 'ready'"
+json_assert "$guard_dir/partial-capacity.json" "data['capacity']['agents'][1]['worktree_state'] == 'blocked'"
+json_assert "$guard_dir/partial-capacity.json" "data['failures'][0]['component'] == 'worktree'"
+
+step "partial capacity text output"
+run_json "$guard_dir/partial-capacity.txt" \
+  devkit_fixture -p "$OK_PROJECT" status --repo "$REPO" --count 2 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --ready \
+    --runtime-only \
+    --format text
+grep_required "status: degraded" "$guard_dir/partial-capacity.txt"
+grep_required "capacity_status: degraded" "$guard_dir/partial-capacity.txt"
+grep_required "usable_capacity: 1" "$guard_dir/partial-capacity.txt"
+grep_required "agent1_status: status=ready" "$guard_dir/partial-capacity.txt"
+grep_required "agent2_status: status=blocked" "$guard_dir/partial-capacity.txt"
+grep_required "worktree=blocked" "$guard_dir/partial-capacity.txt"
+
+step "missing runtime tool JSON output"
+run_json "$guard_dir/missing-tool.json" \
+  devkit_fixture -p "$MISSING_TOOL_PROJECT" status --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --ready \
+    --runtime-only \
+    --format json
+json_assert "$guard_dir/missing-tool.json" "data['status'] == 'blocked'"
+json_assert "$guard_dir/missing-tool.json" "data['capacity']['usable_capacity'] == 0"
+json_assert "$guard_dir/missing-tool.json" "data['capacity']['blocked_agents'] == [1]"
+json_assert "$guard_dir/missing-tool.json" "data['capacity']['agents'][0]['tooling_state'] == 'blocked'"
+json_assert "$guard_dir/missing-tool.json" "any(check['name'] == 'missing-tool' and check['component'] == 'tooling' for check in data['failures'])"
+json_assert "$guard_dir/missing-tool.json" "'overlay runtime tool declaration' in data['action']"
+
+step "repo readiness degraded JSON output"
+run_json "$guard_dir/repo-degraded.json" \
+  devkit_fixture -p "$OK_PROJECT" status --repo "$REPO" --count 1 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --ready \
+    --repo-check 'echo repo-check-intentional-failure >&2; exit 7' \
+    --format json
+json_assert "$guard_dir/repo-degraded.json" "data['status'] == 'degraded'"
+json_assert "$guard_dir/repo-degraded.json" "data['capacity']['usable_capacity'] == 1"
+json_assert "$guard_dir/repo-degraded.json" "data['capacity']['degraded_agents'] == [1]"
+json_assert "$guard_dir/repo-degraded.json" "data['capacity']['agents'][0]['repo_state'] == 'blocked'"
+json_assert "$guard_dir/repo-degraded.json" "any(check['phase'] == 'repo' and check['component'] == 'repo' for check in data['failures'])"
+json_assert "$guard_dir/repo-degraded.json" "'runtime-only' in data['action']"
+
+step "native down reports stopped broker"
+run_json "$guard_dir/down.json" \
+  devkit_fixture -p "$OK_PROJECT" down --repo "$REPO" --count 2 \
+    --flake "$FLAKE" \
+    --broker-socket "$broker_sock" \
+    --broker-state-root "$broker_state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json
+json_assert "$guard_dir/down.json" "data['status'] == 'stopped'"
+json_assert "$guard_dir/down.json" "data['broker']['running'] is False"
+json_assert "$guard_dir/down.json" "data['broker']['stale_state'] is False"
+
+if find "$DEVKIT_ROOT/overlays" -maxdepth 2 -name flake.lock -print | grep -q .; then
+  fail "overlay-local Nix checks created flake.lock files"
+fi
+
+echo
+echo "native-readiness-degraded-guard: ok"

@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+DEV_ROOT="$(cd -- "$DEVKIT_ROOT/.." && pwd -P)"
+DEVKIT="$DEVKIT_ROOT/kit/scripts/devkit"
+
+DEV_ALL_OVERLAY="${DEVKIT_NATIVE_E2E_DEV_ALL_OVERLAY:-dev-all}"
+DEV_ALL_REPO="${DEVKIT_NATIVE_E2E_DEV_ALL_REPO:-ouroboros-ide}"
+DEV_ALL_FLAKE="${DEVKIT_NATIVE_E2E_DEV_ALL_FLAKE:-./overlays/dev-all#default}"
+SMALL_OVERLAY="${DEVKIT_NATIVE_E2E_SMALL_OVERLAY:-ouroboros-static-front-end}"
+SMALL_REPO="${DEVKIT_NATIVE_E2E_SMALL_REPO:-$SMALL_OVERLAY}"
+SMALL_FLAKE="${DEVKIT_NATIVE_E2E_SMALL_FLAKE:-./overlays/$SMALL_OVERLAY#default}"
+SMALL_BASE_BRANCH="${DEVKIT_NATIVE_E2E_SMALL_BASE_BRANCH:-main}"
+SCALE_COUNT="${DEVKIT_NATIVE_E2E_SCALE_COUNT:-2}"
+
+fail() {
+  echo "native-e2e-lifecycle: $*" >&2
+  exit 1
+}
+
+step() {
+  printf '\n== %s ==\n' "$*"
+}
+
+grep_required() {
+  local pattern="$1"
+  local file="$2"
+  grep -q -- "$pattern" "$file" || fail "missing expected pattern $pattern in $file"
+}
+
+require_repo() {
+  local repo="$1"
+  local path="$DEV_ROOT/$repo"
+  git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+    fail "$path must be an existing Git checkout"
+}
+
+cleanup_cycle() {
+  local overlay="$1"
+  local repo="$2"
+  local flake="$3"
+  local dir="$4"
+  local prefix="$5"
+  local count="$6"
+  local sock="$dir/broker.sock"
+  local state="$dir/broker-state"
+  local workroot="$dir/worktrees"
+  local stateroot="$dir/agents"
+
+  "$DEVKIT" -p "$overlay" down --repo "$repo" --count "$count" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json >/dev/null 2>&1 || true
+
+  for idx in $(seq 1 "$count"); do
+    git -C "$DEV_ROOT/$repo" worktree remove -f "$workroot/agent$idx/$repo" >/dev/null 2>&1 || true
+  done
+  git -C "$DEV_ROOT/$repo" worktree prune >/dev/null 2>&1 || true
+  for idx in $(seq 1 "$count"); do
+    git -C "$DEV_ROOT/$repo" branch -D "${prefix}${idx}" >/dev/null 2>&1 || true
+  done
+}
+
+run_cycle() {
+  local overlay="$1"
+  local repo="$2"
+  local flake="$3"
+  local base_branch="$4"
+  local dir="$5"
+  local shell_name="$6"
+  local count="$SCALE_COUNT"
+  local prefix="devkit-e2e-$(date +%s)-$$-$overlay-agent"
+  local sock="$dir/broker.sock"
+  local state="$dir/broker-state"
+  local workroot="$dir/worktrees"
+  local stateroot="$dir/agents"
+
+  mkdir -p "$dir" "$workroot" "$stateroot"
+  cleanup_stack+=("$overlay|$repo|$flake|$dir|$prefix|$count")
+
+  step "$overlay up"
+  "$DEVKIT" -p "$overlay" up --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --base-branch "$base_branch" \
+    --branch-prefix "$prefix" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --runtime-only \
+    --format json \
+    | tee "$dir/up.json"
+  grep_required '"command": "up"' "$dir/up.json"
+  grep_required '"runtime": "native"' "$dir/up.json"
+  grep_required '"running": true' "$dir/up.json"
+  grep_required '"capacity_available": 1' "$dir/up.json"
+
+  step "$overlay status --ready"
+  "$DEVKIT" -p "$overlay" status --repo "$repo" --count 1 \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --ready \
+    --runtime-only \
+    --format json \
+    | tee "$dir/status-ready.json"
+  grep_required '"command": "status"' "$dir/status-ready.json"
+  grep_required '"readiness_mode": "runtime-only"' "$dir/status-ready.json"
+  grep_required '"capacity_available": 1' "$dir/status-ready.json"
+
+  step "$overlay exec"
+  "$DEVKIT" -p "$overlay" exec 1 --repo "$repo" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    -- \
+    env "EXPECTED_SHELL=$shell_name" "EXPECTED_BROKER=unix://$sock" \
+      bash -lc '
+        set -euo pipefail
+        test "${DEVKIT_NATIVE_AGENT:-}" = 1
+        test "${DEVKIT_NIX_SHELL:-}" = "$EXPECTED_SHELL"
+        test "${DOCKER_HOST:-}" = "$EXPECTED_BROKER"
+        test ! -e /var/run/docker.sock
+        codex --version
+        printf "exec-ok shell=%s repo=%s\n" "$DEVKIT_NIX_SHELL" "$(basename "$PWD")"
+      ' \
+    2>&1 | tee "$dir/exec.txt"
+  grep_required "exec-ok shell=$shell_name" "$dir/exec.txt"
+  grep_required "codex-cli" "$dir/exec.txt"
+
+  step "$overlay attach"
+  printf 'echo attach-ok shell=$DEVKIT_NIX_SHELL repo=$(basename "$PWD")\nexit\n' |
+    timeout 180s "$DEVKIT" -p "$overlay" attach 1 --repo "$repo" \
+      --flake "$flake" \
+      --broker-socket "$sock" \
+      --worktree-root "$workroot" \
+      --agent-state-root "$stateroot" \
+    2>&1 | tee "$dir/attach.txt"
+  grep_required "attach-ok shell=$shell_name" "$dir/attach.txt"
+
+  step "$overlay scale"
+  "$DEVKIT" -p "$overlay" scale "$count" --repo "$repo" \
+    --flake "$flake" \
+    --base-branch "$base_branch" \
+    --branch-prefix "$prefix" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --runtime-only \
+    --format json \
+    | tee "$dir/scale.json"
+  grep_required '"command": "scale"' "$dir/scale.json"
+  grep_required "\"count\": $count" "$dir/scale.json"
+  grep_required "\"capacity_available\": $count" "$dir/scale.json"
+
+  step "$overlay down"
+  "$DEVKIT" -p "$overlay" down --repo "$repo" --count "$count" \
+    --flake "$flake" \
+    --broker-socket "$sock" \
+    --broker-state-root "$state" \
+    --worktree-root "$workroot" \
+    --agent-state-root "$stateroot" \
+    --format json \
+    | tee "$dir/down.json"
+  grep_required '"command": "down"' "$dir/down.json"
+  grep_required '"runtime": "native"' "$dir/down.json"
+  grep_required '"running": false' "$dir/down.json"
+}
+
+require_repo "$DEV_ALL_REPO"
+require_repo "$SMALL_REPO"
+command -v timeout >/dev/null 2>&1 || fail "timeout is required"
+
+e2e_dir="$(mktemp -d /tmp/devkit-native-e2e.XXXXXX)"
+cleanup_stack=()
+
+cleanup() {
+  set +e
+  for item in "${cleanup_stack[@]}"; do
+    IFS='|' read -r overlay repo flake dir prefix count <<<"$item"
+    cleanup_cycle "$overlay" "$repo" "$flake" "$dir" "$prefix" "$count"
+  done
+  rm -rf "$e2e_dir"
+}
+trap cleanup EXIT
+
+run_cycle "$DEV_ALL_OVERLAY" "$DEV_ALL_REPO" "$DEV_ALL_FLAKE" "main" "$e2e_dir/dev-all" "dev-all"
+run_cycle "$SMALL_OVERLAY" "$SMALL_REPO" "$SMALL_FLAKE" "$SMALL_BASE_BRANCH" "$e2e_dir/$SMALL_OVERLAY" "$SMALL_OVERLAY"
+
+if find "$DEVKIT_ROOT/overlays" -maxdepth 2 -name flake.lock -print | grep -q .; then
+  fail "overlay-local Nix checks created flake.lock files"
+fi
+
+echo
+echo "native-e2e-lifecycle: ok"

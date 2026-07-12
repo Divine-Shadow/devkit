@@ -1,0 +1,60 @@
+# Managed by the dev-all overlay for Ouroboros Codex homes.
+# Mirrors deny-rg-require-governed-search from:
+# ouroboros-ide/tools/subagent-governance/catalog/policies.json
+# Direct scoped rg is temporarily permitted for 24 hours from
+# 2026-05-21T02:24:51Z while governed-search performance is remediated.
+# Legacy rgb remains blocked.
+
+prefix_rule(
+    pattern = ["rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["bash", "scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["bash", "./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["/bin/bash", "scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["/bin/bash", "./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["sh", "scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)
+
+prefix_rule(
+    pattern = ["sh", "./scripts/subagent/rgb"],
+    decision = "forbidden",
+    justification = "Ouroboros governance policy: legacy rgb is blocked in governed runs. Direct scoped rg is temporarily permitted for 24 hours from 2026-05-21T02:24:51Z while governed-search performance is remediated; use MCP governance.search when it performs acceptably or scripts/subagent/governed-search when a broker transcript is required."
+)

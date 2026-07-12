@@ -9,12 +9,11 @@ import (
 )
 
 type Window struct {
-	Index          int    `yaml:"index"`
-	Path           string `yaml:"path"`
-	Name           string `yaml:"name"`
-	Service        string `yaml:"service"`
-	Project        string `yaml:"project"`
-	ComposeProject string `yaml:"compose_project"`
+	Index   int    `yaml:"index"`
+	Path    string `yaml:"path"`
+	Name    string `yaml:"name"`
+	Service string `yaml:"service"`
+	Project string `yaml:"project"`
 }
 
 type File struct {
@@ -24,14 +23,9 @@ type File struct {
 }
 
 type Overlay struct {
-	Project        string            `yaml:"project"`
-	Service        string            `yaml:"service"`
-	Count          int               `yaml:"count"`
-	Profiles       string            `yaml:"profiles"`
-	Build          bool              `yaml:"build"`
-	ComposeProject string            `yaml:"compose_project"`
-	Network        *Network          `yaml:"network"`
-	Env            map[string]string `yaml:"env"`
+	Project string `yaml:"project"`
+	Service string `yaml:"service"`
+	Count   int    `yaml:"count"`
 	// Optional: when targeting the dev-all overlay, request host-side git worktrees
 	// to be prepared before tmux windows are attached. This only applies to
 	// overlays where Project == "dev-all".
@@ -51,12 +45,6 @@ type Worktrees struct {
 	BaseBranch string `yaml:"base_branch"`
 	// Prefix for per-agent branch names (e.g., "agent" -> agent1, agent2, ...). Optional.
 	BranchPrefix string `yaml:"branch_prefix"`
-}
-
-// Network controls the internal subnet and DNS IP used for an overlay's dev networks.
-type Network struct {
-	Subnet string `yaml:"subnet"`
-	DNSIP  string `yaml:"dns_ip"`
 }
 
 func Read(p string) (File, error) {

@@ -1,7 +1,0 @@
- 
-
-services:
-  dev-agent:
-    volumes:
-      - ${DEVKIT_CODEX_POOL_DIR}:/var/codex-pool:ro
-

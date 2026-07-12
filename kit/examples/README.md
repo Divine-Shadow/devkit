@@ -1,35 +1,68 @@
-Examples for tmux layouts and orchestration
+# Native Layout Examples
 
-- Dry-run: append `--dry-run` to print docker/tmux commands without executing.
+Examples in this directory are for native flake-backed agents.
 
-Useful commands
-- Preview orchestration: `devkit/kit/scripts/devkit --dry-run layout-apply --file devkit/kit/examples/orchestration.yaml`
-- Apply orchestration: `devkit/kit/scripts/devkit layout-apply --file devkit/kit/examples/orchestration.yaml`
-- Preview layout-only windows: `devkit/kit/scripts/devkit --dry-run tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
-- Apply layout-only windows: `devkit/kit/scripts/devkit tmux-apply-layout --file devkit/kit/examples/tmux.yaml`
-
-## Codex (8 agents + worktrees)
-
-`orchestration-codex8-worktrees.yaml` launches the `dev-all` overlay with eight codex agents and prepares matching `ouroboros-ide` worktrees. No manual subnet tweaking is required; the file pins a non-conflicting range so multiple layouts can be applied in parallel.
+Useful commands:
 
 ```bash
-export DEVKIT_ENABLE_RUNTIME_CONFIG=1
-export DEVKIT_WORKTREE_ROOT="$HOME/devkit-worktrees"
-mkdir -p "$DEVKIT_WORKTREE_ROOT"
-devkit/kit/scripts/devkit layout-apply \
-  --file devkit/kit/examples/orchestration-codex8-worktrees.yaml \
-  --tmux --attach
+kit/scripts/devkit --dry-run -p dev-all layout-apply --file kit/examples/orchestration-ouro8-devall.yaml
+kit/scripts/devkit -p dev-all layout-apply --file kit/examples/orchestration-ouro8-devall.yaml --tmux --attach
 ```
 
-`--tmux` forces window creation even if `DEVKIT_NO_TMUX=1`, and `--attach` drops you straight into the `devkit_codex8` session. Because the layout lists `project: dev-all`, no `-p` flag is required; if you omit `project` fields in your own layout, pass `-p <overlay>` so the CLI knows which stack to reuse. Use `COMPOSE_PROJECT_NAME=devkit-codex8 devkit/kit/scripts/devkit -p codex down` when you're done.
+`orchestration-ouro8-devall.yaml` launches the `dev-all` overlay with eight agents and prepares matching `ouroboros-ide` worktrees. Use `--tmux` to force window creation when `DEVKIT_NO_TMUX=1`; use `--attach` to attach after windows are created.
 
-### Automated check
-`kit/tests/codex-layout-verify.sh` runs the full workflow (layout apply, tmux session creation, Codex “ok”, `git pull`, tmux/compose teardown) and auto-detects the correct `scripts/devkit` shim. Example:
+`orchestration-ouro8-static-devall.yaml` keeps the same eight `dev-all`
+agents and adds paired `static-N` windows that cd into the sibling
+`/workspaces/dev/ouroboros-static-front-end` checkout. This is the preferred
+layout when one agent needs to compare app code, backend/domain docs, static
+marketing content, and Gatsby fixture data without switching runtimes.
+
+The paired static windows intentionally target the same `dev-agent` indexes as
+the `ouro-N` windows. `layout-validate` will warn about multiple windows per
+agent index; that warning is expected for this companion layout.
+
+From an `ouro-N` window, run the app frontend through Netlify dev on that
+agent's indexed host ports:
 
 ```bash
-DEVKIT_ENABLE_RUNTIME_CONFIG=1 \
-DEVKIT_WORKTREE_ROOT=$HOME/devkit-worktrees \
-devkit/kit/tests/codex-layout-verify.sh
+agent=${DEVKIT_NATIVE_AGENT:-1}
+app_port=$((45173 + agent))
+app_target_port=$((46173 + agent))
+cd /workspaces/dev/ouroboros-ide/frontend
+NETLIFY_TELEMETRY_DISABLED=1 BROWSER=none netlify dev \
+  --offline \
+  --no-open \
+  --skip-gitignore \
+  --port "$app_port" \
+  --target-port "$app_target_port" \
+  --command "npm run dev -- --host 127.0.0.1 --port $app_target_port"
 ```
 
-The script resolves the layout path, forces tmux, verifies the eight codex windows exist, runs `codexw exec --skip-git-repo-check "reply with: ok"`, performs `git fetch && git pull`, and tears the stack down so the next run starts clean.
+The direct app URL is `http://127.0.0.1:$app_port`. When native ingress is
+running, the matching route is `https://ouroboros-N.test`; agent 1 also backs
+`https://ouroboros.test`.
+
+From a `static-N` window, run the fixture-safe Gatsby server with:
+
+```bash
+port=$((8000 + ${DEVKIT_NATIVE_AGENT:-1}))
+USE_CONTENTFUL_FIXTURE=1 GATSBY_TELEMETRY_DISABLED=1 \
+  npm run dev -- --host 127.0.0.1 --port "$port"
+```
+
+The dev-all ingress config includes matching app routes to Netlify ports
+`45174` through `45181` and matching `http://static-N.localhost` routes to
+Gatsby ports `8001` through `8008`. These per-agent host ports avoid collisions
+because native agents share host networking. Use fixture mode by default so
+agents can inspect the marketing surface without Contentful credentials. If a
+native ingress process is not running, use the direct per-agent URLs, for
+example `http://127.0.0.1:45174` for app agent 1 and
+`http://static-1.localhost:8001` for static agent 1.
+
+Useful dry-run:
+
+```bash
+kit/scripts/devkit --dry-run -p dev-all layout-apply \
+  --file kit/examples/orchestration-ouro8-static-devall.yaml \
+  --skip-broker --skip-ready
+```

@@ -19,12 +19,13 @@ func Register(r *cmdregistry.Registry) {
 
 func handle(ctx *cmdregistry.Context) error {
 	ok := true
-	if _, err := execx.Capture(context.Background(), "docker", "version"); err.Code != 0 {
-		fmt.Fprintln(os.Stderr, "[preflight] docker not available or daemon unreachable")
+	if !requiredTool("nix flakes", "nix", "--extra-experimental-features", "nix-command flakes", "--version") {
 		ok = false
-	} else {
-		fmt.Println("[preflight] docker: OK")
 	}
+	if !requiredTool("bubblewrap", "bwrap", "--version") {
+		ok = false
+	}
+	optionalTool("brokered Docker upstream", "docker", "version")
 	if _, err := execx.Capture(context.Background(), "tmux", "-V"); err.Code != 0 {
 		fmt.Fprintln(os.Stderr, "[preflight] tmux not found (only needed for tmux windows)")
 	} else {
@@ -40,7 +41,7 @@ func handle(ctx *cmdregistry.Context) error {
 				ok = false
 			}
 		} else {
-			fmt.Fprintln(os.Stderr, "[preflight] ~/.codex not found; codex may prompt for login in containers")
+			fmt.Fprintln(os.Stderr, "[preflight] ~/.codex not found; codex may prompt for login in native agents")
 		}
 		key := filepath.Join(home, ".ssh", "id_ed25519")
 		if _, er := os.Stat(key); er != nil {
@@ -83,4 +84,21 @@ func handle(ctx *cmdregistry.Context) error {
 		fmt.Printf("[preflight] pool: OK (%d slots in %s). Reminder: include --profile pool to mount.\n", slots, dir)
 	}
 	return nil
+}
+
+func requiredTool(label string, name string, args ...string) bool {
+	if _, res := execx.Capture(context.Background(), name, args...); res.Code != 0 {
+		fmt.Fprintf(os.Stderr, "[preflight] %s not available\n", label)
+		return false
+	}
+	fmt.Printf("[preflight] %s: OK\n", label)
+	return true
+}
+
+func optionalTool(label string, name string, args ...string) {
+	if _, res := execx.Capture(context.Background(), name, args...); res.Code != 0 {
+		fmt.Fprintf(os.Stderr, "[preflight] %s unavailable (only needed when an overlay requests brokered Docker)\n", label)
+		return
+	}
+	fmt.Printf("[preflight] %s: OK\n", label)
 }

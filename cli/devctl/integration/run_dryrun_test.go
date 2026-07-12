@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	pth "devkit/cli/devctl/internal/paths"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestRun_DryRun ensures the run command produces expected docker compose invocations
+// TestRun_DryRun ensures the run command produces expected native invocations
 // and does not error when invoked in dry-run mode with a minimal dev-all overlay.
 func TestRun_DryRun(t *testing.T) {
 	root := t.TempDir()
@@ -22,10 +21,6 @@ func TestRun_DryRun(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	base := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3.18\n    command: ['sh','-lc','sleep 1']\n"
-	write(filepath.Join(root, "kit/compose.yml"), base)
-	write(filepath.Join(root, "kit/compose.dns.yml"), base)
-	write(filepath.Join(root, "overlays/dev-all/compose.override.yml"), base)
 	// files edited by allowlist step
 	write(filepath.Join(root, "kit/proxy/allowlist.txt"), "\n")
 	write(filepath.Join(root, "kit/dns/dnsmasq.conf"), "\n")
@@ -39,8 +34,6 @@ func TestRun_DryRun(t *testing.T) {
 		t.Skipf("go build failed: %v\n%s", err, out)
 	}
 
-	t.Setenv("COMPOSE_PROJECT_NAME", "")
-
 	var stderr bytes.Buffer
 	cmd := exec.Command(bin, "--dry-run", "--no-tmux", "--no-seed", "-p", "dev-all", "run", "testrepo", "2")
 	cmd.Env = append(os.Environ(), "DEVKIT_ROOT="+root)
@@ -50,18 +43,16 @@ func TestRun_DryRun(t *testing.T) {
 		t.Fatalf("run dry-run failed: %v\nstderr=%s", err, stderr.String())
 	}
 	out := stderr.String()
-	// Expect compose up scaling and some execs
+	// Expect native lifecycle and tmux commands, not container-backed agent execs.
 	wants := []string{
-		"compose -f ",
-		" up -d --remove-orphans --scale dev-agent=2",
-		"/workspaces/dev/" + pth.AgentWorktreesDir + "/agent2/testrepo",
+		" -p dev-all up --repo testrepo --count 2",
 	}
 	for _, w := range wants {
 		if !strings.Contains(out, w) {
 			t.Fatalf("missing %q in:\n%s", w, out)
 		}
 	}
-	if !(strings.Contains(out, "docker exec -t") && strings.Contains(out, "dev-agent-1 bash -lc")) {
-		t.Fatalf("missing docker exec for agent1 in:\n%s", out)
+	if strings.Contains(out, "docker "+"compose") || strings.Contains(out, "docker "+"exec") {
+		t.Fatalf("run dry-run should not use retired container commands for dev-all:\n%s", out)
 	}
 }

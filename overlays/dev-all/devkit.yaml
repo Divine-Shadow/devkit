@@ -7,58 +7,434 @@ defaults:
   base_branch: main
   # Prefix for per-agent branch names (agent1, agent2, ...)
   branch_prefix: agent
-  # Run readiness (ssh + warm + validation) after up/restart/scale.
+  # Run native readiness after up/restart/scale.
   auto_ready: true
   # Warm hook is required for readiness.
   require_warm: true
+runtime:
+  flake: ./overlays/dev-all#default
+  codex_version: 0.144.0
+  core_check: bash scripts/sbt2 "Compile / compile"
+  notes: Canonical multi-worktree runtime for ouroboros-ide.
+readiness:
+  default_mode: runtime-only
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker go java sbt node npm purs spago vite netlify playwright deno aws make gcc mgba-headless; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: purescript-spago-netlify
+      command: purs --version >/dev/null && spago --version >/dev/null && vite --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null
+    - name: playwright-browser
+      command: |
+        node <<'NODE'
+        const { chromium } = require("@playwright/test");
+        (async () => {
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage();
+          await page.setContent("<title>native-playwright-ok</title>");
+          const title = await page.title();
+          await browser.close();
+          if (title !== "native-playwright-ok") {
+            throw new Error(`unexpected title: ${title}`);
+          }
+        })().catch((err) => {
+          console.error(err);
+          process.exit(1);
+        });
+        NODE
+    - name: governance-provenance
+      command: |
+        env_file=/workspaces/dev/.devkit/ouro8-governance-env.sh
+        test -r "$env_file"
+        . "$env_file"
+        case "${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-}" in
+          /nix/store/*/share/subagent-governance/subagent-governance.jar) ;;
+          *)
+            echo "expected Nix-store governance jar, got: ${SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR:-<unset>}" >&2
+            exit 1
+            ;;
+        esac
+        test -f "$SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR"
+        test -n "${DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH:?}"
+        test -n "${DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256:?}"
+        if [ "$SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR" != "$DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH" ]; then
+          echo "governance jar path drift: expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH actual=$SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR" >&2
+          exit 1
+        fi
+        actual_jar_sha="$(sha256sum "$SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR" | awk '{print $1}')"
+        if [ "$actual_jar_sha" != "$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256" ]; then
+          echo "governance jar hash drift: $SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256 actual=$actual_jar_sha" >&2
+          exit 1
+        fi
+        state_dir="${SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR:-/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane}"
+        server_jar_path_file="$state_dir/server.jar.path"
+        server_jar_sha_file="$state_dir/server.jar.sha256"
+        if [ -e "$server_jar_path_file" ] || [ -e "$server_jar_sha_file" ]; then
+          test -r "$server_jar_path_file"
+          test -r "$server_jar_sha_file"
+          server_jar_path="$(tr -d '\r\n' < "$server_jar_path_file")"
+          server_jar_sha="$(tr -d '\r\n' < "$server_jar_sha_file")"
+          if [ "$server_jar_path" != "$DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH" ]; then
+            echo "governance singleton jar path drift: expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH actual=$server_jar_path" >&2
+            exit 1
+          fi
+          if [ "$server_jar_sha" != "$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256" ]; then
+            echo "governance singleton jar hash drift: expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256 actual=$server_jar_sha" >&2
+            exit 1
+          fi
+        fi
+        test -r "${DEVKIT_GOVERNANCE_REPO_CONFIG_PATH:?}"
+        test -n "${DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256:?}"
+        test -n "${DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256:?}"
+        actual_catalog_sha="$(sha256sum "$DEVKIT_GOVERNANCE_REPO_CONFIG_PATH" | awk '{print $1}')"
+        if [ "$actual_catalog_sha" != "$DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256" ]; then
+          echo "governance catalog hash drift: $DEVKIT_GOVERNANCE_REPO_CONFIG_PATH expected=$DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256 actual=$actual_catalog_sha" >&2
+          exit 1
+        fi
+        bridge_paths="$(
+          find /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees /agent-state \
+            -path '*/.codex/log/governance-mcp-stdio-forward/provenance.json' \
+            -type f 2>/dev/null || true
+        )"
+        bridge_status=0
+        if [ -n "$bridge_paths" ]; then
+          while IFS= read -r bridge_provenance; do
+            if ! test -r "$bridge_provenance"; then
+              bridge_status=1
+              continue
+            fi
+            BRIDGE_PROVENANCE="$bridge_provenance" node <<'NODE' || bridge_status=1
+        const fs = require("fs");
+        const path = process.env.BRIDGE_PROVENANCE;
+        const payload = JSON.parse(fs.readFileSync(path, "utf8"));
+        const expectedJarPath = process.env.DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH || "";
+        const expectedJarSha = process.env.DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256 || "";
+        const expectedRepoConfigPath = process.env.DEVKIT_GOVERNANCE_REPO_CONFIG_PATH || "";
+        const expectedRepoConfigSha = process.env.DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256 || "";
+        const expectedEntrypointSha = process.env.DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256 || "";
+        const fail = (message) => {
+          console.error(`${message}: ${path}`);
+          process.exit(1);
+        };
+        const selectedJarPath = String(payload.selectedJarPath || "");
+        if (!selectedJarPath.startsWith("/nix/store/")) {
+          fail(`governance bridge used non-Nix jar ${selectedJarPath}`);
+        }
+        if (!expectedJarPath || selectedJarPath !== expectedJarPath) {
+          fail(`governance bridge jar path drift expected=${expectedJarPath} actual=${selectedJarPath}`);
+        }
+        if (!expectedJarSha || String(payload.selectedJarSha256 || "") !== expectedJarSha || payload.jarMatchesExpected !== true) {
+          fail(`governance bridge jar hash drift expected=${expectedJarSha} actual=${String(payload.selectedJarSha256 || "")}`);
+        }
+        if (!expectedRepoConfigPath || String(payload.repoConfigPath || "") !== expectedRepoConfigPath) {
+          fail(`governance bridge catalog path drift expected=${expectedRepoConfigPath} actual=${String(payload.repoConfigPath || "")}`);
+        }
+        if (!expectedRepoConfigSha || String(payload.repoConfigSha256 || "") !== expectedRepoConfigSha) {
+          fail(`governance bridge catalog hash drift expected=${expectedRepoConfigSha} actual=${String(payload.repoConfigSha256 || "")}`);
+        }
+        if (!expectedEntrypointSha || String(payload.mcpEntrypointSha256 || "") !== expectedEntrypointSha || payload.mcpEntrypointMatchesExpected !== true) {
+          fail(`governance bridge entrypoint fingerprint drift expected=${expectedEntrypointSha} actual=${String(payload.mcpEntrypointSha256 || "")}`);
+        }
+        NODE
+          done <<EOF
+        $bridge_paths
+        EOF
+        fi
+        if [ "$bridge_status" -ne 0 ]; then
+          exit "$bridge_status"
+        fi
+        printf '%s\n' "${SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS:-}" | grep -Eq '(^|,)ouroboros-ide(,|$)'
+        printf '%s\n' "${SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS:-}" | grep -Fq 'ouroboros-ide=/workspaces/dev/ouroboros-ide'
+    - name: codex-provider-config
+      command: |
+        set -euo pipefail
+        config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+        test -r "$config" || {
+          echo "dev-all readiness: missing Codex config at $config" >&2
+          exit 1
+        }
+        grep -Fqx '# source = nixos-wsl codex config' "$config" || {
+          echo "dev-all readiness: Codex config is not Nix-authored: $config" >&2
+          exit 1
+        }
+        grep -Fqx 'model_provider = "openai"' "$config" || {
+          echo "dev-all readiness: Codex config must use model_provider = \"openai\": $config" >&2
+          exit 1
+        }
+        grep -Fqx '[profiles.openai]' "$config" || {
+          echo "dev-all readiness: Codex config missing [profiles.openai]: $config" >&2
+          exit 1
+        }
+  repo_checks:
+    - name: git-remote
+      command: GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null
+    - name: frontend-warm
+      command: |
+        if [ -f frontend/package.json ]; then
+          npm --prefix frontend ci --include=dev --ignore-scripts
+          ln -sf "$(command -v purs)" frontend/node_modules/.bin/purs
+          npm --prefix frontend rebuild better-sqlite3 --build-from-source
+          test -x frontend/node_modules/.bin/tsc
+          npm --prefix frontend ls @playwright/test global-agent --depth=0 >/dev/null
+        fi
+    - name: frontend-playwright-browser
+      command: |
+        test -f frontend/package.json
+        cd frontend
+        node <<'NODE'
+        const { chromium } = require("@playwright/test");
+        (async () => {
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage();
+          await page.setContent("<title>frontend-playwright-ok</title>");
+          const title = await page.title();
+          await browser.close();
+          if (title !== "frontend-playwright-ok") {
+            throw new Error(`unexpected title: ${title}`);
+          }
+        })().catch((err) => {
+          console.error(err);
+          process.exit(1);
+        });
+        NODE
+    - name: frontend-netlify-dev-server
+      command: |
+        test -f frontend/netlify.toml
+        cd frontend
+        agent_dir="$(basename "$(dirname "$HOME")")"
+        agent_index="$(printf '%s' "$agent_dir" | sed -n 's/.*agent\([0-9][0-9]*\)$/\1/p')"
+        if [ -z "$agent_index" ]; then
+          agent_index=1
+        fi
+        port=$((45173 + agent_index))
+        target_port=$((46173 + agent_index))
+        log="$(mktemp)"
+        had_netlify_dir=0
+        if [ -e .netlify ]; then
+          had_netlify_dir=1
+        fi
+        cleanup() {
+          code="$?"
+          pkill -TERM -P "$pid" >/dev/null 2>&1 || true
+          kill "$pid" >/dev/null 2>&1 || true
+          pkill -TERM -f "vite .*--port $target_port" >/dev/null 2>&1 || true
+          pkill -TERM -f "npm run dev .*--port $target_port" >/dev/null 2>&1 || true
+          wait "$pid" >/dev/null 2>&1 || true
+          if [ "$had_netlify_dir" = 0 ]; then
+            rm -rf .netlify
+          fi
+          if [ "$code" -ne 0 ]; then
+            cat "$log" >&2 || true
+          fi
+          rm -f "$log" /tmp/devkit-netlify-dev-index.html
+          exit "$code"
+        }
+        NETLIFY_TELEMETRY_DISABLED=1 BROWSER=none netlify dev \
+          --offline \
+          --no-open \
+          --skip-gitignore \
+          --port "$port" \
+          --target-port "$target_port" \
+          --command "npm run dev -- --host 127.0.0.1 --port $target_port" \
+          >"$log" 2>&1 &
+        pid="$!"
+        trap cleanup EXIT
+        for _ in $(seq 1 120); do
+          if curl -fsS "http://127.0.0.1:$port/" >/tmp/devkit-netlify-dev-index.html 2>/dev/null; then
+            grep -Eiq '<!doctype html|<html|<div id="root"' /tmp/devkit-netlify-dev-index.html
+            exit 0
+          fi
+          kill -0 "$pid" >/dev/null 2>&1
+          sleep 1
+        done
+        echo "timed out waiting for netlify dev on port $port" >&2
+        exit 1
+    - name: frontend-purescript-build
+      command: |
+        test -f frontend/package.json
+        npm --prefix frontend run ps:build
+    - name: frontend-typecheck
+      command: |
+        test -f frontend/package.json
+        npm --prefix frontend run typecheck
+    - name: static-marketing-fixture-typecheck
+      command: |
+        static_repo=/workspaces/dev/ouroboros-static-front-end
+        test -f "$static_repo/package.json"
+        npm --prefix "$static_repo" run typecheck
+    - name: static-marketing-fixture-smoke
+      command: |
+        static_repo=/workspaces/dev/ouroboros-static-front-end
+        test -f "$static_repo/package.json"
+        (
+          cd "$static_repo"
+          SMOKE_TEST_PORT=$((9010 + ${DEVKIT_NATIVE_AGENT:-0})) \
+          XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-/tmp/devkit-static-gatsby-config-${DEVKIT_NATIVE_AGENT:-0}}" \
+          USE_CONTENTFUL_FIXTURE=1 \
+          GATSBY_TELEMETRY_DISABLED=1 \
+          npm run smoke
+        )
+    - name: frontend-test
+      command: |
+        test -f frontend/package.json
+        npm --prefix frontend run test:raw
+    - name: core-check
+      command: bash scripts/sbt2 "Compile / compile"
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+  upstream: unix:///var/run/docker.sock
+  allowed_images:
+    - postgres:latest
+    - testcontainers/ryuk:0.7.0
+  allow_pulls: true
+  log_level: info
+native:
+  worktree_root: ../agent-worktrees
+  state_root: ../.devkit/native-agents
+  worktree_container_root: /workspaces/dev/agent-worktrees
+  state_container_root: /agent-state
 ingress:
   kind: caddy
   routes:
     - host: ouroboros.test
-      service: dev-agent
-      port: 5173
+      service: 127.0.0.1
+      port: 45174
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-1.test
-      service: dev-agent@1
-      port: 5173
+      service: 127.0.0.1
+      port: 45174
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-1.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-2.test
-      service: dev-agent@2
-      port: 5173
+      service: 127.0.0.1
+      port: 45175
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-2.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-3.test
-      service: dev-agent@3
-      port: 5173
+      service: 127.0.0.1
+      port: 45176
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-3.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-4.test
-      service: dev-agent@4
-      port: 5173
+      service: 127.0.0.1
+      port: 45177
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-4.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-5.test
-      service: dev-agent@5
-      port: 5173
+      service: 127.0.0.1
+      port: 45178
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-5.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-6.test
-      service: dev-agent@6
-      port: 5173
+      service: 127.0.0.1
+      port: 45179
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-6.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-7.test
-      service: dev-agent@7
-      port: 5173
+      service: 127.0.0.1
+      port: 45180
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-7.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
     - host: ouroboros-8.test
-      service: dev-agent@8
-      port: 5173
+      service: 127.0.0.1
+      port: 45181
       cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: ouroboros-8.test
+      path: /_governance/*
+      service: 127.0.0.1
+      port: 7778
+      cert: ../../../ouroboros-ide/infra/ouroboros.test.pem
+      key: ../../../ouroboros-ide/infra/ouroboros.test-key.pem
+    - host: localhost
+      path: /operator-attention/*
+      service: operator-attention-listener
+      port: 7779
+    - host: localhost
+      path: /ouroboros-1/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-2/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-3/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-4/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-5/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-6/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-7/_governance/*
+      service: 127.0.0.1
+      port: 7778
+    - host: localhost
+      path: /ouroboros-8/_governance/*
+      service: 127.0.0.1
+      port: 7778
     - host: webserver.ouroboros.test
       service: dev-agent
       port: 8080
@@ -104,6 +480,30 @@ ingress:
       port: 8080
       cert: ../../../ouroboros-ide/infra/webserver.ouroboros.test.pem
       key: ../../../ouroboros-ide/infra/webserver.ouroboros.test-key.pem
+    - host: http://static-1.localhost
+      service: 127.0.0.1
+      port: 8001
+    - host: http://static-2.localhost
+      service: 127.0.0.1
+      port: 8002
+    - host: http://static-3.localhost
+      service: 127.0.0.1
+      port: 8003
+    - host: http://static-4.localhost
+      service: 127.0.0.1
+      port: 8004
+    - host: http://static-5.localhost
+      service: 127.0.0.1
+      port: 8005
+    - host: http://static-6.localhost
+      service: 127.0.0.1
+      port: 8006
+    - host: http://static-7.localhost
+      service: 127.0.0.1
+      port: 8007
+    - host: http://static-8.localhost
+      service: 127.0.0.1
+      port: 8008
   hosts:
     - ouroboros.test
     - webserver.ouroboros.test
@@ -128,28 +528,54 @@ hooks:
   # Warm frontend deps and ensure playwright/typecheck tooling exists.
   warm: |
     set -euo pipefail
+    canonical_ouro_repos() {
+      printf '%s\n' /workspaces/dev/ouroboros-ide
+      if [ -n "${DEVKIT_NATIVE_AGENT:-}" ]; then
+        printf '%s\n' "/workspaces/dev/agent-worktrees/agent${DEVKIT_NATIVE_AGENT}/ouroboros-ide"
+        return 0
+      fi
+      local index
+      for index in 1 2 3 4 5 6 7 8; do
+        printf '%s\n' "/workspaces/dev/agent-worktrees/agent${index}/ouroboros-ide"
+      done
+    }
+    cleanup_governance_logs() {
+      local ttl="${OURO_LOG_TTL_DAYS:-7}"
+      if ! printf '%s' "$ttl" | grep -Eq '^[0-9]+$'; then
+        echo "[dev-all warm] invalid OURO_LOG_TTL_DAYS=$ttl, skipping log cleanup" >&2
+        return 0
+      fi
+
+      canonical_ouro_repos | while IFS= read -r repo; do
+        [ -d "$repo/logs" ] || continue
+        if [ -x "$repo/scripts/devops/governance-retention-cleanup" ]; then
+          "$repo/scripts/devops/governance-retention-cleanup" --root "$repo/logs" --ttl-days "$ttl"
+        else
+          find "$repo/logs" -path "$repo/logs/plans" -prune -o -type f -mtime +"$ttl" -delete
+        fi
+      done
+    }
+    install_governed_search_policy_rules() {
+      local source=/workspaces/dev/devkit/overlays/dev-all/codex-governed-search-policy.rules
+      local target
+      [ -r "$source" ] || return 0
+
+      for home in \
+        /workspaces/dev/ouroboros-ide/.devhome-agent1 \
+        /workspaces/dev/agent-worktrees/agent[0-9]*/.devhome-agent[0-9]* \
+        /workspaces/dev/.devkit/native-agents/dev-all-agent[0-9]*/home; do
+        [ -d "$home" ] || continue
+        target="$home/.codex/rules/governed-search-policy.rules"
+        mkdir -p "$(dirname "$target")"
+        cp -f "$source" "$target"
+      done
+    }
+    cleanup_governance_logs
+    install_governed_search_policy_rules
     # Keep a compatibility path for workflows that expect agent1 under agent-worktrees.
     mkdir -p /workspaces/dev/agent-worktrees/agent1
     if [ -d /workspaces/dev/ouroboros-ide ] && [ ! -e /workspaces/dev/agent-worktrees/agent1/ouroboros-ide ]; then
       ln -s ../../ouroboros-ide /workspaces/dev/agent-worktrees/agent1/ouroboros-ide
-    fi
-    if command -v npm >/dev/null 2>&1; then
-      for repo in /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees/agent[0-9]*/ouroboros-ide; do
-        if [ -f "$repo/frontend/package.json" ]; then
-          npm --prefix "$repo/frontend" install --include=dev --no-package-lock
-          if [ ! -x "$repo/frontend/node_modules/.bin/tsc" ]; then
-            npm --prefix "$repo/frontend" install --include=dev --no-save --no-package-lock typescript
-          fi
-          if ! npm --prefix "$repo/frontend" ls @playwright/test >/dev/null 2>&1; then
-            npm --prefix "$repo/frontend" install --no-save --no-package-lock @playwright/test @vitest/browser-playwright
-          fi
-          # microsoft/playwright-cli is archived; canonical CLI is `npx playwright`.
-          if ! npm --prefix "$repo/frontend" ls playwright >/dev/null 2>&1; then
-            npm --prefix "$repo/frontend" install --no-save --no-package-lock playwright
-          fi
-          npm --prefix "$repo/frontend" exec playwright install chromium
-        fi
-      done
     fi
     mkdir -p /workspace/.local/bin
     if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then

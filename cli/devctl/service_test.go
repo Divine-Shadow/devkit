@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"devkit/cli/devctl/internal/config"
@@ -64,19 +64,61 @@ func TestApplyOverlayEnvLoadsEnvFiles(t *testing.T) {
 	}
 }
 
-func TestCodexComposePinsDockerHost(t *testing.T) {
-	cwd, err := os.Getwd()
+func TestGitIdentityForRepoCommandUsesIdentityValues(t *testing.T) {
+	home := "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2"
+	repoPath := "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"
+	cmd := gitIdentityForRepoCommand(
+		home,
+		repoPath,
+		"Agent 2 of BayeSartre",
+		"agent+2@ouroboros-ai.com",
+	)
+
+	for _, want := range []string{
+		"config --worktree user.name 'Agent 2 of BayeSartre'",
+		"config --worktree user.email 'agent+2@ouroboros-ai.com'",
+		"config --worktree core.sshCommand 'ssh -F /workspaces/dev/agent-worktrees/agent2/.devhome-agent2/.ssh/config'",
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("command missing %q:\n%s", want, cmd)
+		}
+	}
+
+	if strings.Contains(cmd, "user.name '"+home+"'") || strings.Contains(cmd, "user.email '"+home+"'") {
+		t.Fatalf("command used agent home as git identity:\n%s", cmd)
+	}
+}
+
+func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "id_ed25519"), []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNativeSSHConfig(home, home, nil); err != nil {
+		t.Fatalf("write default config: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(sshDir, "config"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
-	overridePath := filepath.Join(root, "overlays", "codex", "compose.override.yml")
-	data, err := os.ReadFile(overridePath)
-	if err != nil {
-		t.Fatalf("read codex override: %v", err)
+	text := string(data)
+	if !strings.Contains(text, "HostName github.com") || !strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+		t.Fatalf("default config missing github host/default key:\n%s", text)
 	}
-	want := []byte("DOCKER_HOST=unix:///broker-run/postgres-broker.sock")
-	if !bytes.Contains(data, want) {
-		t.Fatalf("codex compose override missing %q", string(want))
+
+	if err := writeNativeSSHConfig(home, home, []string{"work_key"}); err != nil {
+		t.Fatalf("write custom config: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(sshDir, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(data)
+	if !strings.Contains(text, filepath.Join(home, ".ssh", "work_key")) || strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+		t.Fatalf("custom config did not use only custom key:\n%s", text)
 	}
 }

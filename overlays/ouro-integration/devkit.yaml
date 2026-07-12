@@ -1,0 +1,124 @@
+workspace: ../../../agent-worktrees/integration
+service: dev-agent
+
+defaults:
+  repo: ouroboros-ide
+  agents: 1
+  base_branch: main
+  branch_prefix: agent
+
+runtime:
+  canonical: false
+  flake: ./overlays/ouro-integration#default
+  codex_version: 0.144.0
+  core_check: |
+    (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)
+    (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")
+  notes: Integration runtime with the Ouroboros Scala toolchain plus Terraform/AWS tooling and dedicated integration worktrees mounted read-write.
+readiness:
+  default_mode: runtime-only
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker java sbt aws terraform packer node npm; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: terraform-packer-aws
+      command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
+    - name: sbt-jvm
+      command: java -version >/dev/null 2>&1 && command -v sbt >/dev/null
+    - name: governance-mcp-config
+      command: |
+        set -euo pipefail
+        config="${CODEX_HOME:-$HOME/.codex}/config.toml"
+        expected_cwd="$(pwd -P)"
+        require_config() {
+          if ! grep -Fq "$1" "$config"; then
+            echo "ouro-integration readiness: Codex governance config missing $1 in $config" >&2
+            exit 1
+          fi
+        }
+        test -r "$config" || {
+          echo "ouro-integration readiness: missing Codex config at $config" >&2
+          exit 1
+        }
+        require_config '# source = nixos-wsl codex config'
+        require_config '[profiles.openai]'
+        require_config 'model_provider = "openai"'
+        require_config '# BEGIN DEVKIT NATIVE GOVERNANCE MCP'
+        require_config '[mcp_servers.governance]'
+        require_config 'command = "/run/current-system/sw/bin/bash"'
+        require_config "cwd = \"$expected_cwd\""
+        require_config 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256='
+        require_config 'governance.workspace_topology'
+        test -r /workspaces/dev/.devkit/ouro8-governance-env.sh
+        grep -Fq 'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' /workspaces/dev/.devkit/ouro8-governance-env.sh
+    - name: codex-auth-present
+      command: |
+        set -euo pipefail
+        auth="${CODEX_HOME:-$HOME/.codex}/auth.json"
+        test -r "$auth" || {
+          echo "ouro-integration readiness: missing Codex auth at $auth" >&2
+          exit 1
+        }
+        python3 - "$auth" <<'PY'
+        import json
+        import sys
+
+        auth_path = sys.argv[1]
+        try:
+            with open(auth_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            print(f"ouro-integration readiness: invalid Codex auth in {auth_path}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        tokens = data.get("tokens") or {}
+        if not (tokens.get("refresh_token") or data.get("OPENAI_API_KEY")):
+            print(f"ouro-integration readiness: Codex auth has no refresh token or API key in {auth_path}", file=sys.stderr)
+            sys.exit(1)
+        PY
+  repo_checks:
+    - name: aws-config
+      command: test -f /workspaces/dev/.aws/config
+    - name: core-check
+      command: |
+        (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)
+        (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")
+
+env:
+  AWS_PROFILE: codex
+
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+  upstream: unix:///var/run/docker.sock
+  allowed_images:
+    - postgres:latest
+    - testcontainers/ryuk:0.7.0
+  allow_pulls: true
+  log_level: info
+
+hooks:
+  warm: |
+    set -euo pipefail
+
+    mkdir -p /workspaces/dev/.local/bin /workspace/.local/bin
+
+    if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      ln -sf "$(command -v python3)" /workspaces/dev/.local/bin/python
+      ln -sf "$(command -v python3)" /workspace/.local/bin/python
+    fi
+
+    if [ -f /workspaces/dev/.aws/config ]; then
+      printf 'AWS config available at /workspaces/dev/.aws/config\n'
+    else
+      printf 'Expected AWS config at /workspaces/dev/.aws/config\n' >&2
+      exit 1
+    fi
+
+    command -v aws >/dev/null
+    command -v terraform >/dev/null
+    command -v sbt >/dev/null
+    command -v java >/dev/null
+  maintain: ""

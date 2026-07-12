@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${1:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
+
+cd "$ROOT"
+
+scan_paths=()
+for path in README.md Makefile flake.nix cli kit/docs kit/scripts nix overlays; do
+  if [[ -e "$path" ]]; then
+    scan_paths+=("$path")
+  fi
+done
+
+if [[ "${#scan_paths[@]}" -eq 0 ]]; then
+  echo "nix-overlay-runtime-guard: no supported paths found" >&2
+  exit 1
+fi
+
+failures=0
+rg_common=(
+  --glob '!kit/.devhome/**'
+  --glob '!kit/bin/**'
+  --glob '!kit/scripts/nix-overlay-runtime-guard'
+)
+
+if find overlays -maxdepth 2 -name flake.lock -print | grep -q .; then
+  find overlays -maxdepth 2 -name flake.lock -print
+  echo "nix-overlay-runtime-guard: overlay-local flake.lock files are not allowed" >&2
+  failures=1
+fi
+
+if rg -n --no-heading "${rg_common[@]}" -- '--no-write-lock-file' "${scan_paths[@]}"; then
+  echo "nix-overlay-runtime-guard: noisy lock suppression flag is not allowed in supported surfaces" >&2
+  failures=1
+fi
+
+develop_lines="$(
+  rg -n --no-heading "${rg_common[@]}" 'develop' "${scan_paths[@]}" || true
+)"
+
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  case "$line" in
+    *'./overlays'*|*'p.Flake'*|*'e.Flake'*|*'develop %s'*|*'$flake'*|*'DEV_ALL_FLAKE'*|*'STATIC_FRONTEND_FLAKE'*|*', flake,'*)
+      if [[ "$line" != *'--output-lock-file /dev/null'* && "$line" != *'"--output-lock-file", "/dev/null"'* ]]; then
+        echo "$line"
+        failures=1
+      fi
+      ;;
+  esac
+done <<< "$develop_lines"
+
+if [[ "$failures" -ne 0 ]]; then
+  echo "nix-overlay-runtime-guard: overlay-local nix develop commands must use --output-lock-file /dev/null" >&2
+  exit 1
+fi
+
+echo "nix-overlay-runtime-guard: ok"

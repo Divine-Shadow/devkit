@@ -5,6 +5,28 @@ defaults:
   agents: 1
   base_branch: main
   branch_prefix: agent
+runtime:
+  flake: ./overlays/ouroboros-static-front-end#default
+  codex_version: 0.144.0
+  core_check: npm run build:fixture
+  notes: Node/Gatsby runtime for the standalone static front end.
+readiness:
+  default_mode: runtime-only
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker node npm purs spago vite netlify deno playwright; do
+          command -v "$tool" >/dev/null
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: frontend-tooling
+      command: node --version >/dev/null && npm --version >/dev/null && purs --version >/dev/null && spago --version >/dev/null && vite --version >/dev/null && netlify --version >/dev/null && deno --version >/dev/null
+    - name: playwright-cli
+      command: playwright --version >/dev/null && node -e 'require("@playwright/test")'
+  repo_checks:
+    - name: core-check
+      command: npm run build:fixture
 env:
   NODE_ENV: development
   GATSBY_TELEMETRY_DISABLED: "1"
@@ -25,4 +47,4 @@ hooks:
     if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
       ln -sf "$(command -v python3)" /workspace/.local/bin/python
     fi
-    npm run build
+    npm run build:fixture

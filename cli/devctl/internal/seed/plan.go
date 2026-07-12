@@ -6,11 +6,10 @@ type SeedStep struct{ Cmd []string }
 // Plan is an ordered list of steps.
 type Plan struct{ Steps []SeedStep }
 
-// BuildResetPlan removes the Codex dir and recreates the needed directories under home.
+// BuildResetPlan preserves the Codex dir and recreates the needed directories under home.
 // This mirrors the behavior of ResetAndCreateDirsScript but returns argv steps to avoid heredocs.
 func BuildResetPlan(home string) Plan {
 	steps := []SeedStep{
-		{Cmd: []string{"rm", "-rf", home + "/.codex"}},
 		{Cmd: []string{"mkdir", "-p", home + "/.codex/rollouts", home + "/.cache", home + "/.config", home + "/.local"}},
 	}
 	return Plan{Steps: steps}

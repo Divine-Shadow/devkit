@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+NIX_FLAGS=(--extra-experimental-features "nix-command flakes")
+EXPECTED_CODEX_VERSION="${DEVKIT_EXPECTED_CODEX_VERSION:-}"
+
+overlays=(
+  _template
+  codex
+  dev-all
+  dumb-onion-hax
+  ouro-integration
+  ouroboros-static-front-end
+  ouroboros-terraform
+  pokeemerald
+)
+
+runtime_value_for() {
+  local overlay="$1"
+  local field="$2"
+  local yaml="$DEVKIT_ROOT/overlays/$overlay/devkit.yaml"
+  awk -v field="$field" '
+    /^[[:space:]]*runtime:[[:space:]]*$/ { in_runtime = 1; next }
+    /^[^[:space:]][^:]*:/ { if (in_runtime) exit }
+    in_runtime {
+      pattern = "^[[:space:]]+" field ":[[:space:]]*"
+    }
+    in_runtime && $0 ~ pattern {
+      sub(pattern, "")
+      sub(/[[:space:]]+#.*$/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if (substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$yaml"
+}
+
+runtime_flake_for() {
+  runtime_value_for "$1" flake
+}
+
+runtime_codex_version_for() {
+  runtime_value_for "$1" codex_version
+}
+
+smoke_for() {
+  case "$1" in
+    _template)
+      printf '%s\n' 'for tool in git ssh curl docker codex python3 uv; do command -v "$tool" >/dev/null; done && docker --version && git --version && uv --version && python3 --version'
+      ;;
+    codex)
+      printf '%s\n' 'for tool in git ssh curl docker go java sbt node npm purs spago netlify deno playwright; do command -v "$tool" >/dev/null; done && docker --version && java -version >/dev/null 2>&1 && node -e '\''require("@playwright/test")'\'''
+      ;;
+    dev-all)
+      printf '%s\n' 'for tool in git ssh curl docker go java sbt node npm purs spago netlify playwright deno aws make gcc mgba-headless; do command -v "$tool" >/dev/null; done && spago --version && netlify --version && deno --version && playwright --version && go version && docker --version && mgba-headless --help 2>&1 | grep -q -- --script'
+      ;;
+    dumb-onion-hax)
+      printf '%s\n' 'for tool in git ssh curl docker java sbt aws python3; do command -v "$tool" >/dev/null; done && docker --version && java -version >/dev/null 2>&1'
+      ;;
+    ouro-integration)
+      printf '%s\n' 'for tool in git ssh curl docker java sbt aws terraform packer node npm; do command -v "$tool" >/dev/null; done && docker --version && terraform version | head -1 && packer version && aws --version'
+      ;;
+    ouroboros-static-front-end)
+      printf '%s\n' 'for tool in git ssh curl docker node npm purs spago netlify deno playwright; do command -v "$tool" >/dev/null; done && docker --version && node --version && npm --version && purs --version && spago --version && netlify --version && deno --version && playwright --version && node -e '\''require("@playwright/test")'\'''
+      ;;
+    ouroboros-terraform)
+      printf '%s\n' 'for tool in git ssh curl docker terraform packer aws; do command -v "$tool" >/dev/null; done && docker --version && terraform version | head -1 && packer version && aws --version'
+      ;;
+    pokeemerald)
+      printf '%s\n' 'for tool in git ssh curl docker make arm-none-eabi-gcc arm-none-eabi-as mgba-headless; do command -v "$tool" >/dev/null; done && docker --version && arm-none-eabi-gcc --version | head -1 && arm-none-eabi-as --version | head -1 && mgba-headless --help 2>&1 | grep -q -- --script'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+run_overlay() {
+  local overlay="$1"
+  local expected flake smoke
+  flake="$(runtime_flake_for "$overlay")"
+  if [ -z "$flake" ]; then
+    echo "missing runtime.flake for overlay runtime smoke: $overlay" >&2
+    return 2
+  fi
+  expected="${EXPECTED_CODEX_VERSION:-$(runtime_codex_version_for "$overlay")}"
+  if [ -z "$expected" ]; then
+    echo "missing runtime.codex_version for overlay runtime smoke: $overlay" >&2
+    return 2
+  fi
+  smoke="$(smoke_for "$overlay")" || {
+    echo "unknown overlay runtime smoke: $overlay" >&2
+    return 2
+  }
+  printf '\n== %s (%s) ==\n' "$overlay" "$flake"
+  (
+    cd "$DEVKIT_ROOT"
+    nix "${NIX_FLAGS[@]}" develop "$flake" --output-lock-file /dev/null --command bash -c \
+      "got=\"\$(codex --version | awk '{print \$NF}' | sed 's/^v//')\"; test \"\$got\" = '$expected' || { echo \"codex version \$got, want $expected\" >&2; exit 1; }; $smoke"
+  )
+}
+
+if [ "$#" -gt 0 ]; then
+  for overlay in "$@"; do
+    run_overlay "$overlay"
+  done
+else
+  for overlay in "${overlays[@]}"; do
+    run_overlay "$overlay"
+  done
+fi
+
+printf '\noverlay-runtime-smoke: ok\n'

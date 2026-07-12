@@ -9,9 +9,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,13 +30,14 @@ var (
 )
 
 type brokerConfig struct {
-	ListenAddr      string
-	UpstreamAddr    string
-	AllowedImages   []string
-	AllowedEnv      []string
-	AllowImagePulls bool
-	LogLevel        string
-	AttachNetworks  []string
+	ListenAddr        string
+	UpstreamAddr      string
+	AllowedImages     []string
+	AllowedEnv        []string
+	AllowImagePulls   bool
+	LogLevel          string
+	AttachNetworks    []string
+	SocketBindAliases []string
 }
 
 type containerRegistry struct {
@@ -83,11 +86,13 @@ func (c *containerRegistry) match(identifier string) (containerRecord, bool) {
 }
 
 type requestContext struct {
-	policy     *policy
-	client     *http.Client
-	target     *url.URL
-	containers *containerRegistry
-	attachNets []string
+	policy            *policy
+	client            *http.Client
+	target            *url.URL
+	containers        *containerRegistry
+	attachNets        []string
+	brokerSock        string
+	brokerSockAliases []string
 }
 
 type policy struct {
@@ -210,6 +215,8 @@ func defaultAllowedPorts(name string) []string {
 	switch family {
 	case "minio/minio":
 		return []string{"9000/tcp", "9001/tcp"}
+	case "testcontainers/ryuk":
+		return []string{"8080/tcp"}
 	case "postgres":
 		fallthrough
 	default:
@@ -374,19 +381,24 @@ func loadConfig() brokerConfig {
 	}
 
 	allowed := splitAndTrim(os.Getenv("BROKER_ALLOWED_IMAGES"))
-	defaultImage := strings.TrimSpace(getEnv("BROKER_ALLOWED_IMAGE", "postgres"))
-	defaultTag := strings.TrimSpace(os.Getenv("BROKER_ALLOWED_TAG"))
-	if defaultImage != "" {
-		if defaultTag != "" {
-			allowed = append(allowed, fmt.Sprintf("%s:%s", defaultImage, defaultTag))
+	_, explicitLegacyImage := os.LookupEnv("BROKER_ALLOWED_IMAGE")
+	_, explicitLegacyTag := os.LookupEnv("BROKER_ALLOWED_TAG")
+	if len(allowed) == 0 || explicitLegacyImage || explicitLegacyTag {
+		defaultImage := strings.TrimSpace(getEnv("BROKER_ALLOWED_IMAGE", "postgres"))
+		defaultTag := strings.TrimSpace(os.Getenv("BROKER_ALLOWED_TAG"))
+		if defaultImage != "" {
+			if defaultTag != "" {
+				allowed = append(allowed, fmt.Sprintf("%s:%s", defaultImage, defaultTag))
+			}
+			allowed = append(allowed, defaultImage)
 		}
-		allowed = append(allowed, defaultImage)
 	}
 	cfg.AllowedImages = uniqueStrings(allowed)
 
 	if env := os.Getenv("BROKER_ALLOWED_ENV"); env != "" {
 		cfg.AllowedEnv = strings.Split(env, ",")
 	}
+	cfg.SocketBindAliases = uniqueStrings(splitAndTrim(os.Getenv("BROKER_SOCKET_BIND_ALIASES")))
 	if nets := os.Getenv("BROKER_ATTACH_NETWORKS"); nets != "" {
 		for _, part := range strings.Split(nets, ",") {
 			if trimmed := strings.TrimSpace(part); trimmed != "" {
@@ -493,11 +505,13 @@ func main() {
 	}
 
 	rc := &requestContext{
-		policy:     policy,
-		client:     client,
-		target:     targetURL,
-		containers: newContainerRegistry(),
-		attachNets: cfg.AttachNetworks,
+		policy:            policy,
+		client:            client,
+		target:            targetURL,
+		containers:        newContainerRegistry(),
+		attachNets:        cfg.AttachNetworks,
+		brokerSock:        listenAddr,
+		brokerSockAliases: cfg.SocketBindAliases,
 	}
 
 	log.WithField("allowed_images", policy.allowedImages()).Info("policy initialised")
@@ -572,6 +586,10 @@ func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
 			log.WithError(err).Error("failed to authorize request")
 			http.Error(w, "broker error", http.StatusInternalServerError)
 		}
+		return
+	}
+	if shouldProxyStreamingRequest(r) {
+		rc.proxyStreaming(w, r)
 		return
 	}
 
@@ -761,6 +779,8 @@ func (rc *requestContext) authorize(r *http.Request) error {
 		return rc.authorizeContainerCreate(r)
 	case strings.HasPrefix(cleanPath, "/containers/"):
 		return rc.authorizeContainerAction(cleanPath)
+	case cleanPath == "/networks" && r.Method == http.MethodGet:
+		return nil
 	case strings.HasPrefix(cleanPath, "/networks/") && r.Method == http.MethodGet:
 		return rc.authorizeNetworkInspect(cleanPath)
 	default:
@@ -816,7 +836,7 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		"networkMode":  payload.HostConfig.NetworkMode,
 	}).Debug("inspected container create payload")
 
-	if payload.HostConfig.Privileged {
+	if payload.HostConfig.Privileged && !allowPrivilegedContainerCreate(payload.Image) {
 		log.Warn("blocked container create: privileged requested")
 		return errForbidden
 	}
@@ -826,7 +846,14 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return errForbidden
 	}
 
-	if len(payload.HostConfig.Binds) > 0 || len(payload.HostConfig.CapAdd) > 0 || payload.HostConfig.PublishAllPorts {
+	if len(payload.HostConfig.Binds) > 0 &&
+		!allowRyukBrokerSocketBind(payload.Image, payload.HostConfig.Binds, rc.brokerSock, rc.brokerSockAliases) &&
+		!allowSAMPythonBuildBinds(payload.Image, payload.HostConfig.Binds) {
+		log.WithField("binds", payload.HostConfig.Binds).Warn("blocked container create: binds detected")
+		return errForbidden
+	}
+
+	if len(payload.HostConfig.CapAdd) > 0 || payload.HostConfig.PublishAllPorts {
 		log.Warn("blocked container create: binds/caps/publish detected")
 		return errForbidden
 	}
@@ -886,6 +913,103 @@ func validatePortBindings(bindings map[string][]portBinding, allowedPorts []stri
 	return nil
 }
 
+func allowPrivilegedContainerCreate(image string) bool {
+	name, _ := splitImageRef(image)
+	return normalizeImageFamily(name) == "testcontainers/ryuk"
+}
+
+func allowRyukBrokerSocketBind(image string, binds []string, brokerSocket string, brokerSocketAliases []string) bool {
+	if !allowPrivilegedContainerCreate(image) || len(binds) != 1 {
+		return false
+	}
+	source, target, _, ok := splitBindMount(binds[0])
+	if !ok || target != "/var/run/docker.sock" {
+		return false
+	}
+	if samePath(source, brokerSocket) {
+		return true
+	}
+	for _, alias := range brokerSocketAliases {
+		if samePath(source, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func allowSAMPythonBuildBinds(image string, binds []string) bool {
+	if !isSAMPython312BuildImage(image) || len(binds) != 2 {
+		return false
+	}
+
+	var sourceRoot string
+	var outputRoot string
+	for _, bind := range binds {
+		source, target, mode, ok := splitBindMount(bind)
+		if !ok {
+			return false
+		}
+		switch target {
+		case "/src":
+			if mode != "ro" {
+				return false
+			}
+			const suffix = "/modules/db_credentials_rotation/lambda_artifact"
+			clean := filepath.ToSlash(filepath.Clean(source))
+			if !strings.HasSuffix(clean, suffix) {
+				return false
+			}
+			sourceRoot = strings.TrimSuffix(clean, suffix)
+		case "/out":
+			if mode != "" && mode != "rw" {
+				return false
+			}
+			const suffix = "/.local/db_credentials_rotation_lambda"
+			clean := filepath.ToSlash(filepath.Clean(source))
+			if !strings.HasSuffix(clean, suffix) {
+				return false
+			}
+			outputRoot = strings.TrimSuffix(clean, suffix)
+		default:
+			return false
+		}
+	}
+	return sourceRoot != "" && outputRoot != "" && sourceRoot == outputRoot
+}
+
+func isSAMPython312BuildImage(image string) bool {
+	name, _ := splitImageRef(image)
+	name = strings.TrimSpace(strings.SplitN(name, "@", 2)[0])
+	return normalizeImageFamily(name) == "public.ecr.aws/sam/build-python3.12"
+}
+
+func splitBindMount(bind string) (source, target, mode string, ok bool) {
+	parts := strings.Split(bind, ":")
+	if len(parts) < 2 {
+		return "", "", "", false
+	}
+	source = strings.TrimSpace(parts[0])
+	target = strings.TrimSpace(parts[1])
+	if source == "" || target == "" {
+		return "", "", "", false
+	}
+	if len(parts) > 2 {
+		mode = strings.TrimSpace(parts[2])
+	}
+	return source, target, mode, true
+}
+
+func samePath(a, b string) bool {
+	cleanA := filepath.Clean(a)
+	cleanB := filepath.Clean(b)
+	if cleanA == cleanB {
+		return true
+	}
+	resolvedA, errA := filepath.EvalSymlinks(cleanA)
+	resolvedB, errB := filepath.EvalSymlinks(cleanB)
+	return errA == nil && errB == nil && resolvedA == resolvedB
+}
+
 func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
 	identifier := containerIDFromPath(cleanPath)
 	if identifier == "" {
@@ -900,13 +1024,11 @@ func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
 
 func (rc *requestContext) authorizeNetworkInspect(cleanPath string) error {
 	identifier := resourceIDFromPath(cleanPath)
-	switch identifier {
-	case "bridge", "host", "none":
-		log.WithField("network", identifier).Debug("allowing network inspect")
-		return nil
-	default:
+	if identifier == "" {
 		return errForbidden
 	}
+	log.WithField("network", identifier).Debug("allowing network inspect")
+	return nil
 }
 
 func (rc *requestContext) authorizeImageInspect(cleanPath string) error {
@@ -968,6 +1090,24 @@ func copyResponse(w http.ResponseWriter, resp *http.Response) {
 		writer = &flushWriter{w: w, fl: fl}
 	}
 	_, _ = io.Copy(writer, resp.Body)
+}
+
+func shouldProxyStreamingRequest(r *http.Request) bool {
+	cleanPath := stripVersionPrefix(r.URL.Path)
+	return r.Method == http.MethodPost &&
+		strings.HasPrefix(cleanPath, "/containers/") &&
+		strings.HasSuffix(cleanPath, "/attach")
+}
+
+func (rc *requestContext) proxyStreaming(w http.ResponseWriter, r *http.Request) {
+	proxy := httputil.NewSingleHostReverseProxy(rc.target)
+	proxy.Transport = rc.client.Transport
+	proxy.Director = func(req *http.Request) {
+		req.URL = rc.target.ResolveReference(&url.URL{Path: r.URL.Path, RawQuery: r.URL.RawQuery})
+		req.Host = "docker"
+		req.RequestURI = ""
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 func getEnv(key, def string) string {

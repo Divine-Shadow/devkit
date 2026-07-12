@@ -24,7 +24,7 @@ func buildDevctlBinary(t *testing.T) string {
 	return bin
 }
 
-func setupMinimalCompose(t *testing.T, root string) {
+func setupMinimalNativeOverlay(t *testing.T, root string) {
 	t.Helper()
 	write := func(p, s string) {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -34,10 +34,7 @@ func setupMinimalCompose(t *testing.T, root string) {
 			t.Fatalf("write failed: %v", err)
 		}
 	}
-	base := "version: '3.8'\nservices:\n  dev-agent:\n    image: alpine:3\n    command: ['sh','-lc','sleep infinity']\n"
-	write(filepath.Join(root, "kit/compose.yml"), base)
-	write(filepath.Join(root, "kit/compose.dns.yml"), base)
-	write(filepath.Join(root, "overlays/dev-all/compose.override.yml"), base)
+	write(filepath.Join(root, "overlays/dev-all/devkit.yaml"), "runtime:\n  flake: ./overlays/dev-all#default\n")
 }
 
 func TestLayoutValidateSuccess(t *testing.T) {
@@ -46,7 +43,7 @@ func TestLayoutValidateSuccess(t *testing.T) {
 	}
 	bin := buildDevctlBinary(t)
 	root := t.TempDir()
-	setupMinimalCompose(t, root)
+	setupMinimalNativeOverlay(t, root)
 
 	layout := `session: devkit:ok
 windows:
@@ -78,7 +75,7 @@ func TestLayoutValidateDetectsErrors(t *testing.T) {
 	}
 	bin := buildDevctlBinary(t)
 	root := t.TempDir()
-	setupMinimalCompose(t, root)
+	setupMinimalNativeOverlay(t, root)
 
 	layout := `session: devkit:bad
 windows:

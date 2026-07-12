@@ -5,18 +5,10 @@ overlays:
   - project: dev-all
     service: dev-agent
     count: 8
-    profiles: dns
-    compose_project: devkit-ouro8
-    network:
-      subnet: 172.31.156.0/24
-      dns_ip: 172.31.156.3
     worktrees:
       repo: ouroboros-ide
       count: 8
       # base_branch and branch_prefix fallback to overlays/dev-all/devkit.yaml defaults.
-    env:
-      # Use a separate ingress port so ouro4 stacks can remain up in parallel.
-      DEVKIT_INGRESS_PORT: "8453"
 
 windows:
   # ouroboros-ide agents — each targets a distinct worktree under dev-all.

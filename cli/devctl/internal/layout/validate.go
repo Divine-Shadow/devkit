@@ -72,7 +72,7 @@ func Validate(f File, defaultProject string) (warnings []string, errors []string
 	}
 
 	for proj := range missingOverlay {
-		warnings = append(warnings, fmt.Sprintf("no overlay defined for project %s; assuming default compose files", proj))
+		warnings = append(warnings, fmt.Sprintf("no overlay defined for project %s; native layout should declare it explicitly", proj))
 	}
 
 	for proj, maxIdx := range maxIndex {

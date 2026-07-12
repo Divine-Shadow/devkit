@@ -1,0 +1,57 @@
+workspace: ../../..
+service: dev-workspace-agent
+defaults:
+  repo: .
+  agents: 1
+  base_branch: main
+  branch_prefix: workspace-agent
+  auto_ready: true
+  require_warm: false
+runtime:
+  flake: ./overlays/dev-workspace#default
+  codex_version: 0.144.0
+  core_check: git diff --check
+  notes: Native runtime for a Codex agent entered at the dev workspace root.
+readiness:
+  default_mode: runtime-only
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker go java sbt node npm purs spago vite netlify playwright deno aws make gcc; do
+          command -v "$tool" >/dev/null
+        done
+    - name: workspace-siblings
+      command: |
+        test "$(pwd)" = /workspaces/dev
+        test -d devkit
+        test -d ouroboros-ide
+        test -d ouroboros-static-front-end
+    - name: workspace-skills
+      command: |
+        test -d "$CODEX_HOME/skills/devkit-management"
+        test -d "$CODEX_HOME/skills/autonomy-contract"
+        find -L "$CODEX_HOME/skills" -mindepth 1 -maxdepth 1 -type d | grep -q .
+    - name: governance-env
+      command: |
+        test -r /workspaces/dev/.devkit/ouro8-governance-env.sh
+        grep -q 'dev-workspace=/workspaces/dev' /workspaces/dev/.devkit/ouro8-governance-env.sh
+        grep -q 'ouroboros-ide=/workspaces/dev/ouroboros-ide' /workspaces/dev/.devkit/ouro8-governance-env.sh
+  repo_checks:
+    - name: governance-stdio-smoke
+      command: |
+        cd /workspaces/dev/ouroboros-ide
+        scripts/devops/governance-mcp-stdio-smoke --json --routing-probe --workspace-id dev-workspace --expected-workspace-root /workspaces/dev >/dev/null
+    - name: static-production-dotenv-present
+      command: |
+        test -f /workspaces/dev/ouroboros-static-front-end/.production.env
+env:
+  NODE_ENV: development
+  GATSBY_TELEMETRY_DISABLED: "1"
+broker:
+  socket: ../.devkit/native-broker/broker.sock
+  upstream: unix:///var/run/docker.sock
+  allowed_images:
+    - postgres:latest
+    - testcontainers/ryuk:0.7.0
+  allow_pulls: true
+  log_level: info

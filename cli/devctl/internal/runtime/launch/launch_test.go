@@ -1,0 +1,1772 @@
+package launch
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"devkit/cli/devctl/internal/devkitpaths"
+	"devkit/cli/devctl/internal/runtime/agent"
+	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+)
+
+func TestMain(m *testing.M) {
+	codexSystemConfigPath = filepath.Join(os.TempDir(), "devkit-launch-test-missing-codex-config.toml")
+	resolveOuroGovernanceRuntimeIdentityForPlan = func(string) (ouroGovernanceRuntimeIdentity, error) {
+		return ouroGovernanceRuntimeIdentity{
+			RuntimeBundlePath: "/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle",
+		}, nil
+	}
+	os.Exit(m.Run())
+}
+
+func devkitRootFromPackage(t *testing.T) string {
+	t.Helper()
+	root := filepath.Join("..", "..", "..", "..", "..")
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatalf("resolve devkit root: %v", err)
+	}
+	return abs
+}
+
+func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnRepository(t *testing.T) {
+	root := devkitRootFromPackage(t)
+	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-all", "runtime.nix"))
+	for _, want := range []string{
+		"packages.pinnedGovernanceJar",
+		"packages.pinnedArtifactColumnPluginRepository",
+		"packages.pinnedSbtControlPlaneRuntimeJar",
+		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar",
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=$(cat ${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar.sha256)",
+		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"packages.pinnedSubmitToCiJar",
+		"export SUBMIT_TO_CI_JAR=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar",
+		"export SUBMIT_TO_CI_HASH_PATH=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar.sha256",
+		"export SUBMIT_TO_CI_BUILD_POLICY=reuse",
+		"export SUBMIT_TO_CI_EXTERNAL_JAR=1",
+		"export SUBMIT_TO_CI_FLAKE_ARTIFACT=0",
+		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
+		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=$SUBMIT_TO_CI_JAR",
+		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=$(cat \"$SUBMIT_TO_CI_HASH_PATH\")",
+		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH=${packages.pinnedArtifactColumnPluginRepository}",
+		"export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV=$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH/share/artifact-column-plugin/metadata.env",
+		"export ARTIFACT_COLUMN_PLUGIN_VERSION=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_VERSION=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_IVY_PATH=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_IVY_PATH=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
+		"export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=$(cat ${packages.pinnedArtifactColumnPluginRepository}/share/artifact-column-plugin/artifact-column-plugin.jar.sha256)",
+		"export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT=1",
+		"export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT=0",
+		"export SBT_CONTROL_PLANE_RUNTIME_JAR=${packages.pinnedSbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar",
+		"export SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256=$(cat ${packages.pinnedSbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar.sha256)",
+		"export SBT_CONTROL_PLANE_PINNED_ARTIFACT=1",
+		"export SBT_CONTROL_PLANE_FLAKE_ARTIFACT=0",
+		"export SBT2_CLIENT_MODE=force",
+		"export SBT2_JAVA_XMX=6g",
+		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=force",
+	} {
+		if !strings.Contains(runtimeNix, want) {
+			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
+		}
+	}
+
+	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
+	for _, want := range []string{
+		`governanceJarVersion = "c70370f2478c39e4f65c611a9953e835cfb661b3";`,
+		`submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";`,
+		`artifactColumnRuntimeVersion = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7";`,
+		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
+		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
+		`submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";`,
+		`artifactColumnRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${artifactColumnRuntimeVersion}";`,
+		`sbtControlPlaneRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${sbtControlPlaneRuntimeVersion}";`,
+		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
+		`mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
+		`mkPinnedArtifactColumnPluginRepository = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
+		`mkPinnedArtifactColumnPluginSmoke = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-adoption-check;`,
+		`mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-jar;`,
+		`assert toString submitToCiJar == "/nix/store/4xxf15fa8ajm60np3d9vnmiinmb53zd2-submit-to-ci-dev";`,
+		`assert submitToCiJar.drvPath == "/nix/store/k9jfshsf7pl3zk87szjdzw3jqzxivz05-submit-to-ci-dev.drv";`,
+		`dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;`,
+		`dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;`,
+		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
+		`pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;`,
+		`pinnedArtifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;`,
+		`pinnedSbtControlPlaneRuntimeJar = mkPinnedSbtControlPlaneRuntimeJar pkgs;`,
+		`pinned-governance-jar = mkPinnedGovernanceJar pkgs;`,
+		`pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;`,
+		`pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;`,
+		`pinned-sbt-control-plane-runtime-jar = mkPinnedSbtControlPlaneRuntimeJar pkgs;`,
+	} {
+		if !strings.Contains(flakeNix, want) {
+			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
+		}
+	}
+	for _, forbidden := range []string{
+		`mkPinnedArtifactColumnPluginRepository = pkgs: submitRuntimeSourceFlake`,
+		`mkPinnedArtifactColumnPluginSmoke = pkgs: submitRuntimeSourceFlake`,
+	} {
+		if strings.Contains(flakeNix, forbidden) {
+			t.Fatalf("Artifact Column consumer still derives from submit runtime authority %q:\n%s", forbidden, flakeNix)
+		}
+	}
+
+	bundleNix := readTestFile(t, filepath.Join(root, "nix", "dev-all-runtime-bundle.nix"))
+	for _, want := range []string{
+		`identitySchema = "devkit-dev-all-runtime-identity/v1";`,
+		`artifactColumnVersion = "0.1.0-artifact-column-v2-package-derived-ownership-20260711";`,
+		`artifactColumnJarSha256 = "948d70381978242d5da4288368622e365b1d746546606c183d3cc321f41c00d2";`,
+		`submitJarSha256 = "f3fd06efc9b92ffbda400fa5c5bbe3cc88bc46743a347e22c5f20d16441f531c";`,
+		`identity.env`,
+		`identity.json`,
+		`identity-fingerprint`,
+		`identity-nul`,
+		`plugin-smoke`,
+		`bundle_root='@bundleRoot@'`,
+		`substitute '${launcherTemplate}' "$out/bin/dev-all-runtime-bundle"`,
+		`ln -s '${artifactColumnPluginRepository}' "$out/runtime/artifact-column-plugin-repository"`,
+	} {
+		if !strings.Contains(bundleNix, want) {
+			t.Fatalf("runtime bundle missing %q:\n%s", want, bundleNix)
+		}
+	}
+	if strings.Contains(bundleNix, "cp ") || strings.Contains(bundleNix, "cp -") {
+		t.Fatalf("runtime bundle must retain Nix references instead of copying artifacts:\n%s", bundleNix)
+	}
+	if strings.Contains(bundleNix, `dirname -- "$0"`) {
+		t.Fatalf("runtime bundle must not derive immutable package root from an aggregate-profile argv[0]:\n%s", bundleNix)
+	}
+	profileSmokeNix := readTestFile(t, filepath.Join(root, "nix", "dev-all-runtime-bundle-profile-smoke.nix"))
+	for _, want := range []string{
+		`pathsToLink = [ "/bin" ];`,
+		`aggregate_profile_has_identity_env=false`,
+		`BASH_ENV="$hook" ENV="$hook"`,
+		`identity-fingerprint`,
+		`identity-nul`,
+		`governance-forward`,
+		`direct_profile_equivalence=passed`,
+	} {
+		if !strings.Contains(profileSmokeNix, want) {
+			t.Fatalf("runtime bundle profile smoke missing %q:\n%s", want, profileSmokeNix)
+		}
+	}
+	for _, content := range []string{runtimeNix, bundleNix} {
+		if strings.Contains(content, "ARTIFACT_COLUMN_PLUGIN_REPOSITORY=") {
+			t.Fatalf("retired Artifact Column repository alias survived:\n%s", content)
+		}
+	}
+}
+
+func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T) {
+	bundlePath := "/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle"
+	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-dev/share/subagent-governance/subagent-governance.jar"
+	submitJarPath := "/nix/store/cccccccccccccccccccccccccccccccc-submit-to-ci-dev/share/submit-to-ci/submit-to-ci.jar"
+	artifactRepoPath := "/nix/store/dddddddddddddddddddddddddddddddd-artifact-column-plugin-repository-" + ouroGovernanceArtifactColumnVersion
+	artifactMetadataPath := artifactRepoPath + "/share/artifact-column-plugin/metadata.env"
+	artifactIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/" + ouroGovernanceArtifactColumnVersion
+	sbtRuntimeJarPath := "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-sbt-control-plane-runtime-dev/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar"
+	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
+	fields := []string{
+		ouroGovernanceRuntimeIdentitySchema,
+		bundlePath,
+		"c70370f2478c39e4f65c611a9953e835cfb661b3",
+		ouroGovernanceSubmitRuntimeSourceRev,
+		ouroGovernanceArtifactColumnSourceRev,
+		"be9a16cd8abdf9d479bbf0b7379ebdf0651d156e",
+		jarPath, jarPath, jarPath, "deadbeef", "deadbeef",
+		submitJarPath, submitJarPath + ".sha256", submitJarPath, "facefeed",
+		"force", "6g", "force",
+		artifactRepoPath, artifactMetadataPath,
+		ouroGovernanceArtifactColumnVersion, ouroGovernanceArtifactColumnSourceRev, "4eaf59e",
+		artifactIvyPath, ouroGovernanceArtifactColumnJarSHA256, "1", "0",
+		sbtRuntimeJarPath, "54907ebe40a4cc7598dba7774a2d793fc7ca83d9c11811cc98fe96d189413872", "1", "0",
+		javaHome,
+	}
+	out := "building '/nix/store/example.drv'...\n" + ouroGovernanceRuntimeIdentityMarker + "\x00" + strings.Join(fields, "\x00") + "\x00"
+
+	identity, err := parseOuroGovernanceRuntimeIdentityOutput([]byte(out), "/workspaces/dev/devkit#dev-all")
+	if err != nil {
+		t.Fatalf("parse runtime identity: %v", err)
+	}
+	if identity.SchemaVersion != ouroGovernanceRuntimeIdentitySchema || identity.RuntimeBundlePath != bundlePath ||
+		identity.SubmitToCiSourceRev != ouroGovernanceSubmitRuntimeSourceRev ||
+		identity.ArtifactColumnRuntimeSourceRev != ouroGovernanceArtifactColumnSourceRev {
+		t.Fatalf("bundle identity parsed incorrectly: %#v", identity)
+	}
+	if identity.LatestJarPath != jarPath || identity.ControlPlaneJar != jarPath || identity.ExpectedJarPath != jarPath {
+		t.Fatalf("jar identity parsed incorrectly: %#v", identity)
+	}
+	if identity.ExpectedJarSHA256 != "deadbeef" || identity.SubagentExpectedJarSHA256 != "deadbeef" {
+		t.Fatalf("sha identity parsed incorrectly: %#v", identity)
+	}
+	if identity.SubmitToCiJarPath != submitJarPath || identity.SubmitToCiHashPath != submitJarPath+".sha256" || identity.SubmitToCiExpectedJarPath != submitJarPath {
+		t.Fatalf("submit-to-ci identity parsed incorrectly: %#v", identity)
+	}
+	if identity.SubmitToCiExpectedSHA256 != "facefeed" {
+		t.Fatalf("submit-to-ci sha parsed incorrectly: %#v", identity)
+	}
+	if identity.SubmitSbt2ClientMode != "force" || identity.SubmitSbt2JavaXmx != "6g" || identity.LintInvarianceSbt2Mode != "force" {
+		t.Fatalf("submit runtime authority parsed incorrectly: %#v", identity)
+	}
+	if identity.ArtifactColumnRepositoryPath != artifactRepoPath ||
+		identity.ArtifactColumnMetadataEnv != artifactMetadataPath ||
+		identity.ArtifactColumnVersion != ouroGovernanceArtifactColumnVersion ||
+		identity.ArtifactColumnSourceRev != ouroGovernanceArtifactColumnSourceRev ||
+		identity.ArtifactColumnSourceShortRev != "4eaf59e" ||
+		identity.ArtifactColumnIvyPath != artifactIvyPath ||
+		identity.ArtifactColumnJarSHA256 != ouroGovernanceArtifactColumnJarSHA256 ||
+		identity.ArtifactColumnPinnedArtifact != "1" ||
+		identity.ArtifactColumnFlakeArtifact != "0" {
+		t.Fatalf("artifact-column plugin repository identity parsed incorrectly: %#v", identity)
+	}
+	if identity.SbtControlPlaneRuntimeJarPath != sbtRuntimeJarPath ||
+		identity.SbtControlPlaneRuntimeJarSHA256 != "54907ebe40a4cc7598dba7774a2d793fc7ca83d9c11811cc98fe96d189413872" ||
+		identity.SbtControlPlanePinnedArtifact != "1" ||
+		identity.SbtControlPlaneFlakeArtifact != "0" {
+		t.Fatalf("SBT control-plane runtime identity parsed incorrectly: %#v", identity)
+	}
+	if identity.JavaHome != javaHome {
+		t.Fatalf("java home parsed incorrectly: %#v", identity)
+	}
+}
+
+func TestParseOuroGovernanceRuntimeIdentityOutputRejectsClosedOrIncompleteIdentity(t *testing.T) {
+	for name, output := range map[string][]byte{
+		"closed":     nil,
+		"no marker":  []byte("ordinary launcher output\n"),
+		"incomplete": []byte(ouroGovernanceRuntimeIdentityMarker + "\x00" + strings.Repeat("field\x00", 31)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseOuroGovernanceRuntimeIdentityOutput(output, "/relocated/devkit#dev-all-runtime-bundle"); err == nil {
+				t.Fatalf("expected %s identity to fail closed", name)
+			}
+		})
+	}
+}
+
+func TestOuroGovernanceRuntimeBundleFlakeUsesExplicitDevkitRoot(t *testing.T) {
+	got := ouroGovernanceRuntimeBundleFlake("/tmp/relocated-devkit")
+	if got != "/tmp/relocated-devkit#dev-all-runtime-bundle" {
+		t.Fatalf("bundle flake = %q", got)
+	}
+	for _, forbidden := range []string{"/workspaces/dev/devkit", "/workspaces/dev/devkit#dev-all"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("bundle flake retained mutable protected-checkout authority %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestResolveOuroGovernanceRuntimeIdentityRejectsMissingFlake(t *testing.T) {
+	missingRoot := t.TempDir()
+	_, err := resolveOuroGovernanceRuntimeIdentity(missingRoot)
+	if err == nil || !strings.Contains(err.Error(), "missing devkit flake") {
+		t.Fatalf("missing flake error = %v", err)
+	}
+}
+
+func TestOuroGovernanceRuntimeBundleSelectionUsesExecutableAuthorityRoot(t *testing.T) {
+	trustedRoot := filepath.Join(t.TempDir(), "trusted-devkit")
+	hostileRoot := filepath.Join(t.TempDir(), "hostile-devkit")
+	executable := filepath.Join(trustedRoot, "kit", "bin", "devctl")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("test binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVKIT_ROOT", hostileRoot)
+
+	paths, err := devkitpaths.DetectPathsFromExe(executable)
+	if err != nil {
+		t.Fatalf("DetectPathsFromExe: %v", err)
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{Paths: paths, Repo: "ouroboros-ide"})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	got := ouroGovernanceRuntimeBundleFlake(p.RuntimeAuthorityRoot)
+	if got != trustedRoot+"#dev-all-runtime-bundle" {
+		t.Fatalf("runtime bundle selection = %q, want executable-derived trusted root", got)
+	}
+	if strings.Contains(got, hostileRoot) {
+		t.Fatalf("hostile DEVKIT_ROOT selected runtime bundle: %s", got)
+	}
+}
+
+func TestImmutableRuntimeBundleRejectsMutableIdentityOverride(t *testing.T) {
+	bundlePath := strings.TrimSpace(os.Getenv("DEVKIT_TEST_RUNTIME_BUNDLE"))
+	if bundlePath == "" {
+		t.Skip("set DEVKIT_TEST_RUNTIME_BUNDLE to exercise the built immutable bundle")
+	}
+	launcher := filepath.Join(bundlePath, "bin", "dev-all-runtime-bundle")
+	identityOutput, err := exec.Command(launcher, "identity-nul").CombinedOutput()
+	if err != nil {
+		t.Fatalf("bundle identity-nul: %v: %s", err, identityOutput)
+	}
+	identity, err := parseOuroGovernanceRuntimeIdentityOutput(identityOutput, bundlePath)
+	if err != nil {
+		t.Fatalf("parse bundle identity: %v", err)
+	}
+	physicalJar := filepath.Join(
+		identity.ArtifactColumnRepositoryPath,
+		identity.ArtifactColumnIvyPath,
+		"jars",
+		"artifact-column-plugin_sbt2_3.jar",
+	)
+	jarData, err := os.ReadFile(physicalJar)
+	if err != nil {
+		t.Fatalf("read physical Artifact Column Ivy jar: %v", err)
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(jarData)); got != ouroGovernanceArtifactColumnJarSHA256 {
+		t.Fatalf("physical Artifact Column Ivy jar sha256 = %s, want %s", got, ouroGovernanceArtifactColumnJarSHA256)
+	}
+	metadata := readTestFile(t, identity.ArtifactColumnMetadataEnv)
+	for key, want := range map[string]string{
+		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV": identity.ArtifactColumnSourceRev,
+		"ARTIFACT_COLUMN_PLUGIN_VERSION":    identity.ArtifactColumnVersion,
+		"ARTIFACT_COLUMN_PLUGIN_IVY_PATH":   identity.ArtifactColumnIvyPath,
+		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256": ouroGovernanceArtifactColumnJarSHA256,
+	} {
+		if got := metadataEnvValue(metadata, key); got != want {
+			t.Fatalf("physical Artifact Column metadata %s = %q, want %q", key, got, want)
+		}
+	}
+	tmp := t.TempDir()
+	bashEnvSentinel := filepath.Join(tmp, "bash-env-sourced")
+	bashEnv := filepath.Join(tmp, "hostile-bash-env.sh")
+	if err := os.WriteFile(bashEnv, []byte(": > \"$DEVKIT_TEST_BASH_ENV_SENTINEL\"\nexport ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=attacker\n"), 0o600); err != nil {
+		t.Fatalf("write hostile BASH_ENV: %v", err)
+	}
+
+	cmd := exec.Command(launcher, "exec", "bash", "-c", strings.Join([]string{
+		`test "$ARTIFACT_COLUMN_PLUGIN_SOURCE_REV" = "$EXPECTED_ARTIFACT_REV"`,
+		`test "$ARTIFACT_COLUMN_PLUGIN_VERSION" = "$EXPECTED_ARTIFACT_VERSION"`,
+		`test "$ARTIFACT_COLUMN_PLUGIN_JAR_SHA256" = "$EXPECTED_ARTIFACT_SHA"`,
+		`test "$DEVKIT_RUNTIME_BUNDLE_PATH" = "$EXPECTED_BUNDLE"`,
+		`test ! -e "$DEVKIT_TEST_BASH_ENV_SENTINEL"`,
+	}, "; "))
+	cmd.Env = append(os.Environ(),
+		"BASH_ENV="+bashEnv,
+		"ENV="+bashEnv,
+		"DEVKIT_TEST_BASH_ENV_SENTINEL="+bashEnvSentinel,
+		"EXPECTED_ARTIFACT_REV="+ouroGovernanceArtifactColumnSourceRev,
+		"EXPECTED_ARTIFACT_VERSION="+ouroGovernanceArtifactColumnVersion,
+		"EXPECTED_ARTIFACT_SHA="+ouroGovernanceArtifactColumnJarSHA256,
+		"EXPECTED_BUNDLE="+bundlePath,
+		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=attacker",
+		"ARTIFACT_COLUMN_PLUGIN_VERSION=attacker",
+		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=attacker",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("immutable bundle exec rejected valid authority or accepted hostile startup hooks: %v: %s", err, out)
+	}
+}
+
+func TestBuildOuroGovernanceEnvIsRoutingOnly(t *testing.T) {
+	got := buildOuroGovernanceEnv(
+		"/home/bayesartre/dev",
+		"/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
+		"abc123",
+	)
+	for _, want := range []string{
+		"Shared governance MCP/control-plane routing",
+		"Runtime artifact identity is applied afterward by the immutable bundle launcher.",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
+		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256='abc123'",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=",
+		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=",
+		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=",
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated governance routing env missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"DEVKIT_RUNTIME_BUNDLE",
+		"DEVKIT_RUNTIME_IDENTITY",
+		"DEVKIT_GOVERNANCE_SOURCE_REV",
+		"DEVKIT_SUBMIT_TO_CI_SOURCE_REV",
+		"DEVKIT_ARTIFACT_COLUMN_SOURCE_REV",
+		"DEVKIT_SBT_CONTROL_PLANE_SOURCE_REV",
+		"SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH",
+		"DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256",
+		"DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV",
+		"SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"SUBAGENT_GOVERNANCE_PINNED_ARTIFACT",
+		"SUBAGENT_GOVERNANCE_FLAKE_ARTIFACT",
+		"SUBMIT_TO_CI_JAR",
+		"SUBMIT_TO_CI_HASH_PATH",
+		"SUBMIT_TO_CI_BUILD_POLICY",
+		"SUBMIT_TO_CI_EXTERNAL_JAR",
+		"SUBMIT_TO_CI_FLAKE_ARTIFACT",
+		"SUBMIT_TO_CI_PINNED_ARTIFACT",
+		"ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH",
+		"ARTIFACT_COLUMN_PLUGIN_METADATA_ENV",
+		"ARTIFACT_COLUMN_PLUGIN_VERSION",
+		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV",
+		"ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV",
+		"ARTIFACT_COLUMN_PLUGIN_IVY_PATH",
+		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256",
+		"ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT",
+		"ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT",
+		"SBT_CONTROL_PLANE_RUNTIME_JAR",
+		"SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256",
+		"SBT_CONTROL_PLANE_PINNED_ARTIFACT",
+		"SBT_CONTROL_PLANE_FLAKE_ARTIFACT",
+		"SBT2_CLIENT_MODE",
+		"SBT2_JAVA_XMX",
+		"OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE",
+		"JAVA_HOME",
+		"identity-fingerprint",
+		"print-dev-env",
+		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
+		"DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("mutable routing env retained runtime authority %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestEnsureCodexGovernanceConfigRejectsMissingImmutableBundle(t *testing.T) {
+	p := nativeplan.Plan{Agent: agent.Spec{ID: agent.ID{Repo: "ouroboros-ide"}}}
+	if err := ensureCodexGovernanceConfig(p, ""); err == nil || !strings.Contains(err.Error(), "immutable runtime bundle path is required") {
+		t.Fatalf("missing bundle error = %v", err)
+	}
+}
+
+func TestEnsureCodexGovernanceConfigRejectsMissingHostHome(t *testing.T) {
+	p := nativeplan.Plan{Agent: agent.Spec{ID: agent.ID{Repo: "ouroboros-ide"}}}
+	err := ensureCodexGovernanceConfig(p, "/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle")
+	if err == nil || !strings.Contains(err.Error(), "agent host home is required") {
+		t.Fatalf("missing host home error = %v", err)
+	}
+}
+
+func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	brokerSocket := filepath.Join(tmp, "broker.sock")
+	if err := os.WriteFile(brokerSocket, []byte("socket placeholder"), 0o600); err != nil {
+		t.Fatalf("write broker socket placeholder: %v", err)
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:          devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:           "ouroboros-ide",
+		Flake:          ".#runtime-test-agent",
+		BrokerEndpoint: brokerSocket,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir host worktree: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostHome, 0o700); err != nil {
+		t.Fatalf("mkdir host home: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.StateRoot, 0o700); err != nil {
+		t.Fatalf("mkdir state root: %v", err)
+	}
+	if err := os.WriteFile(p.DNS.ResolvConf, []byte("nameserver 127.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("write resolv: %v", err)
+	}
+
+	cmd, err := BuildBubblewrap(p, []string{"git", "--version"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	for _, want := range []string{
+		"'--bind' '" + devRoot + "' '/workspaces/dev'",
+		"'--symlink' '/run/current-system/sw/bin/env' '/usr/bin/env'",
+		"'--symlink' '/run/current-system/sw/bin/sh' '/bin/sh'",
+		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
+		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/.cache/shared/coursier'",
+		"'--setenv' 'DOCKER_HOST' 'unix://" + brokerSocket + "'",
+		"'--setenv' 'OURO_NIX_SANDBOX' '1'",
+		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
+		"'--setenv' 'TMPDIR' '/tmp'",
+		"'--setenv' 'XDG_CACHE_HOME' '/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'",
+		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' '--option' 'flake-registry' '' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing %q:\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export XDG_CACHE_HOME='/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'") {
+		t.Fatalf("agent shell does not restore XDG_CACHE_HOME:\n%#v", cmd.Args)
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export COURSIER_CACHE='/workspaces/dev/.cache/shared/coursier'") {
+		t.Fatalf("agent shell does not export shared coursier cache:\n%#v", cmd.Args)
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export OURO_NIX_SANDBOX='1'") {
+		t.Fatalf("agent shell does not export Nix sandbox marker:\n%#v", cmd.Args)
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export SBT_BOOT_DIR='/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.sbt/boot'") {
+		t.Fatalf("agent shell does not export per-agent SBT boot dir:\n%#v", cmd.Args)
+	}
+	for _, optionalHostPath := range []string{"/etc/static", "/etc/ssl", "/etc/pki"} {
+		if _, err := os.Stat(optionalHostPath); err != nil {
+			continue
+		}
+		want := "'--ro-bind' '" + optionalHostPath + "' '" + optionalHostPath + "'"
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing optional host bind %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "'--dir' '/tmp'") {
+		t.Fatalf("launcher must not create /tmp after mounting it as tmpfs:\n%s", joined)
+	}
+	if len(cmd.Args) < 1 || !strings.Contains(cmd.Args[len(cmd.Args)-1], "cd '/workspaces/dev/agent-worktrees/agent1/ouroboros-ide' && exec 'git' '--version'") {
+		t.Fatalf("launch script did not cd and exec command:\n%#v", cmd.Args)
+	}
+	if strings.Contains(joined, "/var/run/docker.sock") {
+		t.Fatalf("native launcher must not expose /var/run/docker.sock:\n%s", joined)
+	}
+}
+
+func assertSourceGeneratedGovernanceConfig(t *testing.T, got string, preserved string) {
+	t.Helper()
+	if !strings.Contains(got, preserved) {
+		t.Fatalf("config did not preserve existing content %q:\n%s", preserved, got)
+	}
+	for _, want := range []string{
+		codexNixManagedConfigMarker,
+		`model_provider = "openai"`,
+		"[profiles.openai]",
+		codexGovernanceManagedBegin,
+		"# source = devkit native launch generator",
+		"governance_mcp_entrypoint_sha256",
+		"[mcp_servers.governance]",
+		`command = "/run/current-system/sw/bin/bash"`,
+		`startup_timeout_sec = 240`,
+		`tool_timeout_sec = 10800`,
+		`default_tools_approval_mode = "approve"`,
+		`"get_run_status"`,
+		`"cancel_run"`,
+		`DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
+		`SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH = "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"`,
+		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
+		"DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256",
+		"/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle/bin/dev-all-runtime-bundle",
+		"[projects.",
+		codexGovernanceManagedEnd,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("source-generated governance config missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"env_vars = [",
+		`"SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM"`,
+		"SUBAGENT_GOVERNANCE_CONTROL_PLANE_BIND=0.0.0.0",
+		`command = "bash"`,
+		`args = ["-lc", "mkdir -p ${HOME:-/tmp}/.codex/log; set -x; exec bash scripts/devops/governance-mcp-stdio-forward"]`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("source-generated governance config contains stale mutable value %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
+	parts := []string{
+		codexNixManagedConfigMarker,
+		`model = "gpt-5.5"`,
+		`model_provider = "openai"`,
+		`model_reasoning_effort = "xhigh"`,
+		`approval_policy = "never"`,
+		`sandbox_mode = "danger-full-access"`,
+	}
+	if strings.TrimSpace(topLevel) != "" {
+		parts = append(parts, strings.TrimRight(topLevel, "\r\n"))
+	}
+	parts = append(parts,
+		"",
+		"[profiles.openai]",
+		`model = "gpt-5.5"`,
+		`model_provider = "openai"`,
+		`model_reasoning_effort = "xhigh"`,
+		`approval_policy = "never"`,
+		`sandbox_mode = "danger-full-access"`,
+	)
+	for _, section := range tail {
+		if strings.TrimSpace(section) == "" {
+			continue
+		}
+		parts = append(parts, "", strings.TrimRight(section, "\r\n"))
+	}
+	return strings.Join(parts, "\n") + "\n"
+}
+
+func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+		FlakeInputOverrides: map[string]string{
+			"ouroboros-terraform": "path:" + repoRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir host worktree: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostHome, 0o700); err != nil {
+		t.Fatalf("mkdir host home: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.StateRoot, 0o700); err != nil {
+		t.Fatalf("mkdir state root: %v", err)
+	}
+	if err := os.WriteFile(p.DNS.ResolvConf, []byte("nameserver 127.0.0.1\n"), 0o644); err != nil {
+		t.Fatalf("write resolv: %v", err)
+	}
+	cmd, err := BuildBubblewrap(p, []string{"true"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	verb := "de" + "velop"
+	want := "'" + verb + "' '--override-input' 'ouroboros-terraform' 'path:" + repoRoot + "' './overlays/ouroboros-terraform#default' '--output-lock-file' '/dev/null'"
+	if !strings.Contains(joined, want) {
+		t.Fatalf("command missing %q:\n%s", want, joined)
+	}
+}
+
+func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	proxySocket := filepath.Join(tmp, "egress.sock")
+	if err := os.WriteFile(proxySocket, []byte("socket placeholder"), 0o600); err != nil {
+		t.Fatalf("write proxy socket placeholder: %v", err)
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:       devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:        "ouroboros-ide",
+		Flake:       ".#runtime-test-agent",
+		ProxySocket: proxySocket,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	cmd, err := BuildBubblewrap(p, []string{"curl", "-I", "https://api.openai.com"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	for _, want := range []string{
+		"'--unshare-net'",
+		"'--bind' '" + proxySocket + "' '" + proxySocket + "'",
+		"native proxy-bridge --listen 127.0.0.1:18888",
+		"'--setenv' 'HTTP_PROXY' 'http://127.0.0.1:18888'",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing %q:\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(joined, "proxy-bridge") || !strings.Contains(joined, proxySocket) {
+		t.Fatalf("command missing proxy socket bridge:\n%s", joined)
+	}
+	if strings.Contains(joined, "'--share-net'") {
+		t.Fatalf("proxy socket launches must not share host network:\n%s", joined)
+	}
+}
+
+func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	hostWorktree := filepath.Join(devRoot, "agent-worktrees", "agent3", "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, hostWorktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project:          "dev-all",
+		Index:            3,
+		Repo:             "ouroboros-ide",
+		Flake:            ".#runtime-test-agent",
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devRoot, "ouroboros-ide", "infra", "docker", "dev", "tinyproxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	cmd, err := BuildBubblewrap(p, []string{"true"})
+	if err != nil {
+		t.Fatalf("BuildBubblewrap: %v", err)
+	}
+	joined := ShellString(cmd)
+	for _, want := range []string{
+		"'--unshare-net'",
+		"'--bind' '" + hostWorktree + "' '/workspace'",
+		"'--bind' '" + hostWorktree + "' '/workspaces/dev/agent-worktrees/agent3/ouroboros-ide'",
+		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3") + "' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3'",
+		"'--ro-bind' '" + devkitRoot + "' '/workspaces/dev/devkit'",
+		"native proxy-bridge --listen 127.0.0.1:18888",
+		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3/.cache/coursier'",
+		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3/.cache/ivy2'",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("command missing %q:\n%s", want, joined)
+		}
+	}
+	for _, forbidden := range []string{
+		"'--share-net'",
+		"'--bind' '" + devRoot + "' '/workspaces/dev'",
+		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees") + "' '/workspaces/dev/agent-worktrees'",
+		"'--bind' '" + filepath.Join(devRoot, ".devkit", "native-agents") + "' '/agent-state'",
+		"/workspaces/dev/.cache/shared",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("workspace-egress command contains forbidden %q:\n%s", forbidden, joined)
+		}
+	}
+}
+
+func TestPrepareRequiresExistingWorktree(t *testing.T) {
+	tmp := t.TempDir()
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: filepath.Join(tmp, "devkit"), RuntimeAuthorityRoot: filepath.Join(tmp, "devkit")},
+		Repo:  "missing",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := Prepare(p); err == nil {
+		t.Fatalf("expected missing worktree error")
+	}
+}
+
+func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p.Agent.HostWorktree), 0o755); err != nil {
+		t.Fatalf("mkdir worktree parent: %v", err)
+	}
+	runTestCommand(t, "", "git", "init", p.Agent.HostWorktree)
+
+	hostUserHome := filepath.Join(tmp, "host-user")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "known_hosts"), "github.com ssh-ed25519 key")
+	t.Setenv("HOME", hostUserHome)
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
+
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"), strings.Join([]string{
+		"Host example.invalid",
+		"  User keep",
+		"Host github.com",
+		"  HostName ssh.github.com",
+		"  Port 443",
+		"  User git",
+		"  IdentityFile /old/home/.ssh/id_ed25519",
+		"",
+	}, "\n"))
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	sshCommand := "ssh -F " + filepath.Join(p.Agent.SandboxHome, ".ssh", "config")
+	cfg := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
+	for _, want := range []string{
+		gitSSHManagedBegin,
+		"Host github.com",
+		"  IdentityFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "id_ed25519"),
+		"  IdentitiesOnly yes",
+		"  BatchMode yes",
+		"  UserKnownHostsFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "known_hosts"),
+		gitSSHManagedEnd,
+		"Host example.invalid",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("ssh config missing %q:\n%s", want, cfg)
+		}
+	}
+	if got := runTestCommand(t, "", "git", "config", "--file", filepath.Join(p.Agent.HostHome, ".gitconfig"), "--get", "core.sshCommand"); got != sshCommand {
+		t.Fatalf("global core.sshCommand = %q, want %q", got, sshCommand)
+	}
+	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--get", "extensions.worktreeConfig"); got != "true" {
+		t.Fatalf("extensions.worktreeConfig = %q, want true", got)
+	}
+	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--worktree", "--get", "core.sshCommand"); got != sshCommand {
+		t.Fatalf("worktree core.sshCommand = %q, want %q", got, sshCommand)
+	}
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("second Prepare: %v", err)
+	}
+	cfg = readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
+	if count := strings.Count(cfg, gitSSHManagedBegin); count != 1 {
+		t.Fatalf("managed block count = %d, want 1:\n%s", count, cfg)
+	}
+	if strings.Contains(cfg, "ssh.github.com") || strings.Contains(cfg, "Port 443") || strings.Contains(cfg, "/old/home") {
+		t.Fatalf("legacy github host block was preserved:\n%s", cfg)
+	}
+	if count := strings.Count(cfg, "Host github.com"); count != 1 {
+		t.Fatalf("github host block count = %d, want 1:\n%s", count, cfg)
+	}
+}
+
+func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+
+	legacyCodex := filepath.Join(p.Agent.StateRoot, "home", ".codex")
+	legacySession := filepath.Join(legacyCodex, "sessions", "2026", "05", "15", "rollout.jsonl")
+	writeTestFile(t, legacySession, "legacy session")
+	legacySessionMtime := time.Date(2026, 5, 15, 12, 34, 56, 0, time.UTC)
+	if err := os.Chtimes(legacySession, legacySessionMtime, legacySessionMtime); err != nil {
+		t.Fatalf("set legacy session mtime: %v", err)
+	}
+	writeTestFile(t, filepath.Join(legacyCodex, "rollouts", "in-flight.jsonl"), "legacy rollout")
+	writeTestFile(t, filepath.Join(legacyCodex, "shell_snapshots", "snapshot.sh"), "legacy shell")
+	writeTestFile(t, filepath.Join(legacyCodex, "log", "codex-tui.log"), "legacy log")
+	writeTestFile(t, filepath.Join(legacyCodex, "state_5.sqlite"), "legacy state")
+	writeTestFile(t, filepath.Join(legacyCodex, "logs_2.sqlite"), "legacy logs")
+	writeTestFile(t, filepath.Join(legacyCodex, "auth.json"), "legacy auth")
+	writeTestFile(t, filepath.Join(legacyCodex, "config.toml"), "legacy config")
+
+	dstCodex := filepath.Join(p.Agent.HostHome, ".codex")
+	writeTestFile(t, filepath.Join(dstCodex, "auth.json"), "current auth")
+	writeTestFile(t, filepath.Join(dstCodex, "config.toml"), `model = "stale-home"`+"\n")
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "current"`))
+	beforeSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	importedSession := filepath.Join(dstCodex, "sessions", "2026", "05", "15", "rollout.jsonl")
+	if got := readTestFile(t, importedSession); got != "legacy session" {
+		t.Fatalf("session content = %q", got)
+	}
+	if st, err := os.Stat(importedSession); err != nil {
+		t.Fatalf("stat imported session: %v", err)
+	} else if !st.ModTime().Equal(legacySessionMtime) {
+		t.Fatalf("imported session mtime = %s, want %s", st.ModTime(), legacySessionMtime)
+	}
+	for rel, want := range map[string]string{
+		filepath.Join("rollouts", "in-flight.jsonl"):    "legacy rollout",
+		filepath.Join("shell_snapshots", "snapshot.sh"): "legacy shell",
+		filepath.Join("log", "codex-tui.log"):           "legacy log",
+		"state_5.sqlite":                                "legacy state",
+		"logs_2.sqlite":                                 "legacy logs",
+		"auth.json":                                     "current auth",
+	} {
+		if got := readTestFile(t, filepath.Join(dstCodex, rel)); got != want {
+			t.Fatalf("%s content = %q, want %q", rel, got, want)
+		}
+	}
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), `personality = "current"`)
+	if strings.Contains(readTestFile(t, filepath.Join(dstCodex, "config.toml")), `model = "stale-home"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore")
+	}
+	afterSessions := countFiles(t, filepath.Join(dstCodex, "sessions"))
+	if afterSessions < beforeSessions+1 {
+		t.Fatalf("session count did not increase as expected: before=%d after=%d", beforeSessions, afterSessions)
+	}
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("second Prepare: %v", err)
+	}
+	if got := countFiles(t, filepath.Join(dstCodex, "sessions")); got != afterSessions {
+		t.Fatalf("second Prepare changed session count: before=%d after=%d", afterSessions, got)
+	}
+	if got := readTestFile(t, filepath.Join(dstCodex, "auth.json")); got != "current auth" {
+		t.Fatalf("auth was clobbered: %q", got)
+	}
+	assertSourceGeneratedGovernanceConfig(t, readTestFile(t, filepath.Join(dstCodex, "config.toml")), `personality = "current"`)
+}
+
+func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
+	sessionPath := filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")
+	writeTestFile(t, sessionPath, "past")
+	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
+	retiredPath := "/usr/local/bin/" + "codex"
+	writeTestFile(t, zshrc, `codex() {
+  HOME="$HOME" CODEX_HOME="$HOME/.codex" `+retiredPath+` "$@"
+}
+`)
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	got := readTestFile(t, zshrc)
+	if strings.Contains(got, retiredPath) {
+		t.Fatalf("retired codex path was not repaired:\n%s", got)
+	}
+	if !strings.Contains(got, "command codex") {
+		t.Fatalf("repaired wrapper missing command codex:\n%s", got)
+	}
+	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.5", "    -a never", "    -s danger-full-access"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("repaired wrapper must not override Codex config with CLI fragment %q:\n%s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
+		t.Fatalf("repaired wrapper missing TUI log guard:\n%s", got)
+	}
+	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
+		t.Fatalf("repaired wrapper missing governance entrypoint fingerprint:\n%s", got)
+	}
+	if !strings.Contains(got, "devkit_codex_require_config()") || !strings.Contains(got, "Codex config must use model_provider = \\\"openai\\\"") {
+		t.Fatalf("repaired wrapper missing loud openai config guard:\n%s", got)
+	}
+	if strings.Contains(got, "mcp_servers.governance.args=") {
+		t.Fatalf("repaired wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
+	}
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, "")
+	if !strings.Contains(gotConfig, "args = [\"-lc\",") || !strings.Contains(gotConfig, "using governance env: ${governance_env}") {
+		t.Fatalf("generated config missing array-valued governance entrypoint:\n%s", gotConfig)
+	}
+	if session := readTestFile(t, sessionPath); session != "past" {
+		t.Fatalf("session was changed: %q", session)
+	}
+}
+
+func TestPrepareAddsTUILogGuardToGeneratedCodexShellHook(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
+	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
+	writeTestFile(t, zshrc, `unalias codex 2>/dev/null || true
+codex() {
+  local -a extra
+  extra=(
+    -a never
+  )
+  HOME="$HOME" CODEX_HOME="$HOME/.codex" CODEX_ROLLOUT_DIR="$HOME/.codex/rollouts" command codex "${extra[@]}" "$@"
+}
+`)
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	got := readTestFile(t, zshrc)
+	if !strings.Contains(got, "devkit_codex_tui_log_guard()") {
+		t.Fatalf("generated wrapper missing TUI log guard function:\n%s", got)
+	}
+	for _, forbidden := range []string{`"${extra[@]}"`, "mcp_servers.", "    -c ", "    -m gpt-5.5", "    -a never", "    -s danger-full-access"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated wrapper must not override Codex config with CLI fragment %q:\n%s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256") {
+		t.Fatalf("generated wrapper missing governance entrypoint fingerprint:\n%s", got)
+	}
+	if !strings.Contains(got, "  devkit_codex_tui_log_guard\n  devkit_codex_require_config || return\n  HOME=\"$HOME\" CODEX_HOME=") {
+		t.Fatalf("generated wrapper does not call TUI log guard before codex:\n%s", got)
+	}
+	if !strings.Contains(got, "Codex config missing [profiles.openai]") {
+		t.Fatalf("generated wrapper missing loud openai profile failure:\n%s", got)
+	}
+	if strings.Contains(got, "mcp_servers.governance.args=") {
+		t.Fatalf("generated wrapper must not pass array-valued governance args through CLI -c:\n%s", got)
+	}
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, "")
+	if !strings.Contains(gotConfig, "args = [\"-lc\",") ||
+		!strings.Contains(gotConfig, "${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh") ||
+		!strings.Contains(gotConfig, "required governance env missing") {
+		t.Fatalf("generated config missing source-derived governance entrypoint:\n%s", gotConfig)
+	}
+}
+
+func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	policy := "prefix_rule(\n    pattern = [\"rg\"],\n    decision = \"forbidden\"\n)\n"
+	writeTestFile(t, filepath.Join(devkitRoot, "overlays", "dev-all", "codex-governed-search-policy.rules"), policy)
+
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	existingConfig := testAuthoritativeCodexConfig(`personality = "existing"`, strings.Join([]string{
+		`[projects."/home/bayesartre/dev/ouroboros-ide"]`,
+		`trust_level = "trusted"`,
+		``,
+		`[projects."/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"]`,
+		`trust_level = "trusted"`,
+		``,
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n"))
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), existingConfig)
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-home"`+"\n")
+	writeTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml"), strings.Join([]string{
+		`approval_policy = "never"`,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		`args = ["-lc", "mkdir -p ${HOME:-/tmp}/.codex/log; set -x; exec bash scripts/devops/governance-mcp-stdio-forward"]`,
+		`startup_timeout_sec = 60`,
+		"",
+	}, "\n"))
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
+	for _, altForwarder := range []string{
+		filepath.Join(devRoot, "agent-worktrees", "agent2", "ouroboros-ide-statement-classifier-submit", "scripts", "devops", "governance-mcp-stdio-forward"),
+		filepath.Join(devRoot, "agent-worktrees", "terraform-ouro-1-redaction-safe", "ouroboros-ide", "scripts", "devops", "governance-mcp-stdio-forward"),
+	} {
+		writeTestFile(t, altForwarder, "#!/usr/bin/env bash\n")
+	}
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	target := filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")
+	if got := readTestFile(t, target); got != policy {
+		t.Fatalf("policy rules = %q, want %q", got, policy)
+	}
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, `personality = "existing"`)
+	if strings.Contains(gotConfig, `model = "stale-home"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore:\n%s", gotConfig)
+	}
+	if strings.Count(gotConfig, `[projects."/home/bayesartre/dev/ouroboros-ide"]`) > 1 {
+		t.Fatalf("config retained duplicate stale project trust table:\n%s", gotConfig)
+	}
+	for _, forbidden := range []string{
+		"env_vars = [",
+		"mcp_servers.governance.env.",
+		`"SUBAGENT_GOVERNANCE_CONTROL_PLANE_AUTOWARM"`,
+		"SUBAGENT_GOVERNANCE_CONTROL_PLANE_BIND=0.0.0.0",
+	} {
+		if strings.Contains(gotConfig, forbidden) {
+			t.Fatalf("config contains forbidden %q:\n%s", forbidden, gotConfig)
+		}
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
+		t.Fatalf("session was clobbered: %q", got)
+	}
+	wantWorktreeConfig := strings.Join([]string{
+		`approval_policy = "never"`,
+		"",
+	}, "\n")
+	if gotWorktreeConfig := readTestFile(t, filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml")); gotWorktreeConfig != wantWorktreeConfig {
+		t.Fatalf("worktree config should remove mutable governance table, got:\n%s\nwant:\n%s", gotWorktreeConfig, wantWorktreeConfig)
+	}
+	envPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh")
+	gotEnv := readTestFile(t, envPath)
+	for _, want := range []string{
+		"Shared governance MCP/control-plane routing",
+		"Runtime artifact identity is applied afterward by the immutable bundle launcher.",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
+		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
+		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
+		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=",
+		"dev-workspace=/workspaces/dev",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
+		"agent1=/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
+		"agent9-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent9/ouroboros-terraform",
+		"email-policy-mcp-app=/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide",
+		"shadow1-workbook-patch-mcp-localcontext=/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide",
+		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
+		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
+		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl",
+	} {
+		if !strings.Contains(gotEnv, want) {
+			t.Fatalf("governance routing env missing %q:\n%s", want, gotEnv)
+		}
+	}
+	for _, forbidden := range []string{
+		"DEVKIT_RUNTIME_IDENTITY",
+		"DEVKIT_RUNTIME_BUNDLE",
+		"DEVKIT_GOVERNANCE_SOURCE_REV",
+		"DEVKIT_SUBMIT_TO_CI_SOURCE_REV",
+		"DEVKIT_ARTIFACT_COLUMN_SOURCE_REV",
+		"DEVKIT_SBT_CONTROL_PLANE_SOURCE_REV",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_",
+		"DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_",
+		"DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV",
+		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
+		"SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
+		"SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR",
+		"SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"SUBAGENT_GOVERNANCE_PINNED_ARTIFACT",
+		"SUBAGENT_GOVERNANCE_FLAKE_ARTIFACT",
+		"SUBMIT_TO_CI_",
+		"ARTIFACT_COLUMN_PLUGIN_",
+		"SBT_CONTROL_PLANE_",
+		"SBT2_CLIENT_MODE",
+		"SBT2_JAVA_XMX",
+		"OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE",
+		"JAVA_HOME=",
+		"identity-fingerprint",
+		"print-dev-env",
+		"/workspaces/dev/devkit#dev-all",
+	} {
+		if strings.Contains(gotEnv, forbidden) {
+			t.Fatalf("mutable governance routing env retained runtime authority %q:\n%s", forbidden, gotEnv)
+		}
+	}
+	for _, forbidden := range []string{
+		"agent2-ouroboros-ide-statement-classifier-submit",
+		"terraform-ouro-1-redaction-safe",
+	} {
+		if strings.Contains(gotEnv, forbidden) {
+			t.Fatalf("governance env leaked ad-hoc worktree %q:\n%s", forbidden, gotEnv)
+		}
+	}
+	if strings.Contains(gotEnv, "SUBAGENT_GOVERNANCE_WORKSPACE_ID=") {
+		t.Fatalf("shared governance env must not pin a per-agent workspace id:\n%s", gotEnv)
+	}
+	if strings.Contains(gotEnv, "\n  local ") {
+		t.Fatalf("shared governance env must avoid local declarations for remote eval compatibility:\n%s", gotEnv)
+	}
+	for _, forbidden := range []string{
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
+		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=" + filepath.Join(devRoot, "ouroboros-ide", "tools", "subagent-governance", "subagent-governance.jar"),
+	} {
+		if strings.Contains(gotEnv, forbidden) {
+			t.Fatalf("shared governance env retained mutable jar path %q:\n%s", forbidden, gotEnv)
+		}
+	}
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
+	for _, want := range []string{
+		`"workspaceRoot": "/workspaces/dev/ouroboros-ide"`,
+		`"skillCatalogPath": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/catalog/skills.json"`,
+		`"policyCatalogPath": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/catalog/policies.json"`,
+		`"promptBundleRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/skills"`,
+		`"knownWorkspaceIds": [`,
+		`"dev-workspace"`,
+		`"ouroboros-ide"`,
+		`"ouroboros-terraform"`,
+		`"agent4"`,
+		`"agent4-ouroboros-terraform"`,
+		`"email-policy-mcp-app"`,
+		`"dev-workspace": "/workspaces/dev"`,
+		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"agent1": "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"`,
+		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
+		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
+		`"email-policy-mcp-app": "/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide"`,
+		`"shadow1-workbook-patch-mcp-localcontext": "/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide"`,
+		`"schemaRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas"`,
+		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
+		`"controlPlaneStateDir": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
+	} {
+		if !strings.Contains(gotRepoConfig, want) {
+			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
+		}
+	}
+	for _, forbidden := range []string{
+		`"agent2-ouroboros-ide-statement-classifier-submit"`,
+		`"terraform-ouro-1-redaction-safe"`,
+	} {
+		if strings.Contains(gotRepoConfig, forbidden) {
+			t.Fatalf("governance repo config leaked ad-hoc worktree %q:\n%s", forbidden, gotRepoConfig)
+		}
+	}
+	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
+		t.Fatalf("governance repo config must not carry mutable jar authority:\n%s", gotRepoConfig)
+	}
+	if wantHash := fmt.Sprintf("%x", sha256.Sum256([]byte(gotRepoConfig))); !strings.Contains(gotEnv, "export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256='"+wantHash+"'") {
+		t.Fatalf("governance env missing repo config hash %s:\n%s", wantHash, gotEnv)
+	}
+	if st, err := os.Stat(envPath); err != nil {
+		t.Fatalf("stat governance env: %v", err)
+	} else if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("governance env mode = %o, want 600", got)
+	}
+	repoConfigPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json")
+	if err := os.Chmod(envPath, 0o644); err != nil {
+		t.Fatalf("loosen governance env mode: %v", err)
+	}
+	if err := os.Chmod(repoConfigPath, 0o644); err != nil {
+		t.Fatalf("loosen governance repo config mode: %v", err)
+	}
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare should repair generated governance file modes: %v", err)
+	}
+	if st, err := os.Stat(envPath); err != nil {
+		t.Fatalf("stat repaired governance env: %v", err)
+	} else if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("repaired governance env mode = %o, want 600", got)
+	}
+	if st, err := os.Stat(repoConfigPath); err != nil {
+		t.Fatalf("stat repaired governance repo config: %v", err)
+	} else if got := st.Mode().Perm(); got != 0o600 {
+		t.Fatalf("repaired governance repo config mode = %o, want 600", got)
+	}
+}
+
+func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+		FlakeInputOverrides: map[string]string{
+			"ouroboros-terraform": "path:" + repoRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "terraform"`, strings.Join([]string{
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n")))
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-terraform"`+"\n")
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl"), "past session")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	gotConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotConfig, `personality = "terraform"`)
+	if strings.Contains(gotConfig, `model = "stale-terraform"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore")
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")); got != "past session" {
+		t.Fatalf("session was clobbered: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(p.Agent.HostWorktree, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("Prepare must not create repo-local Terraform Codex config, err=%v", err)
+	}
+	gotEnv := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"))
+	for _, want := range []string{
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
+		"agent1-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform",
+	} {
+		if !strings.Contains(gotEnv, want) {
+			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
+		}
+	}
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
+	for _, want := range []string{
+		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"agent1-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
+	} {
+		if !strings.Contains(gotRepoConfig, want) {
+			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
+		}
+	}
+}
+
+func TestPrepareOuroTerraformRequiresAuthoritativeOpenAICodexConfig(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	badSource := filepath.Join(tmp, "base-only-config.toml")
+	writeTestFile(t, badSource, `model = "base-only"`+"\n")
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", badSource)
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), testAuthoritativeCodexConfig(`personality = "stale-home"`))
+
+	err = Prepare(p)
+	if err == nil {
+		t.Fatalf("expected missing openai Codex config to fail")
+	}
+	for _, want := range []string{
+		"authoritative Codex config",
+		"# source = nixos-wsl codex config",
+		"top-level model_provider",
+		"refusing to synthesize a base-only config.toml",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestPrepareOuroTerraformRestoresCodexConfigFromNixSource(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	repoRoot := filepath.Join(devRoot, "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, repoRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	sourceConfig := testAuthoritativeCodexConfig(`personality = "nix-source"`)
+	systemConfigPath := filepath.Join(tmp, "etc", "codex", "config.toml")
+	writeTestFile(t, systemConfigPath, sourceConfig)
+	setCodexSystemConfigForTest(t, systemConfigPath)
+	cachePath := filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath))
+	writeTestFile(t, cachePath, testAuthoritativeCodexConfig(`personality = "stale-cache"`))
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project: "ouroboros-terraform",
+		Repo:    "ouroboros-terraform",
+		Flake:   "./overlays/ouroboros-terraform#default",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "base-only"`+"\n")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, got, `personality = "nix-source"`)
+	if strings.Contains(got, `model = "base-only"`) {
+		t.Fatalf("base-only config survived Nix-source restore:\n%s", got)
+	}
+	if gotCache := readTestFile(t, cachePath); gotCache != sourceConfig {
+		t.Fatalf("cache was not refreshed from system config:\n%s", gotCache)
+	}
+}
+
+func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	policy := "prefix_rule(\n    pattern = [\"rg\"],\n    decision = \"forbidden\"\n)\n"
+	writeTestFile(t, filepath.Join(devkitRoot, "overlays", "dev-all", "codex-governed-search-policy.rules"), policy)
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "config.toml"), "top_level = true\n")
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "devkit-management", "SKILL.md"), "# devkit management\n")
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "autonomy-contract", "SKILL.md"), "# autonomy contract\n")
+	writeTestFile(t, filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "governed-search", "SKILL.md"), "# governed search\n")
+	systemConfigPath := filepath.Join(tmp, "etc", "codex", "config.toml")
+	writeTestFile(t, systemConfigPath, testAuthoritativeCodexConfig(`personality = "dev-workspace"`, strings.Join([]string{
+		codexGovernanceManagedBegin,
+		`[mcp_servers.governance]`,
+		`command = "bash"`,
+		codexGovernanceManagedEnd,
+		``,
+	}, "\n")))
+	setCodexSystemConfigForTest(t, systemConfigPath)
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "stale-dev-workspace-cache"`))
+
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project: "dev-workspace",
+		Flake:   "./overlays/dev-workspace#default",
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-dev-workspace"`+"\n")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	if got := readTestFile(t, filepath.Join(devRoot, ".codex", "config.toml")); got != "top_level = true\n" {
+		t.Fatalf("top-level config was modified:\n%s", got)
+	}
+	gotAgentConfig := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"))
+	assertSourceGeneratedGovernanceConfig(t, gotAgentConfig, `personality = "dev-workspace"`)
+	if strings.Contains(gotAgentConfig, `model = "stale-dev-workspace"`) {
+		t.Fatalf("stale mutable config survived Nix-source restore")
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")); got != policy {
+		t.Fatalf("policy rules = %q, want %q", got, policy)
+	}
+	for skill, wantTarget := range map[string]string{
+		"devkit-management": filepath.Join(devRoot, ".codex", "skills", "devkit-management"),
+		"autonomy-contract": filepath.Join(devRoot, ".codex", "skills", "autonomy-contract"),
+		"governed-search":   filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "governed-search"),
+	} {
+		link := filepath.Join(p.Agent.HostHome, ".codex", "skills", skill)
+		gotTarget, err := os.Readlink(link)
+		if err != nil {
+			t.Fatalf("read skill link %s: %v", link, err)
+		}
+		if gotTarget != wantTarget {
+			t.Fatalf("skill link %s = %q, want %q", skill, gotTarget, wantTarget)
+		}
+	}
+	gotEnv := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"))
+	for _, want := range []string{
+		"dev-workspace=/workspaces/dev",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
+	} {
+		if !strings.Contains(gotEnv, want) {
+			t.Fatalf("governance env missing %q:\n%s", want, gotEnv)
+		}
+	}
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
+	for _, want := range []string{
+		`"dev-workspace"`,
+		`"dev-workspace": "/workspaces/dev"`,
+		`"ouroboros-ide": "/workspaces/dev/ouroboros-ide"`,
+		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
+	} {
+		if !strings.Contains(gotRepoConfig, want) {
+			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
+		}
+	}
+	if strings.Contains(gotRepoConfig, `"latestJarPath"`) || strings.Contains(gotRepoConfig, "tools/subagent-governance/subagent-governance.jar") {
+		t.Fatalf("governance repo config must not carry mutable jar authority:\n%s", gotRepoConfig)
+	}
+}
+
+func TestPrepareCreatesSharedScalaCachesAndCapsOnlyCodexTUILog(t *testing.T) {
+	t.Setenv("DEVKIT_CODEX_TUI_LOG_MAX_BYTES", "8")
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "log", "codex-tui.log"), "0123456789abcdef")
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "keep.jsonl"), "session")
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "state.sqlite"), "sqlite")
+	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rollouts", "keep.jsonl"), "rollout")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	for _, dir := range []string{
+		filepath.Join(devRoot, ".cache", "shared", "coursier"),
+		filepath.Join(devRoot, ".cache", "shared", "ivy2"),
+		filepath.Join(p.Agent.HostHome, ".sbt"),
+		filepath.Join(p.Agent.HostHome, ".sbt", "boot"),
+	} {
+		if st, err := os.Stat(dir); err != nil {
+			t.Fatalf("shared/per-agent cache dir missing %s: %v", dir, err)
+		} else if !st.IsDir() {
+			t.Fatalf("cache path is not a dir: %s", dir)
+		}
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "log", "codex-tui.log")); got != "89abcdef" {
+		t.Fatalf("capped codex-tui.log = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "keep.jsonl")); got != "session" {
+		t.Fatalf("session was touched: %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "state.sqlite")); got != "sqlite" {
+		t.Fatalf("sqlite state was touched: %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "rollouts", "keep.jsonl")); got != "rollout" {
+		t.Fatalf("rollout was touched: %q", got)
+	}
+}
+
+func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
+	hostUserHome := t.TempDir()
+	srcSSH := filepath.Join(hostUserHome, ".ssh")
+	if err := os.MkdirAll(srcSSH, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"id_ed25519":     "private",
+		"id_ed25519.pub": "public",
+		"known_hosts":    "github.com key",
+	} {
+		if err := os.WriteFile(filepath.Join(srcSSH, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", hostUserHome)
+
+	nativeHome := filepath.Join(t.TempDir(), "native-home")
+	if err := SeedSSH(nativeHome, false); err != nil {
+		t.Fatalf("SeedSSH: %v", err)
+	}
+	for name, wantMode := range map[string]os.FileMode{
+		"id_ed25519":     0o600,
+		"id_ed25519.pub": 0o644,
+		"known_hosts":    0o644,
+	} {
+		info, err := os.Stat(filepath.Join(nativeHome, ".ssh", name))
+		if err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+		if got := info.Mode().Perm(); got != wantMode {
+			t.Fatalf("%s mode = %v, want %v", name, got, wantMode)
+		}
+	}
+}
+
+func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
+	overlayConfig := readTestFile(t, filepath.Join("..", "..", "..", "..", "..", "overlays", "dev-all", "devkit.yaml"))
+	for _, want := range []string{
+		"name: governance-provenance",
+		"env_file=/workspaces/dev/.devkit/ouro8-governance-env.sh",
+		"/nix/store/*/share/subagent-governance/subagent-governance.jar",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH",
+		"DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
+		"governance jar hash drift",
+		"server.jar.path",
+		"server.jar.sha256",
+		"governance singleton jar path drift",
+		"governance singleton jar hash drift",
+		"/agent-state",
+		"governance-mcp-stdio-forward/provenance.json",
+		"governance bridge jar path drift",
+		"governance bridge catalog hash drift",
+		"governance bridge entrypoint fingerprint drift",
+		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
+	} {
+		if !strings.Contains(overlayConfig, want) {
+			t.Fatalf("dev-all overlay missing governance provenance guard %q:\n%s", want, overlayConfig)
+		}
+	}
+}
+
+func TestSeedAWSSyncsConfigAndCaches(t *testing.T) {
+	srcAWS := filepath.Join(t.TempDir(), ".aws")
+	for _, dir := range []string{
+		srcAWS,
+		filepath.Join(srcAWS, "sso", "cache"),
+		filepath.Join(srcAWS, "cli", "cache"),
+	} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	files := map[string]string{
+		"config":                                "[profile ouroboros]\nsso_session = mysesh\n",
+		"credentials":                           "",
+		filepath.Join("sso", "cache", "a.json"): `{"accessToken":"redacted"}`,
+		filepath.Join("cli", "cache", "b.json"): `{"Credentials":{"AccessKeyId":"redacted"}}`,
+	}
+	for rel, content := range files {
+		if err := os.WriteFile(filepath.Join(srcAWS, rel), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	t.Setenv("DEVKIT_AWS_HOME", srcAWS)
+
+	nativeHome := filepath.Join(t.TempDir(), "native-home")
+	if err := SeedAWS(nativeHome, false); err != nil {
+		t.Fatalf("SeedAWS: %v", err)
+	}
+	for rel, want := range files {
+		if got := readTestFile(t, filepath.Join(nativeHome, ".aws", rel)); got != want {
+			t.Fatalf("%s = %q, want %q", rel, got, want)
+		}
+		info, err := os.Stat(filepath.Join(nativeHome, ".aws", rel))
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("%s mode = %v, want 0600", rel, got)
+		}
+	}
+	for _, rel := range []string{".aws", filepath.Join(".aws", "sso"), filepath.Join(".aws", "sso", "cache"), filepath.Join(".aws", "cli"), filepath.Join(".aws", "cli", "cache")} {
+		info, err := os.Stat(filepath.Join(nativeHome, rel))
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("%s mode = %v, want 0700", rel, got)
+		}
+	}
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func setCodexSystemConfigForTest(t *testing.T, path string) {
+	t.Helper()
+	previous := codexSystemConfigPath
+	codexSystemConfigPath = path
+	t.Cleanup(func() {
+		codexSystemConfigPath = previous
+	})
+}
+
+func countFiles(t *testing.T, root string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(root, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			count++
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	return count
+}
+
+func runTestCommand(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out))
+}
