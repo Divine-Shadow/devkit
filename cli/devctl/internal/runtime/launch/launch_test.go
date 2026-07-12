@@ -80,7 +80,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "c70370f2478c39e4f65c611a9953e835cfb661b3";`,
+		`governanceJarVersion = "38ec4f97e2f699d2e84110d01c877971d1e8bd97";`,
 		`submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";`,
 		`artifactColumnRuntimeVersion = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7";`,
 		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
@@ -177,7 +177,7 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	fields := []string{
 		ouroGovernanceRuntimeIdentitySchema,
 		bundlePath,
-		"c70370f2478c39e4f65c611a9953e835cfb661b3",
+		"38ec4f97e2f699d2e84110d01c877971d1e8bd97",
 		ouroGovernanceSubmitRuntimeSourceRev,
 		ouroGovernanceArtifactColumnSourceRev,
 		"be9a16cd8abdf9d479bbf0b7379ebdf0651d156e",

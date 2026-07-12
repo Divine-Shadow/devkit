@@ -57,7 +57,7 @@
       };
       codexVersion = "0.144.0";
       codexReleaseTag = "rust-v${codexVersion}";
-      governanceJarVersion = "c70370f2478c39e4f65c611a9953e835cfb661b3";
+      governanceJarVersion = "38ec4f97e2f699d2e84110d01c877971d1e8bd97";
       submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";
       artifactColumnRuntimeVersion = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7";
       sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";

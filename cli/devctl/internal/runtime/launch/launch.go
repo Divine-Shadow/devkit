@@ -741,7 +741,7 @@ func validOuroGovernanceJavaXmx(value string) bool {
 }
 
 const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
-const ouroGovernanceSourceRev = "c70370f2478c39e4f65c611a9953e835cfb661b3"
+const ouroGovernanceSourceRev = "38ec4f97e2f699d2e84110d01c877971d1e8bd97"
 const ouroGovernanceSubmitRuntimeSourceRev = "d15715adeadc8881b08ac7a05f19fec15fd29986"
 const ouroGovernanceArtifactColumnSourceRev = "4eaf59e32d6ebd49c842c8038e7cfc4f825870d7"
 const ouroGovernanceArtifactColumnVersion = "0.1.0-artifact-column-v2-package-derived-ownership-20260711"
