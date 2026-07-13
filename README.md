@@ -44,6 +44,8 @@ For day-to-day operations, see the native runbook:
 - `ensure-ready`: run runtime or repo readiness checks.
 - `native plan`: inspect the computed sandbox plan.
 - `runtime-matrix --all --check`: validate overlay-to-flake metadata.
+- `nix run .#management-inspection`: explicitly refresh or enter a read-only,
+  revision-identified source view for Management inspection.
 - `preflight`: check host prerequisites.
 - `verify-all`: run the supported verification flow for configured overlays.
 

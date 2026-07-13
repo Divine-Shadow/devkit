@@ -111,6 +111,52 @@
           bundle = mkDevAllRuntimeBundle pkgs;
           inherit pkgs;
         };
+      mkDevctl =
+        pkgs:
+        pkgs.buildGoModule {
+          pname = "devkit-devctl";
+          version = "dev";
+          src = ./.;
+          modRoot = "cli/devctl";
+          vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+          subPackages = [ "." ];
+          env.CGO_ENABLED = "0";
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+          postInstall = ''
+            mkdir -p "$out/kit/bin"
+            mv "$out/bin/devctl" "$out/kit/bin/devctl"
+            rmdir "$out/bin"
+            cp -R ${./overlays} "$out/overlays"
+          '';
+        };
+      mkManagementInspectionApp =
+        pkgs:
+        let
+          devctl = mkDevctl pkgs;
+        in
+        pkgs.writeShellApplication {
+          name = "management-inspection";
+          runtimeInputs = with pkgs; [
+            bashInteractive
+            bubblewrap
+            coreutils
+            findutils
+            git
+            gnugrep
+            gnused
+            gnutar
+            jq
+            less
+            nix
+            ripgrep
+          ];
+          text = ''
+            exec ${devctl}/kit/bin/devctl management-inspect "$@"
+          '';
+        };
     in
     {
       devShells = forEachSystem (
@@ -451,7 +497,9 @@
       packages = forEachSystem (
         { pkgs, ... }:
         {
+          devctl = mkDevctl pkgs;
           dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
+          management-inspection = mkManagementInspectionApp pkgs;
           pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;
           pinned-governance-jar = mkPinnedGovernanceJar pkgs;
           pinned-sbt-control-plane-runtime-jar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
@@ -470,12 +518,24 @@
         }
       );
 
+      apps = forEachSystem (
+        { pkgs, ... }:
+        {
+          management-inspection = {
+            type = "app";
+            program = "${mkManagementInspectionApp pkgs}/bin/management-inspection";
+            meta.description = "Explicitly refreshed, revision-identified, read-only Management source inspection profile";
+          };
+        }
+      );
+
       checks = forEachSystem (
         { pkgs, ... }:
         {
           dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
+          management-inspection-cli = mkDevctl pkgs;
 
           runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" { } ''
             mkdir -p "$out"

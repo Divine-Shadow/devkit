@@ -17,6 +17,7 @@ import (
 	brokercmd "devkit/cli/devctl/internal/commands/brokercmd"
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
+	managementinspectcmd "devkit/cli/devctl/internal/commands/managementinspect"
 	nativecmd "devkit/cli/devctl/internal/commands/nativecmd"
 	networkcmd "devkit/cli/devctl/internal/commands/network"
 	preflightcmd "devkit/cli/devctl/internal/commands/preflight"
@@ -425,6 +426,10 @@ Commands:
   reset [N]                                  (alias: fresh-open)
   bootstrap <repo> <count>                   (flake-backed overlays)
   runtime-matrix [--check] [--all] [--repo NAME|--overlay NAME] (repo to runtime pairing report)
+  management-inspect refresh --repo PATH --revision REF [--name NAME] [--state-root PATH]
+  management-inspect status|readback [--name NAME] [--state-root PATH] [--format text|json]
+  management-inspect shell [--name NAME] [--state-root PATH]
+  management-inspect exec [--name NAME] [--state-root PATH] -- COMMAND...
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
   preflight                                  (host checks: nix, bubblewrap, tmux, ssh keys, ~/.codex, broker Docker)
@@ -562,6 +567,7 @@ func main() {
 	brokercmd.Register(registry)
 	hostscmd.Register(registry)
 	hookcmd.Register(registry)
+	managementinspectcmd.Register(registry)
 	networkcmd.Register(registry)
 	preflightcmd.Register(registry)
 	runtimematrixcmd.Register(registry)

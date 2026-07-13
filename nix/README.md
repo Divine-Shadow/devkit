@@ -21,6 +21,13 @@ Current shell targets:
 - `runtime-test-agent`: lightweight integration-test shell.
 - `tinyproxy`: host-service shell for proxy experiments.
 
+Source-derived operator apps:
+
+- `management-inspection`: explicitly snapshots one Git commit into the Nix
+  store and exposes it through a read-only Management inspection profile with
+  separate revision-specific writable state. See
+  `kit/docs/management-readonly-inspection-profile.md`.
+
 Use explicit experimental feature flags on hosts that do not enable flakes by
 default:
 
