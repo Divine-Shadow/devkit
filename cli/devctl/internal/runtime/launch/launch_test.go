@@ -71,7 +71,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 		"export SBT_CONTROL_PLANE_FLAKE_ARTIFACT=0",
 		"export SBT2_CLIENT_MODE=force",
 		"export SBT2_JAVA_XMX=6g",
-		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=force",
+		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off",
 	} {
 		if !strings.Contains(runtimeNix, want) {
 			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
