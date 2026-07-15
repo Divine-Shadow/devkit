@@ -854,12 +854,25 @@ func validOuroGovernanceJavaXmx(value string) bool {
 }
 
 const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
-const ouroGovernanceSourceRev = "38ec4f97e2f699d2e84110d01c877971d1e8bd97"
-const ouroGovernanceSubmitRuntimeSourceRev = "d15715adeadc8881b08ac7a05f19fec15fd29986"
+const ouroGovernanceSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
+const ouroGovernanceSubmitRuntimeSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
 const ouroGovernanceArtifactColumnSourceRev = "8e23ded5579e896c95b5a751f4d4a18da70049a9"
 const ouroGovernanceArtifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712"
 const ouroGovernanceArtifactColumnJarSHA256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347"
-const ouroGovernanceSbtControlPlaneSourceRev = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e"
+const ouroGovernanceSbtControlPlaneSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
+
+var ouroGovernanceSystemRuntimeLauncherPath = "/run/current-system/sw/bin/dev-all-runtime-bundle"
+
+func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
+	if strings.TrimSpace(os.Getenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV")) != "1" {
+		return "", false, nil
+	}
+	launcherPath := filepath.Clean(ouroGovernanceSystemRuntimeLauncherPath)
+	if !isExecutable(launcherPath) {
+		return "", false, fmt.Errorf("authoritative system governance runtime launcher is missing or not executable: %s", launcherPath)
+	}
+	return launcherPath, true, nil
+}
 
 func ouroGovernanceRuntimeBundleFlake(devkitRoot string) string {
 	return filepath.Clean(devkitRoot) + "#dev-all-runtime-bundle"
@@ -867,58 +880,71 @@ func ouroGovernanceRuntimeBundleFlake(devkitRoot string) string {
 
 func resolveOuroGovernanceRuntimeIdentity(devkitRoot string) (ouroGovernanceRuntimeIdentity, error) {
 	devkitRoot = filepath.Clean(strings.TrimSpace(devkitRoot))
-	flakePath := filepath.Join(devkitRoot, "flake.nix")
-	if !pathExists(flakePath) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle: missing devkit flake %s", flakePath)
-	}
 	runtimeBundleFlake := ouroGovernanceRuntimeBundleFlake(devkitRoot)
-	nixBin, err := exec.LookPath("nix")
+	runtimeAuthority := runtimeBundleFlake
+	bundlePath := ""
+	launcherPath, useSystemLauncher, err := selectOuroGovernanceSystemRuntimeLauncher()
 	if err != nil {
-		if pathExists("/run/current-system/sw/bin/nix") {
-			nixBin = "/run/current-system/sw/bin/nix"
-		} else {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env: nix not found")
+		return ouroGovernanceRuntimeIdentity{}, err
+	}
+	if useSystemLauncher {
+		runtimeAuthority = launcherPath
+	} else {
+		flakePath := filepath.Join(devkitRoot, "flake.nix")
+		if !pathExists(flakePath) {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle: missing devkit flake %s", flakePath)
 		}
-	}
-	cmd := exec.Command(
-		nixBin,
-		"--extra-experimental-features", "nix-command flakes",
-		"--no-warn-dirty",
-		"--option", "eval-cache", "false",
-		"build", "--no-link", "--print-out-paths", runtimeBundleFlake,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("build governance runtime bundle from %s: %w: %s", runtimeBundleFlake, err, strings.TrimSpace(string(out)))
-	}
-	var bundlePaths []string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "/nix/store/") && !strings.ContainsAny(line, " \t") {
-			bundlePaths = append(bundlePaths, line)
+		nixBin, err := exec.LookPath("nix")
+		if err != nil {
+			if pathExists("/run/current-system/sw/bin/nix") {
+				nixBin = "/run/current-system/sw/bin/nix"
+			} else {
+				return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env: nix not found")
+			}
 		}
+		cmd := exec.Command(
+			nixBin,
+			"--extra-experimental-features", "nix-command flakes",
+			"--no-warn-dirty",
+			"--option", "eval-cache", "false",
+			"build", "--no-link", "--print-out-paths", runtimeBundleFlake,
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("build governance runtime bundle from %s: %w: %s", runtimeBundleFlake, err, strings.TrimSpace(string(out)))
+		}
+		var bundlePaths []string
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "/nix/store/") && !strings.ContainsAny(line, " \t") {
+				bundlePaths = append(bundlePaths, line)
+			}
+		}
+		if len(bundlePaths) != 1 {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("build governance runtime bundle from %s: expected one Nix-store output, got %d", runtimeBundleFlake, len(bundlePaths))
+		}
+		bundlePath = bundlePaths[0]
+		launcherPath = filepath.Join(bundlePath, "bin", "dev-all-runtime-bundle")
 	}
-	if len(bundlePaths) != 1 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("build governance runtime bundle from %s: expected one Nix-store output, got %d", runtimeBundleFlake, len(bundlePaths))
-	}
-	bundlePath := bundlePaths[0]
-	launcherPath := filepath.Join(bundlePath, "bin", "dev-all-runtime-bundle")
 	if !isExecutable(launcherPath) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: missing executable launcher %s", runtimeBundleFlake, launcherPath)
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: missing executable launcher %s", runtimeAuthority, launcherPath)
 	}
 	launcher := exec.Command(launcherPath, "identity-nul")
 	identityOutput, err := launcher.CombinedOutput()
 	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: launcher identity failed: %w: %s", runtimeBundleFlake, err, strings.TrimSpace(string(identityOutput)))
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: launcher identity failed: %w: %s", runtimeAuthority, err, strings.TrimSpace(string(identityOutput)))
 	}
-	identity, err := parseOuroGovernanceRuntimeIdentityOutput(identityOutput, runtimeBundleFlake)
+	identity, err := parseOuroGovernanceRuntimeIdentityOutput(identityOutput, runtimeAuthority)
 	if err != nil {
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
-	if identity.RuntimeBundlePath != bundlePath {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: launcher bundle path mismatch: expected %s got %s", runtimeBundleFlake, bundlePath, identity.RuntimeBundlePath)
+	if useSystemLauncher {
+		bundlePath = identity.RuntimeBundlePath
 	}
-	runtimeFlake := runtimeBundleFlake
+	if identity.RuntimeBundlePath != bundlePath {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: launcher bundle path mismatch: expected %s got %s", runtimeAuthority, bundlePath, identity.RuntimeBundlePath)
+	}
+	runtimeFlake := runtimeAuthority
 	if !identity.Complete() {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci/SBT control-plane runtime jar, artifact-column plugin repository, Java, or submit runtime authority identity", runtimeFlake)
 	}

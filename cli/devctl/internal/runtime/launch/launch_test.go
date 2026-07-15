@@ -177,10 +177,10 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	fields := []string{
 		ouroGovernanceRuntimeIdentitySchema,
 		bundlePath,
-		"38ec4f97e2f699d2e84110d01c877971d1e8bd97",
+		ouroGovernanceSourceRev,
 		ouroGovernanceSubmitRuntimeSourceRev,
 		ouroGovernanceArtifactColumnSourceRev,
-		"be9a16cd8abdf9d479bbf0b7379ebdf0651d156e",
+		ouroGovernanceSbtControlPlaneSourceRev,
 		jarPath, jarPath, jarPath, "deadbeef", "deadbeef",
 		submitJarPath, submitJarPath + ".sha256", submitJarPath, "facefeed",
 		"force", "6g", "force",
@@ -265,10 +265,31 @@ func TestOuroGovernanceRuntimeBundleFlakeUsesExplicitDevkitRoot(t *testing.T) {
 }
 
 func TestResolveOuroGovernanceRuntimeIdentityRejectsMissingFlake(t *testing.T) {
+	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "")
 	missingRoot := t.TempDir()
 	_, err := resolveOuroGovernanceRuntimeIdentity(missingRoot)
 	if err == nil || !strings.Contains(err.Error(), "missing devkit flake") {
 		t.Fatalf("missing flake error = %v", err)
+	}
+}
+
+func TestSelectOuroGovernanceSystemRuntimeLauncherRequiresAuthoritativeEnv(t *testing.T) {
+	original := ouroGovernanceSystemRuntimeLauncherPath
+	t.Cleanup(func() { ouroGovernanceSystemRuntimeLauncherPath = original })
+	launcher := filepath.Join(t.TempDir(), "dev-all-runtime-bundle")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ouroGovernanceSystemRuntimeLauncherPath = launcher
+
+	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "")
+	if got, selected, err := selectOuroGovernanceSystemRuntimeLauncher(); err != nil || selected || got != "" {
+		t.Fatalf("untrusted selection = path %q selected %t err %v", got, selected, err)
+	}
+
+	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "1")
+	if got, selected, err := selectOuroGovernanceSystemRuntimeLauncher(); err != nil || !selected || got != launcher {
+		t.Fatalf("authoritative selection = path %q selected %t err %v", got, selected, err)
 	}
 }
 
