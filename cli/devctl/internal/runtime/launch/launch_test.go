@@ -1168,7 +1168,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"shadow1-workbook-patch-mcp-localcontext=/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
-		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl",
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=/workspaces/dev/.devkit/governance-control-plane",
+		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=/workspaces/dev/.devkit/governance-control-plane/execution-graph-decisions.jsonl",
 	} {
 		if !strings.Contains(gotEnv, want) {
 			t.Fatalf("governance routing env missing %q:\n%s", want, gotEnv)
@@ -1249,8 +1250,8 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"shadow1-workbook-patch-mcp-localcontext": "/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide"`,
 		`"schemaRoot": "/workspaces/dev/ouroboros-ide/tools/subagent-governance/schemas"`,
 		`"controlPlaneUrl": "http://127.0.0.1:7778"`,
-		`"controlPlaneStateDir": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane"`,
-		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
+		`"controlPlaneStateDir": "/workspaces/dev/.devkit/governance-control-plane"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/.devkit/governance-control-plane/execution-graph-decisions.jsonl"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
@@ -1294,6 +1295,94 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("stat repaired governance repo config: %v", err)
 	} else if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("repaired governance repo config mode = %o, want 600", got)
+	}
+}
+
+func TestPrepareMigratesOuroGovernanceStateOutsideProductCheckout(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	writeTestFile(t, filepath.Join(devkitRoot, "overlays", "dev-all", "codex-governed-search-policy.rules"), "prefix_rule()\n")
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
+
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+
+	legacyRoot := filepath.Join(devRoot, "ouroboros-ide", "logs", "subagent-governance")
+	writeTestFile(t, filepath.Join(legacyRoot, "control-plane", "historical-continuation-operator-token"), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	writeTestFile(t, filepath.Join(legacyRoot, "control-plane", "workspace-topology", "child-workspaces.jsonl"), "topology\n")
+	writeTestFile(t, filepath.Join(legacyRoot, "control-plane", "operator-attention", "state.json"), "{}\n")
+	writeTestFile(t, filepath.Join(legacyRoot, "control-plane", "workspace-submit-artifacts", "run", "subagent-report-cards", "report.yaml"), "report: pass\n")
+	writeTestFile(t, filepath.Join(legacyRoot, "execution-graph-decisions.jsonl"), "decision\n")
+	writeTestFile(t, filepath.Join(legacyRoot, "history", "20260714-pre-typed-binding-epoch", "README.md"), "history\n")
+	writeTestFile(t, filepath.Join(legacyRoot, "probes", "probe-1", "probe-descriptor.json"), "{}\n")
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+
+	externalRoot := filepath.Join(devRoot, ".devkit", "governance-control-plane")
+	for rel, want := range map[string]string{
+		"historical-continuation-operator-token":                                                   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		filepath.Join("workspace-topology", "child-workspaces.jsonl"):                              "topology\n",
+		filepath.Join("operator-attention", "state.json"):                                          "{}\n",
+		filepath.Join("workspace-submit-artifacts", "run", "subagent-report-cards", "report.yaml"): "report: pass\n",
+		"execution-graph-decisions.jsonl":                                                          "decision\n",
+		filepath.Join("history", "20260714-pre-typed-binding-epoch", "README.md"):                  "history\n",
+		filepath.Join("probes", "probe-1", "probe-descriptor.json"):                                "{}\n",
+	} {
+		if got := readTestFile(t, filepath.Join(externalRoot, rel)); got != want {
+			t.Fatalf("migrated governance state %s = %q, want %q", rel, got, want)
+		}
+	}
+	for _, legacyPath := range []string{
+		filepath.Join(legacyRoot, "control-plane", "historical-continuation-operator-token"),
+		filepath.Join(legacyRoot, "control-plane", "workspace-topology", "child-workspaces.jsonl"),
+		filepath.Join(legacyRoot, "execution-graph-decisions.jsonl"),
+		filepath.Join(legacyRoot, "history", "20260714-pre-typed-binding-epoch", "README.md"),
+	} {
+		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+			t.Fatalf("legacy governance state path still exists after source-owned move: %s err=%v", legacyPath, err)
+		}
+	}
+	gotEnv := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"))
+	gotRepoConfig := readTestFile(t, filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"))
+	for _, generated := range []string{gotEnv, gotRepoConfig} {
+		if strings.Contains(generated, "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane") {
+			t.Fatalf("generated governance config retained Product-checkout state dir:\n%s", generated)
+		}
+		if !strings.Contains(generated, "/workspaces/dev/.devkit/governance-control-plane") {
+			t.Fatalf("generated governance config missing external state dir:\n%s", generated)
+		}
+	}
+}
+
+func TestOuroGovernanceExternalStateMigrationFailsClosedOnConflict(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	legacyRoot := filepath.Join(devRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
+	externalRoot := filepath.Join(devRoot, ".devkit", "governance-control-plane")
+	writeTestFile(t, filepath.Join(legacyRoot, "server.pid"), "old")
+	writeTestFile(t, filepath.Join(externalRoot, "server.pid"), "new")
+
+	err := migrateOuroGovernanceExternalState(devRoot)
+	if err == nil || !strings.Contains(err.Error(), "migration conflict") {
+		t.Fatalf("migrate conflict error = %v, want migration conflict", err)
+	}
+	if got := readTestFile(t, filepath.Join(legacyRoot, "server.pid")); got != "old" {
+		t.Fatalf("legacy conflicting state was mutated: %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(externalRoot, "server.pid")); got != "new" {
+		t.Fatalf("external conflicting state was mutated: %q", got)
 	}
 }
 
@@ -1361,7 +1450,7 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	for _, want := range []string{
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
 		`"agent1-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform"`,
-		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/.devkit/governance-control-plane/execution-graph-decisions.jsonl"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
@@ -1536,7 +1625,7 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 		`"dev-workspace": "/workspaces/dev"`,
 		`"ouroboros-ide": "/workspaces/dev/ouroboros-ide"`,
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
-		`"executionGraphDecisionLogPath": "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl"`,
+		`"executionGraphDecisionLogPath": "/workspaces/dev/.devkit/governance-control-plane/execution-graph-decisions.jsonl"`,
 	} {
 		if !strings.Contains(gotRepoConfig, want) {
 			t.Fatalf("governance repo config missing %q:\n%s", want, gotRepoConfig)
@@ -1653,6 +1742,8 @@ func TestDevAllOverlayRequiresGovernanceProvenance(t *testing.T) {
 		"governance bridge jar path drift",
 		"governance bridge catalog hash drift",
 		"governance bridge entrypoint fingerprint drift",
+		"/workspaces/dev/.devkit/governance-control-plane",
+		"governance state dir must be external to Product checkout",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 	} {
 		if !strings.Contains(overlayConfig, want) {

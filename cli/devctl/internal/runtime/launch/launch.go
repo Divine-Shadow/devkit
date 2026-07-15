@@ -143,6 +143,16 @@ const (
 	codexDevkitConfigSourceRelPath = ".devkit/nix-codex-config.toml"
 )
 
+const (
+	sandboxDevRoot                             = "/workspaces/dev"
+	ouroGovernanceExternalStateRoot            = sandboxDevRoot + "/.devkit/governance-control-plane"
+	ouroGovernanceLegacyLogRoot                = sandboxDevRoot + "/ouroboros-ide/logs/subagent-governance"
+	ouroGovernanceExecutionGraphDecisionLog    = ouroGovernanceExternalStateRoot + "/execution-graph-decisions.jsonl"
+	ouroGovernanceExecutionGraphClosureLog     = ouroGovernanceExternalStateRoot + "/execution-graph-closure-decisions.jsonl"
+	ouroGovernanceHistoricalAuthorityLog       = ouroGovernanceExternalStateRoot + "/historical-terminal-authority.jsonl"
+	ouroGovernanceLegacyExecutionGraphDecision = ouroGovernanceLegacyLogRoot + "/execution-graph-decisions.jsonl"
+)
+
 var codexSystemConfigPath = "/etc/codex/config.toml"
 
 func ensureGitSSHConfig(p nativeplan.Plan) error {
@@ -489,6 +499,9 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) (ouroGovernanceRuntimeIdentity, 
 	if strings.TrimSpace(p.RuntimeAuthorityRoot) == "" {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("prepare governance runtime bundle: executable-derived runtime authority root is required")
 	}
+	if err := migrateOuroGovernanceExternalState(hostDevRoot); err != nil {
+		return ouroGovernanceRuntimeIdentity{}, err
+	}
 	envPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh")
 	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json")
 	sandboxRepoConfigPath := "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"
@@ -640,6 +653,106 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 		return filepath.Dir(devkitRoot)
 	}
 	return filepath.Dir(devkitRoot)
+}
+
+func hostPathForSandboxDevPath(hostDevRoot string, sandboxPath string) (string, error) {
+	hostDevRoot = filepath.Clean(strings.TrimSpace(hostDevRoot))
+	sandboxPath = filepath.Clean(strings.TrimSpace(sandboxPath))
+	if hostDevRoot == "" {
+		return "", fmt.Errorf("host dev root is empty")
+	}
+	if sandboxPath == sandboxDevRoot {
+		return hostDevRoot, nil
+	}
+	prefix := sandboxDevRoot + string(os.PathSeparator)
+	if !strings.HasPrefix(sandboxPath, prefix) {
+		return "", fmt.Errorf("sandbox path %s is outside %s", sandboxPath, sandboxDevRoot)
+	}
+	rel := strings.TrimPrefix(sandboxPath, prefix)
+	return filepath.Join(hostDevRoot, rel), nil
+}
+
+func migrateOuroGovernanceExternalState(hostDevRoot string) error {
+	newRoot, err := hostPathForSandboxDevPath(hostDevRoot, ouroGovernanceExternalStateRoot)
+	if err != nil {
+		return fmt.Errorf("resolve governance external state root: %w", err)
+	}
+	legacyRoot, err := hostPathForSandboxDevPath(hostDevRoot, ouroGovernanceLegacyLogRoot)
+	if err != nil {
+		return fmt.Errorf("resolve governance legacy state root: %w", err)
+	}
+	if sameFilesystemPath(newRoot, legacyRoot) {
+		return fmt.Errorf("governance external state root %s must not equal legacy Product log root", newRoot)
+	}
+	if err := os.MkdirAll(newRoot, 0o700); err != nil {
+		return fmt.Errorf("mkdir governance external state root %s: %w", newRoot, err)
+	}
+	legacyControlPlane := filepath.Join(legacyRoot, "control-plane")
+	if err := migrateGovernanceStateDirContents(legacyControlPlane, newRoot); err != nil {
+		return err
+	}
+	for _, rel := range []string{
+		"execution-graph-decisions.jsonl",
+		"execution-graph-closure-decisions.jsonl",
+		"historical-terminal-authority.jsonl",
+		"override-audit.log",
+		"submit-to-ci-hot-swap-probe.log",
+		"history",
+		"probes",
+	} {
+		if err := migrateGovernanceStateEntry(filepath.Join(legacyRoot, rel), filepath.Join(newRoot, rel)); err != nil {
+			return err
+		}
+	}
+	if st, err := os.Stat(newRoot); err != nil {
+		return fmt.Errorf("stat governance external state root %s: %w", newRoot, err)
+	} else if !st.IsDir() {
+		return fmt.Errorf("governance external state root %s is not a directory", newRoot)
+	}
+	return nil
+}
+
+func migrateGovernanceStateDirContents(srcRoot string, dstRoot string) error {
+	entries, err := os.ReadDir(srcRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read legacy governance state dir %s: %w", srcRoot, err)
+	}
+	for _, entry := range entries {
+		src := filepath.Join(srcRoot, entry.Name())
+		dst := filepath.Join(dstRoot, entry.Name())
+		if err := migrateGovernanceStateEntry(src, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateGovernanceStateEntry(src string, dst string) error {
+	info, err := os.Lstat(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat legacy governance state %s: %w", src, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to migrate symlinked governance state %s", src)
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("governance state migration conflict: legacy %s and external %s both exist", src, dst)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat external governance state %s: %w", dst, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return fmt.Errorf("mkdir external governance state parent %s: %w", filepath.Dir(dst), err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return fmt.Errorf("move governance state %s -> %s: %w", src, dst, err)
+	}
+	return nil
 }
 
 type ouroGovernanceRuntimeIdentity struct {
@@ -1043,10 +1156,7 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	repoConfigPath = filepath.Clean(repoConfigPath)
-	sandboxDevRoot := "/workspaces/dev"
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
-	stateDir := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
-	decisionLogPath := filepath.Join(sandboxDevRoot, "ouroboros-ide", "logs", "subagent-governance", "execution-graph-decisions.jsonl")
 	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
 	lines := []string{
 		"# Shared governance MCP/control-plane routing for native Ouroboros GUI agents.",
@@ -1061,8 +1171,8 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_FORWARD_SERVER_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + stateDir,
-		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=" + decisionLogPath,
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + ouroGovernanceExternalStateRoot,
+		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=" + ouroGovernanceExecutionGraphDecisionLog,
 		"",
 	}
 	return strings.Join(lines, "\n")
@@ -1151,8 +1261,8 @@ func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
 			SchemaRoot:                    governanceSourceRoot + "/schemas",
 			ControlPlaneURL:               "http://127.0.0.1:7778",
 			WarmHookCommand:               "scripts/devops/governance-control-plane warm",
-			ControlPlaneStateDir:          "/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane",
-			ExecutionGraphDecisionLogPath: "/workspaces/dev/ouroboros-ide/logs/subagent-governance/execution-graph-decisions.jsonl",
+			ControlPlaneStateDir:          ouroGovernanceExternalStateRoot,
+			ExecutionGraphDecisionLogPath: ouroGovernanceExecutionGraphDecisionLog,
 		},
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")

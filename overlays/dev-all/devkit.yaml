@@ -70,7 +70,11 @@ readiness:
           echo "governance jar hash drift: $SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR expected=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256 actual=$actual_jar_sha" >&2
           exit 1
         fi
-        state_dir="${SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR:-/workspaces/dev/ouroboros-ide/logs/subagent-governance/control-plane}"
+        state_dir="${SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR:-/workspaces/dev/.devkit/governance-control-plane}"
+        if [ "$state_dir" != "/workspaces/dev/.devkit/governance-control-plane" ]; then
+          echo "governance state dir must be external to Product checkout: $state_dir" >&2
+          exit 1
+        fi
         server_jar_path_file="$state_dir/server.jar.path"
         server_jar_sha_file="$state_dir/server.jar.sha256"
         if [ -e "$server_jar_path_file" ] || [ -e "$server_jar_sha_file" ]; then
