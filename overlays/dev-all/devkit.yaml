@@ -99,18 +99,12 @@ readiness:
           echo "governance catalog hash drift: $DEVKIT_GOVERNANCE_REPO_CONFIG_PATH expected=$DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256 actual=$actual_catalog_sha" >&2
           exit 1
         fi
-        bridge_paths="$(
-          find /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees /agent-state \
-            -path '*/.codex/log/governance-mcp-stdio-forward/provenance.json' \
-            -type f 2>/dev/null || true
-        )"
         bridge_status=0
-        if [ -n "$bridge_paths" ]; then
-          while IFS= read -r bridge_provenance; do
-            if ! test -r "$bridge_provenance"; then
-              bridge_status=1
-              continue
-            fi
+        bridge_provenance="${CODEX_HOME:-$HOME/.codex}/log/governance-mcp-stdio-forward/provenance.json"
+        if [ -e "$bridge_provenance" ]; then
+          if ! test -r "$bridge_provenance"; then
+            bridge_status=1
+          else
             BRIDGE_PROVENANCE="$bridge_provenance" node <<'NODE' || bridge_status=1
         const fs = require("fs");
         const path = process.env.BRIDGE_PROVENANCE;
@@ -144,9 +138,7 @@ readiness:
           fail(`governance bridge entrypoint fingerprint drift expected=${expectedEntrypointSha} actual=${String(payload.mcpEntrypointSha256 || "")}`);
         }
         NODE
-          done <<EOF
-        $bridge_paths
-        EOF
+          fi
         fi
         if [ "$bridge_status" -ne 0 ]; then
           exit "$bridge_status"

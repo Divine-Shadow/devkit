@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,34 @@ func TestFlakeBackedOverlaysDeclareReadinessContract(t *testing.T) {
 				t.Fatalf("%s missing core-check repo check", overlay)
 			}
 		})
+	}
+}
+
+func TestDevAllGovernanceProvenanceReadinessIsSlotScoped(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime caller unavailable")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
+	cfg, _, err := ReadAll([]string{filepath.Join(root, "overlays")}, "dev-all")
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	var command string
+	for _, check := range cfg.Readiness.RuntimeChecks {
+		if check.Name == "governance-provenance" {
+			command = check.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("dev-all missing governance-provenance runtime check")
+	}
+	if !strings.Contains(command, `${CODEX_HOME:-$HOME/.codex}/log/governance-mcp-stdio-forward/provenance.json`) {
+		t.Fatal("dev-all governance provenance must resolve from the current slot CODEX_HOME")
+	}
+	if strings.Contains(command, "find /workspaces/dev/ouroboros-ide /workspaces/dev/agent-worktrees /agent-state") {
+		t.Fatal("dev-all governance provenance must not couple current readiness to sibling leased homes")
 	}
 }
 

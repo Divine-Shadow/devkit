@@ -34,6 +34,9 @@ Every native readiness run first validates:
 
 Overlay `readiness.runtime_checks` then adds tool-specific checks, and
 `runtime.codex_version` is converted into a `codex-version` runtime check.
+Per-agent checks resolve mutable runtime evidence from the current slot's
+`HOME`/`CODEX_HOME`; they must not block a freshly reconstructed slot on stale
+provenance retained in a sibling leased home.
 
 ## Repo Checks
 
