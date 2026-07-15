@@ -1386,6 +1386,28 @@ func TestOuroGovernanceExternalStateMigrationFailsClosedOnConflict(t *testing.T)
 	}
 }
 
+func TestOuroGovernanceMigrationRejectsEstablishedExternalTokenWithLegacyResidue(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	legacyRoot := filepath.Join(devRoot, "ouroboros-ide", "logs", "subagent-governance", "control-plane")
+	externalRoot := filepath.Join(devRoot, ".devkit", "governance-control-plane")
+	legacyToken := strings.Repeat("a", 64)
+	establishedToken := strings.Repeat("b", 64)
+	writeTestFile(t, filepath.Join(legacyRoot, "historical-continuation-operator-token"), legacyToken)
+	writeTestFile(t, filepath.Join(externalRoot, "historical-continuation-operator-token"), establishedToken)
+
+	err := migrateOuroGovernanceExternalState(devRoot)
+	if err == nil || !strings.Contains(err.Error(), "migration conflict") {
+		t.Fatalf("migrate token conflict error = %v, want migration conflict", err)
+	}
+	if got := readTestFile(t, filepath.Join(legacyRoot, "historical-continuation-operator-token")); got != legacyToken {
+		t.Fatalf("legacy token was mutated: %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(externalRoot, "historical-continuation-operator-token")); got != establishedToken {
+		t.Fatalf("external token was mutated: %q", got)
+	}
+}
+
 func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
