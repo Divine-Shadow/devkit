@@ -1241,6 +1241,7 @@ func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog
 		roots[id] = root
 		rootBindings = append(rootBindings, fmt.Sprintf("%s=%s", id, root))
 	}
+	add("fleet-runtime-workspace", canonicalOuroGovernanceRuntimeWorkspaceRoot(hostDevRoot))
 	for i := 1; i <= 9; i++ {
 		agent := fmt.Sprintf("agent%d", i)
 		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent)
@@ -1258,6 +1259,18 @@ func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog
 	// need explicit launch identity instead of being broadcast to every
 	// governed app-server, especially Terraform lanes.
 	return ouroGovernanceCatalog{ids: ids, rootBindings: rootBindings, rootMap: roots}
+}
+
+func canonicalOuroGovernanceRuntimeWorkspaceRoot(hostDevRoot string) string {
+	root := strings.TrimSpace(hostDevRoot)
+	if root == "" {
+		root = sandboxDevRoot
+	}
+	candidate := filepath.Join(filepath.Clean(root), ".devkit", "governance-control-plane", "runtime-workspace")
+	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(candidate)
 }
 
 func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {

@@ -1199,6 +1199,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
 		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
+		"fleet-runtime-workspace=" + filepath.Join(devRoot, ".devkit", "governance-control-plane", "runtime-workspace"),
 		"agent1=/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
 		"agent9-ouroboros-terraform=/workspaces/dev/agent-worktrees/agent9/ouroboros-terraform",
 		"email-policy-mcp-app=/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide",
@@ -1275,11 +1276,13 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		`"dev-workspace"`,
 		`"ouroboros-ide"`,
 		`"ouroboros-terraform"`,
+		`"fleet-runtime-workspace"`,
 		`"agent4"`,
 		`"agent4-ouroboros-terraform"`,
 		`"email-policy-mcp-app"`,
 		`"dev-workspace": "/workspaces/dev"`,
 		`"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform"`,
+		`"fleet-runtime-workspace": "` + filepath.ToSlash(filepath.Join(devRoot, ".devkit", "governance-control-plane", "runtime-workspace")) + `"`,
 		`"agent1": "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"`,
 		`"agent4": "/workspaces/dev/agent-worktrees/agent4/ouroboros-ide"`,
 		`"agent4-ouroboros-terraform": "/workspaces/dev/agent-worktrees/agent4/ouroboros-terraform"`,
@@ -1340,6 +1343,55 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("stat repaired governance repo config: %v", err)
 	} else if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("repaired governance repo config mode = %o, want 600", got)
+	}
+}
+
+func TestOuroGovernanceGeneratedRoutingUsesOneCanonicalRuntimeWorkspaceBinding(t *testing.T) {
+	tmp := t.TempDir()
+	hostDevRoot := filepath.Join(tmp, "dev")
+	externalState := filepath.Join(tmp, "external-state")
+	canonicalRuntimeRoot := filepath.Join(externalState, "governance-control-plane", "runtime-workspace")
+	if err := os.MkdirAll(canonicalRuntimeRoot, 0o755); err != nil {
+		t.Fatalf("mkdir canonical runtime root: %v", err)
+	}
+	if err := os.MkdirAll(hostDevRoot, 0o755); err != nil {
+		t.Fatalf("mkdir host dev root: %v", err)
+	}
+	if err := os.Symlink(externalState, filepath.Join(hostDevRoot, ".devkit")); err != nil {
+		t.Fatalf("symlink host state root: %v", err)
+	}
+
+	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
+	if got := strings.Count(strings.Join(catalog.ids, ","), "fleet-runtime-workspace"); got != 1 {
+		t.Fatalf("runtime workspace id count = %d, want 1: %v", got, catalog.ids)
+	}
+	if got := catalog.rootMap["fleet-runtime-workspace"]; got != canonicalRuntimeRoot {
+		t.Fatalf("runtime workspace root = %q, want canonical %q", got, canonicalRuntimeRoot)
+	}
+	if _, exists := catalog.rootMap["fleet-runtime-workspace-host"]; exists {
+		t.Fatalf("generated catalog retained forbidden runtime workspace alias: %v", catalog.rootMap)
+	}
+
+	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
+	if err != nil {
+		t.Fatalf("build governance repo config: %v", err)
+	}
+	repoConfigSHA := fmt.Sprintf("%x", sha256.Sum256(repoConfig))
+	env := buildOuroGovernanceEnv(hostDevRoot, "/workspaces/dev/.devkit/ouro8-governance-repo-env.json", repoConfigSHA, strings.Repeat("a", 64))
+	expectedBinding := "fleet-runtime-workspace=" + canonicalRuntimeRoot
+	if strings.Count(env, expectedBinding) != 1 {
+		t.Fatalf("routing env must contain exactly one canonical runtime binding %q:\n%s", expectedBinding, env)
+	}
+	if strings.Count(string(repoConfig), `"fleet-runtime-workspace"`) != 2 {
+		t.Fatalf("repo config must contain the runtime id once in ids and once in roots:\n%s", repoConfig)
+	}
+	if !strings.Contains(string(repoConfig), `"fleet-runtime-workspace": "`+filepath.ToSlash(canonicalRuntimeRoot)+`"`) {
+		t.Fatalf("repo config missing canonical runtime binding:\n%s", repoConfig)
+	}
+	for _, generated := range []string{env, string(repoConfig)} {
+		if strings.Contains(generated, "fleet-runtime-workspace-host") {
+			t.Fatalf("generated routing retained forbidden runtime workspace alias:\n%s", generated)
+		}
 	}
 }
 
