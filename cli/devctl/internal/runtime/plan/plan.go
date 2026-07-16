@@ -285,6 +285,16 @@ func Build(opts BuildOptions) (Plan, error) {
 		env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"] = "false"
 	}
 
+	flakeInputOverrides, err := normalizeFlakeInputOverridesForSandbox(
+		opts.FlakeInputOverrides,
+		isolationProfile,
+		paths,
+		repo,
+	)
+	if err != nil {
+		return Plan{}, err
+	}
+
 	p := Plan{
 		Agent: agent.Spec{
 			ID: agent.ID{
@@ -307,7 +317,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		SandboxWorktreeRoot:  paths.SandboxWorktreeRoot,
 		SandboxStateRoot:     paths.SandboxStateRoot,
 		Flake:                flake,
-		FlakeInputOverrides:  normalizeFlakeInputOverrides(opts.FlakeInputOverrides),
+		FlakeInputOverrides:  flakeInputOverrides,
 		Launcher:             launcher,
 		IsolationProfile:     isolationProfile,
 		MountPolicyIdentity:  mountPolicyIdentity,
@@ -512,6 +522,32 @@ func normalizeFlakeInputOverrides(overrides map[string]string) map[string]string
 		return nil
 	}
 	return out
+}
+
+func normalizeFlakeInputOverridesForSandbox(overrides map[string]string, isolationProfile string, paths agent.Paths, repo string) (map[string]string, error) {
+	normalized := normalizeFlakeInputOverrides(overrides)
+	if isolationProfile != IsolationProfileWorkspaceEgress || len(normalized) == 0 {
+		return normalized, nil
+	}
+
+	canonicalRepo := filepath.Clean(filepath.Join(paths.DevRoot, repo))
+	hostWorktree := filepath.Clean(paths.HostWorktree)
+	for name, value := range normalized {
+		if !strings.HasPrefix(value, "path:") {
+			continue
+		}
+		hostPath := filepath.Clean(strings.TrimPrefix(value, "path:"))
+		if isWindowsFilesystemPath(hostPath) {
+			return nil, fmt.Errorf("workspace-egress isolation rejects Windows-mounted flake input %s=%s", name, value)
+		}
+		switch hostPath {
+		case canonicalRepo, hostWorktree:
+			normalized[name] = "path:" + filepath.Clean(paths.SandboxWorktree)
+		default:
+			return nil, fmt.Errorf("workspace-egress isolation rejects unbound flake input %s=%s", name, value)
+		}
+	}
+	return normalized, nil
 }
 
 func defaultRepo(project string) string {

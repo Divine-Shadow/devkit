@@ -160,6 +160,36 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 	}
 }
 
+func TestWorkspaceEgressRewritesRepoFlakeOverrideToSandboxWorktree(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktree := filepath.Join(devRoot, "agent-worktrees", "agent1", "ouroboros-terraform")
+	for _, dir := range []string{devkitRoot, worktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := Build(BuildOptions{
+		Paths:   devkitpaths.Paths{Root: devkitRoot},
+		Project: "ouroboros-terraform",
+		Index:   1,
+		Repo:    "ouroboros-terraform",
+		FlakeInputOverrides: map[string]string{
+			"ouroboros-terraform": "path:" + filepath.Join(devRoot, "ouroboros-terraform"),
+		},
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	want := "path:" + p.Agent.SandboxWorktree
+	if p.FlakeInputOverrides["ouroboros-terraform"] != want {
+		t.Fatalf("flake input override = %q, want %q", p.FlakeInputOverrides["ouroboros-terraform"], want)
+	}
+}
+
 func TestBuildDoesNotFallBackRuntimeAuthorityToConfigRoot(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
 		Paths: devkitpaths.Paths{Root: "/caller-controlled/devkit"},
