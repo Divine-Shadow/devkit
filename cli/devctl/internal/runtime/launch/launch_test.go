@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"devkit/cli/devctl/internal/devkitpaths"
+	"devkit/cli/devctl/internal/governanceentrypoint"
 	"devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
@@ -402,11 +403,13 @@ func TestImmutableRuntimeBundleRejectsMutableIdentityOverride(t *testing.T) {
 	}
 }
 
-func TestBuildOuroGovernanceEnvIsRoutingOnly(t *testing.T) {
+func TestBuildOuroGovernanceEnvBindsRoutingToImmutableEntrypoint(t *testing.T) {
+	entrypointSHA256 := governanceentrypoint.SHA256ForRuntimeBundle("/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle")
 	got := buildOuroGovernanceEnv(
 		"/home/bayesartre/dev",
 		"/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
 		"abc123",
+		entrypointSHA256,
 	)
 	for _, want := range []string{
 		"Shared governance MCP/control-plane routing",
@@ -414,6 +417,7 @@ func TestBuildOuroGovernanceEnvIsRoutingOnly(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256='abc123'",
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256='" + entrypointSHA256 + "'",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=",
 		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=",
@@ -466,7 +470,6 @@ func TestBuildOuroGovernanceEnvIsRoutingOnly(t *testing.T) {
 		"identity-fingerprint",
 		"print-dev-env",
 		"DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256",
-		"DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256",
 	} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("mutable routing env retained runtime authority %q:\n%s", forbidden, got)
@@ -1184,12 +1187,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	}
 	envPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh")
 	gotEnv := readTestFile(t, envPath)
+	wantEntrypointSHA256 := governanceentrypoint.SHA256ForRuntimeBundle("/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle")
 	for _, want := range []string{
 		"Shared governance MCP/control-plane routing",
 		"Runtime artifact identity is applied afterward by the immutable bundle launcher.",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH='/workspaces/dev/.devkit/ouro8-governance-repo-env.json'",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=",
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256='" + wantEntrypointSHA256 + "'",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=",
 		"dev-workspace=/workspaces/dev",
 		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
@@ -1307,6 +1312,14 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 		t.Fatalf("stat governance env: %v", err)
 	} else if got := st.Mode().Perm(); got != 0o600 {
 		t.Fatalf("governance env mode = %o, want 600", got)
+	}
+	staleEnv := strings.Replace(gotEnv, wantEntrypointSHA256, strings.Repeat("0", 64), 1)
+	writeTestFile(t, envPath, staleEnv)
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare should rewrite stale governance entrypoint identity: %v", err)
+	}
+	if repairedEnv := readTestFile(t, envPath); repairedEnv != gotEnv {
+		t.Fatalf("stale governance entrypoint identity was not rewritten:\n%s", repairedEnv)
 	}
 	repoConfigPath := filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json")
 	if err := os.Chmod(envPath, 0o644); err != nil {

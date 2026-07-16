@@ -514,7 +514,8 @@ func ensureOuroGovernanceEnv(p nativeplan.Plan) (ouroGovernanceRuntimeIdentity, 
 	if err != nil {
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
-	content := buildOuroGovernanceEnv(hostDevRoot, sandboxRepoConfigPath, repoConfigSha256)
+	entrypointSHA256 := governanceentrypoint.SHA256ForRuntimeBundle(runtimeIdentity.RuntimeBundlePath)
+	content := buildOuroGovernanceEnv(hostDevRoot, sandboxRepoConfigPath, repoConfigSha256, entrypointSHA256)
 	if data, err := os.ReadFile(envPath); err == nil && string(data) == content {
 		// Keep checking the paired repo config below; it may have been generated
 		// by an older devkit and carry a stale workspace catalog.
@@ -1180,7 +1181,7 @@ func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (
 	}, nil
 }
 
-func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string) string {
+func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string, entrypointSHA256 string) string {
 	hostDevRoot = filepath.Clean(hostDevRoot)
 	repoConfigPath = filepath.Clean(repoConfigPath)
 	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
@@ -1188,10 +1189,12 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 	lines := []string{
 		"# Shared governance MCP/control-plane routing for native Ouroboros GUI agents.",
 		"# Runtime artifact identity is applied afterward by the immutable bundle launcher.",
+		"# The entrypoint expectation binds this generated routing env to that exact immutable bundle.",
 		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
 		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
 		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
+		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(entrypointSHA256),
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(catalog.ids, ","),
 		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(catalog.rootBindings, ","),
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + schemaRoot,
