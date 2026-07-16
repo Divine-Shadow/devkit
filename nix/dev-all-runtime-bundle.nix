@@ -16,7 +16,7 @@ let
   identitySchema = "devkit-dev-all-runtime-identity/v1";
   artifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712";
   artifactColumnJarSha256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347";
-  submitJarSha256 = "f3fd06efc9b92ffbda400fa5c5bbe3cc88bc46743a347e22c5f20d16441f531c";
+  submitJarSha256 = "510a1bfa0d793a43b00298ff83327e5e933451c7aa4743ecf09a187799ed6ccd";
   artifactColumnIvyPath =
     "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/${artifactColumnVersion}";
   launcherTemplate = pkgs.writeText "dev-all-runtime-bundle-template" ''

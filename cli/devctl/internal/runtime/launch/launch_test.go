@@ -80,10 +80,6 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarVersion = "38ec4f97e2f699d2e84110d01c877971d1e8bd97";`,
-		`submitRuntimeVersion = "d15715adeadc8881b08ac7a05f19fec15fd29986";`,
-		`artifactColumnRuntimeVersion = "8e23ded5579e896c95b5a751f4d4a18da70049a9";`,
-		`sbtControlPlaneRuntimeVersion = "be9a16cd8abdf9d479bbf0b7379ebdf0651d156e";`,
 		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
 		`submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";`,
 		`artifactColumnRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${artifactColumnRuntimeVersion}";`,
@@ -92,9 +88,9 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 		`mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
 		`mkPinnedArtifactColumnPluginRepository = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
 		`mkPinnedArtifactColumnPluginSmoke = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-adoption-check;`,
-		`mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-jar;`,
-		`assert toString submitToCiJar == "/nix/store/4xxf15fa8ajm60np3d9vnmiinmb53zd2-submit-to-ci-dev";`,
-		`assert submitToCiJar.drvPath == "/nix/store/k9jfshsf7pl3zk87szjdzw3jqzxivz05-submit-to-ci-dev.drv";`,
+		`mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-current-source;`,
+		`assert toString submitToCiJar == "/nix/store/vc0v6zlrfyhh8gd1m5vxmsnv753zzrg4-submit-to-ci-dev";`,
+		`assert submitToCiJar.drvPath == "/nix/store/rkjxnfm2j9yfmzlr78raybxy3h5hxlin-submit-to-ci-dev.drv";`,
 		`dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;`,
 		`dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
@@ -124,7 +120,7 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 		`identitySchema = "devkit-dev-all-runtime-identity/v1";`,
 		`artifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712";`,
 		`artifactColumnJarSha256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347";`,
-		`submitJarSha256 = "f3fd06efc9b92ffbda400fa5c5bbe3cc88bc46743a347e22c5f20d16441f531c";`,
+		`submitJarSha256 = "510a1bfa0d793a43b00298ff83327e5e933451c7aa4743ecf09a187799ed6ccd";`,
 		`identity.env`,
 		`identity.json`,
 		`identity-fingerprint`,
@@ -161,6 +157,21 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 	for _, content := range []string{runtimeNix, bundleNix} {
 		if strings.Contains(content, "ARTIFACT_COLUMN_PLUGIN_REPOSITORY=") {
 			t.Fatalf("retired Artifact Column repository alias survived:\n%s", content)
+		}
+	}
+}
+
+func TestOuroGovernanceRuntimeIdentitySourcePinsMatchFlake(t *testing.T) {
+	flakeNix := readTestFile(t, filepath.Join(devkitRootFromPackage(t), "flake.nix"))
+	for _, want := range []string{
+		fmt.Sprintf(`productRuntimeVersion = %q;`, ouroProductRuntimeSourceRev),
+		`governanceJarVersion = productRuntimeVersion;`,
+		`submitRuntimeVersion = productRuntimeVersion;`,
+		fmt.Sprintf(`artifactColumnRuntimeVersion = %q;`, ouroGovernanceArtifactColumnSourceRev),
+		`sbtControlPlaneRuntimeVersion = productRuntimeVersion;`,
+	} {
+		if !strings.Contains(flakeNix, want) {
+			t.Fatalf("runtime identity validator pin does not match flake authority: missing %q", want)
 		}
 	}
 }

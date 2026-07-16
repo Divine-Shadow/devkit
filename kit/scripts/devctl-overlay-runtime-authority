@@ -16,6 +16,7 @@ test -f "$devctl/flake.lock"
 test -f "$devctl/nix/dev-all-runtime-bundle.nix"
 test -f "$devctl/overlays/dev-all/flake.nix"
 test -f "$devctl/overlays/dev-all/runtime.nix"
+test ! -e "$devctl/overlays/dev-all/flake.lock"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -34,6 +35,10 @@ system="$("${NIX[@]}" eval --impure --raw --expr builtins.currentSystem)"
 shell_drv="$("${NIX[@]}" eval --offline --raw --output-lock-file /dev/null \
   "$overlay#devShells.$system.dev-all.drvPath")"
 test -n "$shell_drv"
+
+"${NIX[@]}" develop "$overlay#default" --offline \
+  --output-lock-file /dev/null --command bash -lc \
+  'command -v nix >/dev/null && command -v git >/dev/null'
 
 env -u DEVKIT_ROOT -u DEVKIT_OVERLAYS_DIR \
   "$devctl/kit/bin/devctl" --dry-run -p dev-all \

@@ -854,12 +854,13 @@ func validOuroGovernanceJavaXmx(value string) bool {
 }
 
 const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
-const ouroGovernanceSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
-const ouroGovernanceSubmitRuntimeSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
+const ouroProductRuntimeSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
+const ouroGovernanceSourceRev = ouroProductRuntimeSourceRev
+const ouroGovernanceSubmitRuntimeSourceRev = ouroProductRuntimeSourceRev
 const ouroGovernanceArtifactColumnSourceRev = "8e23ded5579e896c95b5a751f4d4a18da70049a9"
 const ouroGovernanceArtifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712"
 const ouroGovernanceArtifactColumnJarSHA256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347"
-const ouroGovernanceSbtControlPlaneSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
+const ouroGovernanceSbtControlPlaneSourceRev = ouroProductRuntimeSourceRev
 
 var ouroGovernanceSystemRuntimeLauncherPath = "/run/current-system/sw/bin/dev-all-runtime-bundle"
 
