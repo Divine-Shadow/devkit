@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,7 +194,11 @@ func ensureGitSSHConfig(p nativeplan.Plan) error {
 		return fmt.Errorf("mkdir %s: %w", sshDir, err)
 	}
 	sshCommand := "ssh -F " + filepath.Join(sandboxHome, ".ssh", "config")
-	if err := WriteGitSSHConfig(hostHome, sandboxHome, identityNames); err != nil {
+	proxyURL := ""
+	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
+		proxyURL = p.Proxy.HTTPProxy
+	}
+	if err := writeGitSSHConfig(hostHome, sandboxHome, identityNames, proxyURL); err != nil {
 		return err
 	}
 	if err := runGitConfigFile(filepath.Join(hostHome, ".gitconfig"), "core.sshCommand", sshCommand); err != nil {
@@ -218,6 +223,10 @@ func existingSSHIdentities(sshDir string) []string {
 }
 
 func WriteGitSSHConfig(hostHome, configHome string, identityNames []string) error {
+	return writeGitSSHConfig(hostHome, configHome, identityNames, "")
+}
+
+func writeGitSSHConfig(hostHome, configHome string, identityNames []string, proxyURL string) error {
 	hostHome = strings.TrimSpace(hostHome)
 	configHome = strings.TrimSpace(configHome)
 	if hostHome == "" || configHome == "" {
@@ -234,18 +243,24 @@ func WriteGitSSHConfig(hostHome, configHome string, identityNames []string) erro
 		return fmt.Errorf("mkdir %s: %w", sshDir, err)
 	}
 	cfgPath := filepath.Join(sshDir, "config")
-	cfg := buildGitSSHConfig(configHome, identityNames)
+	cfg := buildGitSSHConfig(configHome, identityNames, proxyURL)
 	if err := writeManagedBlock(cfgPath, cfg, 0o600); err != nil {
 		return err
 	}
 	return nil
 }
 
-func buildGitSSHConfig(configHome string, identityNames []string) string {
+func buildGitSSHConfig(configHome string, identityNames []string, proxyURL string) string {
 	var b strings.Builder
 	b.WriteString(gitSSHManagedBegin + "\n")
 	b.WriteString("Host github.com\n")
-	b.WriteString("  HostName github.com\n")
+	if parsed, err := url.Parse(strings.TrimSpace(proxyURL)); err == nil && parsed.Scheme == "http" && parsed.Host != "" {
+		b.WriteString("  HostName ssh.github.com\n")
+		b.WriteString("  Port 443\n")
+		b.WriteString("  ProxyCommand nc -X connect -x " + parsed.Host + " %h %p\n")
+	} else {
+		b.WriteString("  HostName github.com\n")
+	}
 	b.WriteString("  User git\n")
 	for _, name := range identityNames {
 		name = strings.TrimSpace(name)
@@ -2284,6 +2299,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		_ = addBind("ro", "/etc/resolv.conf", "/etc/resolv.conf", false)
 	}
 	addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
+	addSymlink("/run/current-system/sw/bin/bash", "/usr/bin/bash")
 	addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
 	addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
 

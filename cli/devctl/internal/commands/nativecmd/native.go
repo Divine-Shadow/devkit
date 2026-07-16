@@ -158,8 +158,9 @@ func handleEgressProxy(ctx *cmdregistry.Context) error {
 	}
 	fmt.Fprintf(os.Stderr, "native egress proxy listening on %s allowlist=%s\n", socketPath, allowlistPath)
 	return egressproxy.Serve(context.Background(), egressproxy.Config{
-		SocketPath:    socketPath,
-		AllowlistPath: allowlistPath,
+		SocketPath:       socketPath,
+		AllowlistPath:    allowlistPath,
+		UpstreamProxyURL: managedEgressUpstreamProxyURL(),
 	})
 }
 
@@ -1844,8 +1845,9 @@ func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func(), error) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- egressproxy.Serve(proxyCtx, egressproxy.Config{
-			SocketPath:    socketPath,
-			AllowlistPath: allowlistPath,
+			SocketPath:       socketPath,
+			AllowlistPath:    allowlistPath,
+			UpstreamProxyURL: managedEgressUpstreamProxyURL(),
 		})
 	}()
 	if err := waitForUnixSocketOrExit(socketPath, errCh, 5*time.Second); err != nil {
@@ -1859,6 +1861,18 @@ func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func(), error) {
 		case <-time.After(2 * time.Second):
 		}
 	}, nil
+}
+
+func managedEgressUpstreamProxyURL() string {
+	if strings.TrimSpace(os.Getenv("DEVKIT_NATIVE_ISOLATION_PROFILE")) != nativeplan.IsolationProfileWorkspaceEgress {
+		return ""
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func unixSocketAccepts(path string) bool {

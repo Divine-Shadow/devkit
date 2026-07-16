@@ -867,6 +867,19 @@ func TestIsolateManagedEgressProxyForRunRequiresExactSocketBind(t *testing.T) {
 	}
 }
 
+func TestManagedEgressUpstreamProxyURLOnlyChainsNestedWorkspaceEgress(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:18888")
+	t.Setenv("HTTP_PROXY", "http://fallback.invalid:8080")
+	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
+	if got := managedEgressUpstreamProxyURL(); got != "" {
+		t.Fatalf("non-isolated upstream proxy = %q", got)
+	}
+	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", nativeplan.IsolationProfileWorkspaceEgress)
+	if got := managedEgressUpstreamProxyURL(); got != "http://127.0.0.1:18888" {
+		t.Fatalf("nested workspace-egress upstream proxy = %q", got)
+	}
+}
+
 func TestTailLines(t *testing.T) {
 	got := tailLines("a\nb\nc", 2)
 	if len(got) != 2 || got[0] != "b" || got[1] != "c" {

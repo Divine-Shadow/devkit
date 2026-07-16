@@ -170,6 +170,20 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 	}
 }
 
+func TestDevWorkspaceRuntimeExportsNestedCodexConfigSource(t *testing.T) {
+	root := devkitRootFromPackage(t)
+	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-workspace", "runtime.nix"))
+	for _, want := range []string{
+		`[ -n "''${CODEX_HOME:-}" ]`,
+		`[ -r "$CODEX_HOME/config.toml" ]`,
+		`export DEVKIT_CODEX_CONFIG_SOURCE="$CODEX_HOME/config.toml"`,
+	} {
+		if !strings.Contains(runtimeNix, want) {
+			t.Fatalf("dev-workspace runtime missing %q:\n%s", want, runtimeNix)
+		}
+	}
+}
+
 func TestOuroGovernanceRuntimeIdentitySourcePinsMatchFlake(t *testing.T) {
 	flakeNix := readTestFile(t, filepath.Join(devkitRootFromPackage(t), "flake.nix"))
 	for _, want := range []string{
@@ -542,6 +556,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	for _, want := range []string{
 		"'--bind' '" + devRoot + "' '/workspaces/dev'",
 		"'--symlink' '/run/current-system/sw/bin/env' '/usr/bin/env'",
+		"'--symlink' '/run/current-system/sw/bin/bash' '/usr/bin/bash'",
 		"'--symlink' '/run/current-system/sw/bin/sh' '/bin/sh'",
 		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
 		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/.cache/shared/coursier'",
@@ -922,6 +937,47 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	}
 	if count := strings.Count(cfg, "Host github.com"); count != 1 {
 		t.Fatalf("github host block count = %d, want 1:\n%s", count, cfg)
+	}
+}
+
+func TestPrepareConfiguresWorkspaceEgressGitSSHThroughManagedProxy(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	allowlistPath := filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt")
+	writeTestFile(t, allowlistPath, "github.com\nssh.github.com\n")
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:             "ouroboros-ide",
+		Index:            2,
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  allowlistPath,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
+	writeTestFile(t, p.Proxy.UnixSocket, "socket placeholder")
+	hostUserHome := filepath.Join(tmp, "host-user")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
+	t.Setenv("HOME", hostUserHome)
+	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	cfg := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
+	for _, want := range []string{
+		"Host github.com",
+		"  HostName ssh.github.com",
+		"  Port 443",
+		"  ProxyCommand nc -X connect -x 127.0.0.1:18888 %h %p",
+		"  IdentityFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "id_ed25519"),
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("workspace-egress SSH config missing %q:\n%s", want, cfg)
+		}
 	}
 }
 

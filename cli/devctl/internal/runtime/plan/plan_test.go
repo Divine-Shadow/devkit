@@ -551,6 +551,10 @@ func TestBuildDevWorkspaceUsesWorkspaceRoot(t *testing.T) {
 	if !hasBind(p.Binds, "/repo", "/workspaces/dev") {
 		t.Fatalf("workspace-root plan must mount dev root at /workspaces/dev: %#v", p.Binds)
 	}
+	joinedLauncher := strings.Join(p.LauncherArgs, " ")
+	if !strings.Contains(joinedLauncher, "--symlink /run/current-system/sw/bin/bash /usr/bin/bash") {
+		t.Fatalf("workspace-root launcher must provide /usr/bin/bash compatibility: %#v", p.LauncherArgs)
+	}
 }
 
 func TestBuildManifestIncludesEveryAgent(t *testing.T) {

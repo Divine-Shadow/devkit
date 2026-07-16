@@ -3,6 +3,9 @@
 mkShell "dev-workspace" toolsets.ouroborosAgentTools ''
   export JAVA_HOME=${pkgs.jdk21}
   export GOROOT=${packages.pinnedGo}
+  if [ -n "''${CODEX_HOME:-}" ] && [ -r "$CODEX_HOME/config.toml" ]; then
+    export DEVKIT_CODEX_CONFIG_SOURCE="$CODEX_HOME/config.toml"
+  fi
   case " ''${SBT_OPTS:-} " in
     *" -Djava.awt.headless="*) ;;
     *) export SBT_OPTS="-Djava.awt.headless=true''${SBT_OPTS:+ $SBT_OPTS}" ;;

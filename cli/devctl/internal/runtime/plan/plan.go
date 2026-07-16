@@ -625,6 +625,7 @@ func launcherArgs(p Plan) []string {
 			"--dir", "/usr/bin",
 			"--dir", "/bin",
 			"--symlink", "/run/current-system/sw/bin/env", "/usr/bin/env",
+			"--symlink", "/run/current-system/sw/bin/bash", "/usr/bin/bash",
 			"--symlink", "/run/current-system/sw/bin/bash", "/bin/bash",
 			"--symlink", "/run/current-system/sw/bin/sh", "/bin/sh",
 		)

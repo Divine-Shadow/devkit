@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,8 +17,9 @@ import (
 )
 
 type Config struct {
-	SocketPath    string
-	AllowlistPath string
+	SocketPath       string
+	AllowlistPath    string
+	UpstreamProxyURL string
 }
 
 type Allowlist struct {
@@ -91,6 +93,10 @@ func Serve(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("read allowlist %s: %w", allowlistPath, err)
 	}
+	upstreamProxy, err := parseUpstreamProxyURL(cfg.UpstreamProxyURL)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(socketPath), err)
 	}
@@ -118,7 +124,7 @@ func Serve(ctx context.Context, cfg Config) error {
 			}
 			return err
 		}
-		go handleConn(conn, allowlist)
+		go handleConn(conn, allowlist, upstreamProxy)
 	}
 }
 
@@ -171,7 +177,7 @@ func bridgeConn(client net.Conn, socketPath string) {
 	<-done
 }
 
-func handleConn(conn net.Conn, allowlist Allowlist) {
+func handleConn(conn net.Conn, allowlist Allowlist, upstreamProxy *url.URL) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -181,13 +187,13 @@ func handleConn(conn net.Conn, allowlist Allowlist) {
 	}
 	req.Close = true
 	if strings.EqualFold(req.Method, http.MethodConnect) {
-		handleConnect(conn, reader, req, allowlist)
+		handleConnect(conn, reader, req, allowlist, upstreamProxy)
 		return
 	}
-	handleHTTP(conn, req, allowlist)
+	handleHTTP(conn, req, allowlist, upstreamProxy)
 }
 
-func handleConnect(client net.Conn, reader *bufio.Reader, req *http.Request, allowlist Allowlist) {
+func handleConnect(client net.Conn, reader *bufio.Reader, req *http.Request, allowlist Allowlist, upstreamProxy *url.URL) {
 	target := req.Host
 	if !allowlist.Allowed(target) {
 		writeProxyError(client, http.StatusForbidden, "forbidden by devkit native egress allowlist")
@@ -196,7 +202,7 @@ func handleConnect(client net.Conn, reader *bufio.Reader, req *http.Request, all
 	if !strings.Contains(target, ":") {
 		target += ":443"
 	}
-	upstream, err := net.DialTimeout("tcp", target, 20*time.Second)
+	upstream, err := dialConnectTarget(target, upstreamProxy)
 	if err != nil {
 		writeProxyError(client, http.StatusBadGateway, err.Error())
 		return
@@ -217,7 +223,7 @@ func handleConnect(client net.Conn, reader *bufio.Reader, req *http.Request, all
 	<-done
 }
 
-func handleHTTP(client net.Conn, req *http.Request, allowlist Allowlist) {
+func handleHTTP(client net.Conn, req *http.Request, allowlist Allowlist, upstreamProxy *url.URL) {
 	target := req.URL.Host
 	if target == "" {
 		target = req.Host
@@ -231,13 +237,75 @@ func handleHTTP(client net.Conn, req *http.Request, allowlist Allowlist) {
 	}
 	req.RequestURI = ""
 	req.Header.Del("Proxy-Connection")
-	resp, err := http.DefaultTransport.RoundTrip(req)
+	transport := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) { return upstreamProxy, nil },
+		DialContext: (&net.Dialer{
+			Timeout: 20 * time.Second,
+		}).DialContext,
+	}
+	defer transport.CloseIdleConnections()
+	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		writeProxyError(client, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	_ = resp.Write(client)
+}
+
+func parseUpstreamProxyURL(raw string) (*url.URL, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse upstream proxy URL: %w", err)
+	}
+	if parsed.Scheme != "http" || parsed.Hostname() == "" {
+		return nil, fmt.Errorf("upstream proxy URL must use http with a host")
+	}
+	if parsed.Port() == "" {
+		parsed.Host = net.JoinHostPort(parsed.Hostname(), "80")
+	}
+	return parsed, nil
+}
+
+func dialConnectTarget(target string, upstreamProxy *url.URL) (net.Conn, error) {
+	if upstreamProxy == nil {
+		return net.DialTimeout("tcp", target, 20*time.Second)
+	}
+	conn, err := net.DialTimeout("tcp", upstreamProxy.Host, 20*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial upstream proxy: %w", err)
+	}
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{},
+		Host:   target,
+		Header: make(http.Header),
+	}
+	if upstreamProxy.User != nil {
+		password, _ := upstreamProxy.User.Password()
+		req.SetBasicAuth(upstreamProxy.User.Username(), password)
+		req.Header.Set("Proxy-Authorization", req.Header.Get("Authorization"))
+		req.Header.Del("Authorization")
+	}
+	if err := req.Write(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("write upstream CONNECT: %w", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("read upstream CONNECT response: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("upstream CONNECT returned %s", resp.Status)
+	}
+	return conn, nil
 }
 
 func writeProxyError(w io.Writer, code int, msg string) {
