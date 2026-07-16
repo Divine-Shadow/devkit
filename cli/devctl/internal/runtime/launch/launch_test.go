@@ -36,6 +36,14 @@ func devkitRootFromPackage(t *testing.T) string {
 	return abs
 }
 
+func initTestGitWorktree(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir worktree parent: %v", err)
+	}
+	runTestCommand(t, "", "git", "init", path)
+}
+
 func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnRepository(t *testing.T) {
 	root := devkitRootFromPackage(t)
 	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-all", "runtime.nix"))
@@ -515,9 +523,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir host worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	if err := os.MkdirAll(p.Agent.HostHome, 0o700); err != nil {
 		t.Fatalf("mkdir host home: %v", err)
 	}
@@ -678,9 +684,7 @@ func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir host worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	if err := os.MkdirAll(p.Agent.HostHome, 0o700); err != nil {
 		t.Fatalf("mkdir host home: %v", err)
 	}
@@ -816,6 +820,24 @@ func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsPlainDirectoryAsReadyWorktree(t *testing.T) {
+	tmp := t.TempDir()
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths: devkitpaths.Paths{Root: filepath.Join(tmp, "devkit"), RuntimeAuthorityRoot: filepath.Join(tmp, "devkit")},
+		Repo:  "ouroboros-ide",
+		Index: 2,
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
+		t.Fatalf("mkdir plain worktree path: %v", err)
+	}
+	if err := Prepare(p); err == nil || !strings.Contains(err.Error(), "is not a Git worktree") {
+		t.Fatalf("Prepare plain directory error = %v", err)
+	}
+}
+
 func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -908,9 +930,7 @@ func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 
 	legacyCodex := filepath.Join(p.Agent.StateRoot, "home", ".codex")
 	legacySession := filepath.Join(legacyCodex, "sessions", "2026", "05", "15", "rollout.jsonl")
@@ -990,9 +1010,7 @@ func TestPrepareRepairsRetiredCodexShellHookWithoutTouchingSessions(t *testing.T
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 	sessionPath := filepath.Join(p.Agent.HostHome, ".codex", "sessions", "past.jsonl")
 	writeTestFile(t, sessionPath, "past")
@@ -1052,9 +1070,7 @@ func TestPrepareAddsTUILogGuardToGeneratedCodexShellHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 	zshrc := filepath.Join(p.Agent.HostHome, ".zshrc")
 	writeTestFile(t, zshrc, `unalias codex 2>/dev/null || true
@@ -1115,9 +1131,7 @@ func TestPrepareInstallsDevAllGovernedSearchPolicyRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	existingConfig := testAuthoritativeCodexConfig(`personality = "existing"`, strings.Join([]string{
 		`[projects."/home/bayesartre/dev/ouroboros-ide"]`,
 		`trust_level = "trusted"`,
@@ -1410,9 +1424,7 @@ func TestPrepareMigratesOuroGovernanceStateOutsideProductCheckout(t *testing.T) 
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 
 	legacyRoot := filepath.Join(devRoot, "ouroboros-ide", "logs", "subagent-governance")
 	writeTestFile(t, filepath.Join(legacyRoot, "control-plane", "historical-continuation-operator-token"), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -1528,9 +1540,7 @@ func TestPrepareOuroTerraformCleansHomeGovernanceConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(`personality = "terraform"`, strings.Join([]string{
 		codexGovernanceManagedBegin,
 		`[mcp_servers.governance]`,
@@ -1597,9 +1607,7 @@ func TestPrepareOuroTerraformRequiresAuthoritativeOpenAICodexConfig(t *testing.T
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	badSource := filepath.Join(tmp, "base-only-config.toml")
 	writeTestFile(t, badSource, `model = "base-only"`+"\n")
 	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", badSource)
@@ -1647,9 +1655,7 @@ func TestPrepareOuroTerraformRestoresCodexConfigFromNixSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "base-only"`+"\n")
 
 	if err := Prepare(p); err != nil {
@@ -1694,9 +1700,7 @@ func TestPrepareDevWorkspaceCleansHomeGovernanceConfigAndLinksSkills(t *testing.
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "config.toml"), `model = "stale-dev-workspace"`+"\n")
 
 	if err := Prepare(p); err != nil {
@@ -1768,9 +1772,7 @@ func TestPrepareCreatesSharedScalaCachesAndCapsOnlyCodexTUILog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
 	}
-	if err := os.MkdirAll(p.Agent.HostWorktree, 0o755); err != nil {
-		t.Fatalf("mkdir worktree: %v", err)
-	}
+	initTestGitWorktree(t, p.Agent.HostWorktree)
 	writeTestFile(t, filepath.Join(devRoot, filepath.FromSlash(codexDevkitConfigSourceRelPath)), testAuthoritativeCodexConfig(""))
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "log", "codex-tui.log"), "0123456789abcdef")
 	writeTestFile(t, filepath.Join(p.Agent.HostHome, ".codex", "sessions", "keep.jsonl"), "session")

@@ -33,6 +33,9 @@ func Prepare(p nativeplan.Plan) error {
 	} else if !st.IsDir() {
 		return fmt.Errorf("host worktree %s is not a directory", p.Agent.HostWorktree)
 	}
+	if err := requireGitWorktree(p.Agent.HostWorktree); err != nil {
+		return err
+	}
 	for _, dir := range []string{p.Agent.HostHome, p.Agent.StateRoot} {
 		if strings.TrimSpace(dir) == "" {
 			continue
@@ -100,6 +103,26 @@ func Prepare(p nativeplan.Plan) error {
 		if _, err := os.Stat(bind.Source); err != nil {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
+	}
+	return nil
+}
+
+func requireGitWorktree(worktree string) error {
+	cmd := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("host worktree %s is not a Git worktree: %w", worktree, err)
+	}
+	top := filepath.Clean(strings.TrimSpace(string(out)))
+	expected := filepath.Clean(worktree)
+	if resolved, err := filepath.EvalSymlinks(top); err == nil {
+		top = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(expected); err == nil {
+		expected = resolved
+	}
+	if top != expected {
+		return fmt.Errorf("host worktree %s resolves to foreign Git root %s", worktree, top)
 	}
 	return nil
 }

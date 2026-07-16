@@ -139,6 +139,35 @@ func existingGitCheckout(wt string) (bool, error) {
 	return top == resolvedWT, nil
 }
 
+func verifyFreshNativeWorktree(wt, baseRef string) error {
+	ok, err := existingGitCheckout(wt)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("fresh native worktree %s is not a Git checkout", wt)
+	}
+	head, result := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "HEAD")
+	if result.Code != 0 {
+		return fmt.Errorf("read fresh native worktree HEAD %s: exit %d", wt, result.Code)
+	}
+	base, result := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", baseRef)
+	if result.Code != 0 {
+		return fmt.Errorf("read fresh native worktree base %s at %s: exit %d", baseRef, wt, result.Code)
+	}
+	if strings.TrimSpace(head) != strings.TrimSpace(base) {
+		return fmt.Errorf("fresh native worktree %s HEAD %s does not match %s %s", wt, strings.TrimSpace(head), baseRef, strings.TrimSpace(base))
+	}
+	status, result := execx.Capture(context.Background(), "git", "-C", wt, "status", "--porcelain=v1")
+	if result.Code != 0 {
+		return fmt.Errorf("read fresh native worktree status %s: exit %d", wt, result.Code)
+	}
+	if strings.TrimSpace(status) != "" {
+		return fmt.Errorf("fresh native worktree %s is dirty", wt)
+	}
+	return nil
+}
+
 // Setup ensures worktrees and branches exist for agents 1..n.
 // devkitRoot: path to devkit/ root (we derive dev root as parent dir).
 // repo: primary repo folder name under dev root.
@@ -343,6 +372,11 @@ func SetupNative(opts NativeOptions) error {
 		}
 		if err := run(opts.DryRun, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
 			return err
+		}
+		if !opts.DryRun {
+			if err := verifyFreshNativeWorktree(wt, "origin/"+baseBranch); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

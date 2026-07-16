@@ -180,6 +180,50 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 	}
 }
 
+func TestSetupNative_ReconstructsMissingRepoBesidePartialAgentHome(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+	agentParent := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2")
+	if err := os.MkdirAll(filepath.Join(agentParent, ".devhome-agent2", ".codex"), 0o700); err != nil {
+		t.Fatalf("prepare partial agent home: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(agentParent, "ouroboros-ide"), 0o755); err != nil {
+		t.Fatalf("prepare plain repo directory: %v", err)
+	}
+
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        2,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+	}); err != nil {
+		t.Fatalf("native reconstruction failed: %v", err)
+	}
+
+	worktree := filepath.Join(agentParent, "ouroboros-ide")
+	checkBranchAndUpstream(t, worktree, "agent2")
+	if got, want := readTrim(t, "git", "-C", worktree, "rev-parse", "HEAD"), readTrim(t, "git", "-C", worktree, "rev-parse", "origin/main"); got != want {
+		t.Fatalf("fresh worktree HEAD = %s, origin/main = %s", got, want)
+	}
+	if got := readTrim(t, "git", "-C", worktree, "status", "--porcelain=v1"); got != "" {
+		t.Fatalf("fresh worktree is dirty: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(agentParent, ".devhome-agent2", ".codex")); err != nil {
+		t.Fatalf("partial agent home was not preserved for source bootstrap: %v", err)
+	}
+}
+
 func TestSetupNative_FromLinkedSourceWorktreeUsesAbsoluteGitdir(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
