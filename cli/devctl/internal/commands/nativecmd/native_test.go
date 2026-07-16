@@ -825,6 +825,48 @@ func TestExitCodeFromError(t *testing.T) {
 	}
 }
 
+func TestIsolateManagedEgressProxyForRunUsesLauncherOwnedSocket(t *testing.T) {
+	sharedSocket := "/home/me/dev/.devkit/native-egress/dev-workspace-agent1-workspace-egress.sock"
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{
+			UnixSocket:    sharedSocket,
+			AllowlistPath: "/home/me/dev/devkit/kit/proxy/allowlist.txt",
+		},
+		Binds: []nativeplan.Bind{
+			{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
+			{Source: sharedSocket, Target: sharedSocket, Mode: "rw", Required: true},
+		},
+	}
+
+	got, err := isolateManagedEgressProxyForRun(p, 4242)
+	if err != nil {
+		t.Fatalf("isolateManagedEgressProxyForRun: %v", err)
+	}
+	wantSocket := "/home/me/dev/.devkit/native-egress/.managed-egress-4242.sock"
+	if got.Proxy.UnixSocket != wantSocket {
+		t.Fatalf("proxy socket = %q, want %q", got.Proxy.UnixSocket, wantSocket)
+	}
+	if got.Binds[1].Source != wantSocket || got.Binds[1].Target != wantSocket {
+		t.Fatalf("proxy bind = %#v", got.Binds[1])
+	}
+	if p.Proxy.UnixSocket != sharedSocket || p.Binds[1].Source != sharedSocket || p.Binds[1].Target != sharedSocket {
+		t.Fatalf("input plan mutated: %#v", p)
+	}
+}
+
+func TestIsolateManagedEgressProxyForRunRequiresExactSocketBind(t *testing.T) {
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{
+			UnixSocket:    "/tmp/shared.sock",
+			AllowlistPath: "/tmp/allowlist.txt",
+		},
+	}
+	_, err := isolateManagedEgressProxyForRun(p, 9)
+	if err == nil || !strings.Contains(err.Error(), "must appear exactly once") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestTailLines(t *testing.T) {
 	got := tailLines("a\nb\nc", 2)
 	if len(got) != 2 || got[0] != "b" || got[1] != "c" {

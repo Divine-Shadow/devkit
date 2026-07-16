@@ -873,6 +873,12 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
+	if !ctx.DryRun {
+		p, err = isolateManagedEgressProxyForRun(p, os.Getpid())
+		if err != nil {
+			return err
+		}
+	}
 	cleanupProxy, err := ensureManagedEgressProxy(p, ctx.DryRun)
 	if err != nil {
 		return err
@@ -900,6 +906,36 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return runCommandPreservingExit(cmd)
+}
+
+func isolateManagedEgressProxyForRun(p nativeplan.Plan, pid int) (nativeplan.Plan, error) {
+	if strings.TrimSpace(p.Proxy.AllowlistPath) == "" {
+		return p, nil
+	}
+	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
+	if socketPath == "" {
+		return nativeplan.Plan{}, fmt.Errorf("managed native egress proxy requires a proxy socket")
+	}
+	if pid < 1 {
+		return nativeplan.Plan{}, fmt.Errorf("managed native egress proxy requires a positive launcher pid")
+	}
+	runSocketPath := filepath.Join(filepath.Dir(socketPath), fmt.Sprintf(".managed-egress-%d.sock", pid))
+	p.Binds = append([]nativeplan.Bind(nil), p.Binds...)
+	replaced := 0
+	for i := range p.Binds {
+		if filepath.Clean(p.Binds[i].Source) != filepath.Clean(socketPath) ||
+			filepath.Clean(p.Binds[i].Target) != filepath.Clean(socketPath) {
+			continue
+		}
+		p.Binds[i].Source = runSocketPath
+		p.Binds[i].Target = runSocketPath
+		replaced++
+	}
+	if replaced != 1 {
+		return nativeplan.Plan{}, fmt.Errorf("managed native egress proxy socket bind %s must appear exactly once, found %d", socketPath, replaced)
+	}
+	p.Proxy.UnixSocket = runSocketPath
+	return p, nil
 }
 
 func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
