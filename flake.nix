@@ -129,7 +129,8 @@
             mkdir -p "$out/kit/bin"
             mv "$out/bin/devctl" "$out/kit/bin/devctl"
             rmdir "$out/bin"
-            cp -R ${./overlays} "$out/overlays"
+            cp "$src/flake.nix" "$src/flake.lock" "$out/"
+            cp -R "$src/nix" "$src/overlays" "$out/"
           '';
         };
       mkManagementInspectionApp =
@@ -536,6 +537,24 @@
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
           management-inspection-cli = mkDevctl pkgs;
+
+          devctl-overlay-runtime-authority-layout =
+            let
+              devctl = mkDevctl pkgs;
+            in
+            pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
+              nativeBuildInputs = [ pkgs.gnugrep ];
+            } ''
+              test -x ${devctl}/kit/bin/devctl
+              test -f ${devctl}/flake.nix
+              test -f ${devctl}/flake.lock
+              test -f ${devctl}/nix/dev-all-runtime-bundle.nix
+              test -f ${devctl}/overlays/dev-all/flake.nix
+              test -f ${devctl}/overlays/dev-all/runtime.nix
+              grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
+              mkdir -p "$out"
+              printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
+            '';
 
           runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" { } ''
             mkdir -p "$out"

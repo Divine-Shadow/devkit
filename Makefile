@@ -11,7 +11,7 @@ N          ?= 4
 
 NIX       ?= nix --extra-experimental-features 'nix-command flakes'
 
-.PHONY: build-cli health run ci-cheap native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-audit native-readiness-degraded-guard native-codex-home-preservation-guard native-overlay-matrix overlay-runtime-smoke retired-runtime-guard nix-overlay-runtime-guard postgres-broker-container-smoke
+.PHONY: build-cli health run ci-cheap devctl-overlay-runtime-authority native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-audit native-readiness-degraded-guard native-codex-home-preservation-guard native-overlay-matrix overlay-runtime-smoke retired-runtime-guard nix-overlay-runtime-guard postgres-broker-container-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -34,6 +34,7 @@ ci-cheap: build-cli
 	@cd cli/devctl && go test -count=1 ./...
 	@echo "== Nix flake check =="
 	@$(NIX) flake check
+	@$(MAKE) devctl-overlay-runtime-authority
 	@echo "== Overlay runtime metadata =="
 	@$(NIX) develop --command nix/validate-overlay-runtimes.py overlays >/tmp/devkit-overlay-runtimes.json
 	@echo "== Overlay lock policy =="
@@ -44,6 +45,10 @@ ci-cheap: build-cli
 	@kit/scripts/retired-runtime-guard
 	@echo "== Overlay Nix runtime guard =="
 	@kit/scripts/nix-overlay-runtime-guard
+
+devctl-overlay-runtime-authority:
+	@echo "== Immutable devctl overlay runtime authority =="
+	@kit/scripts/devctl-overlay-runtime-authority
 
 native-runtime-smoke: build-cli
 	@echo "== Native runtime smoke (dev-all) =="

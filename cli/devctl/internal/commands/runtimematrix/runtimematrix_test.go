@@ -214,6 +214,34 @@ func TestCheckAcceptsOverlayLocalFlakeRef(t *testing.T) {
 	}
 }
 
+func TestCheckAcceptsDevAllRootedAndLegacyFlakeRefs(t *testing.T) {
+	flakePath := filepath.Join(t.TempDir(), "flake.nix")
+	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, flake := range []string{
+		"path:.?dir=overlays/dev-all#default",
+		"./overlays/dev-all#default",
+	} {
+		flake := flake
+		t.Run(flake, func(t *testing.T) {
+			err := Check([]Entry{{
+				Overlay:      "dev-all",
+				Repo:         "ouroboros-ide",
+				Flake:        flake,
+				CodexVersion: "0.144.0",
+				CoreCheck:    `bash scripts/sbt2 "Compile / compile"`,
+				FlakePath:    flakePath,
+				Canonical:    true,
+			}}, true)
+			if err != nil {
+				t.Fatalf("dev-all flake ref %q rejected: %v", flake, err)
+			}
+		})
+	}
+}
+
 func TestCheckRejectsWrongOverlayLocalFlakeRef(t *testing.T) {
 	flakePath := filepath.Join(t.TempDir(), "flake.nix")
 	if err := os.WriteFile(flakePath, []byte("{ outputs = { ... }: {}; }\n"), 0o644); err != nil {

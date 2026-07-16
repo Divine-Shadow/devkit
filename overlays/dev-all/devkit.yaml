@@ -12,7 +12,7 @@ defaults:
   # Warm hook is required for readiness.
   require_warm: true
 runtime:
-  flake: ./overlays/dev-all#default
+  flake: path:.?dir=overlays/dev-all#default
   codex_version: 0.144.0
   core_check: bash scripts/sbt2 "Compile / compile"
   notes: Canonical multi-worktree runtime for ouroboros-ide.

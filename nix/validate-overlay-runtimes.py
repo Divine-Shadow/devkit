@@ -8,8 +8,14 @@ def overlay_local_flake(overlay: str) -> str:
     return f"./overlays/{overlay}#default"
 
 
+def overlay_rooted_flake(overlay: str) -> str:
+    return f"path:.?dir=overlays/{overlay}#default"
+
+
 def accepted_flakes(overlay: str) -> list[str]:
-    return [overlay_local_flake(overlay)]
+    # Diagnostic metadata mirror only. The Go runtimematrix contract and the
+    # executable immutable-package Nix gate own runtime-ref acceptance.
+    return [overlay_rooted_flake(overlay), overlay_local_flake(overlay)]
 
 
 def clean_scalar(value: str) -> str:

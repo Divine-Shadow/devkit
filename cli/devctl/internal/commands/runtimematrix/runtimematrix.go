@@ -295,7 +295,7 @@ func runtimeArtifact(e Entry) string {
 }
 
 func acceptedFlakeRefs(overlay string) []string {
-	return []string{overlayLocalFlakeRef(overlay)}
+	return []string{overlayRootedFlakeRef(overlay), overlayLocalFlakeRef(overlay)}
 }
 
 func flakeRefAccepted(overlay string, flake string) bool {
@@ -309,6 +309,10 @@ func flakeRefAccepted(overlay string, flake string) bool {
 
 func overlayLocalFlakeRef(overlay string) string {
 	return "./overlays/" + overlay + "#default"
+}
+
+func overlayRootedFlakeRef(overlay string) string {
+	return "path:.?dir=overlays/" + overlay + "#default"
 }
 
 func flakeCodexVersion(flake string, overrides map[string]string, workDir string) (string, error) {

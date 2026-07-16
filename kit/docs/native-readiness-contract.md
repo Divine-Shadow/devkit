@@ -37,6 +37,16 @@ Overlay `readiness.runtime_checks` then adds tool-specific checks, and
 Per-agent checks resolve mutable runtime evidence from the current slot's
 `HOME`/`CODEX_HOME`; they must not block a freshly reconstructed slot on stale
 provenance retained in a sibling leased home.
+The immutable devctl package is also the runtime-flake authority: because each
+overlay delegates to `path:../..`, that package must include the repository
+root `flake.nix`, `flake.lock`, `nix/`, and `overlays/` beside `kit/bin/devctl`.
+The `devctl-overlay-runtime-authority` check builds that immutable package,
+resolves the packaged `overlays/dev-all` flake offline, evaluates its delegated
+dev-shell derivation, and executes the packaged devctl's dev-all runtime-matrix
+contract.
+Packaged lifecycle commands use the root-directed
+`path:.?dir=overlays/dev-all#default` reference so Nix retains that immutable
+root while evaluating the overlay's `path:../..` input.
 
 ## Repo Checks
 

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEVKIT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
+NIX=(nix --extra-experimental-features "nix-command flakes")
+
+devctl="${DEVKIT_DEVCTL_PACKAGE:-}"
+if [[ -z "$devctl" ]]; then
+  devctl="$("${NIX[@]}" build --no-link --print-out-paths "$DEVKIT_ROOT#devctl")"
+fi
+
+test -x "$devctl/kit/bin/devctl"
+test -f "$devctl/flake.nix"
+test -f "$devctl/flake.lock"
+test -f "$devctl/nix/dev-all-runtime-bundle.nix"
+test -f "$devctl/overlays/dev-all/flake.nix"
+test -f "$devctl/overlays/dev-all/runtime.nix"
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+export HOME="$tmp_dir/home"
+export XDG_CACHE_HOME="$tmp_dir/cache"
+export XDG_CONFIG_HOME="$tmp_dir/config"
+mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
+
+overlay="path:$devctl?dir=overlays/dev-all"
+system="$("${NIX[@]}" eval --impure --raw --expr builtins.currentSystem)"
+
+"${NIX[@]}" flake metadata --offline --json --output-lock-file /dev/null \
+  "$overlay" > "$tmp_dir/metadata.json"
+
+shell_drv="$("${NIX[@]}" eval --offline --raw --output-lock-file /dev/null \
+  "$overlay#devShells.$system.dev-all.drvPath")"
+test -n "$shell_drv"
+
+env -u DEVKIT_ROOT -u DEVKIT_OVERLAYS_DIR \
+  "$devctl/kit/bin/devctl" --dry-run -p dev-all \
+  runtime-matrix --overlay dev-all --check >/dev/null
+
+printf 'devctl-overlay-runtime-authority: ok (%s -> %s)\n' "$devctl" "$shell_drv"
