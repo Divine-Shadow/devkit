@@ -86,6 +86,14 @@ type BuildOptions struct {
 
 const IsolationProfileWorkspaceEgress = "workspace-egress"
 
+func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
+	const rootedPrefix = "path:.?"
+	if runtimeAuthorityRoot == "" || !strings.HasPrefix(flake, rootedPrefix) {
+		return flake
+	}
+	return "path:" + runtimeAuthorityRoot + "?" + strings.TrimPrefix(flake, rootedPrefix)
+}
+
 func Build(opts BuildOptions) (Plan, error) {
 	project := strings.TrimSpace(opts.Project)
 	if project == "" {
@@ -139,6 +147,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	if runtimeAuthorityRoot != "" {
 		runtimeAuthorityRoot = filepath.Clean(runtimeAuthorityRoot)
 	}
+	flake = resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot)
 	broker := strings.TrimSpace(opts.BrokerEndpoint)
 	if broker == "" {
 		broker = "/run/devkit/test-container-broker.sock"
@@ -255,7 +264,6 @@ func Build(opts BuildOptions) (Plan, error) {
 			"isolation profile workspace-egress: filesystem binds are limited to the worktree, per-agent home, exact Git metadata, runtime support, and capability sockets",
 		)
 	}
-
 	p := Plan{
 		Agent: agent.Spec{
 			ID: agent.ID{

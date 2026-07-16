@@ -130,7 +130,8 @@ func TestBuildDevAllPreservesExecutableRuntimeAuthorityAgainstHostileConfigRoot(
 			Kit:                  filepath.Join(hostileRoot, "kit"),
 			RuntimeAuthorityRoot: trustedRoot,
 		},
-		Repo: "ouroboros-ide",
+		Repo:  "ouroboros-ide",
+		Flake: "path:.?dir=overlays/dev-all#default",
 	})
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
@@ -140,6 +141,14 @@ func TestBuildDevAllPreservesExecutableRuntimeAuthorityAgainstHostileConfigRoot(
 	}
 	if p.RuntimeAuthorityRoot != trustedRoot {
 		t.Fatalf("runtime authority root = %q, want %q", p.RuntimeAuthorityRoot, trustedRoot)
+	}
+	wantFlake := "path:/trusted/source/devkit?dir=overlays/dev-all#default"
+	if p.Flake != wantFlake {
+		t.Fatalf("runtime flake = %q, want immutable authority %q", p.Flake, wantFlake)
+	}
+	wantDevelop := "develop " + wantFlake + " --output-lock-file /dev/null"
+	if rendered := strings.Join(p.LauncherArgs, " "); !strings.Contains(rendered, wantDevelop) {
+		t.Fatalf("launcher must name immutable runtime authority in nix develop args: %s", rendered)
 	}
 }
 

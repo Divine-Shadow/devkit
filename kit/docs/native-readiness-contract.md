@@ -43,7 +43,9 @@ root `flake.nix`, `flake.lock`, `nix/`, and `overlays/` beside `kit/bin/devctl`.
 The `devctl-overlay-runtime-authority` check builds that immutable package,
 resolves the packaged `overlays/dev-all` flake offline, evaluates its delegated
 dev-shell derivation, and executes the packaged devctl's dev-all runtime-matrix
-contract.
+contract. It also requires the packaged native plan to resolve that immutable
+authority into an absolute root-directed flake reference in the generated
+`nix develop` arguments while mutable worktree and state roots remain separate.
 Packaged lifecycle commands use the root-directed
 `path:.?dir=overlays/dev-all#default` reference so Nix retains that immutable
 root while evaluating the overlay's `path:../..` input.

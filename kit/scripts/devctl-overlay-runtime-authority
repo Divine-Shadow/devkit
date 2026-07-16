@@ -39,4 +39,17 @@ env -u DEVKIT_ROOT -u DEVKIT_OVERLAYS_DIR \
   "$devctl/kit/bin/devctl" --dry-run -p dev-all \
   runtime-matrix --overlay dev-all --check >/dev/null
 
+mkdir -p "$tmp_dir/devkit" "$tmp_dir/ouroboros-ide"
+DEVKIT_ROOT="$tmp_dir/devkit" DEVKIT_OVERLAYS_DIR="$devctl/overlays" \
+  "$devctl/kit/bin/devctl" -p dev-all native plan \
+  --repo ouroboros-ide --index 1 --format json > "$tmp_dir/plan.json"
+
+jq -e --arg authority "$devctl" --arg sandbox /workspaces/dev/devkit \
+  --arg flake "path:$devctl?dir=overlays/dev-all#default" '
+  .runtime_authority_root == $authority and
+  .devkit_sandbox_root == $sandbox and
+  .flake == $flake and
+  (.launcher_args | index($flake)) != null
+' "$tmp_dir/plan.json" >/dev/null
+
 printf 'devctl-overlay-runtime-authority: ok (%s -> %s)\n' "$devctl" "$shell_drv"
