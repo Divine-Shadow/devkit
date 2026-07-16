@@ -504,6 +504,31 @@ func TestLifecyclePlanOptionsResolvesWorkspaceEgressProfileFromOverlay(t *testin
 	}
 }
 
+func TestLifecyclePlanOptionsEnforcesRequiredWorkspaceEgressProfile(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "dev-workspace",
+		Paths:   devkitpaths.Paths{Root: "/home/me/dev/devkit"},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		SourceDir: "/home/me/dev/devkit/overlays/dev-workspace",
+		Native: config.Native{
+			RequiredIsolationProfile: "workspace-egress",
+			IsolationProfiles: map[string]config.IsolationProfile{
+				"workspace-egress": {
+					Filesystem:      "workspace-only",
+					EgressAllowlist: "../../kit/proxy/allowlist.txt",
+				},
+			},
+		},
+	}, lifecycleArgs{isolationProfile: "none"}, ".", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.IsolationProfile != "workspace-egress" {
+		t.Fatalf("required isolation profile was bypassed: %q", opts.IsolationProfile)
+	}
+	if opts.EgressAllowlist != "/home/me/dev/devkit/kit/proxy/allowlist.txt" {
+		t.Fatalf("egress allowlist = %q", opts.EgressAllowlist)
+	}
+}
+
 func TestLifecyclePlanOptionsCLIAllowlistOverridesProfileAllowlist(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",

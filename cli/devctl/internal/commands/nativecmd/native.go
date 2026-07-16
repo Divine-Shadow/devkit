@@ -1049,6 +1049,10 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 
 func nativeIsolationOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, repo string, requestedProfile string, requestedAllowlist string, requestedProxy string, requestedProxySocket string) (string, string, string, string) {
 	profileName := strings.TrimSpace(requestedProfile)
+	requiredProfile := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(cfg.Native.RequiredIsolationProfile)), "_", "-")
+	if requiredProfile != "" {
+		profileName = requiredProfile
+	}
 	profileCfg := config.IsolationProfile{}
 	profileSourceDir := cfg.SourceDir
 	if profileName != "" && cfg.Native.IsolationProfiles != nil {

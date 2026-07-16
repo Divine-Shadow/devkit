@@ -92,11 +92,12 @@ func NormalizeReadinessMode(value string) (string, bool) {
 }
 
 type Native struct {
-	WorktreeRoot          string                      `yaml:"worktree_root"`
-	StateRoot             string                      `yaml:"state_root"`
-	WorktreeContainerRoot string                      `yaml:"worktree_container_root"`
-	StateContainerRoot    string                      `yaml:"state_container_root"`
-	IsolationProfiles     map[string]IsolationProfile `yaml:"isolation_profiles"`
+	WorktreeRoot             string                      `yaml:"worktree_root"`
+	StateRoot                string                      `yaml:"state_root"`
+	WorktreeContainerRoot    string                      `yaml:"worktree_container_root"`
+	StateContainerRoot       string                      `yaml:"state_container_root"`
+	RequiredIsolationProfile string                      `yaml:"required_isolation_profile"`
+	IsolationProfiles        map[string]IsolationProfile `yaml:"isolation_profiles"`
 }
 
 type IsolationProfile struct {

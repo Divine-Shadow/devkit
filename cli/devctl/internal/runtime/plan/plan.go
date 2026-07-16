@@ -51,6 +51,9 @@ type Plan struct {
 	FlakeInputOverrides  map[string]string `json:"flake_input_overrides,omitempty"`
 	Launcher             string            `json:"launcher"`
 	LauncherArgs         []string          `json:"launcher_args"`
+	IsolationProfile     string            `json:"isolation_profile,omitempty"`
+	MountPolicyIdentity  string            `json:"mount_policy_identity"`
+	WindowsMountsVisible bool              `json:"windows_mounts_visible"`
 	Binds                []Bind            `json:"binds"`
 	Env                  map[string]string `json:"env"`
 	Proxy                ProxyConfig       `json:"proxy"`
@@ -265,11 +268,23 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
 		binds = workspaceEgressBinds(paths, opts.Paths.Root, repo, broker, resolvConf)
+		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
+			return Plan{}, err
+		}
 		notes = append(notes,
 			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
 			"isolation profile workspace-egress: filesystem binds are limited to the worktree, per-agent home, exact Git metadata, runtime support, and capability sockets",
 		)
 	}
+	mountPolicyIdentity := "devkit/native-broad/v1"
+	windowsMountsVisible := true
+	if isolationProfile == IsolationProfileWorkspaceEgress {
+		mountPolicyIdentity = "devkit/workspace-egress/v1"
+		windowsMountsVisible = false
+		env["DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY"] = mountPolicyIdentity
+		env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"] = "false"
+	}
+
 	p := Plan{
 		Agent: agent.Spec{
 			ID: agent.ID{
@@ -294,6 +309,9 @@ func Build(opts BuildOptions) (Plan, error) {
 		Flake:                flake,
 		FlakeInputOverrides:  normalizeFlakeInputOverrides(opts.FlakeInputOverrides),
 		Launcher:             launcher,
+		IsolationProfile:     isolationProfile,
+		MountPolicyIdentity:  mountPolicyIdentity,
+		WindowsMountsVisible: windowsMountsVisible,
 		Binds:                binds,
 		Env:                  env,
 		Proxy: ProxyConfig{
@@ -384,6 +402,36 @@ func workspaceEgressBinds(paths agent.Paths, devkitRoot string, repo string, bro
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	return binds
+}
+
+func validateWorkspaceEgressMountPolicy(binds []Bind, egressAllowlist string) error {
+	if isWindowsFilesystemPath(egressAllowlist) {
+		return fmt.Errorf("workspace-egress isolation rejects Windows-mounted egress allowlist: %s", egressAllowlist)
+	}
+	for _, bind := range binds {
+		if isWindowsFilesystemPath(bind.Source) || isWindowsFilesystemPath(bind.Target) {
+			return fmt.Errorf("workspace-egress isolation rejects Windows-mounted bind %s -> %s", bind.Source, bind.Target)
+		}
+	}
+	return nil
+}
+
+func isWindowsFilesystemPath(value string) bool {
+	cleaned := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	lower := strings.ToLower(cleaned)
+	if len(lower) >= 3 &&
+		lower[0] >= 'a' && lower[0] <= 'z' &&
+		lower[1] == ':' && lower[2] == '/' {
+		return true
+	}
+	if !strings.HasPrefix(lower, "/mnt/") || len(lower) < len("/mnt/x") {
+		return false
+	}
+	drive := lower[len("/mnt/")]
+	if drive < 'a' || drive > 'z' {
+		return false
+	}
+	return len(lower) == len("/mnt/x") || lower[len("/mnt/x")] == '/'
 }
 
 func gitMetadataBinds(hostWorktree string) []Bind {

@@ -84,6 +84,7 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"  state_root: ../.devkit/native-agents\n" +
 		"  worktree_container_root: /worktrees\n" +
 		"  state_container_root: /agent-state\n" +
+		"  required_isolation_profile: workspace-egress\n" +
 		"  isolation_profiles:\n" +
 		"    workspace-egress:\n" +
 		"      filesystem: workspace-only\n" +
@@ -122,6 +123,9 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if cfg.Native.WorktreeContainerRoot != "/worktrees" || cfg.Native.StateContainerRoot != "/agent-state" {
 		t.Fatalf("native container roots = %#v", cfg.Native)
+	}
+	if cfg.Native.RequiredIsolationProfile != "workspace-egress" {
+		t.Fatalf("required isolation profile = %q", cfg.Native.RequiredIsolationProfile)
 	}
 	profile := cfg.Native.IsolationProfiles["workspace-egress"]
 	if profile.Filesystem != "workspace-only" || profile.EgressAllowlist != "../../docker/dev/tinyproxy/allowlist.txt" {

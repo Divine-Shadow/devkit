@@ -293,6 +293,11 @@ native:
   state_root: ../.devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
+  required_isolation_profile: workspace-egress
+  isolation_profiles:
+    workspace-egress:
+      filesystem: workspace-only
+      egress_allowlist: ../../../ouroboros-ide/infra/docker/dev/tinyproxy/allowlist.txt
 ingress:
   kind: caddy
   routes:

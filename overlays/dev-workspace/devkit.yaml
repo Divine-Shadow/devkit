@@ -12,6 +12,12 @@ runtime:
   codex_version: 0.144.0
   core_check: git diff --check
   notes: Native runtime for a Codex agent entered at the dev workspace root.
+native:
+  required_isolation_profile: workspace-egress
+  isolation_profiles:
+    workspace-egress:
+      filesystem: workspace-only
+      egress_allowlist: ../../kit/proxy/allowlist.txt
 readiness:
   default_mode: runtime-only
   runtime_checks:

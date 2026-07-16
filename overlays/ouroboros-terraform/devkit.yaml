@@ -12,6 +12,12 @@ runtime:
   codex_version: 0.144.0
   core_check: terraform fmt -check -recursive
   notes: Thin devkit adapter; canonical tool requirements live in ../ouroboros-terraform/flake.nix and devkit.yaml, and devkit must pass the ouroboros-terraform flake input override explicitly.
+native:
+  required_isolation_profile: workspace-egress
+  isolation_profiles:
+    workspace-egress:
+      filesystem: workspace-only
+      egress_allowlist: ../../kit/proxy/allowlist.txt
 readiness:
   default_mode: runtime-only
   runtime_checks:

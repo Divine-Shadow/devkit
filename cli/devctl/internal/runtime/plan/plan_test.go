@@ -118,6 +118,48 @@ func TestBuildDevAllPlan(t *testing.T) {
 	}
 }
 
+func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktree := filepath.Join(devRoot, "agent-worktrees", "agent2", "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, worktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            2,
+		Repo:             "ouroboros-ide",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if p.IsolationProfile != IsolationProfileWorkspaceEgress ||
+		p.MountPolicyIdentity != "devkit/workspace-egress/v1" ||
+		p.WindowsMountsVisible {
+		t.Fatalf("isolation readback = profile=%q policy=%q windows=%v", p.IsolationProfile, p.MountPolicyIdentity, p.WindowsMountsVisible)
+	}
+	if p.Env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"] != "false" {
+		t.Fatalf("windows mount env = %q", p.Env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"])
+	}
+
+	_, err = Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: "/mnt/c/retired/devkit"},
+		Project:          "dev-workspace",
+		Repo:             ".",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  "/mnt/c/retired/allowlist.txt",
+	})
+	if err == nil || !strings.Contains(err.Error(), "rejects Windows-mounted") {
+		t.Fatalf("Windows mount must fail closed, got %v", err)
+	}
+}
+
 func TestBuildDoesNotFallBackRuntimeAuthorityToConfigRoot(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
 		Paths: devkitpaths.Paths{Root: "/caller-controlled/devkit"},
