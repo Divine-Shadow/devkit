@@ -174,6 +174,7 @@ func TestDevWorkspaceRuntimeExportsNestedCodexConfigSource(t *testing.T) {
 	root := devkitRootFromPackage(t)
 	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-workspace", "runtime.nix"))
 	for _, want := range []string{
+		`pkgs.python3Packages.pyyaml`,
 		`[ -n "''${CODEX_HOME:-}" ]`,
 		`[ -r "$CODEX_HOME/config.toml" ]`,
 		`export DEVKIT_CODEX_CONFIG_SOURCE="$CODEX_HOME/config.toml"`,

@@ -1,6 +1,8 @@
 { mkShell, packages, pkgs, pkgsPlaywright, toolsets, ... }:
 
-mkShell "dev-workspace" toolsets.ouroborosAgentTools ''
+mkShell "dev-workspace" (toolsets.ouroborosAgentTools ++ [
+  pkgs.python3Packages.pyyaml
+]) ''
   export JAVA_HOME=${pkgs.jdk21}
   export GOROOT=${packages.pinnedGo}
   if [ -n "''${CODEX_HOME:-}" ] && [ -r "$CODEX_HOME/config.toml" ]; then

@@ -24,9 +24,11 @@ filesystem and network isolation.
 - [x] Materialize `/usr/bin/bash` in both rendered and executed bwrap plans.
 - [x] Chain a nested workspace-egress proxy through its healthy outer proxy and
   route authenticated Git SSH through CONNECT on `ssh.github.com:443`.
+- [x] Add the PyYAML runtime dependency required by the bundled skill validator
+  instead of mutating a leased home with `pip`.
 - [x] Add focused regression tests and run the relevant Go/Nix checks.
-- [ ] Publish the source repair and produce a source/closure/readback receipt.
-- [ ] Reactivate the preserved GUI objectives without replacing healthy
+- [x] Publish the source repair and produce a source/closure/readback receipt.
+- [x] Reactivate the preserved GUI objectives without replacing healthy
   homes, auth, or validated candidates.
 
 ## Surprises & Discoveries
@@ -50,6 +52,9 @@ filesystem and network isolation.
   username. The authenticated repository route is SSH on
   `ssh.github.com:443` through the managed CONNECT proxy, using the already
   seeded per-agent key.
+- The bundled skill validator imports `yaml`; bare Python in the new
+  dev-workspace shell made that source-owned management workflow fail. PyYAML
+  is now part of the flake closure.
 - The repo-owned Terraform flake cannot bootstrap an empty Terraform worktree;
   source acquisition uses the source-independent dev-workspace runtime first,
   then hands the populated repo to the Terraform runtime.
@@ -107,4 +112,14 @@ Validation completed before publication:
   authenticated private Terraform Git. Private source HEAD was
   `cabbf8bbd8c4eec871041faf77a794885c1e8c24`.
 
-Publication and task reactivation remain pending.
+The closure repair was published to Devkit `master` at
+`b98dde62101f5c774bb9be858c986bff32460f50`, and the four preserved GUI owners
+received the receipt and resume instruction. The Terraform task's first-class
+goal was independently restored to active with exact readback.
+
+The long-lived host canonical checkout remains mounted read-only at the prior
+revision in existing app-server processes, so it was not mutated or restarted.
+The published clean checkout at `/workspaces/dev/devkit-bwrap-closure` is the
+source-derived runtime authority for resumed nested operations until the host
+service performs its normal checkout/restart convergence. This residual does
+not block the repaired per-task runtime path proved above.
