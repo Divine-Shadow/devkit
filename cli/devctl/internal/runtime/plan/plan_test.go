@@ -57,6 +57,16 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Env["COURSIER_CACHE"] != "/workspaces/dev/.cache/shared/coursier" {
 		t.Fatalf("COURSIER_CACHE = %q", p.Env["COURSIER_CACHE"])
 	}
+	wantServerSystemProperties := strings.Join([]string{
+		"-Dsbt.global.base=" + p.Env["SBT_GLOBAL_BASE"],
+		"-Dsbt.boot.directory=" + p.Env["SBT_BOOT_DIR"],
+		"-Dsbt.ivy.home=" + p.Env["SBT_IVY_HOME"],
+	}, "\n")
+	if got := p.Env["SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES"]; got != wantServerSystemProperties {
+		t.Fatalf("SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES = %q, want %q", got, wantServerSystemProperties)
+	} else if strings.Contains(got, "/home/bayesartre") {
+		t.Fatalf("spawned SBT server identity retained host-home authority: %q", got)
+	}
 	if p.Env["DEVKIT_NATIVE_AGENT"] != "2" {
 		t.Fatalf("DEVKIT_NATIVE_AGENT = %q", p.Env["DEVKIT_NATIVE_AGENT"])
 	}

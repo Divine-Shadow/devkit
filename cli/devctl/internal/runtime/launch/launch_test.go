@@ -568,6 +568,13 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export SBT_BOOT_DIR='/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.sbt/boot'") {
 		t.Fatalf("agent shell does not export per-agent SBT boot dir:\n%#v", cmd.Args)
 	}
+	serverSystemProperties := p.Env["SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES"]
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES="+shellQuote(serverSystemProperties)) {
+		t.Fatalf("agent shell does not bind the spawned SBT server to prepared slot paths:\n%#v", cmd.Args)
+	}
+	if strings.Contains(serverSystemProperties, p.Agent.HostHome) || strings.Contains(serverSystemProperties, "/home/bayesartre") {
+		t.Fatalf("spawned SBT server properties contain host-home authority: %q", serverSystemProperties)
+	}
 	for _, optionalHostPath := range []string{"/etc/static", "/etc/ssl", "/etc/pki"} {
 		if _, err := os.Stat(optionalHostPath); err != nil {
 			continue

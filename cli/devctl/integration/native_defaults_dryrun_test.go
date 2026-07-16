@@ -608,6 +608,10 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 			root := nativeDefaultsRoot(t)
 			writeNixCodexConfigSource(t, root)
 			createNativeAgentWorktreeForRepo(t, root, "test-repo")
+			worktree := filepath.Join(filepath.Clean(filepath.Join(root, "..")), "agent-worktrees", "agent1", "test-repo")
+			if out, err := exec.Command("git", "-C", worktree, "init").CombinedOutput(); err != nil {
+				t.Fatalf("initialize clean Git worktree fixture: %v\n%s", err, out)
+			}
 			cmd := exec.Command(bin, tt.args...)
 			cmd.Env = append(os.Environ(),
 				"DEVKIT_ROOT="+root,

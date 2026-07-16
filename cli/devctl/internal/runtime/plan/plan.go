@@ -208,6 +208,11 @@ func Build(opts BuildOptions) (Plan, error) {
 		"-Dsbt.ivy.home=" + sbtIvyHome,
 		"-Dsbt.coursier.home=" + coursierCache,
 	}, " ")
+	sbtControlPlaneServerSystemProperties := strings.Join([]string{
+		"-Dsbt.global.base=" + sbtGlobalBase,
+		"-Dsbt.boot.directory=" + sbtBootDir,
+		"-Dsbt.ivy.home=" + sbtIvyHome,
+	}, "\n")
 
 	env := map[string]string{
 		"HOME":                         paths.SandboxHome,
@@ -232,6 +237,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"AWS_SHARED_CREDENTIALS_FILE":  filepath.Join(paths.SandboxHome, ".aws", "credentials"),
 		"AWS_SDK_LOAD_CONFIG":          "1",
 	}
+	env["SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES"] = sbtControlPlaneServerSystemProperties
 	if proxyURL != "" {
 		env["HTTP_PROXY"] = proxyURL
 		env["HTTPS_PROXY"] = proxyURL
