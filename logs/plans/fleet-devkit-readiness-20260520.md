@@ -123,3 +123,27 @@ The published clean checkout at `/workspaces/dev/devkit-bwrap-closure` is the
 source-derived runtime authority for resumed nested operations until the host
 service performs its normal checkout/restart convergence. This residual does
 not block the repaired per-task runtime path proved above.
+
+## 2026-07-17 AWS Home Materialization Addendum
+
+A later Terraform canary isolated a narrower boundary defect: some legacy
+agent homes contained `.aws` as a symlink to a Windows-mounted operator home.
+Host-side STS succeeded, but the target was outside the bwrap mount graph, so
+the same profile failed inside the isolated runtime and incorrectly appeared
+to require a new device login.
+
+The runtime seeder now preserves an existing real `.aws` directory, but if the
+destination itself is a symlink it removes only that link and materializes a
+real mode-`0700` directory before copying the sanctioned config and SSO/CLI
+cache files. The external symlink target is never modified. This is conditional
+reconvergence of the implicated credential boundary; successful real homes are
+still reused and are not wiped between runs.
+
+Validation:
+
+- `go test ./...` passed across `cli/devctl`.
+- A focused regression proves an external destination symlink becomes a real
+  sandbox-local directory, required files are copied with strict modes, and
+  the external target remains byte-identical.
+- `nix build .#devctl --no-link --print-out-paths` produced
+  `/nix/store/c10xwd0c4kw46h2s3k9zjvnjbqk4dmfj-devkit-devctl-dev`.

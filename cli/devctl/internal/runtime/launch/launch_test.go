@@ -2019,6 +2019,47 @@ func TestSeedAWSSyncsConfigAndCaches(t *testing.T) {
 	}
 }
 
+func TestSeedAWSMaterializesExistingExternalTargetSymlink(t *testing.T) {
+	srcAWS := filepath.Join(t.TempDir(), ".aws")
+	writeTestFile(t, filepath.Join(srcAWS, "config"), "[profile ouroboros]\nregion = us-east-2\n")
+	writeTestFile(t, filepath.Join(srcAWS, "sso", "cache", "session.json"), `{"accessToken":"redacted"}`)
+	t.Setenv("DEVKIT_AWS_HOME", srcAWS)
+
+	externalAWS := filepath.Join(t.TempDir(), "windows-aws")
+	writeTestFile(t, filepath.Join(externalAWS, "sentinel"), "must-remain")
+	nativeHome := filepath.Join(t.TempDir(), "native-home")
+	if err := os.MkdirAll(nativeHome, 0o700); err != nil {
+		t.Fatalf("mkdir native home: %v", err)
+	}
+	targetAWS := filepath.Join(nativeHome, ".aws")
+	if err := os.Symlink(externalAWS, targetAWS); err != nil {
+		t.Fatalf("symlink target AWS home: %v", err)
+	}
+
+	if err := SeedAWS(nativeHome, false); err != nil {
+		t.Fatalf("SeedAWS: %v", err)
+	}
+	info, err := os.Lstat(targetAWS)
+	if err != nil {
+		t.Fatalf("lstat materialized AWS home: %v", err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("target AWS home was not materialized: mode=%v", info.Mode())
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("target AWS home mode = %v, want 0700", got)
+	}
+	if got := readTestFile(t, filepath.Join(targetAWS, "config")); got != "[profile ouroboros]\nregion = us-east-2\n" {
+		t.Fatalf("materialized config = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(targetAWS, "sso", "cache", "session.json")); got != `{"accessToken":"redacted"}` {
+		t.Fatalf("materialized cache = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(externalAWS, "sentinel")); got != "must-remain" {
+		t.Fatalf("external AWS target was modified: %q", got)
+	}
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

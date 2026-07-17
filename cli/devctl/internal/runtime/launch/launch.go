@@ -2123,6 +2123,9 @@ func SeedAWS(hostHome string, force bool) error {
 	}
 
 	targetAWS := filepath.Join(hostHome, ".aws")
+	if err := materializeAWSHome(targetAWS); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(targetAWS, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", targetAWS, err)
 	}
@@ -2152,6 +2155,26 @@ func SeedAWS(hostHome string, force bool) error {
 		if err := copyAWSDir(filepath.Join(srcAWS, rel), filepath.Join(targetAWS, rel), force); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func materializeAWSHome(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("lstat AWS state target %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove external AWS state symlink %s: %w", path, err)
+		}
+		return nil
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("AWS state target %s exists and is not a directory", path)
 	}
 	return nil
 }
