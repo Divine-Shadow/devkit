@@ -316,6 +316,7 @@ func TestSelectOuroGovernanceSystemRuntimeLauncherRequiresAuthoritativeEnv(t *te
 		t.Fatal(err)
 	}
 	ouroGovernanceSystemRuntimeLauncherPath = launcher
+	t.Setenv(ouroGovernanceActivationRuntimeLauncherEnv, "")
 
 	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "")
 	if got, selected, err := selectOuroGovernanceSystemRuntimeLauncher(); err != nil || selected || got != "" {
@@ -325,6 +326,36 @@ func TestSelectOuroGovernanceSystemRuntimeLauncherRequiresAuthoritativeEnv(t *te
 	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "1")
 	if got, selected, err := selectOuroGovernanceSystemRuntimeLauncher(); err != nil || !selected || got != launcher {
 		t.Fatalf("authoritative selection = path %q selected %t err %v", got, selected, err)
+	}
+}
+
+func TestValidateOuroGovernanceActivationRuntimeLauncherRequiresStoreBackedBundle(t *testing.T) {
+	storeRoot := t.TempDir()
+	launcher := filepath.Join(storeRoot, "fixture-dev-all-runtime-bundle", "bin", "dev-all-runtime-bundle")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := validateOuroGovernanceActivationRuntimeLauncher(launcher, storeRoot); err != nil || got != launcher {
+		t.Fatalf("validated activation launcher = %q, %v", got, err)
+	}
+	for _, candidate := range []string{
+		filepath.Join(t.TempDir(), "dev-all-runtime-bundle"),
+		filepath.Join(storeRoot, "fixture-dev-all-runtime-bundle", "dev-all-runtime-bundle"),
+	} {
+		if _, err := validateOuroGovernanceActivationRuntimeLauncher(candidate, storeRoot); err == nil {
+			t.Fatalf("accepted invalid activation launcher %q", candidate)
+		}
+	}
+}
+
+func TestSelectOuroGovernanceSystemRuntimeLauncherRejectsUntrustedActivationOverride(t *testing.T) {
+	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "1")
+	t.Setenv(ouroGovernanceActivationRuntimeLauncherEnv, filepath.Join(t.TempDir(), "dev-all-runtime-bundle"))
+	if _, _, err := selectOuroGovernanceSystemRuntimeLauncher(); err == nil || !strings.Contains(err.Error(), "must be under /nix/store") {
+		t.Fatalf("activation override error = %v", err)
 	}
 }
 

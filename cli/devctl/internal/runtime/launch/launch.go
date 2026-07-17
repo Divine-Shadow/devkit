@@ -903,15 +903,40 @@ const ouroGovernanceSbtControlPlaneSourceRev = ouroProductRuntimeSourceRev
 
 var ouroGovernanceSystemRuntimeLauncherPath = "/run/current-system/sw/bin/dev-all-runtime-bundle"
 
+const ouroGovernanceActivationRuntimeLauncherEnv = "DEVKIT_GOVERNANCE_RUNTIME_LAUNCHER"
+
 func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
 	if strings.TrimSpace(os.Getenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV")) != "1" {
 		return "", false, nil
+	}
+	if override := strings.TrimSpace(os.Getenv(ouroGovernanceActivationRuntimeLauncherEnv)); override != "" {
+		launcherPath, err := validateOuroGovernanceActivationRuntimeLauncher(override, "/nix/store")
+		if err != nil {
+			return "", false, err
+		}
+		if !isExecutable(launcherPath) {
+			return "", false, fmt.Errorf("authoritative governance runtime launcher override is missing or not executable: %s", launcherPath)
+		}
+		return launcherPath, true, nil
 	}
 	launcherPath := filepath.Clean(ouroGovernanceSystemRuntimeLauncherPath)
 	if !isExecutable(launcherPath) {
 		return "", false, fmt.Errorf("authoritative system governance runtime launcher is missing or not executable: %s", launcherPath)
 	}
 	return launcherPath, true, nil
+}
+
+func validateOuroGovernanceActivationRuntimeLauncher(launcherPath string, storeRoot string) (string, error) {
+	launcherPath = filepath.Clean(strings.TrimSpace(launcherPath))
+	storeRoot = filepath.Clean(strings.TrimSpace(storeRoot))
+	relative, err := filepath.Rel(storeRoot, launcherPath)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("authoritative governance runtime launcher override must be under %s: %s", storeRoot, launcherPath)
+	}
+	if filepath.Base(launcherPath) != "dev-all-runtime-bundle" || filepath.Base(filepath.Dir(launcherPath)) != "bin" {
+		return "", fmt.Errorf("authoritative governance runtime launcher override must name a Nix dev-all-runtime-bundle launcher: %s", launcherPath)
+	}
+	return launcherPath, nil
 }
 
 func ouroGovernanceRuntimeBundleFlake(devkitRoot string) string {
