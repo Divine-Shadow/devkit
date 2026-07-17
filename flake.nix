@@ -57,7 +57,7 @@
       };
       codexVersion = "0.144.0";
       codexReleaseTag = "rust-v${codexVersion}";
-      productRuntimeVersion = "cbe199fa13fb93b2850fdc1437c753485539c88c";
+      productRuntimeVersion = "6826ff0ad172d35ce2eaeb62473ae26facb765a0";
       governanceJarVersion = productRuntimeVersion;
       submitRuntimeVersion = productRuntimeVersion;
       artifactColumnRuntimeVersion = "8e23ded5579e896c95b5a751f4d4a18da70049a9";
@@ -77,8 +77,8 @@
           submitToCiJar = mkPinnedSubmitToCiJar pkgs;
           x86SubmitBaselineIsExact =
             if pkgs.system == "x86_64-linux" then
-              assert toString submitToCiJar == "/nix/store/vc0v6zlrfyhh8gd1m5vxmsnv753zzrg4-submit-to-ci-dev";
-              assert submitToCiJar.drvPath == "/nix/store/rkjxnfm2j9yfmzlr78raybxy3h5hxlin-submit-to-ci-dev.drv";
+              assert toString submitToCiJar == "/nix/store/iymxmh43af91w1rh1i58xrs9a3cvd3kz-submit-to-ci-dev";
+              assert submitToCiJar.drvPath == "/nix/store/bh31sf8fy6najxayfq74h8p2sy74178g-submit-to-ci-dev.drv";
               true
             else
               true;

@@ -98,8 +98,8 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 		`mkPinnedArtifactColumnPluginRepository = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
 		`mkPinnedArtifactColumnPluginSmoke = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-adoption-check;`,
 		`mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-current-source;`,
-		`assert toString submitToCiJar == "/nix/store/vc0v6zlrfyhh8gd1m5vxmsnv753zzrg4-submit-to-ci-dev";`,
-		`assert submitToCiJar.drvPath == "/nix/store/rkjxnfm2j9yfmzlr78raybxy3h5hxlin-submit-to-ci-dev.drv";`,
+		`assert toString submitToCiJar == "/nix/store/iymxmh43af91w1rh1i58xrs9a3cvd3kz-submit-to-ci-dev";`,
+		`assert submitToCiJar.drvPath == "/nix/store/bh31sf8fy6najxayfq74h8p2sy74178g-submit-to-ci-dev.drv";`,
 		`dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;`,
 		`dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;`,
 		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
@@ -443,6 +443,7 @@ func TestBuildOuroGovernanceEnvBindsRoutingToImmutableEntrypoint(t *testing.T) {
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256='" + entrypointSHA256 + "'",
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=",
 		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=",
+		"export SUBAGENT_GOVERNANCE_HOST_DEV_ROOT_ALIAS='/home/bayesartre/dev'",
 		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=",
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=",
 	} {
@@ -497,6 +498,36 @@ func TestBuildOuroGovernanceEnvBindsRoutingToImmutableEntrypoint(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("mutable routing env retained runtime authority %q:\n%s", forbidden, got)
 		}
+	}
+	runtimeNamespaceEnv := buildOuroGovernanceEnv(
+		"/workspaces/dev",
+		"/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
+		"abc123",
+		entrypointSHA256,
+	)
+	if strings.Contains(runtimeNamespaceEnv, "SUBAGENT_GOVERNANCE_HOST_DEV_ROOT_ALIAS") {
+		t.Fatalf("canonical runtime namespace must not emit an overlapping host alias:\n%s", runtimeNamespaceEnv)
+	}
+}
+
+func TestOuroGovernanceHostDevRootAliasRejectsUnsafeOrOverlappingRoots(t *testing.T) {
+	tests := []struct {
+		root string
+		want string
+	}{
+		{root: "/home/bayesartre/dev", want: "/home/bayesartre/dev"},
+		{root: "/workspaces/dev"},
+		{root: "/workspaces/dev/agent-worktrees"},
+		{root: "/workspaces"},
+		{root: "/tmp/governance-alias"},
+		{root: "relative/dev"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.root, func(t *testing.T) {
+			if got := ouroGovernanceHostDevRootAlias(tt.root); got != tt.want {
+				t.Fatalf("ouroGovernanceHostDevRootAlias(%q) = %q, want %q", tt.root, got, tt.want)
+			}
+		})
 	}
 }
 

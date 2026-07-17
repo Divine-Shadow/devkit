@@ -22,6 +22,7 @@ func TestBodyPreservesVerifiedGovernanceJarIdentity(t *testing.T) {
 		"unset OLDPWD",
 		"required governance workspace path missing after cwd normalization",
 		"governance_sanitize_runtime_env",
+		"case ${governance_var} in SUBAGENT_GOVERNANCE_HOST_DEV_ROOT_ALIAS) continue ;; esac",
 		"NIX_LDFLAGS=${NIX_LDFLAGS//${host_dev}/\\/workspaces\\/dev}",
 		"out=${out//${host_dev}/\\/workspaces\\/dev}",
 		"*/agent-worktrees/*/ouroboros-ide) governance_env=${PWD%%/agent-worktrees/*}/.devkit/ouro8-governance-env.sh; governance_root=${PWD%%/agent-worktrees/*}/ouroboros-ide; governance_workspace_root=${PWD}",

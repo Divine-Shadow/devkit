@@ -893,7 +893,7 @@ func validOuroGovernanceJavaXmx(value string) bool {
 }
 
 const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
-const ouroProductRuntimeSourceRev = "cbe199fa13fb93b2850fdc1437c753485539c88c"
+const ouroProductRuntimeSourceRev = "6826ff0ad172d35ce2eaeb62473ae26facb765a0"
 const ouroGovernanceSourceRev = ouroProductRuntimeSourceRev
 const ouroGovernanceSubmitRuntimeSourceRev = ouroProductRuntimeSourceRev
 const ouroGovernanceArtifactColumnSourceRev = "8e23ded5579e896c95b5a751f4d4a18da70049a9"
@@ -1235,15 +1235,36 @@ func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfi
 		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(entrypointSHA256),
 		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(catalog.ids, ","),
 		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(catalog.rootBindings, ","),
-		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT=" + schemaRoot,
+	}
+	if hostDevRootAlias := ouroGovernanceHostDevRootAlias(hostDevRoot); hostDevRootAlias != "" {
+		lines = append(lines, "export SUBAGENT_GOVERNANCE_HOST_DEV_ROOT_ALIAS="+shellQuote(hostDevRootAlias))
+	}
+	lines = append(lines,
+		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT="+schemaRoot,
 		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_FORWARD_SERVER_URL=http://127.0.0.1:7778",
 		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR=" + ouroGovernanceExternalStateRoot,
-		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH=" + ouroGovernanceExecutionGraphDecisionLog,
+		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR="+ouroGovernanceExternalStateRoot,
+		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH="+ouroGovernanceExecutionGraphDecisionLog,
 		"",
-	}
+	)
 	return strings.Join(lines, "\n")
+}
+
+func ouroGovernanceHostDevRootAlias(hostDevRoot string) string {
+	root := filepath.Clean(strings.TrimSpace(hostDevRoot))
+	if !filepath.IsAbs(root) {
+		return ""
+	}
+	within := func(candidate string, parent string) bool {
+		rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(candidate))
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	canonicalRoot := filepath.Clean(sandboxDevRoot)
+	if within(root, canonicalRoot) || within(canonicalRoot, root) || within(root, "/tmp") {
+		return ""
+	}
+	return root
 }
 
 type ouroGovernanceCatalog struct {
