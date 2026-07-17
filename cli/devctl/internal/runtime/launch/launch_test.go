@@ -349,6 +349,20 @@ func TestValidateOuroGovernanceActivationRuntimeLauncherRequiresStoreBackedBundl
 			t.Fatalf("accepted invalid activation launcher %q", candidate)
 		}
 	}
+	externalLauncher := filepath.Join(t.TempDir(), "dev-all-runtime-bundle")
+	if err := os.WriteFile(externalLauncher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escapedLauncher := filepath.Join(storeRoot, "escaped-dev-all-runtime-bundle", "bin", "dev-all-runtime-bundle")
+	if err := os.MkdirAll(filepath.Dir(escapedLauncher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalLauncher, escapedLauncher); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateOuroGovernanceActivationRuntimeLauncher(escapedLauncher, storeRoot); err == nil {
+		t.Fatalf("accepted activation launcher symlink escape %q", escapedLauncher)
+	}
 }
 
 func TestSelectOuroGovernanceSystemRuntimeLauncherRejectsUntrustedActivationOverride(t *testing.T) {

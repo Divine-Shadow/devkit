@@ -936,7 +936,19 @@ func validateOuroGovernanceActivationRuntimeLauncher(launcherPath string, storeR
 	if filepath.Base(launcherPath) != "dev-all-runtime-bundle" || filepath.Base(filepath.Dir(launcherPath)) != "bin" {
 		return "", fmt.Errorf("authoritative governance runtime launcher override must name a Nix dev-all-runtime-bundle launcher: %s", launcherPath)
 	}
-	return launcherPath, nil
+	resolvedLauncherPath, err := filepath.EvalSymlinks(launcherPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve authoritative governance runtime launcher override %s: %w", launcherPath, err)
+	}
+	resolvedLauncherPath = filepath.Clean(resolvedLauncherPath)
+	relative, err = filepath.Rel(storeRoot, resolvedLauncherPath)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("authoritative governance runtime launcher override resolves outside %s: %s", storeRoot, resolvedLauncherPath)
+	}
+	if filepath.Base(resolvedLauncherPath) != "dev-all-runtime-bundle" || filepath.Base(filepath.Dir(resolvedLauncherPath)) != "bin" {
+		return "", fmt.Errorf("authoritative governance runtime launcher override resolves to a non-bundle launcher: %s", resolvedLauncherPath)
+	}
+	return resolvedLauncherPath, nil
 }
 
 func ouroGovernanceRuntimeBundleFlake(devkitRoot string) string {
