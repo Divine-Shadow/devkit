@@ -87,7 +87,10 @@ type BuildOptions struct {
 	DedicatedWorktree     bool
 }
 
-const IsolationProfileWorkspaceEgress = "workspace-egress"
+const (
+	IsolationProfileWorkspaceEgress = "workspace-egress"
+	workspaceEgressNSCDSocket       = "/var/run/nscd/socket"
+)
 
 func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 	const rootedPrefix = "path:.?"
@@ -279,7 +282,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	mountPolicyIdentity := "devkit/native-broad/v1"
 	windowsMountsVisible := true
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		mountPolicyIdentity = "devkit/workspace-egress/v1"
+		mountPolicyIdentity = "devkit/workspace-egress/v2"
 		windowsMountsVisible = false
 		env["DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY"] = mountPolicyIdentity
 		env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"] = "false"
@@ -409,6 +412,10 @@ func workspaceEgressBinds(paths agent.Paths, devkitRoot string, repo string, bro
 	}
 	add(filepath.Join(paths.DevRoot, repo, ".git"), filepath.Join("/workspaces/dev", repo, ".git"), "ro", false)
 	add("/nix/store", "/nix/store", "ro", true)
+	// The isolated network namespace cannot reach the host loopback resolver.
+	// nsncd exposes DNS through this narrowly scoped Unix capability; network
+	// egress remains restricted to the managed proxy.
+	add(workspaceEgressNSCDSocket, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	return binds

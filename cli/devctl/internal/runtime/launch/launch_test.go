@@ -835,6 +835,7 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 	joined := ShellString(cmd)
 	for _, want := range []string{
 		"'--unshare-net'",
+		"'--ro-bind' '/var/run/nscd/socket' '/var/run/nscd/socket'",
 		"'--bind' '" + hostWorktree + "' '/workspace'",
 		"'--bind' '" + hostWorktree + "' '/workspaces/dev/agent-worktrees/agent3/ouroboros-ide'",
 		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3") + "' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3'",

@@ -140,7 +140,7 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 		t.Fatalf("Build: %v", err)
 	}
 	if p.IsolationProfile != IsolationProfileWorkspaceEgress ||
-		p.MountPolicyIdentity != "devkit/workspace-egress/v1" ||
+		p.MountPolicyIdentity != "devkit/workspace-egress/v2" ||
 		p.WindowsMountsVisible {
 		t.Fatalf("isolation readback = profile=%q policy=%q windows=%v", p.IsolationProfile, p.MountPolicyIdentity, p.WindowsMountsVisible)
 	}
@@ -318,6 +318,15 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	}
 	if !hasBind(p.Binds, devkitRoot, "/workspaces/dev/devkit") {
 		t.Fatalf("workspace-egress must mount exact devkit runtime root: %#v", p.Binds)
+	}
+	foundNSCD := false
+	for _, bind := range p.Binds {
+		if bind.Source == workspaceEgressNSCDSocket && bind.Target == workspaceEgressNSCDSocket {
+			foundNSCD = bind.Mode == "ro" && bind.Required
+		}
+	}
+	if !foundNSCD {
+		t.Fatalf("workspace-egress must require a read-only nsncd socket bind: %#v", p.Binds)
 	}
 	if !hasBind(p.Binds, commonGitDir, commonGitDir) {
 		t.Fatalf("workspace-egress must mount exact git common dir: %#v", p.Binds)
