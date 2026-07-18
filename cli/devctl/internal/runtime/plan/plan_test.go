@@ -2,6 +2,7 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -331,6 +332,9 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	if !hasBind(p.Binds, commonGitDir, commonGitDir) {
 		t.Fatalf("workspace-egress must mount exact git common dir: %#v", p.Binds)
 	}
+	if !hasBind(p.Binds, hostWorktree, hostWorktree) {
+		t.Fatalf("workspace-egress must materialize the exact Git-recorded linked worktree path: %#v", p.Binds)
+	}
 	for _, forbidden := range [][2]string{
 		{devRoot, "/workspaces/dev"},
 		{devRoot, devRoot},
@@ -371,6 +375,71 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	} {
 		if !strings.Contains(p.Env["JAVA_TOOL_OPTIONS"], want) {
 			t.Fatalf("JAVA_TOOL_OPTIONS missing %q: %q", want, p.Env["JAVA_TOOL_OPTIONS"])
+		}
+	}
+}
+
+func TestWorkspaceEgressMaterializesOnlyEachLinkedWorktreeCanonicalAlias(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	commonGitDir := filepath.Join(devRoot, ".git")
+	worktreeRoot := filepath.Join(devRoot, "control-plane-worktrees")
+	repo := "shadow-throne-management"
+	for _, dir := range []string{devkitRoot, commonGitDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	worktrees := []string{
+		filepath.Join(worktreeRoot, "agent1", repo),
+		filepath.Join(worktreeRoot, "agent2", repo),
+	}
+	for index, worktree := range worktrees {
+		gitDir := filepath.Join(commonGitDir, "worktrees", fmt.Sprintf("management-%d", index+1))
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", gitDir, err)
+		}
+		if err := os.MkdirAll(worktree, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", worktree, err)
+		}
+		if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(gitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for index, worktree := range worktrees {
+		p, err := Build(BuildOptions{
+			Paths:            devkitpaths.Paths{Root: devkitRoot},
+			Project:          "dev-workspace",
+			Index:            index + 1,
+			Repo:             repo,
+			WorktreeRoot:     worktreeRoot,
+			IsolationProfile: IsolationProfileWorkspaceEgress,
+			EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+		})
+		if err != nil {
+			t.Fatalf("Build agent%d: %v", index+1, err)
+		}
+		if !hasBind(p.Binds, worktree, p.Agent.SandboxWorktree) {
+			t.Fatalf("agent%d missing sandbox-canonical worktree bind: %#v", index+1, p.Binds)
+		}
+		if !hasBind(p.Binds, worktree, worktree) {
+			t.Fatalf("agent%d missing exact Git-recorded worktree alias: %#v", index+1, p.Binds)
+		}
+		if !hasBind(p.Binds, commonGitDir, commonGitDir) {
+			t.Fatalf("agent%d missing exact common Git directory: %#v", index+1, p.Binds)
+		}
+		if hasBind(p.Binds, devRoot, devRoot) || hasBind(p.Binds, worktreeRoot, worktreeRoot) {
+			t.Fatalf("agent%d exposed a broad host path: %#v", index+1, p.Binds)
+		}
+		other := worktrees[1-index]
+		if hasBind(p.Binds, other, other) {
+			t.Fatalf("agent%d exposed sibling linked worktree %s: %#v", index+1, other, p.Binds)
 		}
 	}
 }

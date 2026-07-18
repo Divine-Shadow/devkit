@@ -147,3 +147,46 @@ Validation:
   the external target remains byte-identical.
 - `nix build .#devctl --no-link --print-out-paths` produced
   `/nix/store/c10xwd0c4kw46h2s3k9zjvnjbqk4dmfj-devkit-devctl-dev`.
+
+## 2026-07-18 Linked-worktree Nix Metadata Addendum
+
+A fresh Management v2 consumer proved ordinary Git was healthy while Nix
+failed before flake evaluation. The linked worktree's `.git` file resolved its
+common directory at `/home/bayesartre/dev/.git`; Devkit mounted that exact
+metadata directory, but Nix followed Git's recorded absolute worktree path at
+`/home/bayesartre/dev/control-plane-worktrees/...`, which the narrow sandbox
+had not materialized.
+
+The centralized repair keeps the existing sandbox-canonical `/workspaces/...`
+view and common Git directory, and adds an exact second alias for the same
+validated linked worktree at its Git-recorded host path. It does not mount the
+dev root, worktree parent, or any sibling checkout, and it does not rewrite
+Git metadata or create a symlink.
+
+Progress:
+
+- [x] Reproduce the failure with the repository-declared Fleet Control Nix Go
+  check.
+- [x] Implement generic linked-worktree alias materialization in Devkit source.
+- [x] Pass focused and full Devctl tests plus the Devctl Nix package build.
+- [ ] Publish the reviewed source commit.
+- [ ] Deploy through the package-owned persistent launcher.
+- [ ] Prove two freshly reconstructed Management linked-worktree consumers can
+  write Git metadata and run the Fleet Control Nix Go check.
+
+Pre-publication validation:
+
+- Focused plan and launcher regressions pass for exact linked-worktree aliases,
+  common Git metadata, and sibling/parent non-exposure.
+- The full Devctl suite passes with the ambient launcher configuration removed:
+  `env -u DEVKIT_ROOT -u DEVKIT_OVERLAYS_DIR
+  -u DEVKIT_CODEX_CONFIG_SOURCE -u CODEX_HOME -u CODEX_ROLLOUT_DIR
+  TMPDIR=/tmp/dt go test ./...`.
+- `nix build .#devctl --no-link --print-out-paths` produced
+  `/nix/store/3j357cyx20q988w001ynxfr2sdr2s1jq-devkit-devctl-dev`.
+- A repository-wide `nix flake check --no-build` evaluated `devctl` successfully
+  and then stopped at the independently missing sibling checkout
+  `/workspaces/dev/ouroboros-ide`, which the runtime-bundle output requires.
+- Two independently reconstructed linked worktrees, launched with the repaired
+  source, each evaluated their flake through Nix without exposing the shared
+  worktree parent or the other consumer.

@@ -468,11 +468,18 @@ func gitMetadataBinds(hostWorktree string) []Bind {
 	if gitDir == "" {
 		return nil
 	}
+	// Git records a linked worktree's absolute host path in the common
+	// metadata. Git commands entered through the sandbox-canonical worktree
+	// can operate with only the common directory mounted, but Nix's Git source
+	// evaluator follows that recorded worktree path before evaluating the
+	// flake. Materialize an exact alias for the already-authorized worktree;
+	// do not expose its parent or any sibling checkout.
+	binds := []Bind{{Source: hostWorktree, Target: hostWorktree, Mode: "rw", Required: true}}
 	commonDir := commonGitDir(gitDir)
 	if commonDir != "" {
-		return []Bind{{Source: commonDir, Target: commonDir, Mode: "rw", Required: true}}
+		return append(binds, Bind{Source: commonDir, Target: commonDir, Mode: "rw", Required: true})
 	}
-	return []Bind{{Source: gitDir, Target: gitDir, Mode: "rw", Required: true}}
+	return append(binds, Bind{Source: gitDir, Target: gitDir, Mode: "rw", Required: true})
 }
 
 func parseGitdirFile(data string, hostWorktree string) string {

@@ -856,10 +856,18 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	hostWorktree := filepath.Join(devRoot, "agent-worktrees", "agent3", "ouroboros-ide")
-	for _, dir := range []string{devkitRoot, hostWorktree} {
+	commonGitDir := filepath.Join(devRoot, "ouroboros-ide", ".git")
+	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "agent3")
+	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+worktreeGitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
@@ -883,6 +891,8 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 		"'--ro-bind' '/var/run/nscd/socket' '/var/run/nscd/socket'",
 		"'--bind' '" + hostWorktree + "' '/workspace'",
 		"'--bind' '" + hostWorktree + "' '/workspaces/dev/agent-worktrees/agent3/ouroboros-ide'",
+		"'--bind' '" + hostWorktree + "' '" + hostWorktree + "'",
+		"'--bind' '" + commonGitDir + "' '" + commonGitDir + "'",
 		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3") + "' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3'",
 		"'--ro-bind' '" + devkitRoot + "' '/workspaces/dev/devkit'",
 		"native proxy-bridge --listen 127.0.0.1:18888",
@@ -896,6 +906,7 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 	for _, forbidden := range []string{
 		"'--share-net'",
 		"'--bind' '" + devRoot + "' '/workspaces/dev'",
+		"'--bind' '" + devRoot + "' '" + devRoot + "'",
 		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees") + "' '/workspaces/dev/agent-worktrees'",
 		"'--bind' '" + filepath.Join(devRoot, ".devkit", "native-agents") + "' '/agent-state'",
 		"/workspaces/dev/.cache/shared",
