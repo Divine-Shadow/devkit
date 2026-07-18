@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,62 @@ func TestAllowlistRejectsSiblingSuffixesAndIPs(t *testing.T) {
 	for _, host := range []string{"badexample.com", "example.org", "93.184.216.34", "[::1]:443"} {
 		if allowlist.Allowed(host) {
 			t.Fatalf("expected %s to be rejected", host)
+		}
+	}
+}
+
+func TestRepositoryAllowlistScopesSessionManagerToDeclaredRegion(t *testing.T) {
+	allowlistPath := filepath.Join("..", "..", "..", "..", "..", "kit", "proxy", "allowlist.txt")
+	allowlist, err := LoadAllowlist(allowlistPath)
+	if err != nil {
+		t.Fatalf("load repository allowlist: %v", err)
+	}
+
+	for _, host := range []string{
+		"ssm.us-east-2.amazonaws.com",
+		"ssm.us-east-2.amazonaws.com:443",
+		"ssmmessages.us-east-2.amazonaws.com",
+		"ssmmessages.us-east-2.amazonaws.com:443",
+	} {
+		if !allowlist.Allowed(host) {
+			t.Fatalf("expected declared Session Manager endpoint %s to be allowed", host)
+		}
+	}
+
+	for _, host := range []string{
+		"ssm.us-east-1.amazonaws.com",
+		"ssmmessages.us-east-1.amazonaws.com",
+		"ec2messages.us-east-2.amazonaws.com",
+		"evil-ssm.us-east-2.amazonaws.com",
+		"ssm.us-east-2.amazonaws.com.attacker.invalid",
+		"169.254.169.254",
+	} {
+		if allowlist.Allowed(host) {
+			t.Fatalf("expected unrelated Session Manager endpoint %s to be rejected", host)
+		}
+	}
+
+	dnsPath := filepath.Join("..", "..", "..", "..", "..", "kit", "dns", "dnsmasq.conf")
+	dnsData, err := os.ReadFile(dnsPath)
+	if err != nil {
+		t.Fatalf("load repository DNS policy: %v", err)
+	}
+	dnsPolicy := string(dnsData)
+	for _, line := range []string{
+		"server=/ssm.us-east-2.amazonaws.com/1.1.1.1",
+		"server=/ssmmessages.us-east-2.amazonaws.com/1.1.1.1",
+	} {
+		if strings.Count(dnsPolicy, line) != 1 {
+			t.Fatalf("expected declared DNS policy line exactly once: %s", line)
+		}
+	}
+	for _, fragment := range []string{
+		"server=/ssm.us-east-1.amazonaws.com/",
+		"server=/ssmmessages.us-east-1.amazonaws.com/",
+		"server=/ec2messages.us-east-2.amazonaws.com/",
+	} {
+		if strings.Contains(dnsPolicy, fragment) {
+			t.Fatalf("expected unrelated DNS policy fragment to remain absent: %s", fragment)
 		}
 	}
 }
