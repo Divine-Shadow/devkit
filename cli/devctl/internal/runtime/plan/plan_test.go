@@ -141,7 +141,7 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 		t.Fatalf("Build: %v", err)
 	}
 	if p.IsolationProfile != IsolationProfileWorkspaceEgress ||
-		p.MountPolicyIdentity != "devkit/workspace-egress/v2" ||
+		p.MountPolicyIdentity != "devkit/workspace-egress/v3" ||
 		p.WindowsMountsVisible {
 		t.Fatalf("isolation readback = profile=%q policy=%q windows=%v", p.IsolationProfile, p.MountPolicyIdentity, p.WindowsMountsVisible)
 	}
@@ -290,7 +290,11 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+worktreeGitDir+"\n"), 0o644); err != nil {
+	relativeGitDir, err := filepath.Rel(hostWorktree, worktreeGitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+relativeGitDir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
@@ -329,11 +333,11 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	if !foundNSCD {
 		t.Fatalf("workspace-egress must require a read-only nsncd socket bind: %#v", p.Binds)
 	}
-	if !hasBind(p.Binds, commonGitDir, commonGitDir) {
-		t.Fatalf("workspace-egress must mount exact git common dir: %#v", p.Binds)
+	if !hasBind(p.Binds, commonGitDir, filepath.Join("/workspaces/dev", "ouroboros-ide", ".git")) {
+		t.Fatalf("workspace-egress must project relative common Git metadata into the canonical sandbox path: %#v", p.Binds)
 	}
-	if !hasBind(p.Binds, hostWorktree, hostWorktree) {
-		t.Fatalf("workspace-egress must materialize the exact Git-recorded linked worktree path: %#v", p.Binds)
+	if hasBind(p.Binds, commonGitDir, commonGitDir) || hasBind(p.Binds, hostWorktree, hostWorktree) {
+		t.Fatalf("portable workspace-egress metadata must not require host-path aliases: %#v", p.Binds)
 	}
 	for _, forbidden := range [][2]string{
 		{devRoot, "/workspaces/dev"},

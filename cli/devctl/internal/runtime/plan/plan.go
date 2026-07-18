@@ -270,7 +270,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"standard agents must use brokered OCI access only",
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		binds = workspaceEgressBinds(paths, opts.Paths.Root, repo, broker, resolvConf)
+		binds = workspaceEgressBinds(paths, opts.Paths.Root, broker, resolvConf)
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
 		}
@@ -282,7 +282,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	mountPolicyIdentity := "devkit/native-broad/v1"
 	windowsMountsVisible := true
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		mountPolicyIdentity = "devkit/workspace-egress/v2"
+		mountPolicyIdentity = "devkit/workspace-egress/v3"
 		windowsMountsVisible = false
 		env["DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY"] = mountPolicyIdentity
 		env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"] = "false"
@@ -388,7 +388,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, devkitRoot string, repo string, broker string, resolvConf string) []Bind {
+func workspaceEgressBinds(paths agent.Paths, devkitRoot string, broker string, resolvConf string) []Bind {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -407,10 +407,9 @@ func workspaceEgressBinds(paths agent.Paths, devkitRoot string, repo string, bro
 	add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
 	add(devkitRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
-	for _, bind := range gitMetadataBinds(paths.HostWorktree) {
+	for _, bind := range gitMetadataBinds(paths.HostWorktree, paths.SandboxWorktree) {
 		add(bind.Source, bind.Target, bind.Mode, bind.Required)
 	}
-	add(filepath.Join(paths.DevRoot, repo, ".git"), filepath.Join("/workspaces/dev", repo, ".git"), "ro", false)
 	add("/nix/store", "/nix/store", "ro", true)
 	// The isolated network namespace cannot reach the host loopback resolver.
 	// nsncd exposes DNS through this narrowly scoped Unix capability; network
@@ -451,7 +450,7 @@ func isWindowsFilesystemPath(value string) bool {
 	return len(lower) == len("/mnt/x") || lower[len("/mnt/x")] == '/'
 }
 
-func gitMetadataBinds(hostWorktree string) []Bind {
+func gitMetadataBinds(hostWorktree, sandboxWorktree string) []Bind {
 	gitPath := filepath.Join(hostWorktree, ".git")
 	info, err := os.Stat(gitPath)
 	if err != nil {
@@ -464,25 +463,39 @@ func gitMetadataBinds(hostWorktree string) []Bind {
 	if err != nil {
 		return nil
 	}
-	gitDir := parseGitdirFile(string(data), hostWorktree)
-	if gitDir == "" {
+	gitdirValue := parseGitdirValue(string(data))
+	if gitdirValue == "" {
 		return nil
 	}
-	// Git records a linked worktree's absolute host path in the common
-	// metadata. Git commands entered through the sandbox-canonical worktree
-	// can operate with only the common directory mounted, but Nix's Git source
-	// evaluator follows that recorded worktree path before evaluating the
-	// flake. Materialize an exact alias for the already-authorized worktree;
-	// do not expose its parent or any sibling checkout.
+	gitDir := resolveGitdirValue(gitdirValue, hostWorktree)
+	sandboxGitDir := resolveGitdirValue(gitdirValue, sandboxWorktree)
+	commondirValue := readCommondirValue(gitDir)
+	commonDir := resolveCommondirValue(commondirValue, gitDir)
+	if !filepath.IsAbs(gitdirValue) {
+		if commonDir != "" {
+			// Relative linked-worktree metadata is intentionally portable
+			// across the host dev root and its /workspaces/dev projection.
+			// Mount the common repository only at the sandbox-resolved target;
+			// no host-path alias is part of the normal contract.
+			sandboxCommonDir := resolveCommondirValue(commondirValue, sandboxGitDir)
+			if sandboxCommonDir != "" {
+				return []Bind{{Source: commonDir, Target: sandboxCommonDir, Mode: "rw", Required: true}}
+			}
+		}
+		return []Bind{{Source: gitDir, Target: sandboxGitDir, Mode: "rw", Required: true}}
+	}
+
+	// A linked source can keep common metadata outside the canonical dev root.
+	// Such a worktree retains absolute metadata, so materialize only its exact
+	// worktree and metadata paths; never expose their parents or siblings.
 	binds := []Bind{{Source: hostWorktree, Target: hostWorktree, Mode: "rw", Required: true}}
-	commonDir := commonGitDir(gitDir)
 	if commonDir != "" {
 		return append(binds, Bind{Source: commonDir, Target: commonDir, Mode: "rw", Required: true})
 	}
 	return append(binds, Bind{Source: gitDir, Target: gitDir, Mode: "rw", Required: true})
 }
 
-func parseGitdirFile(data string, hostWorktree string) string {
+func parseGitdirValue(data string) string {
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(strings.ToLower(line), "gitdir:") {
@@ -492,20 +505,34 @@ func parseGitdirFile(data string, hostWorktree string) string {
 		if value == "" {
 			return ""
 		}
-		if filepath.IsAbs(value) {
-			return filepath.Clean(value)
-		}
-		return filepath.Clean(filepath.Join(hostWorktree, value))
+		return filepath.Clean(value)
 	}
 	return ""
 }
 
-func commonGitDir(gitDir string) string {
+func resolveGitdirValue(value, worktree string) string {
+	if value == "" {
+		return ""
+	}
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	return filepath.Clean(filepath.Join(worktree, value))
+}
+
+func readCommondirValue(gitDir string) string {
 	data, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
 		return ""
 	}
 	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
+}
+
+func resolveCommondirValue(value, gitDir string) string {
 	if value == "" {
 		return ""
 	}

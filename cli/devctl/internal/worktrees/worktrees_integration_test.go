@@ -173,10 +173,83 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
-	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), true)
-	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), true)
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), false)
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), false)
 	if got := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 		t.Fatalf("primary checkout branch changed to %s", got)
+	}
+}
+
+func TestSetupNative_NestedCodexWorktreeSurvivesDevRootProjection(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "host-dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        2,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+	}); err != nil {
+		t.Fatalf("native setup failed: %v", err)
+	}
+
+	outer := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide")
+	legacyGitDir := readTrim(t, "git", "-C", outer, "rev-parse", "--git-dir")
+	if !filepath.IsAbs(legacyGitDir) {
+		legacyGitDir = filepath.Join(outer, legacyGitDir)
+	}
+	if err := os.WriteFile(filepath.Join(outer, ".git"), []byte("gitdir: "+filepath.Clean(legacyGitDir)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", outer, "config", "worktree.useRelativePaths", "false")
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        2,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+	}); err != nil {
+		t.Fatalf("native reconvergence failed: %v", err)
+	}
+	checkGitdirForm(t, outer, false)
+	if got := readTrim(t, "git", "-C", outer, "config", "--bool", "worktree.useRelativePaths"); got != "true" {
+		t.Fatalf("worktree.useRelativePaths = %q, want true", got)
+	}
+
+	nested := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", ".devhome-agent2", ".codex", "worktrees", "3293", "ouroboros-ide")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", outer, "worktree", "add", "--detach", nested, "HEAD")
+	checkGitdirForm(t, nested, false)
+	gitFile, err := os.ReadFile(filepath.Join(nested, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(gitFile), devRoot) {
+		t.Fatalf("nested worktree captured host dev root: %s", gitFile)
+	}
+
+	projectedDevRoot := filepath.Join(root, "workspaces-dev")
+	if err := os.Rename(devRoot, projectedDevRoot); err != nil {
+		t.Fatalf("project dev root: %v", err)
+	}
+	projectedNested := filepath.Join(projectedDevRoot, paths.AgentWorktreesDir, "agent2", ".devhome-agent2", ".codex", "worktrees", "3293", "ouroboros-ide")
+	if got := readTrim(t, "git", "-C", projectedNested, "rev-parse", "--show-toplevel"); got != projectedNested {
+		t.Fatalf("projected nested worktree top = %s, want %s", got, projectedNested)
+	}
+	if got := readTrim(t, "git", "-C", projectedNested, "status", "--porcelain=v1"); got != "" {
+		t.Fatalf("projected nested worktree is dirty: %q", got)
 	}
 }
 
@@ -224,7 +297,7 @@ func TestSetupNative_ReconstructsMissingRepoBesidePartialAgentHome(t *testing.T)
 	}
 }
 
-func TestSetupNative_FromLinkedSourceWorktreeUsesAbsoluteGitdir(t *testing.T) {
+func TestSetupNative_FromLinkedSourceWorktreeKeepsExternalGitdirResolvable(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}

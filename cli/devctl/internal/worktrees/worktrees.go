@@ -54,6 +54,57 @@ func rewriteGitdir(wt string, relative bool) {
 	_ = os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0644)
 }
 
+// rewriteNativeGitdir makes linked-worktree metadata portable whenever the
+// common Git repository lives under the canonical dev root. That preserves the
+// relative topology when the dev root is projected from its host path to
+// /workspaces/dev, including for nested worktrees created later by Codex.
+//
+// A linked source checkout can legitimately use a common Git directory outside
+// the dev root. Keep that exceptional path absolute because there is no
+// canonical dev-root-relative projection for it; the narrow runtime metadata
+// bind remains responsible for making that external common directory visible.
+func rewriteNativeGitdir(wt, devRoot string) error {
+	gitFile := filepath.Join(wt, ".git")
+	if info, err := os.Stat(gitFile); err == nil && info.IsDir() {
+		return nil
+	}
+	out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--git-dir")
+	if res.Code != 0 {
+		return fmt.Errorf("read native worktree gitdir %s: exit %d", wt, res.Code)
+	}
+	gitdir := strings.TrimSpace(out)
+	if gitdir == "" {
+		return fmt.Errorf("native worktree %s returned an empty gitdir", wt)
+	}
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Clean(filepath.Join(wt, gitdir))
+	}
+	if pathWithinRoot(devRoot, wt) && pathWithinRoot(devRoot, gitdir) {
+		rel, err := filepath.Rel(wt, gitdir)
+		if err != nil {
+			return fmt.Errorf("make native worktree gitdir relative for %s: %w", wt, err)
+		}
+		gitdir = rel
+	}
+	if err := os.WriteFile(gitFile, []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write native worktree gitdir %s: %w", gitFile, err)
+	}
+	return nil
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	root = filepath.Clean(strings.TrimSpace(root))
+	candidate = filepath.Clean(strings.TrimSpace(candidate))
+	if root == "." || candidate == "." {
+		return false
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 // cleanWorktreePath removes the target directory when it is clearly stale:
 // missing .git metadata, pointing to a different repository, or referencing a
 // gitdir that no longer exists. We keep the directory when it still looks like
@@ -329,7 +380,7 @@ func SetupNative(opts NativeOptions) error {
 			return err
 		}
 	}
-	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "config", "worktree.useRelativePaths", "false")...); err != nil {
+	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "config", "worktree.useRelativePaths", "true")...); err != nil {
 		return err
 	}
 	if !opts.DryRun {
@@ -346,8 +397,12 @@ func SetupNative(opts NativeOptions) error {
 			if ok, err := existingGitCheckout(wt); err != nil {
 				return err
 			} else if ok {
-				_ = run(false, "env", envGit("-C", wt, "config", "worktree.useRelativePaths", "false")...)
-				rewriteGitdir(wt, false)
+				if err := run(false, "env", envGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
+					return err
+				}
+				if err := rewriteNativeGitdir(wt, devRoot); err != nil {
+					return err
+				}
 				continue
 			}
 			if err := cleanWorktreePath(repoWorktreesDir, wt); err != nil {
@@ -368,7 +423,9 @@ func SetupNative(opts NativeOptions) error {
 			}
 		}
 		if !opts.DryRun {
-			rewriteGitdir(wt, false)
+			if err := rewriteNativeGitdir(wt, devRoot); err != nil {
+				return err
+			}
 		}
 		if err := run(opts.DryRun, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
 			return err
