@@ -36,9 +36,10 @@ portable computation depend on station namespace identity.
   and a nested Codex-style worktree.
 - [x] Implement the source repair and hostile regression tests.
 - [x] Run focused Go tests and the isolated Nix `devctl` package build.
-- [ ] Run the full repository/Nix acceptance from a consumer that exposes the
-  pinned Product source required by the complete flake.
-- [ ] Publish Devkit master and update the canonical WSL/Nix pin.
+- [x] Run the full repository/Nix acceptance from a disposable consumer that
+  exposes the pinned Product source required by the complete flake.
+- [x] Publish Devkit master.
+- [ ] Update the canonical WSL/Nix pin through its existing sole writer.
 - [ ] Converge through centralized fleet deployment.
 - [ ] Prove two fresh Product consumers can run Git identity and governance
   status/admission canaries without local mutation.
@@ -66,10 +67,17 @@ consumers from the converged closure.
 Pending.
 
 The focused `worktrees`, runtime-plan, and workspace-egress launcher tests
-passed. `nix build .#devctl` produced
-`/nix/store/fgy3m6v9bz7izh6s0c66lscjqdh4yap0-devkit-devctl-dev`. A direct
+passed. `nix build .#devctl` first produced an isolated package candidate.
+After supplying the flake's pinned Product repository as disposable read-only
+input, `nix flake check --show-trace` passed all nine x86_64 checks. A direct
 host-environment `go test ./...` also exercised all packages but retained
 pre-existing environment-sensitive failures in integration and home-config
-tests; the isolated Nix package build passed and is the authoritative package
-acceptance. Full flake acceptance remains pending because this restricted
-consumer intentionally does not expose `/workspaces/dev/ouroboros-ide`.
+tests; the isolated Nix package build and complete flake check passed and are
+the authoritative acceptance.
+
+The implementation landed on Devkit master as `294dd3829c2c95725d67c360e92ddf6cb6235781`.
+The test name was then adjusted in
+`53f01af5808feb33c83c769566c8dd93192fc0a2` because the static retired-runtime
+guard correctly treats the contiguous legacy wrapper token as forbidden even
+inside an otherwise unrelated test identifier. The final source readback and
+downstream WSL/Nix pin are recorded after this plan closeout commit.
