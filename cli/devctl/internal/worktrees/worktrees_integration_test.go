@@ -180,7 +180,7 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 	}
 }
 
-func TestSetupNative_NestedCodexWorktreeSurvivesDevRootProjection(t *testing.T) {
+func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
