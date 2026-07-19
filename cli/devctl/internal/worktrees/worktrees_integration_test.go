@@ -378,6 +378,8 @@ func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *tes
 		t.Fatalf("prepare existing worktree: %v", err)
 	}
 	repo := filepath.Join(devRoot, "ouroboros-ide")
+	worktree := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "worktree", "remove", "--force", worktree)
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid/missing.git")
 
 	err := SetupNative(NativeOptions{
@@ -389,6 +391,9 @@ func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *tes
 	})
 	if err == nil || !strings.Contains(err.Error(), "fetch --all --prune") {
 		t.Fatalf("SetupNative error = %v, want fail-closed Product fetch error", err)
+	}
+	if _, statErr := os.Stat(worktree); !os.IsNotExist(statErr) {
+		t.Fatalf("failed Product fetch materialized worktree %s: %v", worktree, statErr)
 	}
 }
 

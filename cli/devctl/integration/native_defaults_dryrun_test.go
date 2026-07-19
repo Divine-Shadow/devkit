@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -626,6 +628,79 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 			}
 			if code := exitErr.ExitCode(); code != 7 {
 				t.Fatalf("%s exit code = %d, want 7\n%s", tt.name, code, out)
+			}
+		})
+	}
+}
+
+func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := nativeDefaultsRoot(t)
+	writeNixCodexConfigSource(t, root)
+	createNativeAgentWorktreeForRepo(t, root, "test-repo")
+	worktree := filepath.Join(filepath.Clean(filepath.Join(root, "..")), "agent-worktrees", "agent1", "test-repo")
+	if out, err := exec.Command("git", "-C", worktree, "init").CombinedOutput(); err != nil {
+		t.Fatalf("initialize clean Git worktree fixture: %v\n%s", err, out)
+	}
+
+	bwrapDir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(bwrapDir, "bwrap"),
+		[]byte("#!/bin/sh\nprintf '%s' '__DEVKIT_RESULT__=PASS'\nexit \"${DEVKIT_TEST_BWRAP_EXIT:-0}\"\n"),
+		0o755,
+	); err != nil {
+		t.Fatal(err)
+	}
+	allowlistPath := filepath.Join(root, "allowlist.txt")
+	if err := os.WriteFile(allowlistPath, []byte("github.com\nssh.github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socketRoot, err := os.MkdirTemp("", "dke-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketRoot) })
+	for _, exitCode := range []int{0, 7} {
+		t.Run(fmt.Sprintf("exit-%d", exitCode), func(t *testing.T) {
+			sharedSocket := filepath.Join(socketRoot, fmt.Sprintf("shared-%d.sock", exitCode))
+			cmd := exec.Command(
+				bin,
+				"-p", "dev-all",
+				"exec", "1",
+				"--repo", "test-repo",
+				"--flake", ".#runtime-test-agent",
+				"--isolation-profile", "workspace-egress",
+				"--egress-allowlist", allowlistPath,
+				"--proxy-socket", sharedSocket,
+				"--", "true",
+			)
+			cmd.Env = append(os.Environ(),
+				"DEVKIT_ROOT="+root,
+				"DEVKIT_NO_TMUX=1",
+				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+				"DEVKIT_TEST_BWRAP_EXIT="+strconv.Itoa(exitCode),
+				"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			)
+			out, err := cmd.CombinedOutput()
+			if exitCode == 0 {
+				if err != nil {
+					t.Fatalf("native exec error = %v, want success\n%s", err, out)
+				}
+			} else {
+				exitErr, ok := err.(*exec.ExitError)
+				if !ok || exitErr.ExitCode() != exitCode {
+					t.Fatalf("native exec error = %v, want exit %d\n%s", err, exitCode, out)
+				}
+			}
+			if !strings.Contains(string(out), "__DEVKIT_RESULT__=PASS") {
+				t.Fatalf("native exec suppressed child stdout:\n%s", out)
+			}
+			socketMatches, err := filepath.Glob(filepath.Join(filepath.Dir(sharedSocket), ".managed-egress-*.sock"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(socketMatches) != 0 {
+				t.Fatalf("native exec left managed proxy sockets after exit %d: %v", exitCode, socketMatches)
 			}
 		})
 	}

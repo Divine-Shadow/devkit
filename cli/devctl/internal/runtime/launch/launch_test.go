@@ -1084,13 +1084,25 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	t.Setenv("HOME", hostUserHome)
 
 	hostHome := filepath.Join(tmp, "agent-home")
+	runtimeRoot := filepath.Join(tmp, "runtime-authority")
+	devctlPath := filepath.Join(runtimeRoot, "kit", "bin", "devctl")
+	writeTestFile(t, devctlPath, "#!/bin/sh\nexit 99\n")
+	if err := os.Chmod(devctlPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(tmp, "native-egress", "product-a.sock")
 	p := nativeplan.Plan{
-		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		RuntimeAuthorityRoot: runtimeRoot,
 		Agent: agent.Spec{
+			ID:          agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
 			HostHome:    hostHome,
 			SandboxHome: "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
 		},
-		Proxy: nativeplan.ProxyConfig{HTTPProxy: "http://127.0.0.1:18888"},
+		Proxy: nativeplan.ProxyConfig{
+			HTTPProxy:  "http://127.0.0.1:18888",
+			UnixSocket: socketPath,
+		},
 	}
 	sshCommand, err := PrepareGitBootstrap(p)
 	if err != nil {
@@ -1105,7 +1117,7 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 		"Host github.com",
 		"  HostName ssh.github.com",
 		"  Port 443",
-		"  ProxyCommand nc -X connect -x 127.0.0.1:18888 %h %p",
+		"  ProxyCommand '" + devctlPath + "' -p 'dev-all' native proxy-connect --socket '" + socketPath + "' --target %h:%p",
 		"  IdentityFile " + filepath.Join(hostHome, ".ssh", "id_ed25519"),
 		"  IdentitiesOnly yes",
 		"  BatchMode yes",
@@ -1116,6 +1128,33 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	}
 	if strings.Contains(cfg, p.Agent.SandboxHome) {
 		t.Fatalf("host bootstrap SSH config selected sandbox-only paths:\n%s", cfg)
+	}
+	for _, forbidden := range []string{"127.0.0.1:18888", "ProxyCommand nc ", "https://"} {
+		if strings.Contains(cfg, forbidden) {
+			t.Fatalf("host bootstrap SSH config selected forbidden transport %q:\n%s", forbidden, cfg)
+		}
+	}
+}
+
+func TestPrepareGitBootstrapRejectsMissingPackageOwnedProxyHelper(t *testing.T) {
+	tmp := t.TempDir()
+	hostUserHome := filepath.Join(tmp, "host-user")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
+	t.Setenv("HOME", hostUserHome)
+
+	p := nativeplan.Plan{
+		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		RuntimeAuthorityRoot: filepath.Join(tmp, "missing-runtime"),
+		Agent: agent.Spec{
+			ID:       agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
+			HostHome: filepath.Join(tmp, "agent-home"),
+		},
+		Proxy: nativeplan.ProxyConfig{UnixSocket: filepath.Join(tmp, "proxy.sock")},
+	}
+	_, err := PrepareGitBootstrap(p)
+	if err == nil || !strings.Contains(err.Error(), "package-owned proxy helper") {
+		t.Fatalf("PrepareGitBootstrap error = %v, want package-owned proxy helper rejection", err)
 	}
 }
 

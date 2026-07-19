@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -585,6 +586,11 @@ func main() {
 	}
 	if handler, ok := registry.Lookup(cmd); ok {
 		if err := handler(ctx); err != nil {
+			var exitCoder interface{ ExitCode() int }
+			if errors.As(err, &exitCoder) && exitCoder.ExitCode() >= 0 {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(exitCoder.ExitCode())
+			}
 			die(err.Error())
 		}
 		return

@@ -241,14 +241,43 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 	if len(identityNames) == 0 {
 		return "", fmt.Errorf("native Git bootstrap requires a seeded SSH identity in %s", filepath.Join(hostHome, ".ssh"))
 	}
-	proxyURL := ""
+	proxyCommand := ""
 	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
-		proxyURL = p.Proxy.HTTPProxy
+		proxyCommand, err = gitBootstrapProxyCommand(p)
+		if err != nil {
+			return "", err
+		}
 	}
-	if err := writeGitSSHConfig(hostHome, hostHome, identityNames, proxyURL); err != nil {
+	if err := writeGitSSHConfigWithProxyCommand(hostHome, hostHome, identityNames, proxyCommand); err != nil {
 		return "", err
 	}
 	return sshCommand, nil
+}
+
+func gitBootstrapProxyCommand(p nativeplan.Plan) (string, error) {
+	runtimeRoot := strings.TrimSpace(p.RuntimeAuthorityRoot)
+	if runtimeRoot == "" {
+		return "", fmt.Errorf("native Git bootstrap requires a source-derived runtime authority root")
+	}
+	project := strings.TrimSpace(p.Agent.ID.Project)
+	if project == "" {
+		return "", fmt.Errorf("native Git bootstrap requires a project identity")
+	}
+	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
+	if socketPath == "" {
+		return "", fmt.Errorf("native Git bootstrap requires a managed egress proxy socket")
+	}
+	devctlPath := filepath.Join(filepath.Clean(runtimeRoot), "kit", "bin", "devctl")
+	if !isExecutable(devctlPath) {
+		return "", fmt.Errorf("native Git bootstrap requires package-owned proxy helper %s", devctlPath)
+	}
+	return strings.Join([]string{
+		shellQuote(devctlPath),
+		"-p", shellQuote(project),
+		"native", "proxy-connect",
+		"--socket", shellQuote(socketPath),
+		"--target", "%h:%p",
+	}, " "), nil
 }
 
 func existingSSHIdentities(sshDir string) []string {
@@ -266,6 +295,14 @@ func WriteGitSSHConfig(hostHome, configHome string, identityNames []string) erro
 }
 
 func writeGitSSHConfig(hostHome, configHome string, identityNames []string, proxyURL string) error {
+	proxyCommand := ""
+	if parsed, err := url.Parse(strings.TrimSpace(proxyURL)); err == nil && parsed.Scheme == "http" && parsed.Host != "" {
+		proxyCommand = "nc -X connect -x " + parsed.Host + " %h %p"
+	}
+	return writeGitSSHConfigWithProxyCommand(hostHome, configHome, identityNames, proxyCommand)
+}
+
+func writeGitSSHConfigWithProxyCommand(hostHome, configHome string, identityNames []string, proxyCommand string) error {
 	hostHome = strings.TrimSpace(hostHome)
 	configHome = strings.TrimSpace(configHome)
 	if hostHome == "" || configHome == "" {
@@ -282,7 +319,7 @@ func writeGitSSHConfig(hostHome, configHome string, identityNames []string, prox
 		return fmt.Errorf("mkdir %s: %w", sshDir, err)
 	}
 	cfgPath := filepath.Join(sshDir, "config")
-	cfg := buildGitSSHConfig(configHome, identityNames, proxyURL)
+	cfg := buildGitSSHConfigWithProxyCommand(configHome, identityNames, proxyCommand)
 	if err := writeManagedBlock(cfgPath, cfg, 0o600); err != nil {
 		return err
 	}
@@ -290,13 +327,21 @@ func writeGitSSHConfig(hostHome, configHome string, identityNames []string, prox
 }
 
 func buildGitSSHConfig(configHome string, identityNames []string, proxyURL string) string {
+	proxyCommand := ""
+	if parsed, err := url.Parse(strings.TrimSpace(proxyURL)); err == nil && parsed.Scheme == "http" && parsed.Host != "" {
+		proxyCommand = "nc -X connect -x " + parsed.Host + " %h %p"
+	}
+	return buildGitSSHConfigWithProxyCommand(configHome, identityNames, proxyCommand)
+}
+
+func buildGitSSHConfigWithProxyCommand(configHome string, identityNames []string, proxyCommand string) string {
 	var b strings.Builder
 	b.WriteString(gitSSHManagedBegin + "\n")
 	b.WriteString("Host github.com\n")
-	if parsed, err := url.Parse(strings.TrimSpace(proxyURL)); err == nil && parsed.Scheme == "http" && parsed.Host != "" {
+	if proxyCommand = strings.TrimSpace(proxyCommand); proxyCommand != "" {
 		b.WriteString("  HostName ssh.github.com\n")
 		b.WriteString("  Port 443\n")
-		b.WriteString("  ProxyCommand nc -X connect -x " + parsed.Host + " %h %p\n")
+		b.WriteString("  ProxyCommand " + proxyCommand + "\n")
 	} else {
 		b.WriteString("  HostName github.com\n")
 	}

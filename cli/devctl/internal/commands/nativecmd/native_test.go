@@ -1,9 +1,12 @@
 package nativecmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -913,6 +916,78 @@ func TestWithManagedEgressProxyEstablishesSocketBeforeBootstrapAndCleansUp(t *te
 	}
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Fatalf("managed proxy socket survived bootstrap: %v", err)
+	}
+}
+
+func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) {
+	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
+	tmp := t.TempDir()
+	allowlistPath := filepath.Join(tmp, "allowlist.txt")
+	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(tmp, "managed-egress.sock")
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{
+			UnixSocket:    socketPath,
+			AllowlistPath: allowlistPath,
+		},
+	}
+	sentinel := errors.New("bootstrap failed")
+	err := withManagedEgressProxy(p, false, func() error {
+		if !unixSocketAccepts(socketPath) {
+			t.Fatal("managed proxy was not accepting before callback")
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("withManagedEgressProxy error = %v, want callback failure", err)
+	}
+	if unixSocketAccepts(socketPath) {
+		t.Fatalf("managed proxy listener survived callback failure at %s", socketPath)
+	}
+	if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed proxy pathname survived callback failure: %v", err)
+	}
+}
+
+func TestEnsureManagedEgressProxyRefusesArbitraryExistingListener(t *testing.T) {
+	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
+	tmp := t.TempDir()
+	allowlistPath := filepath.Join(tmp, "allowlist.txt")
+	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(tmp, "managed-egress.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{
+			UnixSocket:    socketPath,
+			AllowlistPath: allowlistPath,
+		},
+	}
+	_, err = ensureManagedEgressProxy(p, false)
+	if err == nil || !strings.Contains(err.Error(), "refuses an existing listener") {
+		t.Fatalf("ensureManagedEgressProxy error = %v, want existing listener rejection", err)
+	}
+	if !unixSocketAccepts(socketPath) {
+		t.Fatal("existing listener was mutated while being refused")
+	}
+}
+
+func TestRunCommandPreservingExitProjectsStdoutByteExactly(t *testing.T) {
+	var stdout bytes.Buffer
+	cmd := exec.Command("sh", "-c", "printf '%s' '__DEVKIT_RESULT__=PASS'")
+	cmd.Stdout = &stdout
+	if err := runCommandPreservingExit(cmd); err != nil {
+		t.Fatalf("runCommandPreservingExit: %v", err)
+	}
+	if got := stdout.String(); got != "__DEVKIT_RESULT__=PASS" {
+		t.Fatalf("stdout projection = %q", got)
 	}
 }
 

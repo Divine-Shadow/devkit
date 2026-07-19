@@ -2,6 +2,7 @@ package egressproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -170,5 +171,193 @@ func TestServeChainsConnectThroughConfiguredUpstreamProxy(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("upstream proxy did not receive CONNECT")
+	}
+}
+
+func TestConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes(t *testing.T) {
+	tmp := t.TempDir()
+	socketPath := filepath.Join(tmp, "consumer.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	targetCh := make(chan string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		req, err := http.ReadRequest(bufio.NewReader(conn))
+		if err != nil {
+			return
+		}
+		targetCh <- req.Host
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\nSSH-2.0-test\r\n")
+		payload := make([]byte, 4)
+		if _, err := io.ReadFull(conn, payload); err == nil && string(payload) == "ping" {
+			_, _ = io.WriteString(conn, "pong")
+		}
+	}()
+
+	var output bytes.Buffer
+	if err := Connect(context.Background(), socketPath, "ssh.github.com:443", strings.NewReader("ping"), &output); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if got := output.String(); got != "SSH-2.0-test\r\npong" {
+		t.Fatalf("tunnel output = %q", got)
+	}
+	select {
+	case got := <-targetCh:
+		if got != "ssh.github.com:443" {
+			t.Fatalf("CONNECT target = %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Unix proxy did not receive CONNECT")
+	}
+}
+
+func TestConnectNeverTouchesHostileFixedLoopbackBridge(t *testing.T) {
+	hostile, err := net.Listen("tcp", "127.0.0.1:18888")
+	if err != nil {
+		t.Skipf("fixed loopback port unavailable for hostile-listener test: %v", err)
+	}
+	defer hostile.Close()
+	if tcpListener, ok := hostile.(*net.TCPListener); ok {
+		_ = tcpListener.SetDeadline(time.Now().Add(250 * time.Millisecond))
+	}
+	hostileAccepted := make(chan error, 1)
+	go func() {
+		conn, acceptErr := hostile.Accept()
+		if acceptErr == nil {
+			_ = conn.Close()
+		}
+		hostileAccepted <- acceptErr
+	}()
+
+	tmp := t.TempDir()
+	socketPath := filepath.Join(tmp, "consumer.sock")
+	managed, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer managed.Close()
+	go func() {
+		conn, err := managed.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = http.ReadRequest(bufio.NewReader(conn))
+		_, _ = io.WriteString(conn, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+	}()
+	err = Connect(context.Background(), socketPath, "ssh.github.com:443", strings.NewReader(""), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "403 Forbidden") {
+		t.Fatalf("Connect error = %v, want managed Unix proxy rejection", err)
+	}
+	if acceptErr := <-hostileAccepted; acceptErr == nil {
+		t.Fatal("package-owned CONNECT helper touched hostile 127.0.0.1:18888 listener")
+	}
+}
+
+func TestConnectFailsClosedOnProxyRejection(t *testing.T) {
+	for _, status := range []string{"403 Forbidden", "502 Bad Gateway"} {
+		t.Run(status, func(t *testing.T) {
+			tmp := t.TempDir()
+			socketPath := filepath.Join(tmp, "consumer.sock")
+			listener, err := net.Listen("unix", socketPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, _ = http.ReadRequest(bufio.NewReader(conn))
+				_, _ = io.WriteString(conn, "HTTP/1.1 "+status+"\r\nContent-Length: 0\r\n\r\n")
+			}()
+
+			var output bytes.Buffer
+			err = Connect(context.Background(), socketPath, "forbidden.invalid:443", strings.NewReader("payload"), &output)
+			if err == nil || !strings.Contains(err.Error(), status) {
+				t.Fatalf("Connect error = %v, want %s rejection", err, status)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("rejected CONNECT emitted tunnel bytes %q", output.String())
+			}
+		})
+	}
+}
+
+func TestConnectFailsClosedWhenExactUnixSocketIsMissing(t *testing.T) {
+	var output bytes.Buffer
+	err := Connect(
+		context.Background(),
+		filepath.Join(t.TempDir(), "missing.sock"),
+		"ssh.github.com:443",
+		strings.NewReader("payload"),
+		&output,
+	)
+	if err == nil || !strings.Contains(err.Error(), "dial managed egress proxy") {
+		t.Fatalf("Connect error = %v, want missing socket rejection", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("missing socket emitted tunnel bytes %q", output.String())
+	}
+}
+
+func TestDialConnectTargetPreservesBannerBufferedWithUpstreamResponse(t *testing.T) {
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		conn, err := upstream.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = http.ReadRequest(bufio.NewReader(conn))
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\nSSH-BANNER")
+	}()
+
+	proxyURL, err := parseUpstreamProxyURL("http://" + upstream.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialConnectTarget("ssh.github.com:443", proxyURL)
+	if err != nil {
+		t.Fatalf("dialConnectTarget: %v", err)
+	}
+	defer conn.Close()
+	payload := make([]byte, len("SSH-BANNER"))
+	if _, err := io.ReadFull(conn, payload); err != nil {
+		t.Fatalf("read buffered banner: %v", err)
+	}
+	if got := string(payload); got != "SSH-BANNER" {
+		t.Fatalf("buffered banner = %q", got)
+	}
+}
+
+func TestServeRefusesExistingSocketAuthority(t *testing.T) {
+	tmp := t.TempDir()
+	socketPath := filepath.Join(tmp, "consumer.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	allowlistPath := filepath.Join(tmp, "allowlist.txt")
+	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = Serve(context.Background(), Config{SocketPath: socketPath, AllowlistPath: allowlistPath})
+	if err == nil || !strings.Contains(err.Error(), "refusing existing proxy socket path") {
+		t.Fatalf("Serve error = %v, want existing authority rejection", err)
 	}
 }

@@ -26,6 +26,15 @@ type Allowlist struct {
 	domains map[string]bool
 }
 
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
 func LoadAllowlist(path string) (Allowlist, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -100,8 +109,10 @@ func Serve(ctx context.Context, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(socketPath), err)
 	}
-	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale proxy socket %s: %w", socketPath, err)
+	if _, err := os.Lstat(socketPath); err == nil {
+		return fmt.Errorf("refusing existing proxy socket path %s", socketPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect proxy socket %s: %w", socketPath, err)
 	}
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -125,6 +136,66 @@ func Serve(ctx context.Context, cfg Config) error {
 			return err
 		}
 		go handleConn(conn, allowlist, upstreamProxy)
+	}
+}
+
+// Connect opens one fail-closed stdio CONNECT tunnel through the exact
+// package-owned Unix proxy socket. It deliberately has no TCP, ambient proxy,
+// or protocol fallback.
+func Connect(ctx context.Context, socketPath string, target string, input io.Reader, output io.Writer) error {
+	socketPath = strings.TrimSpace(socketPath)
+	if socketPath == "" {
+		return fmt.Errorf("proxy socket path is required")
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("CONNECT target is required")
+	}
+	if input == nil || output == nil {
+		return fmt.Errorf("CONNECT input and output are required")
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		return fmt.Errorf("dial managed egress proxy %s: %w", socketPath, err)
+	}
+	defer conn.Close()
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{},
+		Host:   target,
+		Header: make(http.Header),
+	}
+	if err := req.Write(conn); err != nil {
+		return fmt.Errorf("write managed CONNECT: %w", err)
+	}
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		return fmt.Errorf("read managed CONNECT response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return fmt.Errorf("managed CONNECT returned %s", resp.Status)
+	}
+
+	inputErr := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(conn, input)
+		if unixConn, ok := conn.(*net.UnixConn); ok {
+			_ = unixConn.CloseWrite()
+		}
+		inputErr <- copyErr
+	}()
+	_, outputErr := io.Copy(output, reader)
+	_ = conn.Close()
+	select {
+	case copyErr := <-inputErr:
+		return errors.Join(outputErr, copyErr)
+	case <-ctx.Done():
+		return errors.Join(outputErr, ctx.Err())
+	case <-time.After(time.Second):
+		return outputErr
 	}
 }
 
@@ -295,17 +366,18 @@ func dialConnectTarget(target string, upstreamProxy *url.URL) (net.Conn, error) 
 		conn.Close()
 		return nil, fmt.Errorf("write upstream CONNECT: %w", err)
 	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("read upstream CONNECT response: %w", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		conn.Close()
 		return nil, fmt.Errorf("upstream CONNECT returned %s", resp.Status)
 	}
-	return conn, nil
+	return &bufferedConn{Conn: conn, reader: reader}, nil
 }
 
 func writeProxyError(w io.Writer, code int, msg string) {

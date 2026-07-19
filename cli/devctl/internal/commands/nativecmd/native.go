@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -64,6 +65,8 @@ func handle(ctx *cmdregistry.Context) error {
 		return handleEgressProxy(ctx)
 	case "proxy-bridge":
 		return handleProxyBridge(ctx)
+	case "proxy-connect":
+		return handleProxyConnect(ctx)
 	default:
 		return fmt.Errorf("unknown native command %s", ctx.Args[0])
 	}
@@ -193,6 +196,40 @@ func handleProxyBridge(ctx *cmdregistry.Context) error {
 		return nil
 	}
 	return egressproxy.Bridge(context.Background(), listenAddr, socketPath)
+}
+
+func handleProxyConnect(ctx *cmdregistry.Context) error {
+	socketPath := ""
+	target := ""
+	for i := 1; i < len(ctx.Args); i++ {
+		switch ctx.Args[i] {
+		case "--socket":
+			if i+1 >= len(ctx.Args) {
+				return fmt.Errorf("--socket requires a value")
+			}
+			socketPath = resolveNativeRoot(ctx.Paths.Root, ctx.Args[i+1])
+			i++
+		case "--target":
+			if i+1 >= len(ctx.Args) {
+				return fmt.Errorf("--target requires a value")
+			}
+			target = ctx.Args[i+1]
+			i++
+		default:
+			return fmt.Errorf("unknown native proxy-connect arg %s", ctx.Args[i])
+		}
+	}
+	if strings.TrimSpace(socketPath) == "" {
+		return fmt.Errorf("--socket is required")
+	}
+	if strings.TrimSpace(target) == "" {
+		return fmt.Errorf("--target is required")
+	}
+	if ctx.DryRun {
+		fmt.Fprintf(os.Stdout, "native proxy connect socket=%s target=%s\n", socketPath, target)
+		return nil
+	}
+	return egressproxy.Connect(context.Background(), socketPath, target, os.Stdin, os.Stdout)
 }
 
 func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMode bool) (planArgs, error) {
@@ -845,7 +882,7 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 	return parsed, nil
 }
 
-func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) error {
+func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) (retErr error) {
 	if err := ensureNativeLifecycleProject(ctx); err != nil {
 		return err
 	}
@@ -884,7 +921,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
-	defer cleanupProxy()
+	defer func() {
+		retErr = errors.Join(retErr, cleanupProxy())
+	}()
 	if !ctx.DryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
@@ -1773,7 +1812,7 @@ func handleShell(ctx *cmdregistry.Context) error {
 	return handleExec(ctx)
 }
 
-func handleExec(ctx *cmdregistry.Context) error {
+func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	parsed, err := parsePlanArgs(ctx, true, false)
 	if err != nil {
 		return err
@@ -1802,7 +1841,9 @@ func handleExec(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	defer cleanupProxy()
+	defer func() {
+		retErr = errors.Join(retErr, cleanupProxy())
+	}()
 	if !dryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
@@ -1828,28 +1869,34 @@ func handleExec(ctx *cmdregistry.Context) error {
 }
 
 func runCommandPreservingExit(cmd *exec.Cmd) error {
-	err := cmd.Run()
-	if code, ok := exitCodeFromError(err); ok {
-		os.Exit(code)
-	}
-	return err
+	return cmd.Run()
 }
 
-func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func(), error) {
+func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func() error, error) {
 	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
 	allowlistPath := strings.TrimSpace(p.Proxy.AllowlistPath)
 	if allowlistPath == "" {
-		return func() {}, nil
+		return func() error { return nil }, nil
 	}
 	if socketPath == "" {
 		return nil, fmt.Errorf("managed native egress proxy requires a proxy socket")
 	}
 	if dryRun {
 		fmt.Fprintf(os.Stdout, "native egress proxy socket=%s allowlist=%s\n", socketPath, allowlistPath)
-		return func() {}, nil
+		return func() error { return nil }, nil
 	}
-	if unixSocketAccepts(socketPath) {
-		return func() {}, nil
+	if info, err := os.Lstat(socketPath); err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("managed native egress proxy refuses non-socket path %s", socketPath)
+		}
+		if unixSocketAccepts(socketPath) {
+			return nil, fmt.Errorf("managed native egress proxy refuses an existing listener at %s", socketPath)
+		}
+		if err := os.Remove(socketPath); err != nil {
+			return nil, fmt.Errorf("remove stale managed egress proxy socket %s: %w", socketPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect managed egress proxy socket %s: %w", socketPath, err)
 	}
 	proxyCtx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -1862,14 +1909,48 @@ func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func(), error) {
 	}()
 	if err := waitForUnixSocketOrExit(socketPath, errCh, 5*time.Second); err != nil {
 		cancel()
+		_ = os.Remove(socketPath)
 		return nil, err
 	}
-	return func() {
+	ownedInfo, err := os.Lstat(socketPath)
+	if err != nil {
 		cancel()
-		select {
-		case <-errCh:
-		case <-time.After(2 * time.Second):
-		}
+		return nil, fmt.Errorf("inspect started managed egress proxy socket %s: %w", socketPath, err)
+	}
+	var cleanupOnce sync.Once
+	var cleanupErr error
+	return func() error {
+		cleanupOnce.Do(func() {
+			cancel()
+			select {
+			case serveErr := <-errCh:
+				if serveErr != nil {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("managed egress proxy exit: %w", serveErr))
+				}
+			case <-time.After(2 * time.Second):
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("managed egress proxy did not exit within 2s"))
+			}
+			if unixSocketAccepts(socketPath) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("managed egress proxy listener survived cleanup at %s", socketPath))
+				return
+			}
+			info, statErr := os.Lstat(socketPath)
+			if errors.Is(statErr, os.ErrNotExist) {
+				return
+			}
+			if statErr != nil {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("inspect managed egress proxy cleanup path %s: %w", socketPath, statErr))
+				return
+			}
+			if !os.SameFile(ownedInfo, info) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("managed egress proxy cleanup path identity changed at %s", socketPath))
+				return
+			}
+			if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove managed egress proxy socket %s: %w", socketPath, err))
+			}
+		})
+		return cleanupErr
 	}, nil
 }
 
@@ -1878,8 +1959,9 @@ func withManagedEgressProxy(p nativeplan.Plan, dryRun bool, run func() error) er
 	if err != nil {
 		return err
 	}
-	defer cleanupProxy()
-	return run()
+	runErr := run()
+	cleanupErr := cleanupProxy()
+	return errors.Join(runErr, cleanupErr)
 }
 
 func prepareWithManagedEgressProxy(
