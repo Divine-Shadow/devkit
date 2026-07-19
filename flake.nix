@@ -176,7 +176,8 @@
         let
           shell = self.devShells.${pkgs.system}.dev-all;
           runtimeInputs =
-            (shell.nativeBuildInputs or [ ])
+            [ pkgs.nodejs_22 ]
+            ++ (shell.nativeBuildInputs or [ ])
             ++ (shell.buildInputs or [ ]);
           packageNamed =
             name:
@@ -683,16 +684,29 @@
               printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
             '';
 
-          runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" { } ''
+          runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" {
+            nativeBuildInputs = [ runtimeTools ];
+          } ''
+            env -i PATH=${pkgs.bash}/bin \
+              ${runtimeTools}/bin/dev-all-runtime-tools \
+              bash -c '
+                set -eu
+                node_path="$(command -v node)"
+                case "$node_path" in
+                  /nix/store/*-nodejs-22.*/bin/node) ;;
+                  *)
+                    echo "runtime tools selected non-pinned Node: $node_path" >&2
+                    exit 1
+                    ;;
+                esac
+                node --version >/dev/null
+                test -x "$(command -v playwright)"
+                test -n "$NODE_PATH"
+              '
             mkdir -p "$out"
-            cat > "$out/README" <<'EOF'
-            Devkit Nix runtime shell inventory evaluates.
-
-            Required follow-up evidence for each shell:
-            - nix develop .#<shell> --command <tool smoke>
-            - tool parity against the source Dockerfile
-            - brokered OCI access check where applicable
-            EOF
+            printf '%s\n' \
+              'immutable dev-all runtime selects pinned Node and Playwright' \
+              > "$out/README"
           '';
 
           overlay-runtime-metadata = pkgs.runCommand "devkit-overlay-runtime-metadata" {
