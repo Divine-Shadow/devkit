@@ -272,7 +272,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		"standard agents must use brokered OCI access only",
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		binds = workspaceEgressBinds(paths, opts.Paths.Root, broker, resolvConf)
+		binds = workspaceEgressBinds(paths, project, repo, opts.Paths.Root, broker, resolvConf)
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
 		}
@@ -390,7 +390,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, devkitRoot string, broker string, resolvConf string) []Bind {
+func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, broker string, resolvConf string) []Bind {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -409,6 +409,33 @@ func workspaceEgressBinds(paths agent.Paths, devkitRoot string, broker string, r
 	add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
 	add(devkitRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
+	if isGovernedRuntimePlan(project, repo) {
+		// launch.Prepare materializes the immutable runtime identity projection
+		// and governance catalog beneath the controller dev root before every
+		// governed sandbox invocation. Readiness and the governed launcher
+		// consume those exact files; they must not depend on a broad
+		// /workspaces/dev bind or regenerate a second identity in the consumer.
+		hostRuntimeSupportRoot := filepath.Join(paths.DevRoot, ".devkit")
+		sandboxRuntimeSupportRoot := filepath.Join("/workspaces/dev", ".devkit")
+		add(
+			filepath.Join(hostRuntimeSupportRoot, "ouro8-governance-env.sh"),
+			filepath.Join(sandboxRuntimeSupportRoot, "ouro8-governance-env.sh"),
+			"ro",
+			true,
+		)
+		add(
+			filepath.Join(hostRuntimeSupportRoot, "ouro8-governance-repo-env.json"),
+			filepath.Join(sandboxRuntimeSupportRoot, "ouro8-governance-repo-env.json"),
+			"ro",
+			true,
+		)
+		add(
+			filepath.Join(hostRuntimeSupportRoot, "governance-control-plane"),
+			filepath.Join(sandboxRuntimeSupportRoot, "governance-control-plane"),
+			"rw",
+			true,
+		)
+	}
 	for _, bind := range gitMetadataBinds(paths.HostWorktree, paths.SandboxWorktree) {
 		add(bind.Source, bind.Target, bind.Mode, bind.Required)
 	}
@@ -420,6 +447,19 @@ func workspaceEgressBinds(paths agent.Paths, devkitRoot string, broker string, r
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	return binds
+}
+
+func isGovernedRuntimePlan(project, repo string) bool {
+	switch strings.TrimSpace(repo) {
+	case "ouroboros-ide", "ouroboros-terraform":
+		return true
+	}
+	switch strings.TrimSpace(project) {
+	case "dev-workspace", "ouro-integration", "ouroboros-terraform":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateWorkspaceEgressMountPolicy(binds []Bind, egressAllowlist string) error {

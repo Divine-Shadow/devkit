@@ -244,6 +244,15 @@ func hasBind(binds []Bind, source, target string) bool {
 	return false
 }
 
+func hasExactBind(binds []Bind, expected Bind) bool {
+	for _, bind := range binds {
+		if bind == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildDevAllHonorsExplicitProxy(t *testing.T) {
 	p, err := BuildDevAll(BuildOptions{
 		Paths:   devkitpaths.Paths{Root: "/repo/devkit"},
@@ -379,6 +388,79 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	} {
 		if !strings.Contains(p.Env["JAVA_TOOL_OPTIONS"], want) {
 			t.Fatalf("JAVA_TOOL_OPTIONS missing %q: %q", want, p.Env["JAVA_TOOL_OPTIONS"])
+		}
+	}
+}
+
+func TestBuildDevAllWorkspaceEgressProjectsPreparedRuntimeSupportExactly(t *testing.T) {
+	devRoot := t.TempDir()
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktree := filepath.Join(devRoot, "agent-worktrees", "agent1", "ouroboros-ide")
+	home := filepath.Join(worktree, ".devhome-agent1")
+	for _, path := range []string{
+		devkitRoot,
+		worktree,
+		home,
+		filepath.Join(devRoot, ".devkit", "governance-control-plane"),
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{
+		"ouro8-governance-env.sh",
+		"ouro8-governance-repo-env.json",
+	} {
+		if err := os.WriteFile(filepath.Join(devRoot, ".devkit", name), []byte("fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p, err := BuildDevAll(BuildOptions{
+		Paths: devkitpaths.Paths{
+			Root:                 devkitRoot,
+			RuntimeAuthorityRoot: "/nix/store/example-devkit-devctl",
+		},
+		Project:          "dev-all",
+		Repo:             "ouroboros-ide",
+		Index:            1,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  "/nix/store/example-devkit-devctl/kit/proxy/allowlist.txt",
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll error: %v", err)
+	}
+
+	for _, expected := range []Bind{
+		{
+			Source:   filepath.Join(devRoot, ".devkit", "ouro8-governance-env.sh"),
+			Target:   "/workspaces/dev/.devkit/ouro8-governance-env.sh",
+			Mode:     "ro",
+			Required: true,
+		},
+		{
+			Source:   filepath.Join(devRoot, ".devkit", "ouro8-governance-repo-env.json"),
+			Target:   "/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
+			Mode:     "ro",
+			Required: true,
+		},
+		{
+			Source:   filepath.Join(devRoot, ".devkit", "governance-control-plane"),
+			Target:   "/workspaces/dev/.devkit/governance-control-plane",
+			Mode:     "rw",
+			Required: true,
+		},
+	} {
+		if !hasExactBind(p.Binds, expected) {
+			t.Fatalf("missing exact prepared runtime support bind %#v; got %#v", expected, p.Binds)
+		}
+	}
+	for _, forbidden := range []Bind{
+		{Source: devRoot, Target: "/workspaces/dev"},
+		{Source: filepath.Join(devRoot, ".devkit"), Target: "/workspaces/dev/.devkit"},
+	} {
+		if hasBind(p.Binds, forbidden.Source, forbidden.Target) {
+			t.Fatalf("runtime support projection broadened to forbidden bind %#v", forbidden)
 		}
 	}
 }

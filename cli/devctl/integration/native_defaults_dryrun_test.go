@@ -1055,6 +1055,15 @@ runtime:
   flake: ./overlays/dev-all#default
 readiness:
   default_mode: runtime-only
+  runtime_checks:
+    - name: package-runtime-tools
+      command: command -v git >/dev/null && command -v codex >/dev/null
+    - name: governance-provenance
+      command: test -r /workspaces/dev/.devkit/ouro8-governance-env.sh && test -r /workspaces/dev/.devkit/ouro8-governance-repo-env.json
+    - name: codex-provider-config
+      command: test -r "$CODEX_HOME/config.toml"
+    - name: app-server-preparation
+      command: test -r "$CODEX_HOME/config.toml" && test -d "$CODEX_ROLLOUT_DIR"
 broker:
   socket: %s
   upstream: unix:///fixture-docker.sock
@@ -1122,13 +1131,78 @@ native:
 	if err := os.WriteFile(filepath.Join(sshDir, "ssh"), []byte(sshScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bwrapScript := "#!/bin/sh\n" +
-		"if [ -f " + strconv.Quote(readinessFail) + " ]; then\n" +
-		"  printf '__DEVKIT_READINESS_CHECK__\\truntime\\tsandbox-command\\t1\\tcmVhZGluZXNzIGZhaWx1cmU=\\n'\n" +
-		"  exit 0\n" +
-		"fi\n" +
-		"printf '__DEVKIT_READINESS_CHECK__\\truntime\\tsandbox-command\\t0\\t\\n'\n" +
-		"printf '__DEVKIT_READINESS_CHECK__\\truntime\\tbroker-socket\\t0\\t\\n'\n"
+	bwrapScript := `#!/bin/sh
+set -eu
+if [ -f ` + strconv.Quote(readinessFail) + ` ]; then
+  printf '__DEVKIT_READINESS_CHECK__\truntime\tsandbox-command\t1\tcmVhZGluZXNzIGZhaWx1cmU=\n'
+  exit 0
+fi
+governance_env=
+governance_catalog=
+governance_state=
+host_home=
+host_worktree=
+mount_policy=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --ro-bind|--bind)
+      source="$2"
+      target="$3"
+      case "$target" in
+        /workspaces/dev/.devkit/ouro8-governance-env.sh) governance_env="$source" ;;
+        /workspaces/dev/.devkit/ouro8-governance-repo-env.json) governance_catalog="$source" ;;
+        /workspaces/dev/.devkit/governance-control-plane) governance_state="$source" ;;
+        /workspaces/dev/agent-worktrees/agent*/ouroboros-ide)
+          case "$source" in
+            */agent-worktrees/agent*/ouroboros-ide) host_worktree="$source" ;;
+          esac
+          ;;
+        /workspaces/dev/agent-worktrees/agent*/ouroboros-ide/.devhome-agent*|\
+        /workspaces/dev/agent-worktrees/agent*/.devhome-agent*) host_home="$source" ;;
+      esac
+      shift 3
+      ;;
+    --setenv)
+      if [ "$2" = DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY ]; then
+        mount_policy="$3"
+      fi
+      shift 3
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+emit() {
+  name="$1"
+  rc="$2"
+  detail="$3"
+  encoded="$(printf '%s' "$detail" | base64 -w0 2>/dev/null || printf '%s' "$detail" | base64 | tr -d '\n')"
+  printf '__DEVKIT_READINESS_CHECK__\truntime\t%s\t%s\t%s\n' "$name" "$rc" "$encoded"
+}
+emit sandbox-command 0 ''
+emit broker-socket 0 ''
+if [ "$mount_policy" = devkit/workspace-egress/v3 ] && [ -n "$host_worktree" ] &&
+   command git -C "$host_worktree" diff --quiet &&
+   command git -C "$host_worktree" diff --cached --quiet &&
+   [ "$(command git -C "$host_worktree" rev-parse HEAD)" = "$(command git -C "$host_worktree" rev-parse refs/remotes/origin/main)" ]; then
+  emit package-runtime-tools 0 ''
+else
+  emit package-runtime-tools 1 'package runtime identity or clean current Product worktree is missing'
+fi
+if [ -r "$governance_env" ] && [ -r "$governance_catalog" ] && [ -d "$governance_state" ]; then
+  emit governance-provenance 0 ''
+else
+  emit governance-provenance 1 'prepared governance runtime support is not projected into the sandbox'
+fi
+if [ -r "$host_home/.codex/config.toml" ]; then
+  emit codex-provider-config 0 ''
+  emit app-server-preparation 0 ''
+else
+  emit codex-provider-config 1 'Nix-authored Codex config is missing'
+  emit app-server-preparation 1 'source-defined app-server preparation is missing'
+fi
+`
 	if err := os.WriteFile(filepath.Join(sshDir, "bwrap"), []byte(bwrapScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1250,6 +1324,18 @@ native:
 	output, err = runReset()
 	if err != nil {
 		t.Fatalf("installed top-level reset failed: %v\n%s", err, output)
+	}
+	for _, want := range []string{
+		"capacity_available: 3/3",
+		"runtime_ready: 3/3",
+		"repo_ready: 3/3",
+		"agent1_status: status=ready worktree=ready broker=ready sandbox=ready tooling=ready",
+		"agent2_status: status=ready worktree=ready broker=ready sandbox=ready tooling=ready",
+		"agent3_status: status=ready worktree=ready broker=ready sandbox=ready tooling=ready",
+	} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("installed reset omitted accepted readiness %q:\n%s", want, output)
+		}
 	}
 	worktreesRoot := filepath.Join(base, "agent-worktrees")
 	wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
