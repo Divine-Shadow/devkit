@@ -30,6 +30,13 @@ Git to receive that exact SSH command explicitly.
   sandbox-visible identity paths.
 - The WSL v3 patch continues to enforce relative linked-worktree metadata and
   no normal-consumer host alias.
+- An isolated package-owned worktree root may live outside the host dev root.
+  Its linked-worktree gitdir is normal portable metadata when it belongs to the
+  configured root and resolves through the source repository's owned common
+  Git directory; host path spelling alone must not make it exceptional.
+- Owned `.git`, `commondir`, and reverse-gitdir pointers are relative.
+  External source-linked common repositories remain the narrow absolute-path
+  exception and malformed or traversing topologies fail closed.
 
 ## Progress
 
@@ -64,13 +71,23 @@ Git to receive that exact SSH command explicitly.
 - [x] Export the real bootstrap/stdout/cleanup regression suite as pinned
   Devkit flake check `checks.x86_64-linux.native-bootstrap-stdio-cleanup` for
   authoritative WSL consumption.
-- [ ] Publish Devkit master and record the exact commit.
-- [ ] Rebase the WSL v3 patch onto the new Devkit input, update pin/lock and
-  runtime identity assertions, and run the full WSL gate.
-- [ ] Prove direct and source-selected Colmena return the exact same closure and
-  deriver.
-- [ ] Apply through Fleet Control to Colmena.
-- [ ] Verify two fresh Product consumers and authorize one later Joe start-turn.
+- [x] Publish Devkit `be02d57ee140401be23efba945d442756edeef15`.
+- [x] Publish WSL/Nix `5cc33657bd78f3f9323aa450961544bce2f17e8f`
+  after the full clean gate and direct/source-selected-Colmena equality proof.
+- [x] Obtain the terminal canonical apply and two fresh Product proofs for the
+  package-owned SSH/Unix-proxy first-fetch and cleanup contract.
+- [x] Classify the remaining Product failure: isolated top-level roots outside
+  `devRoot` were deliberately left with absolute `.git` metadata despite being
+  linked to the package-owned common repository.
+- [x] Replace the host-root test with configured-worktree-root plus canonical
+  common-repository topology validation, relativeize all owned metadata
+  pointers, and retain the external-linked-source exception.
+- [x] Add two-root, host/sandbox-projection, ref-write, no-host-alias, traversal
+  rejection, and top-level prepare/exec regressions to the named Devkit check.
+- [ ] Publish the follow-up Devkit master commit.
+- [ ] Rebase the WSL patches, repin the named check, and repeat the clean full
+  check plus direct/source-selected-Colmena equality gate.
+- [ ] Return the exact tuple to the protected apply owner; do not apply here.
 
 ## Surprises and discoveries
 
@@ -101,6 +118,11 @@ Git to receive that exact SSH command explicitly.
   `/etc/resolv.conf` is absent there. Supplying the test's own `--resolv-conf`
   input keeps the production contract unchanged and makes the hostile test
   hermetic.
+- After the accepted `5cc3365` apply, two independent Product consumers proved
+  the SSH/bootstrap repair and then exposed the remaining metadata rule:
+  `rewriteNativeGitdir` used `devRoot` containment for both the worktree and
+  gitdir. The controller's isolated worktree roots are outside `devRoot`, while
+  their common repository is still the package-owned source under `devRoot`.
 
 ## Decision log
 
@@ -127,6 +149,11 @@ Git to receive that exact SSH command explicitly.
   identity, managed egress, and prohibition on a second transport authority.
   The same decision is present in the currently consumed unified
   Management/Fleet source `24f310d0750b55874a2f7043c7bf0e4adcdfed7f`.
+- Treat the isolated-root correction as enforcement of the same accepted v3
+  portability/no-host-alias decision, not a new transport or mount authority.
+  Ownership requires the exact configured worktree root, the canonical source
+  common repository, a per-worktree gitdir beneath its `worktrees/` directory,
+  and a reverse pointer back to that exact worktree.
 
 ## Files
 
@@ -179,9 +206,8 @@ credential copy, worktree repair, or alternate launcher counts.
 ## Outcomes and retrospective
 
 Focused worktree, launch, native-command, proxy, and integration tests pass.
-The complete Devkit Go suite passes with ambient consumer runtime variables
-removed. `nix flake check --show-trace --no-write-lock-file` passes all nine
-x86_64 checks, including rebuilt devctl derivation
-`/nix/store/8khnrbyz03s89zd5qgg6r15bh1sar1dm-devkit-devctl-dev.drv`.
-Publication, WSL convergence, protected-controller apply, and fresh-consumer
-proof remain.
+The prior published bootstrap repair passed the complete declared Devkit gate
+and its named `native-bootstrap-stdio-cleanup` check. The follow-up isolated
+metadata correction keeps that check as the sole regression authority and adds
+the real top-level prepare/exec and two-root metadata topology cases to it.
+Follow-up publication and WSL convergence remain.

@@ -168,6 +168,25 @@ func runNativeDefaultDryRun(t *testing.T, bin, root string, args ...string) (str
 	return string(out), err
 }
 
+func isolatedNativeFixtureEnv(extra ...string) []string {
+	blocked := map[string]bool{
+		"DEVKIT_ROOT":                          true,
+		"DEVKIT_OVERLAYS_DIR":                  true,
+		"DEVKIT_NATIVE_AGENT":                  true,
+		"DEVKIT_NATIVE_ISOLATION_PROFILE":      true,
+		"DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY":  true,
+		"DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE": true,
+	}
+	env := make([]string, 0, len(os.Environ())+len(extra))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !blocked[name] {
+			env = append(env, entry)
+		}
+	}
+	return append(env, extra...)
+}
+
 func runProjectDryRun(t *testing.T, bin, root, project string, args ...string) (string, error) {
 	t.Helper()
 	return runProjectDryRunWithEnv(t, bin, root, project, nil, args...)
@@ -725,6 +744,136 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 				t.Fatalf("native exec left managed proxy sockets after exit %d: %v", exitCode, socketMatches)
 			}
 		})
+	}
+}
+
+func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
+	bin := buildDevctlForNativeDefaults(t)
+	root := nativeDefaultsRoot(t)
+	writeNixCodexConfigSource(t, root)
+	devRoot := filepath.Dir(root)
+	repo := filepath.Join(devRoot, "test-repo")
+	bare := filepath.Join(root, "fixture-remotes", "test-repo.git")
+	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	run("git", "init", "--bare", bare)
+	run("git", "init", repo)
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("isolated fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "-C", repo, "add", "README.md")
+	run("git", "-C", repo, "-c", "user.name=Devkit Test", "-c", "user.email=devkit-test@example.com", "commit", "-m", "fixture")
+	run("git", "-C", repo, "branch", "-M", "main")
+	run("git", "-C", repo, "remote", "add", "origin", bare)
+	run("git", "-C", repo, "push", "-u", "origin", "main")
+
+	hostHome := filepath.Join(root, "host-home")
+	if err := os.MkdirAll(filepath.Join(hostHome, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, ".ssh", "id_ed25519"), []byte("integration private fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostHome, ".ssh", "id_ed25519.pub"), []byte("integration public fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	isolatedRoot := filepath.Join(filepath.Dir(devRoot), "isolated-top-level")
+	resolvConf := filepath.Join(root, "..", ".devkit", "native-agents", "dev-all-agent1", "resolv.conf")
+	if err := os.MkdirAll(filepath.Dir(resolvConf), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolvConf, []byte("nameserver 127.0.0.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prepare := exec.Command(
+		bin,
+		"-p", "dev-all",
+		"native", "prepare",
+		"--repo", "test-repo",
+		"--count", "1",
+		"--base-branch", "main",
+		"--branch-prefix", "isolated-agent",
+		"--worktree-root", isolatedRoot,
+		"--worktree-container-root", "/workspaces/dev/isolated-top-level",
+		"--resolv-conf", resolvConf,
+		"--format", "json",
+	)
+	prepare.Env = isolatedNativeFixtureEnv(
+		"DEVKIT_ROOT="+root,
+		"DEVKIT_NO_TMUX=1",
+		"HOME="+hostHome,
+		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+	)
+	prepareOut, err := prepare.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("native prepare: %v\n%s", err, exitErr.Stderr)
+		}
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prepareOut), `"sandbox_worktree": "/workspaces/dev/isolated-top-level/agent1/test-repo"`) {
+		t.Fatalf("native prepare omitted isolated sandbox projection:\n%s", prepareOut)
+	}
+
+	worktree := filepath.Join(isolatedRoot, "agent1", "test-repo")
+	gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitdirValue := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(gitFile)), "gitdir:"))
+	if gitdirValue == "" || filepath.IsAbs(gitdirValue) {
+		t.Fatalf("native prepare emitted non-portable .git metadata: %q", gitFile)
+	}
+	gitdir := filepath.Clean(filepath.Join(worktree, gitdirValue))
+	commondir, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := strings.TrimSpace(string(commondir)); value == "" || filepath.IsAbs(value) {
+		t.Fatalf("native prepare emitted non-portable commondir: %q", commondir)
+	}
+	run("git", "-C", worktree, "update-ref", "refs/devkit/top-level-prepare-proof", "HEAD")
+	run("git", "-C", worktree, "update-ref", "-d", "refs/devkit/top-level-prepare-proof")
+
+	bwrapDir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(bwrapDir, "bwrap"),
+		[]byte("#!/bin/sh\nprintf '%s' '__DEVKIT_ISOLATED_EXEC__=PASS'\n"),
+		0o755,
+	); err != nil {
+		t.Fatal(err)
+	}
+	execCmd := exec.Command(
+		bin,
+		"-p", "dev-all",
+		"exec", "1",
+		"--repo", "test-repo",
+		"--worktree-root", isolatedRoot,
+		"--worktree-container-root", "/workspaces/dev/isolated-top-level",
+		"--", "true",
+	)
+	execCmd.Env = isolatedNativeFixtureEnv(
+		"DEVKIT_ROOT="+root,
+		"DEVKIT_NO_TMUX=1",
+		"HOME="+hostHome,
+		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+		"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	execOut, err := execCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native exec after isolated prepare: %v\n%s", err, execOut)
+	}
+	if !strings.Contains(string(execOut), "__DEVKIT_ISOLATED_EXEC__=PASS") {
+		t.Fatalf("native exec suppressed isolated result projection:\n%s", execOut)
 	}
 }
 

@@ -383,6 +383,67 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	}
 }
 
+func TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktreeRoot := filepath.Join(root, "isolated-product-a")
+	hostWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	commonGitDir := filepath.Join(devRoot, "ouroboros-ide", ".git")
+	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "isolated-product-a")
+	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	relativeGitDir, err := filepath.Rel(hostWorktree, worktreeGitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+relativeGitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := BuildDevAll(BuildOptions{
+		Paths:                 devkitpaths.Paths{Root: devkitRoot},
+		Project:               "dev-all",
+		Index:                 1,
+		Repo:                  "ouroboros-ide",
+		WorktreeRoot:          worktreeRoot,
+		WorktreeContainerRoot: "/workspaces/dev/isolated-product-a",
+		IsolationProfile:      IsolationProfileWorkspaceEgress,
+		EgressAllowlist:       filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("BuildDevAll: %v", err)
+	}
+	if p.Agent.HostWorktree != hostWorktree {
+		t.Fatalf("host worktree = %s, want %s", p.Agent.HostWorktree, hostWorktree)
+	}
+	if p.Agent.SandboxWorktree != "/workspaces/dev/isolated-product-a/agent1/ouroboros-ide" {
+		t.Fatalf("sandbox worktree = %s", p.Agent.SandboxWorktree)
+	}
+	sandboxGitDir := resolveGitdirValue(relativeGitDir, p.Agent.SandboxWorktree)
+	sandboxCommonDir := resolveCommondirValue("../..", sandboxGitDir)
+	if !hasBind(p.Binds, commonGitDir, sandboxCommonDir) {
+		t.Fatalf("isolated metadata missing canonical common-dir bind %s -> %s: %#v", commonGitDir, sandboxCommonDir, p.Binds)
+	}
+	if hasBind(p.Binds, hostWorktree, hostWorktree) || hasBind(p.Binds, commonGitDir, commonGitDir) {
+		t.Fatalf("isolated normal consumer retained a host worktree/common-dir alias: %#v", p.Binds)
+	}
+	for _, bind := range p.Binds {
+		if (bind.Source == hostWorktree || bind.Source == commonGitDir) && strings.Contains(bind.Target, root) {
+			t.Fatalf("sandbox bind target retained host spelling %s: %#v", root, bind)
+		}
+		if strings.Contains(bind.Source, "isolated-product-b") || strings.Contains(bind.Target, "isolated-product-b") {
+			t.Fatalf("isolated consumer exposed unrelated root: %#v", bind)
+		}
+	}
+}
+
 func TestWorkspaceEgressMaterializesOnlyEachLinkedWorktreeCanonicalAlias(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")

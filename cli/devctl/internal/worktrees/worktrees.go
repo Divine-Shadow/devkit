@@ -54,42 +54,162 @@ func rewriteGitdir(wt string, relative bool) {
 	_ = os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0644)
 }
 
-// rewriteNativeGitdir makes linked-worktree metadata portable whenever the
-// common Git repository lives under the canonical dev root. That preserves the
-// relative topology when the dev root is projected from its host path to
-// /workspaces/dev, including for nested worktrees created later by Codex.
+// rewriteNativeGitdir makes package-owned linked-worktree metadata portable.
+// Ownership is established by the configured worktree root plus the source
+// repository's canonical common Git directory, not by the spelling of the host
+// dev root. This covers isolated top-level worktree roots while rejecting a
+// foreign or traversing metadata topology.
 //
 // A linked source checkout can legitimately use a common Git directory outside
-// the dev root. Keep that exceptional path absolute because there is no
-// canonical dev-root-relative projection for it; the narrow runtime metadata
+// the dev root. Keep that exceptional worktree pointer absolute because there
+// is no canonical package-owned projection for it; the narrow runtime metadata
 // bind remains responsible for making that external common directory visible.
-func rewriteNativeGitdir(wt, devRoot string) error {
+func rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir string) error {
 	gitFile := filepath.Join(wt, ".git")
-	if info, err := os.Stat(gitFile); err == nil && info.IsDir() {
+	info, err := os.Lstat(gitFile)
+	if err != nil {
+		return fmt.Errorf("inspect native worktree gitdir %s: %w", gitFile, err)
+	}
+	if info.IsDir() {
 		return nil
 	}
-	out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--git-dir")
-	if res.Code != 0 {
-		return fmt.Errorf("read native worktree gitdir %s: exit %d", wt, res.Code)
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("native worktree gitdir %s must be a regular file", gitFile)
 	}
-	gitdir := strings.TrimSpace(out)
-	if gitdir == "" {
-		return fmt.Errorf("native worktree %s returned an empty gitdir", wt)
+
+	canonicalWorktree, err := canonicalExistingPath(wt)
+	if err != nil {
+		return fmt.Errorf("canonicalize native worktree %s: %w", wt, err)
 	}
-	if !filepath.IsAbs(gitdir) {
-		gitdir = filepath.Clean(filepath.Join(wt, gitdir))
+	canonicalWorktreesRoot, err := canonicalExistingPath(worktreesRoot)
+	if err != nil {
+		return fmt.Errorf("canonicalize native worktree root %s: %w", worktreesRoot, err)
 	}
-	if pathWithinRoot(devRoot, wt) && pathWithinRoot(devRoot, gitdir) {
-		rel, err := filepath.Rel(wt, gitdir)
-		if err != nil {
-			return fmt.Errorf("make native worktree gitdir relative for %s: %w", wt, err)
+	if !pathWithinRoot(canonicalWorktreesRoot, canonicalWorktree) {
+		return fmt.Errorf("native worktree %s is outside package-owned worktree root %s", canonicalWorktree, canonicalWorktreesRoot)
+	}
+
+	gitdirValue, err := readGitdirPointer(gitFile)
+	if err != nil {
+		return err
+	}
+	gitdir, err := canonicalMetadataPath(wt, gitdirValue)
+	if err != nil {
+		return fmt.Errorf("canonicalize native worktree gitdir %s: %w", gitFile, err)
+	}
+	commonDirValue, err := readPlainMetadataPath(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return err
+	}
+	commonDir, err := canonicalMetadataPath(gitdir, commonDirValue)
+	if err != nil {
+		return fmt.Errorf("canonicalize native worktree commondir %s: %w", gitdir, err)
+	}
+	canonicalRepoCommonDir, err := canonicalExistingPath(repoCommonDir)
+	if err != nil {
+		return fmt.Errorf("canonicalize source repository common Git directory %s: %w", repoCommonDir, err)
+	}
+	canonicalDevRoot, err := canonicalExistingPath(devRoot)
+	if err != nil {
+		return fmt.Errorf("canonicalize native dev root %s: %w", devRoot, err)
+	}
+	if commonDir != canonicalRepoCommonDir {
+		return fmt.Errorf("native worktree %s commondir %s is not the package-owned common Git directory %s", canonicalWorktree, commonDir, canonicalRepoCommonDir)
+	}
+	ownedGitdirsRoot := filepath.Join(canonicalRepoCommonDir, "worktrees")
+	if gitdir == ownedGitdirsRoot || !pathWithinRoot(ownedGitdirsRoot, gitdir) {
+		return fmt.Errorf("native worktree %s gitdir %s is outside package-owned Git worktrees %s", canonicalWorktree, gitdir, ownedGitdirsRoot)
+	}
+
+	reverseGitFile := filepath.Join(gitdir, "gitdir")
+	reverseGitdirValue, err := readPlainMetadataPath(reverseGitFile)
+	if err != nil {
+		return err
+	}
+	reverseGitdir, err := canonicalMetadataPath(gitdir, reverseGitdirValue)
+	if err != nil {
+		return fmt.Errorf("canonicalize native reverse gitdir %s: %w", reverseGitFile, err)
+	}
+	canonicalGitFile, err := canonicalExistingPath(gitFile)
+	if err != nil {
+		return fmt.Errorf("canonicalize native worktree .git file %s: %w", gitFile, err)
+	}
+	if reverseGitdir != canonicalGitFile {
+		return fmt.Errorf("native worktree %s reverse gitdir %s does not resolve to %s", canonicalWorktree, reverseGitdir, canonicalGitFile)
+	}
+	if !pathWithinRoot(canonicalDevRoot, canonicalRepoCommonDir) {
+		if err := os.WriteFile(gitFile, []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+			return fmt.Errorf("write exceptional native worktree gitdir %s: %w", gitFile, err)
 		}
-		gitdir = rel
+		return nil
 	}
-	if err := os.WriteFile(gitFile, []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
+
+	relativeGitdir, err := filepath.Rel(canonicalWorktree, gitdir)
+	if err != nil {
+		return fmt.Errorf("make native worktree gitdir relative for %s: %w", canonicalWorktree, err)
+	}
+	relativeCommonDir, err := filepath.Rel(gitdir, canonicalRepoCommonDir)
+	if err != nil {
+		return fmt.Errorf("make native worktree commondir relative for %s: %w", canonicalWorktree, err)
+	}
+	relativeReverseGitdir, err := filepath.Rel(gitdir, canonicalGitFile)
+	if err != nil {
+		return fmt.Errorf("make native reverse gitdir relative for %s: %w", canonicalWorktree, err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(relativeCommonDir+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write native worktree commondir %s: %w", gitdir, err)
+	}
+	if err := os.WriteFile(reverseGitFile, []byte(relativeReverseGitdir+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write native reverse gitdir %s: %w", reverseGitFile, err)
+	}
+	if err := os.WriteFile(gitFile, []byte("gitdir: "+relativeGitdir+"\n"), 0o644); err != nil {
 		return fmt.Errorf("write native worktree gitdir %s: %w", gitFile, err)
 	}
 	return nil
+}
+
+func readGitdirPointer(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read native worktree gitdir %s: %w", path, err)
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(strings.ToLower(line), "gitdir:") {
+		return "", fmt.Errorf("native worktree gitdir %s is malformed", path)
+	}
+	value := strings.TrimSpace(line[len("gitdir:"):])
+	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("native worktree gitdir %s has an invalid path", path)
+	}
+	return value, nil
+}
+
+func readPlainMetadataPath(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read native Git metadata path %s: %w", path, err)
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("native Git metadata path %s is invalid", path)
+	}
+	return value, nil
+}
+
+func canonicalMetadataPath(base, value string) (string, error) {
+	path := filepath.Clean(value)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	return canonicalExistingPath(path)
+}
+
+func canonicalExistingPath(path string) (string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(strings.TrimSpace(path)))
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(absolute)
 }
 
 func pathWithinRoot(root, candidate string) bool {
@@ -367,25 +487,26 @@ func SetupNative(opts NativeOptions) error {
 		}
 		return append(prefix, append([]string{"git"}, args...)...)
 	}
+	var repoCommonDir string
 	var repoWorktreesDir string
 	if !opts.DryRun {
-		if out, res := execx.Capture(context.Background(), "git", "-C", repoPath, "rev-parse", "--git-dir"); res.Code == 0 {
-			gitdir := strings.TrimSpace(out)
-			if gitdir != "" {
-				if !filepath.IsAbs(gitdir) {
-					gitdir = filepath.Clean(filepath.Join(repoPath, gitdir))
-				}
-				if resolved, err := filepath.EvalSymlinks(gitdir); err == nil {
-					gitdir = resolved
-				}
-				repoWorktreesDir = filepath.Join(gitdir, "worktrees")
-				if resolved, err := filepath.EvalSymlinks(repoWorktreesDir); err == nil {
-					repoWorktreesDir = resolved
-				} else {
-					repoWorktreesDir = filepath.Clean(repoWorktreesDir)
-				}
-			}
+		out, res := execx.Capture(context.Background(), "git", "-C", repoPath, "rev-parse", "--git-common-dir")
+		if res.Code != 0 {
+			return fmt.Errorf("read source repository common Git directory %s: exit %d", repoPath, res.Code)
 		}
+		repoCommonDir = strings.TrimSpace(out)
+		if repoCommonDir == "" {
+			return fmt.Errorf("source repository %s returned an empty common Git directory", repoPath)
+		}
+		if !filepath.IsAbs(repoCommonDir) {
+			repoCommonDir = filepath.Join(repoPath, repoCommonDir)
+		}
+		canonicalCommonDir, err := canonicalExistingPath(repoCommonDir)
+		if err != nil {
+			return fmt.Errorf("canonicalize source repository common Git directory %s: %w", repoPath, err)
+		}
+		repoCommonDir = canonicalCommonDir
+		repoWorktreesDir = filepath.Join(repoCommonDir, "worktrees")
 	}
 	remoteURL, result := execx.Capture(context.Background(), "git", "-C", repoPath, "remote", "get-url", "origin")
 	if result.Code != 0 && !opts.DryRun {
@@ -428,7 +549,7 @@ func SetupNative(opts NativeOptions) error {
 				if err := run(false, "env", envLocalGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
 					return err
 				}
-				if err := rewriteNativeGitdir(wt, devRoot); err != nil {
+				if err := rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir); err != nil {
 					return err
 				}
 				continue
@@ -451,7 +572,7 @@ func SetupNative(opts NativeOptions) error {
 			}
 		}
 		if !opts.DryRun {
-			if err := rewriteNativeGitdir(wt, devRoot); err != nil {
+			if err := rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir); err != nil {
 				return err
 			}
 		}

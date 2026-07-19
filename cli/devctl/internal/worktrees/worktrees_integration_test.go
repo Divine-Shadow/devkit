@@ -2,6 +2,7 @@ package worktrees
 
 import (
 	"devkit/cli/devctl/internal/paths"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +78,70 @@ func checkGitdirForm(t *testing.T, path string, wantAbs bool) {
 	if filepath.IsAbs(gitdir) != wantAbs {
 		t.Fatalf("%s: gitdir absolute = %v, want %v (%q)", path, filepath.IsAbs(gitdir), wantAbs, content)
 	}
+}
+
+func checkRelativeNativeMetadata(t *testing.T, worktree, wantCommonDir, forbiddenHostSpelling string) string {
+	t.Helper()
+	gitdirValue, err := readGitdirPointer(filepath.Join(worktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(gitdirValue) {
+		t.Fatalf("%s: package-owned gitdir remained absolute: %q", worktree, gitdirValue)
+	}
+	gitdir, err := canonicalMetadataPath(worktree, gitdirValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commondirValue, err := readPlainMetadataPath(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(commondirValue) {
+		t.Fatalf("%s: package-owned commondir remained absolute: %q", worktree, commondirValue)
+	}
+	commondir, err := canonicalMetadataPath(gitdir, commondirValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCommonDir, err = canonicalExistingPath(wantCommonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commondir != wantCommonDir {
+		t.Fatalf("%s: commondir = %s, want %s", worktree, commondir, wantCommonDir)
+	}
+	reverseValue, err := readPlainMetadataPath(filepath.Join(gitdir, "gitdir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(reverseValue) {
+		t.Fatalf("%s: package-owned reverse gitdir remained absolute: %q", worktree, reverseValue)
+	}
+	for _, path := range []string{filepath.Join(worktree, ".git"), filepath.Join(gitdir, "commondir"), filepath.Join(gitdir, "gitdir")} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), forbiddenHostSpelling) {
+			t.Fatalf("%s retained host spelling %q: %s", path, forbiddenHostSpelling, data)
+		}
+	}
+	if got := readTrim(t, "git", "-C", worktree, "rev-parse", "--absolute-git-dir"); filepath.Clean(got) != gitdir {
+		t.Fatalf("%s: absolute gitdir = %s, want %s", worktree, got, gitdir)
+	}
+	commonFromGit := readTrim(t, "git", "-C", worktree, "rev-parse", "--git-common-dir")
+	if !filepath.IsAbs(commonFromGit) {
+		commonFromGit = filepath.Join(worktree, commonFromGit)
+	}
+	commonFromGit, err = canonicalExistingPath(commonFromGit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commonFromGit != wantCommonDir {
+		t.Fatalf("%s: Git common dir = %s, want %s", worktree, commonFromGit, wantCommonDir)
+	}
+	return gitdir
 }
 
 // This test performs a real host-side worktree setup across two repos with two agents each
@@ -314,6 +379,159 @@ func TestSetupNativeSSHOriginUsesExplicitBootstrapCommand(t *testing.T) {
 		t.Fatalf("SSH invocation selected the prohibited /dev/null transport:\n%s", logText)
 	}
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
+}
+
+func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	hostTopology := filepath.Join(root, "host-topology")
+	devRoot := filepath.Join(hostTopology, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+	bare := filepath.Join(root, "remotes", "ouroboros-ide.git")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
+	logPath := filepath.Join(root, "isolated-ssh.log")
+	sshPath := filepath.Join(root, "package-owned-isolated-ssh")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\n" +
+		"if [ \"${1:-}\" = -G ]; then exit 0; fi\n" +
+		"last=\n" +
+		"for arg in \"$@\"; do last=$arg; done\n" +
+		"case \"$last\" in\n" +
+		"  \"git-upload-pack \"*) exec sh -c \"$last\" ;;\n" +
+		"esac\n" +
+		"exit 1\n"
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "package-owned-isolated-config")
+	if err := os.WriteFile(configPath, []byte("Host fixture.invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	worktreeRoots := []string{
+		filepath.Join(hostTopology, "isolated-product-a"),
+		filepath.Join(hostTopology, "isolated-product-b"),
+	}
+	gitdirs := make([]string, 0, len(worktreeRoots))
+	for index, worktreeRoot := range worktreeRoots {
+		branchPrefix := fmt.Sprintf("isolated%d-agent", index+1)
+		if err := SetupNative(NativeOptions{
+			DevkitRoot:       devkitRoot,
+			Repo:             "ouroboros-ide",
+			Count:            1,
+			BaseBranch:       "main",
+			BranchPrefix:     branchPrefix,
+			WorktreeRoot:     worktreeRoot,
+			GitSSHCommand:    sshPath + " -F " + configPath,
+			RequireSSHOrigin: true,
+		}); err != nil {
+			t.Fatalf("isolated native setup %d failed: %v", index+1, err)
+		}
+		worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+		checkBranchAndUpstream(t, worktree, branchPrefix+"1")
+		gitdirs = append(gitdirs, checkRelativeNativeMetadata(
+			t,
+			worktree,
+			filepath.Join(repo, ".git"),
+			hostTopology,
+		))
+		mustRun(t, "git", "-C", worktree, "update-ref", "refs/devkit/isolated-metadata-proof", "HEAD")
+		mustRun(t, "git", "-C", worktree, "update-ref", "-d", "refs/devkit/isolated-metadata-proof")
+	}
+	if gitdirs[0] == gitdirs[1] {
+		t.Fatalf("isolated consumers shared a worktree gitdir: %s", gitdirs[0])
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(logData), "git-upload-pack"); count != 2 {
+		t.Fatalf("package-owned SSH fetch count = %d, want 2:\n%s", count, logData)
+	}
+
+	projectedRoot := filepath.Join(root, "workspaces", "dev")
+	if err := os.MkdirAll(filepath.Dir(projectedRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(hostTopology, projectedRoot); err != nil {
+		t.Fatalf("project isolated topology under /workspaces/dev shape: %v", err)
+	}
+	for _, name := range []string{"isolated-product-a", "isolated-product-b"} {
+		worktree := filepath.Join(projectedRoot, name, "agent1", "ouroboros-ide")
+		if got := readTrim(t, "git", "-C", worktree, "rev-parse", "--show-toplevel"); filepath.Clean(got) != worktree {
+			t.Fatalf("projected worktree top = %s, want %s", got, worktree)
+		}
+		if got := readTrim(t, "git", "-C", worktree, "status", "--porcelain=v1"); got != "" {
+			t.Fatalf("projected worktree is dirty: %q", got)
+		}
+		mustRun(t, "git", "-C", worktree, "update-ref", "refs/devkit/projected-metadata-proof", "HEAD")
+		mustRun(t, "git", "-C", worktree, "update-ref", "-d", "refs/devkit/projected-metadata-proof")
+	}
+}
+
+func TestRewriteNativeGitdirRejectsForeignCommondirTraversal(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	worktreeRoot := filepath.Join(root, "isolated-product")
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        1,
+		BaseBranch:   "main",
+		BranchPrefix: "isolated-agent",
+		WorktreeRoot: worktreeRoot,
+	}); err != nil {
+		t.Fatalf("prepare isolated native worktree: %v", err)
+	}
+	worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	gitdirValue, err := readGitdirPointer(filepath.Join(worktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitdir, err := canonicalMetadataPath(worktree, gitdirValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignCommonDir := filepath.Join(root, "foreign-common")
+	if err := os.MkdirAll(foreignCommonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	traversal, err := filepath.Rel(gitdir, foreignCommonDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(traversal+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitFileBefore, err := os.ReadFile(filepath.Join(worktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = rewriteNativeGitdir(worktree, worktreeRoot, devRoot, filepath.Join(devRoot, "ouroboros-ide", ".git"))
+	if err == nil || !strings.Contains(err.Error(), "is not the package-owned common Git directory") {
+		t.Fatalf("rewriteNativeGitdir error = %v, want foreign commondir rejection", err)
+	}
+	gitFileAfter, readErr := os.ReadFile(filepath.Join(worktree, ".git"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(gitFileAfter) != string(gitFileBefore) {
+		t.Fatalf("foreign commondir rejection rewrote .git: before=%q after=%q", gitFileBefore, gitFileAfter)
+	}
 }
 
 func TestSetupNativeSSHOriginRejectsMissingBootstrapCommand(t *testing.T) {
