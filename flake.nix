@@ -134,6 +134,32 @@
             cp -R "$src/nix" "$src/overlays" "$out/"
           '';
         };
+      mkNativeBootstrapStdioCleanupCheck =
+        pkgs:
+        pkgs.buildGoModule {
+          pname = "devkit-native-bootstrap-stdio-cleanup-check";
+          version = "dev";
+          src = ./cli/devctl;
+          modRoot = ".";
+          vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+          subPackages = [ "." ];
+          env.CGO_ENABLED = "0";
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+          nativeCheckInputs = [ pkgs.git ];
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test ./internal/runtime/egressproxy -run 'Test(ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|DialConnectTargetPreservesBannerBufferedWithUpstreamResponse|ServeRefusesExistingSocketAuthority)' -count=1
+            go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(UsesPackageOwnedConsumerIdentityAndProxy|RejectsMissingPackageOwnedProxyHelper|RejectsMissingIdentity)' -count=1
+            go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly' -count=1
+            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure)' -count=1
+            go test ./integration -run 'TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit' -count=1
+            runHook postCheck
+          '';
+        };
       mkManagementInspectionApp =
         pkgs:
         let
@@ -538,6 +564,7 @@
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
           management-inspection-cli = mkDevctl pkgs;
+          native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
 
           devctl-overlay-runtime-authority-layout =
             let

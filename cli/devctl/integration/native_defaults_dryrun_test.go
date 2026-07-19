@@ -12,8 +12,18 @@ import (
 
 func buildDevctlForNativeDefaults(t *testing.T) string {
 	t.Helper()
+	return buildDevctlForNativeDefaultsWithTags(t)
+}
+
+func buildDevctlForNativeDefaultsWithTags(t *testing.T, tags ...string) string {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "devctl")
-	cmd := exec.Command("go", "build", "-trimpath", "-o", bin, "./")
+	args := []string{"build", "-trimpath"}
+	if len(tags) > 0 {
+		args = append(args, "-tags", strings.Join(tags, ","))
+	}
+	args = append(args, "-o", bin, "./")
+	cmd := exec.Command("go", args...)
 	cmd.Dir = filepath.Join("..")
 	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -634,7 +644,7 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 }
 
 func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T) {
-	bin := buildDevctlForNativeDefaults(t)
+	bin := buildDevctlForNativeDefaultsWithTags(t, "devkitintegration")
 	root := nativeDefaultsRoot(t)
 	writeNixCodexConfigSource(t, root)
 	createNativeAgentWorktreeForRepo(t, root, "test-repo")
@@ -667,6 +677,10 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketRoot) })
+	nscdSource := filepath.Join(root, "integration-nscd.socket")
+	if err := os.WriteFile(nscdSource, []byte("integration-only bind source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, exitCode := range []int{0, 7} {
 		t.Run(fmt.Sprintf("exit-%d", exitCode), func(t *testing.T) {
 			sharedSocket := filepath.Join(socketRoot, fmt.Sprintf("shared-%d.sock", exitCode))
@@ -686,6 +700,7 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 				"DEVKIT_NO_TMUX=1",
 				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
 				"DEVKIT_TEST_BWRAP_EXIT="+strconv.Itoa(exitCode),
+				"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
 				"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 			)
 			out, err := cmd.CombinedOutput()

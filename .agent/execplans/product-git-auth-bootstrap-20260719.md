@@ -61,6 +61,9 @@ Git to receive that exact SSH command explicitly.
 - [x] Make the native-exec integration fixture provide its declared resolver
   input so the same test passes inside the Nix build sandbox without ambient
   `/etc/resolv.conf`.
+- [x] Export the real bootstrap/stdout/cleanup regression suite as pinned
+  Devkit flake check `checks.x86_64-linux.native-bootstrap-stdio-cleanup` for
+  authoritative WSL consumption.
 - [ ] Publish Devkit master and record the exact commit.
 - [ ] Rebase the WSL v3 patch onto the new Devkit input, update pin/lock and
   runtime identity assertions, and run the full WSL gate.

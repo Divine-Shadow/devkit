@@ -92,6 +92,8 @@ const (
 	workspaceEgressNSCDSocket       = "/var/run/nscd/socket"
 )
 
+var workspaceEgressNSCDSource = workspaceEgressNSCDSocket
+
 func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 	const rootedPrefix = "path:.?"
 	if runtimeAuthorityRoot == "" || !strings.HasPrefix(flake, rootedPrefix) {
@@ -414,7 +416,7 @@ func workspaceEgressBinds(paths agent.Paths, devkitRoot string, broker string, r
 	// The isolated network namespace cannot reach the host loopback resolver.
 	// nsncd exposes DNS through this narrowly scoped Unix capability; network
 	// egress remains restricted to the managed proxy.
-	add(workspaceEgressNSCDSocket, workspaceEgressNSCDSocket, "ro", true)
+	add(workspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	return binds
