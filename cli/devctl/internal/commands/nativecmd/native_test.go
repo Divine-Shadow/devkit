@@ -55,6 +55,20 @@ func TestParseSandboxReadinessResultsPreservesPerCheckDetails(t *testing.T) {
 	}
 }
 
+func TestBuildSandboxReadinessScriptPreservesImmutableRuntimePath(t *testing.T) {
+	script := buildSandboxReadinessScript([]sandboxReadinessCheck{{
+		Phase:   readiness.PhaseRuntime,
+		Name:    "playwright-browser",
+		Command: "node playwright-check.js",
+	}})
+	if !strings.Contains(script, `bash -c "$command"`) {
+		t.Fatalf("readiness command did not preserve the selected runtime environment:\n%s", script)
+	}
+	if strings.Contains(script, `bash -lc "$command"`) {
+		t.Fatalf("readiness command retained a login-shell PATH reinterpretation:\n%s", script)
+	}
+}
+
 func TestGovernanceEnvHostDevRootPrefersWorkspaceBind(t *testing.T) {
 	plan := nativeplan.Plan{
 		DevkitHostRoot: "/tmp/devkit-worktree/devkit",
@@ -342,8 +356,10 @@ func TestLifecycleStatusAttachCapacitySurfacesOperatorSummary(t *testing.T) {
 		"agent1_status: status=degraded",
 		"sandbox=ready",
 		"repo=blocked",
+		`agent1_failure: phase=repo name=typecheck detail="compile failed"`,
 		"agent2_status: status=blocked",
 		"tooling=blocked",
+		`agent2_failure: phase=runtime name=runtime-check-1 detail="spago missing"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %q:\n%s", want, text)

@@ -1579,6 +1579,10 @@ func printLifecycleStatus(status lifecycleStatus, format string) error {
 			for _, agent := range status.Capacity.Agents {
 				fmt.Fprintf(os.Stdout, "agent%d_status: status=%s worktree=%s broker=%s sandbox=%s tooling=%s repo=%s action=%q\n",
 					agent.Index, agent.Status, agent.WorktreeState, agent.BrokerState, agent.SandboxState, agent.ToolingState, agent.RepoState, agent.Action)
+				for _, failed := range agent.FailedChecks {
+					fmt.Fprintf(os.Stdout, "agent%d_failure: phase=%s name=%s detail=%q action=%q\n",
+						agent.Index, failed.Phase, failed.Name, failed.Detail, failed.Action)
+				}
 			}
 		}
 		if status.ManifestPath != "" {
@@ -2549,6 +2553,15 @@ func runSandboxReadinessChecks(p nativeplan.Plan, checks []sandboxReadinessCheck
 	if len(checks) == 0 {
 		return nil, nil
 	}
+	script := buildSandboxReadinessScript(checks)
+	out, err := runSandboxCommand(p, []string{"bash", "-lc", script})
+	if err != nil {
+		return nil, fmt.Errorf("%s", detail(err, out))
+	}
+	return parseSandboxReadinessResults(out)
+}
+
+func buildSandboxReadinessScript(checks []sandboxReadinessCheck) string {
 	var script strings.Builder
 	script.WriteString("set +e\n")
 	script.WriteString("devkit_run_readiness_check() {\n")
@@ -2556,7 +2569,7 @@ func runSandboxReadinessChecks(p nativeplan.Plan, checks []sandboxReadinessCheck
 	script.WriteString("  name=\"$2\"\n")
 	script.WriteString("  command=\"$3\"\n")
 	script.WriteString("  out=\"$(mktemp)\"\n")
-	script.WriteString("  timeout \"${DEVKIT_READINESS_CHECK_TIMEOUT_SECONDS:-1200}\" bash -lc \"$command\" >\"$out\" 2>&1\n")
+	script.WriteString("  timeout \"${DEVKIT_READINESS_CHECK_TIMEOUT_SECONDS:-1200}\" bash -c \"$command\" >\"$out\" 2>&1\n")
 	script.WriteString("  rc=\"$?\"\n")
 	script.WriteString("  encoded=\"$(base64 -w0 \"$out\" 2>/dev/null || base64 \"$out\" | tr -d '\\n')\"\n")
 	script.WriteString("  rm -f \"$out\"\n")
@@ -2571,11 +2584,7 @@ func runSandboxReadinessChecks(p nativeplan.Plan, checks []sandboxReadinessCheck
 		script.WriteString(nativeShellQuote(check.Command))
 		script.WriteString("\n")
 	}
-	out, err := runSandboxCommand(p, []string{"bash", "-lc", script.String()})
-	if err != nil {
-		return nil, fmt.Errorf("%s", detail(err, out))
-	}
-	return parseSandboxReadinessResults(out)
+	return script.String()
 }
 
 func parseSandboxReadinessResults(out string) ([]sandboxReadinessResult, error) {
