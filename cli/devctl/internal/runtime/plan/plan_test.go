@@ -389,7 +389,7 @@ func TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases(t *testing.T) 
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	worktreeRoot := filepath.Join(root, "isolated-product-a")
 	hostWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
-	commonGitDir := filepath.Join(devRoot, "ouroboros-ide", ".git")
+	commonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git")
 	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "isolated-product-a")
 	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -156,7 +156,7 @@
             go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(UsesPackageOwnedConsumerIdentityAndProxy|RejectsMissingPackageOwnedProxyHelper|RejectsMissingIdentity)' -count=1
             go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly' -count=1
             go test ./internal/runtime/plan -run 'TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases' -count=1
-            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal' -count=1
+            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal' -count=1
             go test ./integration -run 'TestNativeTopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)' -count=1
             runHook postCheck
           '';

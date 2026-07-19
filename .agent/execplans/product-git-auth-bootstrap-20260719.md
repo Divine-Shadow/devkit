@@ -37,6 +37,10 @@ Git to receive that exact SSH command explicitly.
 - Owned `.git`, `commondir`, and reverse-gitdir pointers are relative.
   External source-linked common repositories remain the narrow absolute-path
   exception and malformed or traversing topologies fail closed.
+- Each native consumer root owns its common bare repository beneath that same
+  root. Agent and nested worktrees are linked beneath the root, so host and
+  sandbox projections preserve one relative topology without an ambient source
+  checkout, host alias, or metadata rewrite during launch.
 
 ## Progress
 
@@ -83,10 +87,23 @@ Git to receive that exact SSH command explicitly.
   common-repository topology validation, relativeize all owned metadata
   pointers, and retain the external-linked-source exception.
 - [x] Add two-root, host/sandbox-projection, ref-write, no-host-alias, traversal
-  rejection, and top-level prepare/exec regressions to the named Devkit check.
+      rejection, and top-level prepare/exec regressions to the named Devkit check.
+- [x] Classify the post-`ad338bc` Nix failure as an escaped reverse link: the
+      linked worktree was under the selected root, but its ambient common
+      repository was not, so Nix/libgit2 resolved the reverse link to a
+      host-only absolute root after projection.
+- [x] Replace ambient common-repository reuse with an atomic, marker-validated,
+      bare common repository beneath each declared native worktree root.
+      Preserve the one package-owned SSH/Unix-proxy fetch authority.
+- [x] Require the entire `.git`/`commondir`/reverse-link topology to remain
+      beneath that root, preserve per-worktree non-bare configuration, and
+      reject standalone, foreign, traversing, stale, and partial bootstrap
+      states.
+- [x] Extend the declared WSL Nix compatibility check with a real authoritative
+      Nix flake check after projection to an unrelated root.
 - [ ] Publish the follow-up Devkit master commit.
-- [ ] Rebase the WSL patches, repin the named check, and repeat the clean full
-  check plus direct/source-selected-Colmena equality gate.
+- [ ] Rebase the WSL patches, repin both declared checks, and repeat the clean full
+      check plus direct/source-selected-Colmena equality gate.
 - [ ] Return the exact tuple to the protected apply owner; do not apply here.
 
 ## Surprises and discoveries
@@ -154,6 +171,14 @@ Git to receive that exact SSH command explicitly.
   Ownership requires the exact configured worktree root, the canonical source
   common repository, a per-worktree gitdir beneath its `worktrees/` directory,
   and a reverse pointer back to that exact worktree.
+- Treat the owned-common lifecycle as direct enforcement of that accepted v3
+  decision rather than a new Ouro choice. The existing decision already
+  requires one portable relative topology, prohibits ambient Git metadata and
+  host aliases, and selects the package-owned SSH/Unix-proxy fetch. A common
+  repository outside the projected owned root cannot satisfy those constraints;
+  moving that same repository authority beneath the root removes the ambient
+  authority without adding a new transport, credential, launcher, mount, or
+  consumer exception.
 
 ## Files
 

@@ -770,11 +770,30 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("isolated fixture\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run("git", "-C", repo, "add", "README.md")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".devhome-agent*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "-C", repo, "add", "README.md", ".gitignore")
 	run("git", "-C", repo, "-c", "user.name=Devkit Test", "-c", "user.email=devkit-test@example.com", "commit", "-m", "fixture")
 	run("git", "-C", repo, "branch", "-M", "main")
 	run("git", "-C", repo, "remote", "add", "origin", bare)
 	run("git", "-C", repo, "push", "-u", "origin", "main")
+	run("git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
+
+	sshDir := t.TempDir()
+	sshLog := filepath.Join(sshDir, "invocations.log")
+	sshScript := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + strconv.Quote(sshLog) + "\n" +
+		"if [ \"${1:-}\" = -G ]; then exit 0; fi\n" +
+		"last=\n" +
+		"for arg in \"$@\"; do last=$arg; done\n" +
+		"case \"$last\" in\n" +
+		"  \"git-upload-pack \"*) exec sh -c \"$last\" ;;\n" +
+		"esac\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(sshDir, "ssh"), []byte(sshScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	hostHome := filepath.Join(root, "host-home")
 	if err := os.MkdirAll(filepath.Join(hostHome, ".ssh"), 0o700); err != nil {
@@ -786,7 +805,11 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hostHome, ".ssh", "id_ed25519.pub"), []byte("integration public fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	isolatedRoot := filepath.Join(filepath.Dir(devRoot), "isolated-top-level")
+	isolatedRoot, err := os.MkdirTemp("", "devkit-isolated-topology-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(isolatedRoot) })
 	resolvConf := filepath.Join(root, "..", ".devkit", "native-agents", "dev-all-agent1", "resolv.conf")
 	if err := os.MkdirAll(filepath.Dir(resolvConf), 0o700); err != nil {
 		t.Fatal(err)
@@ -812,6 +835,7 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		"DEVKIT_NO_TMUX=1",
 		"HOME="+hostHome,
 		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+		"PATH="+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	prepareOut, err := prepare.Output()
 	if err != nil {
@@ -822,6 +846,16 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	}
 	if !strings.Contains(string(prepareOut), `"sandbox_worktree": "/workspaces/dev/isolated-top-level/agent1/test-repo"`) {
 		t.Fatalf("native prepare omitted isolated sandbox projection:\n%s", prepareOut)
+	}
+	sshInvocations, err := os.ReadFile(sshLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapConfig := filepath.Join(isolatedRoot, "agent1", "test-repo", ".devhome-agent1", ".ssh", "config")
+	if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
+		!strings.Contains(string(sshInvocations), "-F "+bootstrapConfig) ||
+		strings.Contains(string(sshInvocations), "/dev/null") {
+		t.Fatalf("native prepare did not use exactly one package-owned SSH fetch:\n%s", sshInvocations)
 	}
 
 	worktree := filepath.Join(isolatedRoot, "agent1", "test-repo")
@@ -840,6 +874,30 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	}
 	if value := strings.TrimSpace(string(commondir)); value == "" || filepath.IsAbs(value) {
 		t.Fatalf("native prepare emitted non-portable commondir: %q", commondir)
+	}
+	commonDir := filepath.Clean(filepath.Join(gitdir, strings.TrimSpace(string(commondir))))
+	wantCommonDir := filepath.Join(isolatedRoot, ".devkit", "git", "test-repo.git")
+	if commonDir != wantCommonDir {
+		t.Fatalf("native prepare common directory = %s, want package-owned %s", commonDir, wantCommonDir)
+	}
+	reverseGitdir, err := os.ReadFile(filepath.Join(gitdir, "gitdir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value := strings.TrimSpace(string(reverseGitdir)); value == "" || filepath.IsAbs(value) {
+		t.Fatalf("native prepare emitted non-portable reverse gitdir: %q", reverseGitdir)
+	}
+	if got := filepath.Clean(filepath.Join(gitdir, strings.TrimSpace(string(reverseGitdir)))); got != filepath.Join(worktree, ".git") {
+		t.Fatalf("native prepare reverse gitdir = %s, want %s", got, filepath.Join(worktree, ".git"))
+	}
+	for path, content := range map[string][]byte{
+		filepath.Join(worktree, ".git"):    gitFile,
+		filepath.Join(gitdir, "commondir"): commondir,
+		filepath.Join(gitdir, "gitdir"):    reverseGitdir,
+	} {
+		if strings.Contains(string(content), devRoot) || strings.Contains(string(content), repo) {
+			t.Fatalf("%s retained a source/host alias: %s", path, content)
+		}
 	}
 	run("git", "-C", worktree, "update-ref", "refs/devkit/top-level-prepare-proof", "HEAD")
 	run("git", "-C", worktree, "update-ref", "-d", "refs/devkit/top-level-prepare-proof")
@@ -866,8 +924,16 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		"DEVKIT_NO_TMUX=1",
 		"HOME="+hostHome,
 		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
-		"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+bwrapDir+string(os.PathListSeparator)+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
+	gitProbe := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
+	gitProbe.Env = execCmd.Env
+	if probeOut, probeErr := gitProbe.CombinedOutput(); probeErr != nil {
+		configProbe := exec.Command("git", "-C", worktree, "config", "--show-origin", "--list")
+		configProbe.Env = execCmd.Env
+		configOut, _ := configProbe.CombinedOutput()
+		t.Fatalf("isolated worktree failed under exec environment: %v\n%s\nconfig:\n%s", probeErr, probeOut, configOut)
+	}
 	execOut, err := execCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("native exec after isolated prepare: %v\n%s", err, execOut)
@@ -875,6 +941,18 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	if !strings.Contains(string(execOut), "__DEVKIT_ISOLATED_EXEC__=PASS") {
 		t.Fatalf("native exec suppressed isolated result projection:\n%s", execOut)
 	}
+
+	projectedRoot := filepath.Join(t.TempDir(), "unrelated", "sandbox", "depth", "product-root")
+	if err := os.MkdirAll(filepath.Dir(projectedRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(isolatedRoot, projectedRoot); err != nil {
+		t.Fatalf("project owned native root %s -> %s: %v", isolatedRoot, projectedRoot, err)
+	}
+	projectedWorktree := filepath.Join(projectedRoot, "agent1", "test-repo")
+	run("git", "-C", projectedWorktree, "rev-parse", "--show-toplevel")
+	run("git", "-C", projectedWorktree, "update-ref", "refs/devkit/projected-top-level-proof", "HEAD")
+	run("git", "-C", projectedWorktree, "update-ref", "-d", "refs/devkit/projected-top-level-proof")
 }
 
 func TestGlobalDryRunNativeExecDoesNotPrepareOrRun(t *testing.T) {

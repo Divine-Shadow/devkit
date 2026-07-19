@@ -1015,6 +1015,9 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--get", "extensions.worktreeConfig"); got != "true" {
 		t.Fatalf("extensions.worktreeConfig = %q, want true", got)
 	}
+	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--worktree", "--get", "core.bare"); got != "false" {
+		t.Fatalf("worktree core.bare = %q, want false", got)
+	}
 	if got := runTestCommand(t, "", "git", "-C", p.Agent.HostWorktree, "config", "--worktree", "--get", "core.sshCommand"); got != sshCommand {
 		t.Fatalf("worktree core.sshCommand = %q, want %q", got, sshCommand)
 	}

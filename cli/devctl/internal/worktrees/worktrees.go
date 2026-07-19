@@ -55,23 +55,19 @@ func rewriteGitdir(wt string, relative bool) {
 }
 
 // rewriteNativeGitdir makes package-owned linked-worktree metadata portable.
-// Ownership is established by the configured worktree root plus the source
-// repository's canonical common Git directory, not by the spelling of the host
-// dev root. This covers isolated top-level worktree roots while rejecting a
-// foreign or traversing metadata topology.
-//
-// A linked source checkout can legitimately use a common Git directory outside
-// the dev root. Keep that exceptional worktree pointer absolute because there
-// is no canonical package-owned projection for it; the narrow runtime metadata
-// bind remains responsible for making that external common directory visible.
-func rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir string) error {
+// Ownership is established by one common repository and all of its worktrees
+// living beneath the configured worktree root. That topology retains identical
+// relative relationships when the root is projected at an unrelated sandbox
+// path. A common repository outside the root is a foreign authority and is
+// rejected rather than rewritten or exposed through a host alias.
+func rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir string) error {
 	gitFile := filepath.Join(wt, ".git")
 	info, err := os.Lstat(gitFile)
 	if err != nil {
 		return fmt.Errorf("inspect native worktree gitdir %s: %w", gitFile, err)
 	}
 	if info.IsDir() {
-		return nil
+		return fmt.Errorf("native worktree %s is a standalone checkout, not a package-owned linked worktree", canonicalOrClean(wt))
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("native worktree gitdir %s must be a regular file", gitFile)
@@ -109,12 +105,11 @@ func rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir string) error
 	if err != nil {
 		return fmt.Errorf("canonicalize source repository common Git directory %s: %w", repoCommonDir, err)
 	}
-	canonicalDevRoot, err := canonicalExistingPath(devRoot)
-	if err != nil {
-		return fmt.Errorf("canonicalize native dev root %s: %w", devRoot, err)
-	}
 	if commonDir != canonicalRepoCommonDir {
 		return fmt.Errorf("native worktree %s commondir %s is not the package-owned common Git directory %s", canonicalWorktree, commonDir, canonicalRepoCommonDir)
+	}
+	if !pathWithinRoot(canonicalWorktreesRoot, canonicalRepoCommonDir) {
+		return fmt.Errorf("package-owned common Git directory %s is outside worktree root %s", canonicalRepoCommonDir, canonicalWorktreesRoot)
 	}
 	ownedGitdirsRoot := filepath.Join(canonicalRepoCommonDir, "worktrees")
 	if gitdir == ownedGitdirsRoot || !pathWithinRoot(ownedGitdirsRoot, gitdir) {
@@ -137,13 +132,6 @@ func rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir string) error
 	if reverseGitdir != canonicalGitFile {
 		return fmt.Errorf("native worktree %s reverse gitdir %s does not resolve to %s", canonicalWorktree, reverseGitdir, canonicalGitFile)
 	}
-	if !pathWithinRoot(canonicalDevRoot, canonicalRepoCommonDir) {
-		if err := os.WriteFile(gitFile, []byte("gitdir: "+gitdir+"\n"), 0o644); err != nil {
-			return fmt.Errorf("write exceptional native worktree gitdir %s: %w", gitFile, err)
-		}
-		return nil
-	}
-
 	relativeGitdir, err := filepath.Rel(canonicalWorktree, gitdir)
 	if err != nil {
 		return fmt.Errorf("make native worktree gitdir relative for %s: %w", canonicalWorktree, err)
@@ -166,6 +154,13 @@ func rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir string) error
 		return fmt.Errorf("write native worktree gitdir %s: %w", gitFile, err)
 	}
 	return nil
+}
+
+func canonicalOrClean(path string) string {
+	if canonical, err := canonicalExistingPath(path); err == nil {
+		return canonical
+	}
+	return filepath.Clean(path)
 }
 
 func readGitdirPointer(path string) (string, error) {
@@ -229,7 +224,7 @@ func pathWithinRoot(root, candidate string) bool {
 // missing .git metadata, pointing to a different repository, or referencing a
 // gitdir that no longer exists. We keep the directory when it still looks like
 // a valid worktree for the given repo.
-func cleanWorktreePath(repoWorktreesDir, wt string) error {
+func cleanWorktreePath(repoWorktreesDir, wt string, rejectForeign bool) error {
 	info, err := os.Stat(wt)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -269,6 +264,9 @@ func cleanWorktreePath(repoWorktreesDir, wt string) error {
 	if repoWorktreesDir != "" {
 		rel, err := filepath.Rel(repoWorktreesDir, resolved)
 		if err != nil || strings.HasPrefix(rel, "..") {
+			if rejectForeign {
+				return fmt.Errorf("native worktree %s points to foreign Git metadata %s outside %s", wt, resolved, repoWorktreesDir)
+			}
 			return os.RemoveAll(wt)
 		}
 	}
@@ -406,7 +404,7 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 		wt := filepath.Join(parent, repo)
 		bi := fmt.Sprintf("%s%d", branchPrefix, i)
 		if !dry {
-			if err := cleanWorktreePath(repoWorktreesDir, wt); err != nil {
+			if err := cleanWorktreePath(repoWorktreesDir, wt, false); err != nil {
 				return err
 			}
 		}
@@ -429,6 +427,282 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 		if err := run(dry, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, bi)...); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+const nativeOwnedCommonRepositorySchema = "devkit/native-owned-common-repository/v1"
+
+func nativeOwnedCommonRepositoryPath(worktreesRoot, repo string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || repo == "." || filepath.IsAbs(repo) || filepath.Clean(repo) != repo || filepath.Base(repo) != repo {
+		return "", fmt.Errorf("native repository name %q cannot select a package-owned common repository path", repo)
+	}
+	root, err := filepath.Abs(filepath.Clean(strings.TrimSpace(worktreesRoot)))
+	if err != nil {
+		return "", fmt.Errorf("resolve native worktree root %s: %w", worktreesRoot, err)
+	}
+	return filepath.Join(root, ".devkit", "git", repo+".git"), nil
+}
+
+func nativeOwnedCommonRepositoryMarker(repo, remoteURL string) (string, error) {
+	for label, value := range map[string]string{"repository": repo, "origin": remoteURL} {
+		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n\x00") {
+			return "", fmt.Errorf("native %s identity is invalid", label)
+		}
+	}
+	return fmt.Sprintf(
+		"schema=%s\nrepository=%s\norigin=%s\n",
+		nativeOwnedCommonRepositorySchema,
+		repo,
+		remoteURL,
+	), nil
+}
+
+func captureNativeGit(args []string) (string, error) {
+	out, result := execx.Capture(context.Background(), "env", args...)
+	if result.Code != 0 {
+		return "", fmt.Errorf("env %v: exit %d", args, result.Code)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func validateNativeOwnedCommonRepository(
+	worktreesRoot, commonDir, repo, remoteURL string,
+	envLocalGit func(...string) []string,
+) error {
+	info, err := os.Lstat(commonDir)
+	if err != nil {
+		return fmt.Errorf("inspect package-owned common repository %s: %w", commonDir, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("package-owned common repository %s must be a real directory", commonDir)
+	}
+	canonicalRoot, err := canonicalExistingPath(worktreesRoot)
+	if err != nil {
+		return fmt.Errorf("canonicalize native worktree root %s: %w", worktreesRoot, err)
+	}
+	canonicalCommon, err := canonicalExistingPath(commonDir)
+	if err != nil {
+		return fmt.Errorf("canonicalize package-owned common repository %s: %w", commonDir, err)
+	}
+	if !pathWithinRoot(canonicalRoot, canonicalCommon) {
+		return fmt.Errorf("package-owned common repository %s escapes worktree root %s", canonicalCommon, canonicalRoot)
+	}
+	expectedMarker, err := nativeOwnedCommonRepositoryMarker(repo, remoteURL)
+	if err != nil {
+		return err
+	}
+	markerPath := filepath.Join(commonDir, "devkit-owned-common")
+	marker, err := os.ReadFile(markerPath)
+	if err != nil {
+		return fmt.Errorf("read package-owned common repository marker %s: %w", markerPath, err)
+	}
+	if string(marker) != expectedMarker {
+		return fmt.Errorf("package-owned common repository %s identity does not match repository %s and its declared origin", commonDir, repo)
+	}
+	bare, err := captureNativeGit(envLocalGit("--git-dir", commonDir, "rev-parse", "--is-bare-repository"))
+	if err != nil || bare != "true" {
+		return fmt.Errorf("package-owned common repository %s is not a bare Git repository", commonDir)
+	}
+	origin, err := captureNativeGit(envLocalGit("--git-dir", commonDir, "remote", "get-url", "origin"))
+	if err != nil {
+		return fmt.Errorf("read package-owned common repository origin %s: %w", commonDir, err)
+	}
+	if origin != remoteURL {
+		return fmt.Errorf("package-owned common repository %s origin %q does not match declared origin %q", commonDir, origin, remoteURL)
+	}
+	return nil
+}
+
+func ensureNativeOwnedCommonRepository(
+	worktreesRoot, repo, remoteURL string,
+	envLocalGit func(...string) []string,
+	envRemoteGit func(...string) []string,
+	dryRun bool,
+) (string, error) {
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo)
+	if err != nil {
+		return "", err
+	}
+	marker, err := nativeOwnedCommonRepositoryMarker(repo, remoteURL)
+	if err != nil {
+		return "", err
+	}
+	if dryRun {
+		if err := run(true, "env", envLocalGit("init", "--bare", "--initial-branch=main", commonDir)...); err != nil {
+			return "", err
+		}
+		if err := run(true, "env", envLocalGit("--git-dir", commonDir, "remote", "add", "origin", remoteURL)...); err != nil {
+			return "", err
+		}
+		if err := run(true, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune")...); err != nil {
+			return "", err
+		}
+		return commonDir, nil
+	}
+
+	if err := os.MkdirAll(worktreesRoot, 0o755); err != nil {
+		return "", fmt.Errorf("create native worktree root %s: %w", worktreesRoot, err)
+	}
+	if info, statErr := os.Lstat(commonDir); statErr == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("package-owned common repository %s must be a real directory", commonDir)
+		}
+		if err := validateNativeOwnedCommonRepository(worktreesRoot, commonDir, repo, remoteURL, envLocalGit); err != nil {
+			return "", err
+		}
+		if err := run(false, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune")...); err != nil {
+			return "", err
+		}
+		return commonDir, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect package-owned common repository %s: %w", commonDir, statErr)
+	}
+
+	parent := filepath.Dir(commonDir)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return "", fmt.Errorf("create package-owned common repository parent %s: %w", parent, err)
+	}
+	staging, err := os.MkdirTemp(parent, "."+repo+".bootstrap-")
+	if err != nil {
+		return "", fmt.Errorf("create package-owned common repository staging directory: %w", err)
+	}
+	keepStaging := false
+	defer func() {
+		if !keepStaging {
+			_ = os.RemoveAll(staging)
+		}
+	}()
+	if err := run(false, "env", envLocalGit("init", "--bare", "--initial-branch=main", staging)...); err != nil {
+		return "", err
+	}
+	if err := run(false, "env", envLocalGit("--git-dir", staging, "config", "worktree.useRelativePaths", "true")...); err != nil {
+		return "", err
+	}
+	if err := run(false, "env", envLocalGit("--git-dir", staging, "remote", "add", "origin", remoteURL)...); err != nil {
+		return "", err
+	}
+	if err := run(false, "env", envRemoteGit("--git-dir", staging, "fetch", "--all", "--prune")...); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(staging, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
+		return "", fmt.Errorf("write package-owned common repository marker: %w", err)
+	}
+	if err := validateNativeOwnedCommonRepository(worktreesRoot, staging, repo, remoteURL, envLocalGit); err != nil {
+		return "", err
+	}
+	if err := os.Rename(staging, commonDir); err != nil {
+		return "", fmt.Errorf("publish package-owned common repository %s: %w", commonDir, err)
+	}
+	keepStaging = true
+	return commonDir, nil
+}
+
+func preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo string, count int) error {
+	for i := 1; i <= count; i++ {
+		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i), repo)
+		info, err := os.Lstat(worktree)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect native worktree target %s: %w", worktree, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("native worktree target %s must be absent or a package-owned linked worktree", worktree)
+		}
+		gitFile := filepath.Join(worktree, ".git")
+		gitInfo, err := os.Lstat(gitFile)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				entries, readErr := os.ReadDir(worktree)
+				if readErr != nil {
+					return fmt.Errorf("inspect native worktree target %s: %w", worktree, readErr)
+				}
+				if len(entries) == 0 {
+					continue
+				}
+				allowedHome := fmt.Sprintf(".devhome-agent%d", i)
+				if len(entries) == 1 && entries[0].Name() == allowedHome && entries[0].IsDir() && entries[0].Type()&os.ModeSymlink == 0 {
+					continue
+				}
+			}
+			return fmt.Errorf("native worktree target %s contains partial or stale state without linked Git metadata: %w", worktree, err)
+		}
+		if gitInfo.IsDir() {
+			return fmt.Errorf("native worktree %s is a standalone checkout, not a package-owned linked worktree", canonicalOrClean(worktree))
+		}
+		gitdirValue, err := readGitdirPointer(gitFile)
+		if err != nil {
+			return err
+		}
+		gitdir := filepath.Clean(gitdirValue)
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(worktree, gitdir)
+		}
+		gitdir, err = filepath.Abs(gitdir)
+		if err != nil {
+			return fmt.Errorf("resolve native worktree target gitdir %s: %w", gitFile, err)
+		}
+		ownedGitdirsRoot, err := filepath.Abs(filepath.Join(commonDir, "worktrees"))
+		if err != nil {
+			return fmt.Errorf("resolve package-owned Git worktrees root %s: %w", commonDir, err)
+		}
+		if gitdir == ownedGitdirsRoot || !pathWithinRoot(ownedGitdirsRoot, gitdir) {
+			return fmt.Errorf("native worktree target %s points to foreign Git metadata %s outside %s", worktree, gitdir, ownedGitdirsRoot)
+		}
+	}
+	return nil
+}
+
+func stageNativeWorktreePayload(worktree, allowedHome string) (string, error) {
+	entries, err := os.ReadDir(worktree)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect native worktree target %s before materialization: %w", worktree, err)
+	}
+	if len(entries) == 0 {
+		if err := os.Remove(worktree); err != nil {
+			return "", fmt.Errorf("remove empty native worktree target %s: %w", worktree, err)
+		}
+		return "", nil
+	}
+	if len(entries) != 1 || entries[0].Name() != allowedHome || !entries[0].IsDir() || entries[0].Type()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("native worktree target %s became non-empty before materialization", worktree)
+	}
+	stagingDir, err := os.MkdirTemp(filepath.Dir(worktree), ".devkit-native-payload-")
+	if err != nil {
+		return "", fmt.Errorf("create native worktree payload staging directory: %w", err)
+	}
+	stagedHome := filepath.Join(stagingDir, allowedHome)
+	if err := os.Rename(filepath.Join(worktree, allowedHome), stagedHome); err != nil {
+		_ = os.RemoveAll(stagingDir)
+		return "", fmt.Errorf("stage native worktree payload %s: %w", allowedHome, err)
+	}
+	if err := os.Remove(worktree); err != nil {
+		_ = os.Rename(stagedHome, filepath.Join(worktree, allowedHome))
+		_ = os.RemoveAll(stagingDir)
+		return "", fmt.Errorf("remove staged native worktree target %s: %w", worktree, err)
+	}
+	return stagingDir, nil
+}
+
+func restoreNativeWorktreePayload(worktree, allowedHome, stagingDir string) error {
+	if stagingDir == "" {
+		return nil
+	}
+	stagedHome := filepath.Join(stagingDir, allowedHome)
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		return fmt.Errorf("restore native worktree payload root %s: %w", worktree, err)
+	}
+	if err := os.Rename(stagedHome, filepath.Join(worktree, allowedHome)); err != nil {
+		return fmt.Errorf("restore native worktree payload %s: %w", allowedHome, err)
+	}
+	if err := os.Remove(stagingDir); err != nil {
+		return fmt.Errorf("remove native worktree payload staging directory %s: %w", stagingDir, err)
 	}
 	return nil
 }
@@ -473,6 +747,10 @@ func SetupNative(opts NativeOptions) error {
 	if worktreesRoot == "" {
 		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
 	}
+	repoCommonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo)
+	if err != nil {
+		return err
+	}
 	repoPath := filepath.Join(devRoot, repo)
 	gitSSHCommand := strings.TrimSpace(opts.GitSSHCommand)
 	envLocalGit := func(args ...string) []string {
@@ -486,27 +764,6 @@ func SetupNative(opts NativeOptions) error {
 			prefix = append(prefix, "-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		}
 		return append(prefix, append([]string{"git"}, args...)...)
-	}
-	var repoCommonDir string
-	var repoWorktreesDir string
-	if !opts.DryRun {
-		out, res := execx.Capture(context.Background(), "git", "-C", repoPath, "rev-parse", "--git-common-dir")
-		if res.Code != 0 {
-			return fmt.Errorf("read source repository common Git directory %s: exit %d", repoPath, res.Code)
-		}
-		repoCommonDir = strings.TrimSpace(out)
-		if repoCommonDir == "" {
-			return fmt.Errorf("source repository %s returned an empty common Git directory", repoPath)
-		}
-		if !filepath.IsAbs(repoCommonDir) {
-			repoCommonDir = filepath.Join(repoPath, repoCommonDir)
-		}
-		canonicalCommonDir, err := canonicalExistingPath(repoCommonDir)
-		if err != nil {
-			return fmt.Errorf("canonicalize source repository common Git directory %s: %w", repoPath, err)
-		}
-		repoCommonDir = canonicalCommonDir
-		repoWorktreesDir = filepath.Join(repoCommonDir, "worktrees")
 	}
 	remoteURL, result := execx.Capture(context.Background(), "git", "-C", repoPath, "remote", "get-url", "origin")
 	if result.Code != 0 && !opts.DryRun {
@@ -524,16 +781,32 @@ func SetupNative(opts NativeOptions) error {
 			return fmt.Errorf("native Git bootstrap for SSH origin requires a package-owned SSH command")
 		}
 	}
-	if err := run(opts.DryRun, "env", envRemoteGit("-C", repoPath, "fetch", "--all", "--prune")...); err != nil {
-		if opts.RequireSSHOrigin || opts.DryRun || !nativeWorktreesExist(worktreesRoot, repo, count) {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		if opts.DryRun {
+			remoteURL = "SOURCE_DECLARED_ORIGIN"
+		} else {
+			return fmt.Errorf("native Git bootstrap origin is empty")
+		}
+	}
+	if !opts.DryRun {
+		if err := preflightNativeOwnedWorktreeTargets(worktreesRoot, repoCommonDir, repo, count); err != nil {
 			return err
 		}
 	}
-	if err := run(opts.DryRun, "env", envLocalGit("-C", repoPath, "config", "worktree.useRelativePaths", "true")...); err != nil {
+	repoCommonDir, err = ensureNativeOwnedCommonRepository(
+		worktreesRoot,
+		repo,
+		remoteURL,
+		envLocalGit,
+		envRemoteGit,
+		opts.DryRun,
+	)
+	if err != nil {
 		return err
 	}
-	if !opts.DryRun {
-		_ = os.MkdirAll(worktreesRoot, 0o755)
+	if err := run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
+		return err
 	}
 	for i := 1; i <= count; i++ {
 		parent := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i))
@@ -542,6 +815,7 @@ func SetupNative(opts NativeOptions) error {
 		}
 		wt := filepath.Join(parent, repo)
 		branch := fmt.Sprintf("%s%d", branchPrefix, i)
+		allowedHome := fmt.Sprintf(".devhome-agent%d", i)
 		if !opts.DryRun {
 			if ok, err := existingGitCheckout(wt); err != nil {
 				return err
@@ -549,30 +823,41 @@ func SetupNative(opts NativeOptions) error {
 				if err := run(false, "env", envLocalGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
 					return err
 				}
-				if err := rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir); err != nil {
+				if err := rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := cleanWorktreePath(repoWorktreesDir, wt); err != nil {
+		}
+		stagingDir := ""
+		if !opts.DryRun {
+			stagingDir, err = stageNativeWorktreePayload(wt, allowedHome)
+			if err != nil {
 				return err
 			}
 		}
-		_ = run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "prune")...)
-		_ = run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "remove", "-f", wt)...)
-		if err := run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
+		_ = run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "prune")...)
+		_ = run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "remove", "-f", wt)...)
+		if err := run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
 			if opts.DryRun {
 				return err
 			}
+			_ = run(false, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "remove", "-f", wt)...)
 			if remErr := os.RemoveAll(wt); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
-				return fmt.Errorf("remove stale worktree %s: %w", wt, remErr)
+				return errors.Join(err, fmt.Errorf("remove failed native worktree %s: %w", wt, remErr))
 			}
-			if err2 := run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err2 != nil {
-				return err2
+			if restoreErr := restoreNativeWorktreePayload(wt, allowedHome, stagingDir); restoreErr != nil {
+				return errors.Join(err, restoreErr)
+			}
+			return err
+		}
+		if !opts.DryRun {
+			if err := restoreNativeWorktreePayload(wt, allowedHome, stagingDir); err != nil {
+				return err
 			}
 		}
 		if !opts.DryRun {
-			if err := rewriteNativeGitdir(wt, worktreesRoot, devRoot, repoCommonDir); err != nil {
+			if err := rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir); err != nil {
 				return err
 			}
 		}
@@ -593,18 +878,4 @@ func gitRemoteRequiresSSH(remoteURL string) bool {
 	return strings.HasPrefix(remoteURL, "ssh://") ||
 		(strings.Contains(remoteURL, "@") && strings.Contains(remoteURL, ":") &&
 			!strings.Contains(remoteURL, "://"))
-}
-
-func nativeWorktreesExist(worktreesRoot, repo string, count int) bool {
-	if count < 1 {
-		count = 1
-	}
-	for i := 1; i <= count; i++ {
-		wt := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i), repo)
-		ok, err := existingGitCheckout(wt)
-		if err != nil || !ok {
-			return false
-		}
-	}
-	return true
 }

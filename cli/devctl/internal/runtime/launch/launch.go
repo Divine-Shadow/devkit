@@ -110,9 +110,9 @@ func Prepare(p nativeplan.Plan) error {
 
 func requireGitWorktree(worktree string) error {
 	cmd := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("host worktree %s is not a Git worktree: %w", worktree, err)
+		return fmt.Errorf("host worktree %s is not a Git worktree: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
 	top := filepath.Clean(strings.TrimSpace(string(out)))
 	expected := filepath.Clean(worktree)
@@ -462,6 +462,13 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 	}
 	if out, err := runGitConfigWithLockRetry("-C", worktree, "config", "extensions.worktreeConfig", "true"); err != nil {
 		return fmt.Errorf("git config extensions.worktreeConfig in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
+	}
+	// Package-owned native worktrees are linked from a bare common
+	// repository. Once worktreeConfig is enabled, preserve the selected
+	// worktree's non-bare identity explicitly; otherwise the shared
+	// core.bare=true makes subsequent Git and libgit2 opens lose the worktree.
+	if out, err := runGitConfigWithLockRetry("-C", worktree, "config", "--worktree", "core.bare", "false"); err != nil {
+		return fmt.Errorf("git config --worktree core.bare in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
 	if out, err := runGitConfigWithLockRetry("-C", worktree, "config", "--worktree", "core.sshCommand", sshCommand); err != nil {
 		return fmt.Errorf("git config --worktree core.sshCommand in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
