@@ -2553,12 +2553,15 @@ func runSandboxReadinessChecks(p nativeplan.Plan, checks []sandboxReadinessCheck
 	if len(checks) == 0 {
 		return nil, nil
 	}
-	script := buildSandboxReadinessScript(checks)
-	out, err := runSandboxCommand(p, []string{"bash", "-lc", script})
+	out, err := runSandboxCommand(p, sandboxReadinessCommand(checks))
 	if err != nil {
 		return nil, fmt.Errorf("%s", detail(err, out))
 	}
 	return parseSandboxReadinessResults(out)
+}
+
+func sandboxReadinessCommand(checks []sandboxReadinessCheck) []string {
+	return []string{"bash", "-c", buildSandboxReadinessScript(checks)}
 }
 
 func buildSandboxReadinessScript(checks []sandboxReadinessCheck) string {

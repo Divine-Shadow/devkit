@@ -56,11 +56,16 @@ func TestParseSandboxReadinessResultsPreservesPerCheckDetails(t *testing.T) {
 }
 
 func TestBuildSandboxReadinessScriptPreservesImmutableRuntimePath(t *testing.T) {
-	script := buildSandboxReadinessScript([]sandboxReadinessCheck{{
+	checks := []sandboxReadinessCheck{{
 		Phase:   readiness.PhaseRuntime,
 		Name:    "playwright-browser",
 		Command: "node playwright-check.js",
-	}})
+	}}
+	command := sandboxReadinessCommand(checks)
+	if len(command) != 3 || command[0] != "bash" || command[1] != "-c" {
+		t.Fatalf("readiness batch must preserve the immutable runtime environment: %#v", command)
+	}
+	script := command[2]
 	if !strings.Contains(script, `bash -c "$command"`) {
 		t.Fatalf("readiness command did not preserve the selected runtime environment:\n%s", script)
 	}
