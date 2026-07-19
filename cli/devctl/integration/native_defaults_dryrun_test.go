@@ -655,6 +655,10 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 	if err := os.WriteFile(allowlistPath, []byte("github.com\nssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	resolvConfPath := filepath.Join(root, "resolv.conf")
+	if err := os.WriteFile(resolvConfPath, []byte("nameserver 127.0.0.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	socketRoot, err := os.MkdirTemp("", "dke-")
 	if err != nil {
 		t.Fatal(err)
@@ -672,6 +676,7 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 				"--isolation-profile", "workspace-egress",
 				"--egress-allowlist", allowlistPath,
 				"--proxy-socket", sharedSocket,
+				"--resolv-conf", resolvConfPath,
 				"--", "true",
 			)
 			cmd.Env = append(os.Environ(),

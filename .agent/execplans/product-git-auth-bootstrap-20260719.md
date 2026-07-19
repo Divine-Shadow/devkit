@@ -58,6 +58,9 @@ Git to receive that exact SSH command explicitly.
   child exit status, and cover byte-exact stdout projection.
 - [x] Run the focused proxy/launch/worktree/native-command tests, full
   `go test ./...`, and all nine Devkit flake checks.
+- [x] Make the native-exec integration fixture provide its declared resolver
+  input so the same test passes inside the Nix build sandbox without ambient
+  `/etc/resolv.conf`.
 - [ ] Publish Devkit master and record the exact commit.
 - [ ] Rebase the WSL v3 patch onto the new Devkit input, update pin/lock and
   runtime identity assertions, and run the full WSL gate.
@@ -90,6 +93,11 @@ Git to receive that exact SSH command explicitly.
 - Native exec inherited stdout correctly, but `runCommandPreservingExit`
   called `os.Exit` inside the command handler. That skipped deferred cleanup
   and explains the terminal Management consumer's stale socket pathname.
+- The first WSL package reconstruction correctly ran the new integration test
+  in a Nix build sandbox and exposed one fixture-only ambient dependency:
+  `/etc/resolv.conf` is absent there. Supplying the test's own `--resolv-conf`
+  input keeps the production contract unchanged and makes the hostile test
+  hermetic.
 
 ## Decision log
 
