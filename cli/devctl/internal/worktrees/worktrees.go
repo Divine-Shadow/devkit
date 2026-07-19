@@ -751,6 +751,294 @@ type NativeOptions struct {
 	DryRun           bool
 }
 
+// NativeResetOptions describes the one destructive native lifecycle boundary.
+// Reset authority comes from the explicit dev-all reset command plus the
+// source-declared roots; callers cannot opt arbitrary paths into disposal.
+type NativeResetOptions struct {
+	Project        string
+	Repo           string
+	Count          int
+	WorktreeRoot   string
+	StateRoot      string
+	ProtectedRoots []string
+	DryRun         bool
+}
+
+type nativeResetCandidate struct {
+	path     string
+	boundary string
+}
+
+// NativeResetPlan is an opaque, preflighted disposal plan. The paths are
+// deliberately not exported so a caller cannot turn validation into an
+// arbitrary recursive-delete facility.
+type NativeResetPlan struct {
+	dryRun         bool
+	candidates     []nativeResetCandidate
+	protectedRoots []string
+	mountPoints    []string
+}
+
+var nativeResetMountPoints = readNativeResetMountPoints
+
+func decodeMountInfoPath(value string) string {
+	replacer := strings.NewReplacer(
+		`\040`, " ",
+		`\011`, "\t",
+		`\012`, "\n",
+		`\134`, `\`,
+	)
+	return replacer.Replace(value)
+}
+
+func readNativeResetMountPoints() ([]string, error) {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return nil, fmt.Errorf("read native reset mount inventory: %w", err)
+	}
+	var result []string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		result = append(result, filepath.Clean(decodeMountInfoPath(fields[4])))
+	}
+	return result, nil
+}
+
+func validateNativeResetPathComponents(path string) error {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("native reset path %s must be absolute", path)
+	}
+	current := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	if volume != "" {
+		current = volume + string(filepath.Separator)
+	}
+	relative := strings.TrimPrefix(path, current)
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect native reset path %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("native reset path %s traverses a symlink or junction", current)
+		}
+	}
+	return nil
+}
+
+func nativeResetPathsOverlap(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	return pathWithinRoot(left, right) || pathWithinRoot(right, left)
+}
+
+func validateNativeResetCandidate(candidate nativeResetCandidate, protectedRoots, mountPoints []string) error {
+	if !pathWithinRoot(candidate.boundary, candidate.path) || candidate.path == candidate.boundary {
+		return fmt.Errorf("native reset target %s escapes its declared ownership boundary %s", candidate.path, candidate.boundary)
+	}
+	if err := validateNativeResetPathComponents(candidate.path); err != nil {
+		return err
+	}
+	for _, protected := range protectedRoots {
+		protected = strings.TrimSpace(protected)
+		if protected == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(filepath.Clean(protected))
+		if err != nil {
+			return fmt.Errorf("resolve native reset protected root %s: %w", protected, err)
+		}
+		if nativeResetPathsOverlap(candidate.path, absolute) {
+			return fmt.Errorf("native reset target %s overlaps protected root %s", candidate.path, absolute)
+		}
+	}
+	for _, mountPoint := range mountPoints {
+		mountPoint = filepath.Clean(strings.TrimSpace(mountPoint))
+		if mountPoint == "" {
+			continue
+		}
+		if candidate.path == mountPoint || pathWithinRoot(candidate.path, mountPoint) {
+			return fmt.Errorf("native reset target %s contains mount point %s", candidate.path, mountPoint)
+		}
+	}
+	return nil
+}
+
+// PlanNativeReset validates the complete destructive boundary before any
+// broker, session, workspace, home, or bootstrap effect occurs. Existing
+// payload beneath an exact owned target is intentionally opaque: a foreign
+// .git pointer is inert data to unlink, never a source of expanded custody.
+func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
+	if strings.TrimSpace(opts.Project) != "dev-all" {
+		return nil, fmt.Errorf("native destructive reset requires the exact dev-all prefix")
+	}
+	repo := strings.TrimSpace(opts.Repo)
+	if strings.TrimSpace(opts.WorktreeRoot) == "" {
+		return nil, fmt.Errorf("native reset worktree root is required")
+	}
+	worktreeRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(opts.WorktreeRoot)))
+	if err != nil {
+		return nil, fmt.Errorf("resolve native reset worktree root %s: %w", opts.WorktreeRoot, err)
+	}
+	if strings.TrimSpace(opts.StateRoot) == "" {
+		return nil, fmt.Errorf("native reset state root is required")
+	}
+	stateRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(opts.StateRoot)))
+	if err != nil {
+		return nil, fmt.Errorf("resolve native reset state root %s: %w", opts.StateRoot, err)
+	}
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo)
+	if err != nil {
+		return nil, err
+	}
+	count := opts.Count
+	if count < 1 {
+		return nil, fmt.Errorf("native destructive reset count must be positive")
+	}
+	if err := validateNativeResetPathComponents(worktreeRoot); err != nil {
+		return nil, err
+	}
+	if err := validateNativeResetPathComponents(stateRoot); err != nil {
+		return nil, err
+	}
+
+	candidates := make([]nativeResetCandidate, 0, count*2+2)
+	for index := 1; index <= count; index++ {
+		candidates = append(candidates,
+			nativeResetCandidate{
+				path:     filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index)),
+				boundary: worktreeRoot,
+			},
+			nativeResetCandidate{
+				path:     filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, index)),
+				boundary: stateRoot,
+			},
+		)
+	}
+	candidates = append(candidates,
+		nativeResetCandidate{path: commonDir, boundary: worktreeRoot},
+		nativeResetCandidate{
+			path:     runtimeagent.ManifestPath(stateRoot, opts.Project),
+			boundary: stateRoot,
+		},
+	)
+	staging, err := filepath.Glob(filepath.Join(filepath.Dir(commonDir), "."+repo+".bootstrap-*"))
+	if err != nil {
+		return nil, fmt.Errorf("enumerate native reset bootstrap staging paths: %w", err)
+	}
+	for _, path := range staging {
+		candidates = append(candidates, nativeResetCandidate{path: path, boundary: worktreeRoot})
+	}
+
+	mountPoints, err := nativeResetMountPoints()
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		if err := validateNativeResetCandidate(candidate, opts.ProtectedRoots, mountPoints); err != nil {
+			return nil, err
+		}
+	}
+	return &NativeResetPlan{
+		dryRun:         opts.DryRun,
+		candidates:     candidates,
+		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
+		mountPoints:    append([]string(nil), mountPoints...),
+	}, nil
+}
+
+type stagedNativeResetPath struct {
+	source string
+	target string
+}
+
+func rollbackNativeResetStaging(staged []stagedNativeResetPath) error {
+	var result error
+	for index := len(staged) - 1; index >= 0; index-- {
+		item := staged[index]
+		if err := os.Rename(item.target, item.source); err != nil {
+			result = errors.Join(result, fmt.Errorf("restore native reset target %s: %w", item.source, err))
+		}
+	}
+	return result
+}
+
+// Apply atomically removes the validated active names before discarding their
+// contents. A staging failure restores every name already moved.
+func (plan *NativeResetPlan) Apply() error {
+	if plan == nil {
+		return fmt.Errorf("native reset plan is required")
+	}
+	for _, candidate := range plan.candidates {
+		if err := validateNativeResetCandidate(candidate, plan.protectedRoots, plan.mountPoints); err != nil {
+			return fmt.Errorf("revalidate native reset boundary before disposal: %w", err)
+		}
+	}
+	if plan.dryRun {
+		for _, candidate := range plan.candidates {
+			fmt.Fprintf(os.Stderr, "+ reset-owned %s\n", candidate.path)
+		}
+		return nil
+	}
+	quarantines := map[string]string{}
+	var staged []stagedNativeResetPath
+	cleanupEmptyQuarantines := func() {
+		for _, quarantine := range quarantines {
+			_ = os.Remove(quarantine)
+		}
+	}
+	for _, candidate := range plan.candidates {
+		info, err := os.Lstat(candidate.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("inspect native reset target %s: %w", candidate.path, err), rollbackErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("native reset target %s became a symlink or junction", candidate.path), rollbackErr)
+		}
+		quarantine := quarantines[candidate.boundary]
+		if quarantine == "" {
+			quarantine, err = os.MkdirTemp(candidate.boundary, ".devkit-reset-")
+			if err != nil {
+				rollbackErr := rollbackNativeResetStaging(staged)
+				cleanupEmptyQuarantines()
+				return errors.Join(fmt.Errorf("create native reset quarantine under %s: %w", candidate.boundary, err), rollbackErr)
+			}
+			quarantines[candidate.boundary] = quarantine
+		}
+		target := filepath.Join(quarantine, fmt.Sprintf("%03d", len(staged)))
+		if err := os.Rename(candidate.path, target); err != nil {
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("stage native reset target %s: %w", candidate.path, err), rollbackErr)
+		}
+		staged = append(staged, stagedNativeResetPath{source: candidate.path, target: target})
+	}
+	for _, quarantine := range quarantines {
+		if err := os.RemoveAll(quarantine); err != nil {
+			return fmt.Errorf("discard native reset quarantine %s: %w", quarantine, err)
+		}
+	}
+	return nil
+}
+
 // PreflightNative validates every target in a multi-slot reconstruction before
 // bootstrap identity or transport state is materialized. Existing
 // package-owned worktrees and their exact per-agent homes are accepted;

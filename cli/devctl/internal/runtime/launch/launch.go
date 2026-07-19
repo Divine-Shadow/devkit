@@ -2541,6 +2541,8 @@ func isExecutable(path string) bool {
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
+var nativeResolvConfSource = "/etc/resolv.conf"
+
 func ensureResolvConf(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -2551,9 +2553,9 @@ func ensureResolvConf(path string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat resolv.conf %s: %w", path, err)
 	}
-	data, err := os.ReadFile("/etc/resolv.conf")
+	data, err := os.ReadFile(nativeResolvConfSource)
 	if err != nil {
-		return fmt.Errorf("read /etc/resolv.conf: %w", err)
+		return fmt.Errorf("read %s: %w", nativeResolvConfSource, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)

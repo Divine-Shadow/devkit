@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -22,7 +23,10 @@ func buildDevctlForNativeDefaults(t *testing.T) string {
 
 func buildDevctlForNativeDefaultsWithTags(t *testing.T, tags ...string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "devctl")
+	bin := filepath.Join(t.TempDir(), "runtime", "kit", "bin", "devctl")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	args := []string{"build", "-trimpath"}
 	if len(tags) > 0 {
 		args = append(args, "-tags", strings.Join(tags, ","))
@@ -997,17 +1001,24 @@ func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
 
-	for _, args := range [][]string{{"fresh-open", "2"}, {"reset", "2"}} {
-		out, err := runNativeDefaultDryRun(t, bin, root, args...)
-		if err != nil {
-			t.Fatalf("%v failed: %v\n%s", args, err, out)
-		}
-		assertNoDockerCommand(t, out)
-		if !strings.Contains(out, " -p dev-all down --repo ouroboros-ide --count 2") {
-			t.Fatalf("%v missing native down:\n%s", args, out)
-		}
-		if !strings.Contains(out, " -p dev-all up --repo ouroboros-ide --count 2") {
-			t.Fatalf("%v missing native up:\n%s", args, out)
+	freshOutput, err := runNativeDefaultDryRun(t, bin, root, "fresh-open", "2")
+	if err != nil {
+		t.Fatalf("fresh-open failed: %v\n%s", err, freshOutput)
+	}
+	assertNoDockerCommand(t, freshOutput)
+	if !strings.Contains(freshOutput, " -p dev-all down --repo ouroboros-ide --count 2") ||
+		!strings.Contains(freshOutput, " -p dev-all up --repo ouroboros-ide --count 2") {
+		t.Fatalf("fresh-open missing native lifecycle:\n%s", freshOutput)
+	}
+
+	resetOutput, err := runNativeDefaultDryRun(t, bin, root, "reset", "2")
+	if err != nil {
+		t.Fatalf("reset failed: %v\n%s", err, resetOutput)
+	}
+	assertNoDockerCommand(t, resetOutput)
+	for _, required := range []string{"command: down", "command: reset", "+ reset-owned"} {
+		if !strings.Contains(resetOutput, required) {
+			t.Fatalf("reset missing exact destructive lifecycle marker %q:\n%s", required, resetOutput)
 		}
 	}
 }
@@ -1094,6 +1105,7 @@ native:
 	sshDir := filepath.Join(base, "fixture-bin")
 	sshLog := filepath.Join(base, "ssh.log")
 	sshAllow := filepath.Join(base, "allow-ssh-fetch")
+	readinessFail := filepath.Join(base, "fail-readiness")
 	if err := os.MkdirAll(sshDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1111,6 +1123,10 @@ native:
 		t.Fatal(err)
 	}
 	bwrapScript := "#!/bin/sh\n" +
+		"if [ -f " + strconv.Quote(readinessFail) + " ]; then\n" +
+		"  printf '__DEVKIT_READINESS_CHECK__\\truntime\\tsandbox-command\\t1\\tcmVhZGluZXNzIGZhaWx1cmU=\\n'\n" +
+		"  exit 0\n" +
+		"fi\n" +
 		"printf '__DEVKIT_READINESS_CHECK__\\truntime\\tsandbox-command\\t0\\t\\n'\n" +
 		"printf '__DEVKIT_READINESS_CHECK__\\truntime\\tbroker-socket\\t0\\t\\n'\n"
 	if err := os.WriteFile(filepath.Join(sshDir, "bwrap"), []byte(bwrapScript), 0o755); err != nil {
@@ -1159,14 +1175,9 @@ native:
 	if err := os.WriteFile(nscdSource, []byte("integration-only bind source\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for index := 1; index <= 3; index++ {
-		resolver := filepath.Join(base, ".devkit", "native-agents", fmt.Sprintf("dev-all-agent%d", index), "resolv.conf")
-		if err := os.MkdirAll(filepath.Dir(resolver), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(resolver, []byte("nameserver 192.0.2.53\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	resolverSource := filepath.Join(base, "integration-resolv.conf")
+	if err := os.WriteFile(resolverSource, []byte("nameserver 192.0.2.53\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	staleHome := filepath.Join(base, "agent-worktrees", "agent2", "ouroboros-ide", ".devhome-agent2")
 	if err := os.MkdirAll(staleHome, 0o700); err != nil {
@@ -1183,6 +1194,7 @@ native:
 		"DEVKIT_TEST_BROKER_PACKAGE="+brokerPackage,
 		"DEVKIT_INTEGRATION_BROKER_HELPER=1",
 		"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
+		"DEVKIT_INTEGRATION_RESOLV_SOURCE="+resolverSource,
 		"HOME="+controllerHome,
 		"CODEX_AUTH_JSON="+filepath.Join(base, "missing-auth.json"),
 		"PATH="+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -1205,8 +1217,8 @@ native:
 	if !strings.Contains(string(output), "fetch --all --prune") {
 		t.Fatalf("failed package SSH fetch was not classified at bootstrap: %v\n%s", err, output)
 	}
-	if data, readErr := os.ReadFile(staleMarker); readErr != nil || string(data) != "preserve\n" {
-		t.Fatalf("failed reset changed stale package-owned payload: %q %v", data, readErr)
+	if _, readErr := os.Lstat(staleMarker); !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("failed reset did not dispose stale package-owned payload: %v", readErr)
 	}
 	for _, path := range []string{
 		filepath.Join(base, "agent-worktrees", "agent1"),
@@ -1240,6 +1252,7 @@ native:
 		t.Fatalf("installed top-level reset failed: %v\n%s", err, output)
 	}
 	worktreesRoot := filepath.Join(base, "agent-worktrees")
+	wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
 	for index := 1; index <= 3; index++ {
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
 		gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
@@ -1248,6 +1261,29 @@ native:
 		}
 		if value := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(gitFile)), "gitdir:")); value == "" || filepath.IsAbs(value) {
 			t.Fatalf("agent%d gitdir is not package-relative: %q", index, gitFile)
+		}
+		gotCommonDir := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", worktree, "rev-parse", "--git-common-dir"))
+		if !filepath.IsAbs(gotCommonDir) {
+			gotCommonDir = filepath.Join(worktree, gotCommonDir)
+		}
+		if got := filepath.Clean(gotCommonDir); got != wantCommonDir {
+			t.Fatalf("agent%d common repository = %q, want package-owned %q", index, got, wantCommonDir)
+		}
+		gitdir := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", worktree, "rev-parse", "--git-dir"))
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(worktree, gitdir)
+		}
+		for name, path := range map[string]string{
+			"commondir": filepath.Join(gitdir, "commondir"),
+			"reverse":   filepath.Join(gitdir, "gitdir"),
+		} {
+			value, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("agent%d %s metadata missing: %v", index, name, err)
+			}
+			if filepath.IsAbs(strings.TrimSpace(string(value))) {
+				t.Fatalf("agent%d %s metadata is not portable: %q", index, name, value)
+			}
 		}
 		if out := runNativeFixtureCommand(t, "git", "-C", worktree, "status", "--porcelain=v1"); strings.TrimSpace(out) != "" {
 			t.Fatalf("agent%d reset worktree is dirty: %s", index, out)
@@ -1260,8 +1296,8 @@ native:
 			t.Fatalf("agent%d source-defined app-server config missing: %v", index, err)
 		}
 	}
-	if data, err := os.ReadFile(staleMarker); err != nil || string(data) != "preserve\n" {
-		t.Fatalf("stale package-owned agent home was not preserved: %q %v", data, err)
+	if _, err := os.Lstat(staleMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale package-owned agent home survived destructive reset: %v", err)
 	}
 	sshInvocations, err := os.ReadFile(sshLog)
 	if err != nil {
@@ -1288,30 +1324,104 @@ native:
 	if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	foreignSentinel := filepath.Join(foreignRoot, "accepted-business-data")
+	if err := os.WriteFile(foreignSentinel, []byte("outside reset custody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	foreignGitFile := filepath.Join(worktreesRoot, "agent3", "ouroboros-ide", ".git")
 	foreignContent := []byte("gitdir: " + foreignRoot + "\n")
 	if err := os.WriteFile(foreignGitFile, foreignContent, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(worktreesRoot, "agent3", "ouroboros-ide", "stale-payload"), []byte("discard\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	beforeForeignSSH := append([]byte(nil), sshInvocations...)
 	output, err = runReset()
-	if err == nil || !strings.Contains(string(output), "foreign Git metadata") {
-		t.Fatalf("reset accepted foreign protected root: %v\n%s", err, output)
+	if err != nil {
+		t.Fatalf("reset did not reconstruct opaque in-prefix foreign metadata: %v\n%s", err, output)
 	}
-	if after, readErr := os.ReadFile(foreignGitFile); readErr != nil || string(after) != string(foreignContent) {
-		t.Fatalf("foreign protected metadata changed: %q %v", after, readErr)
+	if after, readErr := os.ReadFile(foreignGitFile); readErr != nil ||
+		string(after) == string(foreignContent) ||
+		filepath.IsAbs(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(after)), "gitdir:"))) {
+		t.Fatalf("foreign in-prefix Git pointer was not replaced by portable package metadata: %q %v", after, readErr)
 	}
-	if after, readErr := os.ReadFile(sshLog); readErr != nil || string(after) != string(beforeForeignSSH) {
-		t.Fatalf("foreign-root rejection invoked SSH bootstrap: %q %v", after, readErr)
+	if got, readErr := os.ReadFile(foreignSentinel); readErr != nil || string(got) != "outside reset custody\n" {
+		t.Fatalf("reset acquired custody of foreign Git metadata: %q %v", got, readErr)
 	}
-	for _, path := range []string{
-		brokerSocket,
-		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
-		filepath.Join(base, ".devkit", "native-broker", "broker.json"),
-	} {
-		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
-			t.Fatalf("foreign-root rejection left broker residue %s: %v", path, statErr)
+	if after, readErr := os.ReadFile(sshLog); readErr != nil ||
+		strings.Count(string(after), "git-upload-pack") != strings.Count(string(beforeForeignSSH), "git-upload-pack")+1 {
+		t.Fatalf("foreign payload reconstruction did not use one fresh package SSH bootstrap: %q %v", after, readErr)
+	}
+	assertNoNativeResetProxyResidue(t, base)
+
+	assertFailedResetClean := func(label string, output []byte, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s unexpectedly succeeded:\n%s", label, output)
 		}
+		for _, path := range []string{
+			filepath.Join(base, "agent-worktrees", "agent1"),
+			filepath.Join(base, "agent-worktrees", "agent2"),
+			filepath.Join(base, "agent-worktrees", "agent3"),
+			filepath.Join(base, "agent-worktrees", ".devkit", "git", "ouroboros-ide.git"),
+			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent1"),
+			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2"),
+			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent3"),
+			filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json"),
+			brokerSocket,
+			filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
+			filepath.Join(base, ".devkit", "native-broker", "broker.json"),
+		} {
+			if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("%s left package lifecycle residue %s: %v", label, path, statErr)
+			}
+		}
+		assertNoNativeResetProxyResidue(t, base)
+		if got, readErr := os.ReadFile(foreignSentinel); readErr != nil || string(got) != "outside reset custody\n" {
+			t.Fatalf("%s touched outside-prefix data: %q %v", label, got, readErr)
+		}
+	}
+
+	if err := os.Remove(sshAllow); err != nil {
+		t.Fatal(err)
+	}
+	output, err = runReset()
+	assertFailedResetClean("fetch failure", output, err)
+	if !strings.Contains(string(output), "fetch --all --prune") {
+		t.Fatalf("fetch failure did not reach package SSH bootstrap:\n%s", output)
+	}
+	if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(nscdSource); err != nil {
+		t.Fatal(err)
+	}
+	output, err = runReset()
+	assertFailedResetClean("preparation failure", output, err)
+	if !strings.Contains(string(output), nscdSource) {
+		t.Fatalf("preparation failure was not attributed to the source-defined required bind:\n%s", output)
+	}
+	if err := os.WriteFile(nscdSource, []byte("integration-only bind source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(readinessFail, []byte("fail\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err = runReset()
+	assertFailedResetClean("readiness failure", output, err)
+	if !strings.Contains(string(output), "native capacity is not fully available") {
+		t.Fatalf("readiness failure did not reach the source-defined readiness gate:\n%s", output)
+	}
+	if err := os.Remove(readinessFail); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err = runReset()
+	if err != nil {
+		t.Fatalf("reset did not recover cleanly after failure cleanup: %v\n%s", err, output)
 	}
 	assertNoNativeResetProxyResidue(t, base)
 }

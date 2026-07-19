@@ -424,7 +424,7 @@ Commands:
   worktrees-status <repo> [--all|--index N]  (flake-backed overlays)
   worktrees-sync <repo> (--pull|--push) [--all|--index N]  (flake-backed overlays)
   worktrees-tmux <repo> <count> [--plain]    (flake-backed overlays)
-  reset [N]                                  (alias: fresh-open)
+  reset [N]                                  destructively reconstruct the exact owned native prefix
   bootstrap <repo> <count>                   (flake-backed overlays)
   runtime-matrix [--check] [--all] [--repo NAME|--overlay NAME] (repo to runtime pairing report)
   management-inspect refresh --repo PATH --revision REF [--name NAME] [--state-root PATH]
@@ -1101,7 +1101,6 @@ exit 0`
 		nativeLifecycleCommand(dryRun, exe, project, "up", repo, n)
 		openNativeAgentSession(dryRun, exe, project, repo, "devkit-open", n, plain)
 	case "reset":
-		// Alias to fresh-open with identical behavior
 		mustProject(project)
 		if !isNativeRuntime {
 			die("reset requires runtime.flake")
@@ -1111,11 +1110,15 @@ exit 0`
 			n = mustAtoi(sub[0])
 		}
 		repo := readDefaultRepo(project, paths)
-		nativeLifecycleCommand(dryRun, exe, project, "down", repo, n)
-		if !skipTmux() {
-			killNativeAgentSessions(dryRun)
+		resetCtx := *ctx
+		resetCtx.Args = []string{"--repo", repo, "--count", fmt.Sprintf("%d", n)}
+		if err := nativecmd.ResetOwnedPrefix(&resetCtx, func() {
+			if !skipTmux() {
+				killNativeAgentSessions(dryRun)
+			}
+		}); err != nil {
+			die(err.Error())
 		}
-		nativeLifecycleCommand(dryRun, exe, project, "up", repo, n)
 		openNativeAgentSession(dryRun, exe, project, repo, "devkit-open", n, false)
 	case "ssh-setup":
 		mustProject(project)

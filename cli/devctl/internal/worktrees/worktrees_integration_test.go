@@ -721,6 +721,229 @@ func TestSetupNativeRejectsAndPreservesPartialWorktreeBeforeBootstrap(t *testing
 	}
 }
 
+func TestNativeResetDisposesOpaqueInPrefixPayloadWithoutForeignCustody(t *testing.T) {
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	foreignRoot := filepath.Join(root, "foreign-common.git", "worktrees", "legacy")
+	if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreignSentinel := filepath.Join(foreignRoot, "accepted-business-data")
+	if err := os.WriteFile(foreignSentinel, []byte("outside reset custody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	if err := os.MkdirAll(staleWorktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleWorktree, ".git"), []byte("gitdir: "+foreignRoot+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleWorktree, "dirty-payload"), []byte("disposable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(stateRoot, "dev-all-agent1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, "dev-all-agent1", "stale"), []byte("disposable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanNativeReset(NativeResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Count:        1,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatalf("plan native reset: %v", err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatalf("apply native reset: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(worktreeRoot, "agent1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned stale worktree survived reset: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(stateRoot, "dev-all-agent1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned stale state survived reset: %v", err)
+	}
+	if got, err := os.ReadFile(foreignSentinel); err != nil || string(got) != "outside reset custody\n" {
+		t.Fatalf("foreign Git metadata acquired reset custody: data=%q error=%v", got, err)
+	}
+}
+
+func TestNativeResetRejectsOwnershipEscapesBeforeDisposal(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	newOptions := func(root string) NativeResetOptions {
+		return NativeResetOptions{
+			Project:      "dev-all",
+			Repo:         "ouroboros-ide",
+			Count:        1,
+			WorktreeRoot: filepath.Join(root, "owned-worktrees"),
+			StateRoot:    filepath.Join(root, "owned-state"),
+		}
+	}
+	t.Run("mismatched prefix", func(t *testing.T) {
+		opts := newOptions(t.TempDir())
+		sentinel := filepath.Join(opts.WorktreeRoot, "agent1", "preserve")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts.Project = "other"
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "exact dev-all prefix") {
+			t.Fatalf("mismatched prefix error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("mismatched prefix changed owned payload before rejection: %v", err)
+		}
+	})
+	t.Run("repository traversal", func(t *testing.T) {
+		opts := newOptions(t.TempDir())
+		sentinel := filepath.Join(opts.WorktreeRoot, "agent1", "preserve")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts.Repo = "../outside"
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "cannot select a package-owned common repository path") {
+			t.Fatalf("repository traversal error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("repository traversal changed payload before rejection: %v", err)
+		}
+	})
+	t.Run("symlink escape", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		outside := filepath.Join(root, "outside")
+		if err := os.MkdirAll(outside, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(opts.WorktreeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(opts.WorktreeRoot, "agent1")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "symlink or junction") {
+			t.Fatalf("symlink escape error = %v", err)
+		}
+		if _, err := os.Stat(outside); err != nil {
+			t.Fatalf("symlink escape changed outside target before rejection: %v", err)
+		}
+	})
+	t.Run("common repository parent escape", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		outside := filepath.Join(root, "outside-git")
+		if err := os.MkdirAll(outside, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(opts.WorktreeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(opts.WorktreeRoot, ".devkit")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "symlink or junction") {
+			t.Fatalf("common repository escape error = %v", err)
+		}
+		if _, err := os.Stat(outside); err != nil {
+			t.Fatalf("common repository escape changed outside target before rejection: %v", err)
+		}
+	})
+	t.Run("protected root overlap", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		protected := filepath.Join(opts.WorktreeRoot, "agent1", "ouroboros-ide")
+		if err := os.MkdirAll(protected, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		sentinel := filepath.Join(protected, "preserve")
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts.ProtectedRoots = []string{protected}
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "overlaps protected root") {
+			t.Fatalf("protected overlap error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("protected overlap changed payload before rejection: %v", err)
+		}
+	})
+	t.Run("mount overlap", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		sentinel := filepath.Join(opts.WorktreeRoot, "agent1", "preserve")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		nativeResetMountPoints = func() ([]string, error) {
+			return []string{filepath.Join(opts.WorktreeRoot, "agent1", "mounted")}, nil
+		}
+		defer func() { nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil } }()
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "contains mount point") {
+			t.Fatalf("mount overlap error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("mount overlap changed payload before rejection: %v", err)
+		}
+	})
+}
+
+func TestNativeResetRevalidatesCompleteBoundaryBeforeDisposal(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	agentTwoSentinel := filepath.Join(worktreeRoot, "agent2", "preserve")
+	if err := os.MkdirAll(filepath.Dir(agentTwoSentinel), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentTwoSentinel, []byte("preserve\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanNativeReset(NativeResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Count:        2,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(worktreeRoot, "agent1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "revalidate native reset boundary") {
+		t.Fatalf("apply error = %v, want full boundary revalidation", err)
+	}
+	if got, err := os.ReadFile(agentTwoSentinel); err != nil || string(got) != "preserve\n" {
+		t.Fatalf("boundary revalidation disposed another slot before rejecting escape: data=%q error=%v", got, err)
+	}
+}
+
 func TestSetupNativeSSHOriginRejectsMissingBootstrapCommand(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")

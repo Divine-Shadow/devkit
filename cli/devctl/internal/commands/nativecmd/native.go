@@ -1232,6 +1232,72 @@ func writeNativeManifest(ctx *cmdregistry.Context, opts nativeplan.BuildOptions,
 	return manifest, path, nil
 }
 
+// ResetOwnedPrefix is the sole destructive native reconstruction path. The
+// explicit reset command and source-declared dev-all roots establish the
+// disposal boundary; no caller force switch or ambient path can expand it.
+// stopSessions runs only after the full boundary has passed preflight.
+func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr error) {
+	if ctx == nil {
+		return fmt.Errorf("native reset context is required")
+	}
+	if strings.TrimSpace(ctx.Project) != "dev-all" {
+		return fmt.Errorf("native destructive reset requires the exact dev-all prefix")
+	}
+	parsed, err := parseLifecycleArgs(ctx)
+	if err != nil {
+		return err
+	}
+	cfg, repo, count, _, _, err := lifecycleDefaults(ctx, parsed)
+	if err != nil {
+		return err
+	}
+	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
+	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
+	protectedRoots := []string{
+		ctx.Paths.Root,
+		ctx.Paths.RuntimeAuthorityRoot,
+		filepath.Join(filepath.Dir(filepath.Clean(ctx.Paths.Root)), repo),
+	}
+	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
+	resetOptions := wtx.NativeResetOptions{
+		Project:        ctx.Project,
+		Repo:           repo,
+		Count:          count,
+		WorktreeRoot:   planOpts.WorktreeRoot,
+		StateRoot:      planOpts.StateRoot,
+		ProtectedRoots: protectedRoots,
+		DryRun:         ctx.DryRun,
+	}
+	resetPlan, err := wtx.PlanNativeReset(resetOptions)
+	if err != nil {
+		return err
+	}
+	if err := lifecycleDown(ctx, parsed); err != nil {
+		return err
+	}
+	if stopSessions != nil {
+		stopSessions()
+	}
+	if err := resetPlan.Apply(); err != nil {
+		return err
+	}
+	if err := lifecycleUp(ctx, parsed, "reset"); err != nil {
+		if ctx.DryRun {
+			return err
+		}
+		cleanupPlan, planErr := wtx.PlanNativeReset(resetOptions)
+		if planErr != nil {
+			return errors.Join(err, fmt.Errorf("plan cleanup after failed native reset reconstruction: %w", planErr))
+		}
+		cleanupErr := cleanupPlan.Apply()
+		if cleanupErr != nil {
+			return errors.Join(err, fmt.Errorf("cleanup failed native reset reconstruction: %w", cleanupErr))
+		}
+		return err
+	}
+	return nil
+}
+
 func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string) (retErr error) {
 	cfg, repo, count, baseBranch, branchPrefix, err := lifecycleDefaults(ctx, parsed)
 	if err != nil {
