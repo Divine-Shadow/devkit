@@ -158,12 +158,83 @@
             runHook preCheck
             go test ./internal/runtime/egressproxy -run 'Test(ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|ConnectCancellationClosesTunnelWithoutWaitingForOpenInput|DialConnectTargetPreservesBannerBufferedWithUpstreamResponse|ServeRefusesExistingSocketAuthority|ServeDrainsFullPackAfterClientHalfClose|RelayFullDuplexPropagatesPeerWriteFailure|ServeAndConnectCarryCompleteGitSmartProtocolFetch)' -count=1
             go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(UsesPackageOwnedConsumerIdentityAndProxy|RejectsMissingPackageOwnedProxyHelper|RejectsMissingIdentity)' -count=1
-            go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly' -count=1
+            go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly|TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables' -count=1
+            go test ./internal/runtime/broker -run 'TestResolveBinaryRequiresImmutableAbsoluteExecutable' -count=1
             go test ./internal/runtime/plan -run 'Test(WorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases|BuildDevAllWorkspaceEgressProjectsPreparedRuntimeSupportExactly)' -count=1
+            go test ./internal/runtime/launch -run 'TestBuildBubblewrap(UsesImmutableRuntimeLauncherWithoutConsumerFlakeEvaluation|RejectsMissingOrUntrustedRuntimeLauncher)' -count=1
             go test ./internal/execx -run 'TestRunManaged(AllowsActiveCommandBeyondIdleWindow|IdleTimeoutTerminatesDescendantGroup|ContextDeadlineTerminatesDescendantGroup|PreservesCommandExitClassification)' -count=1
-            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal|TestNativeReset(DisposesOpaqueInPrefixPayloadWithoutForeignCustody|RejectsOwnershipEscapesBeforeDisposal|RevalidatesCompleteBoundaryBeforeDisposal)' -count=1
+            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapRejectsAmbientCheckoutOriginAuthority|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal|TestNativeReset(DisposesOpaqueInPrefixPayloadWithoutForeignCustody|RejectsOwnershipEscapesBeforeDisposal|RevalidatesCompleteBoundaryBeforeDisposal)' -count=1
             go test ./integration -run 'Test(DevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority|Native(TopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)|PrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand))' -count=1
             runHook postCheck
+          '';
+        };
+      mkDevAllRuntimeTools =
+        {
+          pkgs,
+          pkgsPlaywright,
+        }:
+        let
+          shell = self.devShells.${pkgs.system}.dev-all;
+          runtimeInputs =
+            (shell.nativeBuildInputs or [ ])
+            ++ (shell.buildInputs or [ ]);
+          packageNamed =
+            name:
+            let
+              matches = builtins.filter
+                (package: (package.pname or "") == name)
+                runtimeInputs;
+            in
+            if matches == [ ]
+            then throw "dev-all runtime shell is missing ${name}"
+            else builtins.head matches;
+          pinnedGo = packageNamed "go";
+          pinnedNpmTools = packageNamed "devkit-npm-tools";
+        in
+        pkgs.writeShellApplication {
+          name = "dev-all-runtime-tools";
+          inherit runtimeInputs;
+          text = ''
+            export DEVKIT_NIX_SHELL=dev-all
+            export GOROOT='${pinnedGo}'
+            export SSL_CERT_FILE='${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt'
+            export GIT_SSL_CAINFO="$SSL_CERT_FILE"
+            export TESTCONTAINERS_RYUK_DISABLED=true
+            export DOCKER_HOST="''${DOCKER_HOST:-unix:///run/devkit/test-container-broker.sock}"
+            export DOCKER_API_VERSION="''${DOCKER_API_VERSION:-1.52}"
+            case " ''${JAVA_TOOL_OPTIONS:-} " in
+              *" -Ddocker.api.version="*) ;;
+              *) export JAVA_TOOL_OPTIONS="''${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Dapi.version=$DOCKER_API_VERSION -Ddocker.api.version=$DOCKER_API_VERSION" ;;
+            esac
+            export PLAYWRIGHT_BROWSERS_PATH='${pkgsPlaywright.playwright-driver.browsers}'
+            export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="''${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}"
+            export NODE_PATH="${pkgsPlaywright.playwright-test}/lib/node_modules:${pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}"
+            if [ -n "''${HTTP_PROXY:-}" ] && [ -z "''${HTTPS_PROXY:-}" ]; then
+              export HTTPS_PROXY="$HTTP_PROXY"
+            fi
+            export NO_PROXY="''${NO_PROXY:-localhost,127.0.0.1}"
+            test "$#" -gt 0 || {
+              echo "dev-all-runtime-tools: command is required" >&2
+              exit 64
+            }
+            exec "$@"
+          '';
+        };
+      mkDevAllRuntimeShell =
+        {
+          bundle,
+          pkgs,
+          runtimeTools,
+        }:
+        pkgs.writeShellApplication {
+          name = "dev-all-runtime-shell";
+          text = ''
+            test "$#" -gt 0 || {
+              echo "dev-all-runtime-shell: command is required" >&2
+              exit 64
+            }
+            exec '${bundle}/bin/dev-all-runtime-bundle' exec \
+              '${runtimeTools}/bin/dev-all-runtime-tools' "$@"
           '';
         };
       mkManagementInspectionApp =
@@ -529,10 +600,21 @@
       );
 
       packages = forEachSystem (
-        { pkgs, ... }:
+        { pkgs, pkgsPlaywright, ... }:
+        let
+          runtimeBundle = mkDevAllRuntimeBundle pkgs;
+          runtimeTools = mkDevAllRuntimeTools {
+            inherit pkgs pkgsPlaywright;
+          };
+        in
         {
           devctl = mkDevctl pkgs;
-          dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
+          dev-all-runtime-bundle = runtimeBundle;
+          dev-all-runtime-tools = runtimeTools;
+          dev-all-runtime-shell = mkDevAllRuntimeShell {
+            bundle = runtimeBundle;
+            inherit pkgs runtimeTools;
+          };
           management-inspection = mkManagementInspectionApp pkgs;
           pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;
           pinned-governance-jar = mkPinnedGovernanceJar pkgs;
@@ -564,9 +646,20 @@
       );
 
       checks = forEachSystem (
-        { pkgs, ... }:
+        { pkgs, pkgsPlaywright, ... }:
+        let
+          runtimeBundle = mkDevAllRuntimeBundle pkgs;
+          runtimeTools = mkDevAllRuntimeTools {
+            inherit pkgs pkgsPlaywright;
+          };
+        in
         {
           dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
+          dev-all-runtime-tools = runtimeTools;
+          dev-all-runtime-shell = mkDevAllRuntimeShell {
+            bundle = runtimeBundle;
+            inherit pkgs runtimeTools;
+          };
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
           management-inspection-cli = mkDevctl pkgs;

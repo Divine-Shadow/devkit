@@ -95,7 +95,6 @@ type lifecycleArgs struct {
 	format                  string
 	brokerSocket            string
 	brokerStateRoot         string
-	brokerBinary            string
 	brokerAllowPulls        *bool
 	brokerAllowImage        []string
 	proxy                   string
@@ -526,12 +525,6 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 				return parsed, fmt.Errorf("--broker-state-root requires a value")
 			}
 			parsed.brokerStateRoot = ctx.Args[i+1]
-			i++
-		case "--broker-binary":
-			if i+1 >= len(ctx.Args) {
-				return parsed, fmt.Errorf("--broker-binary requires a value")
-			}
-			parsed.brokerBinary = ctx.Args[i+1]
 			i++
 		case "--proxy":
 			if i+1 >= len(ctx.Args) {
@@ -1038,7 +1031,7 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 		AllowedImages: append([]string{}, cfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(cfg.Broker.LogLevel),
 		StateRoot:     strings.TrimSpace(parsed.brokerStateRoot),
-		Binary:        strings.TrimSpace(parsed.brokerBinary),
+		Binary:        strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY")),
 	}
 	if cfg.Broker.AllowPulls != nil {
 		brokerCfg.AllowPulls = *cfg.Broker.AllowPulls
@@ -1066,6 +1059,8 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		Repo:                  repo,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
 		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(ctx.Paths.Root, cfg.Runtime.FlakeInputOverrides),
+		RuntimeLauncher:       strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER")),
+		BubblewrapBinary:      strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY")),
 		Launcher:              "bubblewrap",
 		WorktreeRoot:          resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
 		StateRoot:             resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
@@ -1094,6 +1089,12 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	}
 	if len(opts.FlakeInputOverrides) == 0 {
 		opts.FlakeInputOverrides = config.ResolveRuntimeFlakeInputOverrides(ctx.Paths.Root, cfg.Runtime.FlakeInputOverrides)
+	}
+	if strings.TrimSpace(opts.RuntimeLauncher) == "" {
+		opts.RuntimeLauncher = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER"))
+	}
+	if strings.TrimSpace(opts.BubblewrapBinary) == "" {
+		opts.BubblewrapBinary = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY"))
 	}
 	if strings.TrimSpace(opts.WorktreeRoot) == "" {
 		opts.WorktreeRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.WorktreeRoot)
@@ -1315,6 +1316,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 	worktreeOpts := wtx.NativeOptions{
 		DevkitRoot:       ctx.Paths.Root,
 		Repo:             repo,
+		Origin:           strings.TrimSpace(cfg.Defaults.Origin),
 		Count:            count,
 		BaseBranch:       baseBranch,
 		BranchPrefix:     branchPrefix,
@@ -1830,6 +1832,7 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if err := prepareNativeGitBootstrapAndWorktrees(bootstrapPlan, wtx.NativeOptions{
 		DevkitRoot:       ctx.Paths.Root,
 		Repo:             repo,
+		Origin:           strings.TrimSpace(cfg.Defaults.Origin),
 		Count:            count,
 		BaseBranch:       baseBranch,
 		BranchPrefix:     branchPrefix,

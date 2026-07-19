@@ -30,7 +30,6 @@ type Config struct {
 	AllowPulls        bool
 	LogLevel          string
 	Binary            string
-	Nix               string
 	StartTimeout      time.Duration
 }
 
@@ -91,9 +90,6 @@ func Normalize(c Config) Config {
 	c.SocketBindAliases = normalizeSocketBindAliases(c)
 	if strings.TrimSpace(c.LogLevel) == "" {
 		c.LogLevel = "info"
-	}
-	if strings.TrimSpace(c.Nix) == "" {
-		c.Nix = "nix"
 	}
 	if c.StartTimeout <= 0 {
 		c.StartTimeout = 5 * time.Second
@@ -171,36 +167,24 @@ func Env(c Config) []string {
 	return env
 }
 
-func nixBuildEnv(c Config) []string {
-	c = Normalize(c)
-	env := append([]string{}, os.Environ()...)
-	env = append(env, "XDG_CACHE_HOME="+filepath.Join(c.StateRoot, "cache"))
-	return env
-}
-
 func ResolveBinary(ctx context.Context, c Config) (string, error) {
+	_ = ctx
 	c = Normalize(c)
-	if strings.TrimSpace(c.Binary) != "" {
-		return c.Binary, nil
+	binary := strings.TrimSpace(c.Binary)
+	if binary == "" {
+		return "", fmt.Errorf("immutable postgres-broker binary is required; use the authoritative runtime package")
 	}
-	if c.DevkitRoot == "" {
-		return "", fmt.Errorf("devkit root is required to build postgres-broker")
+	if !filepath.IsAbs(binary) {
+		return "", fmt.Errorf("immutable postgres-broker binary must be an absolute path: %s", binary)
 	}
-	if err := os.MkdirAll(filepath.Join(c.StateRoot, "cache"), 0o700); err != nil {
-		return "", fmt.Errorf("mkdir broker nix cache: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, c.Nix, "--extra-experimental-features", "nix-command flakes", "build", "--no-link", "--print-out-paths", c.DevkitRoot+"#postgres-broker")
-	cmd.Dir = c.DevkitRoot
-	cmd.Env = nixBuildEnv(c)
-	out, err := cmd.CombinedOutput()
+	info, err := os.Stat(binary)
 	if err != nil {
-		return "", fmt.Errorf("build postgres-broker: %w: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("stat immutable postgres-broker binary %s: %w", binary, err)
 	}
-	lines := strings.Fields(strings.TrimSpace(string(out)))
-	if len(lines) == 0 {
-		return "", fmt.Errorf("build postgres-broker produced no output path")
+	if info.IsDir() || info.Mode()&0o111 == 0 {
+		return "", fmt.Errorf("immutable postgres-broker binary is not executable: %s", binary)
 	}
-	return filepath.Join(lines[len(lines)-1], "bin", "postgres-broker"), nil
+	return filepath.Clean(binary), nil
 }
 
 func Inspect(c Config) (Status, error) {
@@ -264,9 +248,9 @@ func Start(ctx context.Context, c Config, dryRun bool) (Status, error) {
 	}
 
 	if dryRun {
-		binary := strings.TrimSpace(c.Binary)
-		if binary == "" {
-			binary = "<nix-built postgres-broker>"
+		binary, err := ResolveBinary(ctx, c)
+		if err != nil {
+			return status, err
 		}
 		status.Command = []string{binary}
 		status.Message = "dry run: broker would be started"

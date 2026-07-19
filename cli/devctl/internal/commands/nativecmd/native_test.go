@@ -249,6 +249,11 @@ func TestParseReadinessModeConflicts(t *testing.T) {
 	if _, err := parseLifecycleArgs(&cmdregistry.Context{Args: []string{"--runtime-only", "--repo-readiness"}}); err == nil {
 		t.Fatalf("expected lifecycle mode conflict")
 	}
+	if _, err := parseLifecycleArgs(&cmdregistry.Context{Args: []string{
+		"--broker-binary", "/tmp/caller-selected-broker",
+	}}); err == nil || !strings.Contains(err.Error(), "unknown native lifecycle arg --broker-binary") {
+		t.Fatalf("caller-selected broker binary was not rejected: %v", err)
+	}
 }
 
 func TestApplyLifecycleReadinessModeUsesOverlayDefault(t *testing.T) {
@@ -581,11 +586,34 @@ func TestLifecyclePlanOptionsDiscoversRepoOwnedIsolationProfile(t *testing.T) {
 }
 
 func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
+	t.Setenv("DEVKIT_RUNTIME_BROKER_BINARY", "/nix/store/example-postgres-broker/bin/postgres-broker")
 	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	cfg := config.OverlayConfig{Broker: config.Broker{Socket: "../.devkit/native-broker/broker.sock"}}
 	got := lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{})
 	if got.Socket != "/home/me/dev/.devkit/native-broker/broker.sock" {
 		t.Fatalf("socket = %q", got.Socket)
+	}
+	if got.Binary != "/nix/store/example-postgres-broker/bin/postgres-broker" {
+		t.Fatalf("broker binary = %q", got.Binary)
+	}
+}
+
+func TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables(t *testing.T) {
+	t.Setenv("DEVKIT_RUNTIME_SHELL_LAUNCHER", "/nix/store/runtime/bin/dev-all-runtime-shell")
+	t.Setenv("DEVKIT_RUNTIME_BWRAP_BINARY", "/nix/store/bubblewrap/bin/bwrap")
+	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
+	opts := lifecyclePlanOptions(
+		ctx,
+		config.OverlayConfig{},
+		lifecycleArgs{},
+		"ouroboros-ide",
+		runtimebroker.Config{Socket: "/tmp/broker.sock"},
+	)
+	if opts.RuntimeLauncher != "/nix/store/runtime/bin/dev-all-runtime-shell" {
+		t.Fatalf("runtime launcher = %q", opts.RuntimeLauncher)
+	}
+	if opts.BubblewrapBinary != "/nix/store/bubblewrap/bin/bwrap" {
+		t.Fatalf("bubblewrap binary = %q", opts.BubblewrapBinary)
 	}
 }
 

@@ -439,6 +439,7 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 		if err := SetupNative(NativeOptions{
 			DevkitRoot:       devkitRoot,
 			Repo:             "ouroboros-ide",
+			Origin:           "ssh://git@fixture.invalid" + bare,
 			Count:            1,
 			BaseBranch:       "main",
 			BranchPrefix:     branchPrefix,
@@ -638,6 +639,7 @@ func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 	err = SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
 		Repo:             "ouroboros-ide",
+		Origin:           "ssh://git@fixture.invalid" + bare,
 		Count:            1,
 		BaseBranch:       "main",
 		BranchPrefix:     "isolated-agent",
@@ -980,6 +982,7 @@ func TestSetupNativeProductBootstrapRejectsHTTPSFallback(t *testing.T) {
 	err := SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
 		Repo:             "ouroboros-ide",
+		Origin:           "https://github.com/Divine-Shadow/ouroboros-ide.git",
 		Count:            1,
 		GitSSHCommand:    "ssh -F /nix/store/package-owned/config",
 		RequireSSHOrigin: true,
@@ -987,6 +990,30 @@ func TestSetupNativeProductBootstrapRejectsHTTPSFallback(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "HTTPS, file, and ambient transport fallbacks are prohibited") {
 		t.Fatalf("SetupNative error = %v, want HTTPS fallback rejection", err)
+	}
+}
+
+func TestSetupNativeProductBootstrapRejectsAmbientCheckoutOriginAuthority(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid/ambient.git")
+
+	err := SetupNative(NativeOptions{
+		DevkitRoot:       devkitRoot,
+		Repo:             "ouroboros-ide",
+		Count:            1,
+		GitSSHCommand:    "ssh -F /nix/store/package-owned/config",
+		RequireSSHOrigin: true,
+		DryRun:           true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambient checkout remotes are not bootstrap authority") {
+		t.Fatalf("SetupNative error = %v, want ambient-origin rejection", err)
 	}
 }
 
@@ -1027,6 +1054,7 @@ func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *tes
 	err := SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
 		Repo:             "ouroboros-ide",
+		Origin:           missingOrigin,
 		Count:            1,
 		GitSSHCommand:    "/bin/false",
 		RequireSSHOrigin: true,

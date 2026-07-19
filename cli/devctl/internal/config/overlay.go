@@ -20,6 +20,8 @@ type Defaults struct {
 	Agents int `yaml:"agents"`
 	// Default repo name under the dev root (e.g., ouroboros-ide)
 	Repo string `yaml:"repo"`
+	// Immutable source-declared remote used to bootstrap an absent repository.
+	Origin string `yaml:"origin"`
 	// Base branch to track from origin (e.g., main)
 	BaseBranch string `yaml:"base_branch"`
 	// Prefix for per-agent branch names (e.g., agent -> agent1, agent2, ...)

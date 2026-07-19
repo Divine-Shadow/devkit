@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -72,41 +71,44 @@ func TestNormalizePreservesExplicitSocketBindAliases(t *testing.T) {
 	}
 }
 
-func TestResolveBinaryUsesStateLocalNixCache(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", "/read-only-host-cache")
+func TestResolveBinaryRequiresImmutableAbsoluteExecutable(t *testing.T) {
 	tmp := t.TempDir()
-	devkitRoot := filepath.Join(tmp, "devkit")
-	stateRoot := filepath.Join(tmp, "state")
-	envFile := filepath.Join(tmp, "xdg-cache-home")
-	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
-		t.Fatalf("mkdir devkit root: %v", err)
-	}
-	nix := filepath.Join(tmp, "nix")
-	script := "#!/usr/bin/env bash\nprintf '%s' \"${XDG_CACHE_HOME:-}\" > " + strconv.Quote(envFile) + "\nprintf '/nix/store/fake-postgres-broker\\n'\n"
-	if err := os.WriteFile(nix, []byte(script), 0o755); err != nil {
-		t.Fatalf("write nix stub: %v", err)
+	brokerBinary := filepath.Join(tmp, "postgres-broker")
+	if err := os.WriteFile(brokerBinary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write broker fixture: %v", err)
 	}
 
 	binary, err := ResolveBinary(context.Background(), Config{
-		DevkitRoot: devkitRoot,
-		StateRoot:  stateRoot,
-		Nix:        nix,
+		DevkitRoot: filepath.Join(tmp, "empty-controller-root", "devkit"),
+		Binary:     brokerBinary,
 	})
 	if err != nil {
 		t.Fatalf("ResolveBinary: %v", err)
 	}
-	if got, want := binary, "/nix/store/fake-postgres-broker/bin/postgres-broker"; got != want {
+	if got, want := binary, brokerBinary; got != want {
 		t.Fatalf("binary = %q, want %q", got, want)
 	}
-	data, err := os.ReadFile(envFile)
-	if err != nil {
-		t.Fatalf("read env file: %v", err)
+
+	if _, err := ResolveBinary(context.Background(), Config{
+		DevkitRoot: filepath.Join(tmp, "devkit"),
+	}); err == nil || !strings.Contains(err.Error(), "immutable postgres-broker binary is required") {
+		t.Fatalf("missing immutable broker authority was not rejected: %v", err)
 	}
-	if got, want := string(data), filepath.Join(stateRoot, "cache"); got != want {
-		t.Fatalf("XDG_CACHE_HOME = %q, want %q", got, want)
+
+	if _, err := ResolveBinary(context.Background(), Config{
+		Binary: "relative/postgres-broker",
+	}); err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
+		t.Fatalf("relative broker selector was not rejected: %v", err)
 	}
-	if info, err := os.Stat(filepath.Join(stateRoot, "cache")); err != nil || !info.IsDir() {
-		t.Fatalf("cache dir was not created: info=%v err=%v", info, err)
+
+	nonExecutable := filepath.Join(tmp, "not-executable")
+	if err := os.WriteFile(nonExecutable, []byte("fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveBinary(context.Background(), Config{
+		Binary: nonExecutable,
+	}); err == nil || !strings.Contains(err.Error(), "is not executable") {
+		t.Fatalf("non-executable broker selector was not rejected: %v", err)
 	}
 }
 

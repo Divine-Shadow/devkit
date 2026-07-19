@@ -591,6 +591,15 @@ func TestEnsureCodexGovernanceConfigRejectsMissingHostHome(t *testing.T) {
 	}
 }
 
+func runtimeLauncherFixture(t *testing.T) string {
+	t.Helper()
+	launcher := filepath.Join(t.TempDir(), "dev-all-runtime-shell")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return launcher
+}
+
 func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -605,11 +614,14 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	if err := os.WriteFile(brokerSocket, []byte("socket placeholder"), 0o600); err != nil {
 		t.Fatalf("write broker socket placeholder: %v", err)
 	}
+	runtimeLauncher := runtimeLauncherFixture(t)
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
-		Paths:          devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
-		Repo:           "ouroboros-ide",
-		Flake:          ".#runtime-test-agent",
-		BrokerEndpoint: brokerSocket,
+		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:             "ouroboros-ide",
+		Flake:            ".#runtime-test-agent",
+		RuntimeLauncher:  runtimeLauncher,
+		BubblewrapBinary: runtimeLauncherFixture(t),
+		BrokerEndpoint:   brokerSocket,
 	})
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
@@ -642,7 +654,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
 		"'--setenv' 'TMPDIR' '/tmp'",
 		"'--setenv' 'XDG_CACHE_HOME' '/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'",
-		"'/run/current-system/sw/bin/nix' '--extra-experimental-features' 'nix-command flakes' '--option' 'flake-registry' '' 'develop' '.#runtime-test-agent' '--output-lock-file' '/dev/null'",
+		"'" + runtimeLauncher + "' 'bash' '-lc'",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command missing %q:\n%s", want, joined)
@@ -761,7 +773,7 @@ func testAuthoritativeCodexConfig(topLevel string, tail ...string) string {
 	return strings.Join(parts, "\n") + "\n"
 }
 
-func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
+func TestBuildBubblewrapUsesImmutableRuntimeLauncherWithoutConsumerFlakeEvaluation(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -771,11 +783,14 @@ func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
+	runtimeLauncher := runtimeLauncherFixture(t)
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
-		Paths:   devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
-		Project: "ouroboros-terraform",
-		Repo:    "ouroboros-terraform",
-		Flake:   "./overlays/ouroboros-terraform#default",
+		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project:          "ouroboros-terraform",
+		Repo:             "ouroboros-terraform",
+		Flake:            "./overlays/ouroboros-terraform#default",
+		RuntimeLauncher:  runtimeLauncher,
+		BubblewrapBinary: runtimeLauncherFixture(t),
 		FlakeInputOverrides: map[string]string{
 			"ouroboros-terraform": "path:" + repoRoot,
 		},
@@ -798,10 +813,60 @@ func TestBuildBubblewrapPassesFlakeInputOverrides(t *testing.T) {
 		t.Fatalf("BuildBubblewrap: %v", err)
 	}
 	joined := ShellString(cmd)
-	verb := "de" + "velop"
-	want := "'" + verb + "' '--override-input' 'ouroboros-terraform' 'path:" + repoRoot + "' './overlays/ouroboros-terraform#default' '--output-lock-file' '/dev/null'"
-	if !strings.Contains(joined, want) {
-		t.Fatalf("command missing %q:\n%s", want, joined)
+	if !strings.Contains(joined, "'"+runtimeLauncher+"' 'bash' '-lc'") {
+		t.Fatalf("command did not select the immutable runtime launcher:\n%s", joined)
+	}
+	for _, forbidden := range []string{
+		"nix' 'develop",
+		"--override-input",
+		"./overlays/ouroboros-terraform#default",
+		"path:" + repoRoot,
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("command retained consumer flake authority %q:\n%s", forbidden, joined)
+		}
+	}
+}
+
+func TestBuildBubblewrapRejectsMissingOrUntrustedRuntimeLauncher(t *testing.T) {
+	tmp := t.TempDir()
+	devkitRoot := filepath.Join(tmp, "devkit")
+	worktree := filepath.Join(tmp, "worktree")
+	for _, dir := range []string{devkitRoot, worktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, launcher := range []string{"", "relative/dev-all-runtime-shell"} {
+		p, err := nativeplan.Build(nativeplan.BuildOptions{
+			Paths:           devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+			Repo:            "ouroboros-ide",
+			RuntimeLauncher: launcher,
+			WorktreeRoot:    filepath.Dir(worktree),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BuildBubblewrap(p, []string{"true"}); err == nil ||
+			!strings.Contains(err.Error(), "immutable native runtime launcher") {
+			t.Fatalf("runtime launcher %q was not rejected: %v", launcher, err)
+		}
+	}
+	for _, bubblewrap := range []string{"", "relative/bwrap"} {
+		p, err := nativeplan.Build(nativeplan.BuildOptions{
+			Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+			Repo:             "ouroboros-ide",
+			RuntimeLauncher:  runtimeLauncherFixture(t),
+			BubblewrapBinary: bubblewrap,
+			WorktreeRoot:     filepath.Dir(worktree),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BuildBubblewrap(p, []string{"true"}); err == nil ||
+			!strings.Contains(err.Error(), "immutable native bubblewrap binary") {
+			t.Fatalf("bubblewrap binary %q was not rejected: %v", bubblewrap, err)
+		}
 	}
 }
 
@@ -820,10 +885,12 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 		t.Fatalf("write proxy socket placeholder: %v", err)
 	}
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
-		Paths:       devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
-		Repo:        "ouroboros-ide",
-		Flake:       ".#runtime-test-agent",
-		ProxySocket: proxySocket,
+		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Repo:             "ouroboros-ide",
+		Flake:            ".#runtime-test-agent",
+		RuntimeLauncher:  runtimeLauncherFixture(t),
+		BubblewrapBinary: runtimeLauncherFixture(t),
+		ProxySocket:      proxySocket,
 	})
 	if err != nil {
 		t.Fatalf("BuildDevAll: %v", err)
@@ -879,6 +946,8 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 		Index:            3,
 		Repo:             "ouroboros-ide",
 		Flake:            ".#runtime-test-agent",
+		RuntimeLauncher:  runtimeLauncherFixture(t),
+		BubblewrapBinary: runtimeLauncherFixture(t),
 		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
 		EgressAllowlist:  filepath.Join(devRoot, "ouroboros-ide", "infra", "docker", "dev", "tinyproxy", "allowlist.txt"),
 	})

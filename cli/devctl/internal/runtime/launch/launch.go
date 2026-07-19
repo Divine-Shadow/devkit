@@ -2504,23 +2504,34 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
-	nixArgs := []string{"/run/current-system/sw/bin/nix", "--extra-experimental-features", "nix-command flakes", "--option", "flake-registry", "", "develop"}
-	names := make([]string, 0, len(p.FlakeInputOverrides))
-	for name := range p.FlakeInputOverrides {
-		names = append(names, name)
+	runtimeLauncher := strings.TrimSpace(p.RuntimeLauncher)
+	if runtimeLauncher == "" {
+		return Command{}, fmt.Errorf("immutable native runtime launcher is required")
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		nixArgs = append(nixArgs, "--override-input", name, p.FlakeInputOverrides[name])
+	if !filepath.IsAbs(runtimeLauncher) {
+		return Command{}, fmt.Errorf("immutable native runtime launcher must be an absolute path: %s", runtimeLauncher)
 	}
-	nixArgs = append(nixArgs, p.Flake, "--output-lock-file", "/dev/null", "--command")
-	nixArgs = append(nixArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
+	if !isExecutable(runtimeLauncher) {
+		return Command{}, fmt.Errorf("immutable native runtime launcher is not executable: %s", runtimeLauncher)
+	}
+	bubblewrapBinary := strings.TrimSpace(p.BubblewrapBinary)
+	if bubblewrapBinary == "" {
+		return Command{}, fmt.Errorf("immutable native bubblewrap binary is required")
+	}
+	if !filepath.IsAbs(bubblewrapBinary) {
+		return Command{}, fmt.Errorf("immutable native bubblewrap binary must be an absolute path: %s", bubblewrapBinary)
+	}
+	if !isExecutable(bubblewrapBinary) {
+		return Command{}, fmt.Errorf("immutable native bubblewrap binary is not executable: %s", bubblewrapBinary)
+	}
+	runtimeArgs := []string{runtimeLauncher}
+	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
-		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyNixCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, nixArgs, p.Proxy))
+		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
 	} else {
-		args = append(args, nixArgs...)
+		args = append(args, runtimeArgs...)
 	}
-	return Command{Path: "bwrap", Args: args, Dir: p.DevkitHostRoot}, nil
+	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
 }
 
 func ShellString(cmd Command) string {
@@ -2566,9 +2577,9 @@ func ensureResolvConf(path string) error {
 	return nil
 }
 
-func outerProxyNixCommand(devkitRoot string, project string, nixArgs []string, proxy nativeplan.ProxyConfig) string {
+func outerProxyRuntimeCommand(devkitRoot string, project string, runtimeArgs []string, proxy nativeplan.ProxyConfig) string {
 	script := proxyBridgeScript(devkitRoot, project, proxy)
-	script += " && " + shellJoin(nixArgs)
+	script += " && " + shellJoin(runtimeArgs)
 	return script
 }
 

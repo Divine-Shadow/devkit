@@ -742,6 +742,7 @@ func restoreNativeWorktreePayload(worktree, allowedHome, stagingDir string) erro
 type NativeOptions struct {
 	DevkitRoot       string
 	Repo             string
+	Origin           string
 	Count            int
 	BaseBranch       string
 	BranchPrefix     string
@@ -1114,9 +1115,16 @@ func SetupNative(opts NativeOptions) error {
 		}
 		return append(prefix, append([]string{"git"}, args...)...)
 	}
-	remoteURL, result := execx.Capture(context.Background(), "git", "-C", repoPath, "remote", "get-url", "origin")
-	if result.Code != 0 && !opts.DryRun {
-		return fmt.Errorf("read native Git bootstrap origin: exit %d", result.Code)
+	remoteURL := strings.TrimSpace(opts.Origin)
+	result := execx.Result{Code: 0}
+	if remoteURL == "" {
+		if opts.RequireSSHOrigin {
+			return fmt.Errorf("native Git bootstrap requires the source-declared SSH origin; ambient checkout remotes are not bootstrap authority")
+		}
+		remoteURL, result = execx.Capture(context.Background(), "git", "-C", repoPath, "remote", "get-url", "origin")
+		if result.Code != 0 && !opts.DryRun {
+			return fmt.Errorf("read native Git bootstrap origin: exit %d", result.Code)
+		}
 	}
 	sshOrigin := opts.RequireSSHOrigin
 	if result.Code == 0 {

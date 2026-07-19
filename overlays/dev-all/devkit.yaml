@@ -3,6 +3,9 @@ defaults:
   agents: 3
   # Primary repo name under the dev root to set up with worktrees
   repo: ouroboros-ide
+  # Product bootstrap uses this pinned SSH transport declaration and never
+  # infers a remote from an ambient checkout.
+  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git
   # The base branch each per-agent branch should track from origin
   base_branch: main
   # Prefix for per-agent branch names (agent1, agent2, ...)

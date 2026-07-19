@@ -114,7 +114,7 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if !hasBind(p.Binds, "/home/bayesartre/dev", "/home/bayesartre/dev") {
 		t.Fatalf("native plan must mount dev root at its host path for git metadata: %#v", p.Binds)
 	}
-	if len(p.LauncherArgs) == 0 || p.LauncherArgs[0] != "bwrap" {
+	if len(p.LauncherArgs) == 0 || p.LauncherArgs[0] != "<immutable-bubblewrap-required>" {
 		t.Fatalf("launcher args = %#v", p.LauncherArgs)
 	}
 }
@@ -229,9 +229,12 @@ func TestBuildDevAllPreservesExecutableRuntimeAuthorityAgainstHostileConfigRoot(
 	if p.Flake != wantFlake {
 		t.Fatalf("runtime flake = %q, want immutable authority %q", p.Flake, wantFlake)
 	}
-	wantDevelop := "develop " + wantFlake + " --output-lock-file /dev/null"
-	if rendered := strings.Join(p.LauncherArgs, " "); !strings.Contains(rendered, wantDevelop) {
-		t.Fatalf("launcher must name immutable runtime authority in nix develop args: %s", rendered)
+	rendered := strings.Join(p.LauncherArgs, " ")
+	if !strings.Contains(rendered, "<immutable-runtime-launcher-required>") {
+		t.Fatalf("plan must fail closed without an immutable runtime launcher: %s", rendered)
+	}
+	if strings.Contains(rendered, wantFlake) || strings.Contains(rendered, "nix develop") {
+		t.Fatalf("plan retained consumer-time runtime derivation: %s", rendered)
 	}
 }
 
@@ -429,6 +432,12 @@ func TestBuildDevAllWorkspaceEgressProjectsPreparedRuntimeSupportExactly(t *test
 	})
 	if err != nil {
 		t.Fatalf("BuildDevAll error: %v", err)
+	}
+	if !hasBind(p.Binds, "/nix/store/example-devkit-devctl", "/workspaces/dev/devkit") {
+		t.Fatalf("source-derived runtime root was not projected into the canonical devkit sandbox path: %#v", p.Binds)
+	}
+	if hasBind(p.Binds, devkitRoot, "/workspaces/dev/devkit") {
+		t.Fatalf("mutable caller-selected devkit root remained a runtime authority: %#v", p.Binds)
 	}
 
 	for _, expected := range []Bind{
@@ -643,8 +652,8 @@ func TestBuildNativeCarriesFlakeInputOverrides(t *testing.T) {
 		t.Fatalf("flake input overrides = %#v", p.FlakeInputOverrides)
 	}
 	joined := strings.Join(p.LauncherArgs, " ")
-	if !strings.Contains(joined, "--override-input ouroboros-terraform path:/repo/ouroboros-terraform ./overlays/ouroboros-terraform#default") {
-		t.Fatalf("launcher args missing override before flake: %#v", p.LauncherArgs)
+	if strings.Contains(joined, "--override-input") || strings.Contains(joined, "nix develop") {
+		t.Fatalf("launcher args retained consumer-time flake authority: %#v", p.LauncherArgs)
 	}
 }
 

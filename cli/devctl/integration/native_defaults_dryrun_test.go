@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +57,7 @@ func nativeDefaultsRoot(t *testing.T) string {
 	write(filepath.Join(root, "overlays/dev-all/devkit.yaml"), `
 defaults:
   repo: ouroboros-ide
+  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git
   agents: 2
 runtime:
   flake: ./overlays/dev-all#default
@@ -171,8 +173,18 @@ func fakeBwrapDir(t *testing.T) string {
 
 func runNativeDefaultDryRun(t *testing.T, bin, root string, args ...string) (string, error) {
 	t.Helper()
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(bin, append([]string{"--dry-run", "-p", "dev-all"}, args...)...)
-	cmd.Env = append(os.Environ(), "DEVKIT_ROOT="+root, "DEVKIT_NO_TMUX=1")
+	cmd.Env = isolatedNativeFixtureEnv(
+		"DEVKIT_ROOT="+root,
+		"DEVKIT_NO_TMUX=1",
+		"DEVKIT_RUNTIME_BROKER_BINARY="+testExecutable,
+		"DEVKIT_RUNTIME_BWRAP_BINARY="+testExecutable,
+		"DEVKIT_RUNTIME_SHELL_LAUNCHER="+testExecutable,
+	)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -185,6 +197,9 @@ func isolatedNativeFixtureEnv(extra ...string) []string {
 		"DEVKIT_NATIVE_ISOLATION_PROFILE":      true,
 		"DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY":  true,
 		"DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE": true,
+		"DEVKIT_RUNTIME_BROKER_BINARY":         true,
+		"DEVKIT_RUNTIME_BWRAP_BINARY":          true,
+		"DEVKIT_RUNTIME_SHELL_LAUNCHER":        true,
 	}
 	env := make([]string, 0, len(os.Environ())+len(extra))
 	for _, entry := range os.Environ() {
@@ -192,6 +207,14 @@ func isolatedNativeFixtureEnv(extra ...string) []string {
 		if !blocked[name] {
 			env = append(env, entry)
 		}
+	}
+	if testExecutable, err := os.Executable(); err == nil {
+		env = append(
+			env,
+			"DEVKIT_RUNTIME_BROKER_BINARY="+testExecutable,
+			"DEVKIT_RUNTIME_BWRAP_BINARY="+testExecutable,
+			"DEVKIT_RUNTIME_SHELL_LAUNCHER="+testExecutable,
+		)
 	}
 	return append(env, extra...)
 }
@@ -203,12 +226,19 @@ func runProjectDryRun(t *testing.T, bin, root, project string, args ...string) (
 
 func runProjectDryRunWithEnv(t *testing.T, bin, root, project string, extraEnv []string, args ...string) (string, error) {
 	t.Helper()
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(bin, append([]string{"--dry-run", "-p", project}, args...)...)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = isolatedNativeFixtureEnv(
 		"DEVKIT_ROOT="+root,
 		"DEVKIT_NO_TMUX=1",
 		"DEVKIT_GIT_USER_NAME=Devkit Test",
 		"DEVKIT_GIT_USER_EMAIL=devkit-test@example.com",
+		"DEVKIT_RUNTIME_BROKER_BINARY="+testExecutable,
+		"DEVKIT_RUNTIME_BWRAP_BINARY="+testExecutable,
+		"DEVKIT_RUNTIME_SHELL_LAUNCHER="+testExecutable,
 	)
 	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
@@ -309,8 +339,10 @@ func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
 				}
 				switch args[0] {
 				case "exec", "attach":
-					if !strings.Contains(out, "bwrap") || !strings.Contains(out, overlay.flake) {
-						t.Fatalf("%s %v missing native sandbox command:\n%s", overlay.project, args, out)
+					if !strings.Contains(out, "--die-with-parent") ||
+						strings.Contains(out, "nix develop") ||
+						strings.Contains(out, "--override-input") {
+						t.Fatalf("%s %v did not use the immutable native runtime command:\n%s", overlay.project, args, out)
 					}
 				case "warm", "maintain":
 					want := " -p " + overlay.project + " exec 1 --repo " + overlay.repo + " -- bash -lc"
@@ -635,6 +667,15 @@ func TestRetiredRuntimeNamespaceIsRejectedForNonFlakeProjectDryRun(t *testing.T)
 func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	bwrapDir := fakeBwrapDir(t)
+	socketRoot, err := os.MkdirTemp("", "dkx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketRoot) })
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -652,11 +693,27 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 			if out, err := exec.Command("git", "-C", worktree, "init").CombinedOutput(); err != nil {
 				t.Fatalf("initialize clean Git worktree fixture: %v\n%s", err, out)
 			}
-			cmd := exec.Command(bin, tt.args...)
+			proxySocketArgs := []string{"--proxy-socket", filepath.Join(socketRoot, tt.name+".sock")}
+			args := append([]string(nil), tt.args...)
+			inserted := false
+			for i, arg := range args {
+				if arg == "--" {
+					args = append(args[:i], append(proxySocketArgs, args[i:]...)...)
+					inserted = true
+					break
+				}
+			}
+			if !inserted {
+				args = append(args, proxySocketArgs...)
+			}
+			cmd := exec.Command(bin, args...)
 			cmd.Env = append(os.Environ(),
 				"DEVKIT_ROOT="+root,
 				"DEVKIT_NO_TMUX=1",
 				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+				"DEVKIT_RUNTIME_BROKER_BINARY="+testExecutable,
+				"DEVKIT_RUNTIME_BWRAP_BINARY="+filepath.Join(bwrapDir, "bwrap"),
+				"DEVKIT_RUNTIME_SHELL_LAUNCHER=/bin/sh",
 				"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 			)
 			out, err := cmd.CombinedOutput()
@@ -729,6 +786,8 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
 				"DEVKIT_TEST_BWRAP_EXIT="+strconv.Itoa(exitCode),
 				"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
+				"DEVKIT_RUNTIME_BWRAP_BINARY="+filepath.Join(bwrapDir, "bwrap"),
+				"DEVKIT_RUNTIME_SHELL_LAUNCHER=/bin/sh",
 				"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 			)
 			out, err := cmd.CombinedOutput()
@@ -787,7 +846,21 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	run("git", "-C", repo, "branch", "-M", "main")
 	run("git", "-C", repo, "remote", "add", "origin", bare)
 	run("git", "-C", repo, "push", "-u", "origin", "main")
-	run("git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
+	fixtureOrigin := "ssh://git@fixture.invalid" + bare
+	run("git", "-C", repo, "remote", "set-url", "origin", fixtureOrigin)
+	overlayPath := filepath.Join(root, "overlays", "dev-all", "devkit.yaml")
+	overlayBytes, err := os.ReadFile(overlayPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayBytes = []byte(strings.ReplaceAll(
+		string(overlayBytes),
+		"ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git",
+		fixtureOrigin,
+	))
+	if err := os.WriteFile(overlayPath, overlayBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	sshDir := t.TempDir()
 	sshLog := filepath.Join(sshDir, "invocations.log")
@@ -933,6 +1006,8 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		"DEVKIT_NO_TMUX=1",
 		"HOME="+hostHome,
 		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+		"DEVKIT_RUNTIME_BWRAP_BINARY="+filepath.Join(bwrapDir, "bwrap"),
+		"DEVKIT_RUNTIME_SHELL_LAUNCHER=/bin/sh",
 		"PATH="+bwrapDir+string(os.PathListSeparator)+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	gitProbe := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
@@ -968,15 +1043,17 @@ func TestGlobalDryRunNativeExecDoesNotPrepareOrRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
 
-	cmd := exec.Command(bin, "--dry-run", "-p", "dev-all", "native", "exec", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent", "--", "echo", "hi")
-	cmd.Env = append(os.Environ(), "DEVKIT_ROOT="+root, "DEVKIT_NO_TMUX=1")
-	outBytes, err := cmd.CombinedOutput()
-	out := string(outBytes)
+	out, err := runNativeDefaultDryRun(t, bin, root, "native", "exec", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent", "--", "echo", "hi")
 	if err != nil {
 		t.Fatalf("global dry-run native exec failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "bwrap") || !strings.Contains(out, "exec") || !strings.Contains(out, "echo") || !strings.Contains(out, "hi") {
-		t.Fatalf("global dry-run did not print native command:\n%s", out)
+	if !strings.Contains(out, "--die-with-parent") ||
+		!strings.Contains(out, "exec") ||
+		!strings.Contains(out, "echo") ||
+		!strings.Contains(out, "hi") ||
+		strings.Contains(out, "nix develop") ||
+		strings.Contains(out, "--override-input") {
+		t.Fatalf("global dry-run did not print immutable native command:\n%s", out)
 	}
 }
 
@@ -1045,9 +1122,11 @@ func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.
 
 	allowlistPath := filepath.Join(root, "kit", "proxy", "allowlist.txt")
 	brokerSocket := filepath.Join(base, ".devkit", "native-broker", "broker.sock")
+	remoteRepo := filepath.Join(base, "remote.git")
 	overlay := fmt.Sprintf(`
 defaults:
   repo: ouroboros-ide
+  origin: ssh://git@github.com%s
   agents: 3
   base_branch: main
   branch_prefix: agent
@@ -1077,7 +1156,7 @@ native:
     workspace-egress:
       filesystem: workspace-only
       egress_allowlist: %s
-`, brokerSocket, allowlistPath)
+`, remoteRepo, brokerSocket, allowlistPath)
 	overlayPath := filepath.Join(root, "overlays", "dev-all", "devkit.yaml")
 	if err := os.MkdirAll(filepath.Dir(overlayPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -1094,7 +1173,6 @@ native:
 	writeNixCodexConfigSource(t, root)
 
 	sourceRepo := filepath.Join(base, "ouroboros-ide")
-	remoteRepo := filepath.Join(base, "remote.git")
 	runNativeFixtureCommand(t, "git", "init", "--bare", "--initial-branch=main", remoteRepo)
 	runNativeFixtureCommand(t, "git", "init", "--initial-branch=main", sourceRepo)
 	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "config", "user.name", "Devkit Reset Regression")
@@ -1223,11 +1301,6 @@ fi
 	if err := os.WriteFile(brokerExecutable, testBinary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	nixScript := "#!/bin/sh\nprintf '%s\\n' \"${DEVKIT_TEST_BROKER_PACKAGE:?}\"\n"
-	if err := os.WriteFile(filepath.Join(sshDir, "nix"), []byte(nixScript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	controllerHome := filepath.Join(base, "controller-home")
 	if err := os.MkdirAll(filepath.Join(controllerHome, ".ssh"), 0o700); err != nil {
 		t.Fatal(err)
@@ -1265,7 +1338,9 @@ fi
 	env := isolatedNativeFixtureEnv(
 		"DEVKIT_ROOT="+root,
 		"DEVKIT_NO_TMUX=1",
-		"DEVKIT_TEST_BROKER_PACKAGE="+brokerPackage,
+		"DEVKIT_RUNTIME_BROKER_BINARY="+brokerExecutable,
+		"DEVKIT_RUNTIME_BWRAP_BINARY="+filepath.Join(sshDir, "bwrap"),
+		"DEVKIT_RUNTIME_SHELL_LAUNCHER="+testExecutable,
 		"DEVKIT_INTEGRATION_BROKER_HELPER=1",
 		"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
 		"DEVKIT_INTEGRATION_RESOLV_SOURCE="+resolverSource,
@@ -1510,6 +1585,209 @@ fi
 		t.Fatalf("reset did not recover cleanly after failure cleanup: %v\n%s", err, output)
 	}
 	assertNoNativeResetProxyResidue(t, base)
+}
+
+func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *testing.T) {
+	runtimeDevctl := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_DEVCTL"))
+	runtimeOverlays := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_OVERLAYS"))
+	runtimeBroker := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_BROKER"))
+	runtimeShell := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_SHELL"))
+	runtimeBwrap := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_BWRAP"))
+	if runtimeDevctl == "" || runtimeOverlays == "" || runtimeBroker == "" ||
+		runtimeShell == "" || runtimeBwrap == "" {
+		t.Skip("installed immutable runtime inputs are not supplied")
+	}
+	for label, path := range map[string]string{
+		"devctl":     runtimeDevctl,
+		"broker":     runtimeBroker,
+		"shell":      runtimeShell,
+		"bubblewrap": runtimeBwrap,
+	} {
+		if info, err := os.Stat(path); err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			t.Fatalf("%s runtime executable is not usable: %s: %v", label, path, err)
+		}
+	}
+	if info, err := os.Stat(runtimeOverlays); err != nil || !info.IsDir() {
+		t.Fatalf("runtime overlays are not usable: %s: %v", runtimeOverlays, err)
+	}
+
+	fixtureRoot, err := os.MkdirTemp("/tmp", "drr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(fixtureRoot) })
+	seed := filepath.Join(fixtureRoot, "seed")
+	remote := filepath.Join(fixtureRoot, "product.git")
+	runNativeFixtureCommand(t, "git", "init", "--initial-branch=main", seed)
+	runNativeFixtureCommand(t, "git", "-C", seed, "config", "user.name", "Installed Runtime Regression")
+	runNativeFixtureCommand(t, "git", "-C", seed, "config", "user.email", "installed-runtime@example.invalid")
+	for path, content := range map[string]string{
+		"README.md":  "installed runtime fixture\n",
+		".gitignore": ".devhome-agent*\n",
+	} {
+		if err := os.WriteFile(filepath.Join(seed, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runNativeFixtureCommand(t, "git", "-C", seed, "add", ".")
+	runNativeFixtureCommand(t, "git", "-C", seed, "commit", "-m", "installed runtime fixture")
+	runNativeFixtureCommand(t, "git", "init", "--bare", "--initial-branch=main", remote)
+	runNativeFixtureCommand(t, "git", "-C", seed, "push", remote, "main:main")
+	expectedHead := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", seed, "rev-parse", "HEAD"))
+
+	for consumer := 1; consumer <= 2; consumer++ {
+		consumer := consumer
+		t.Run(fmt.Sprintf("consumer-%d", consumer), func(t *testing.T) {
+			root := filepath.Join(fixtureRoot, fmt.Sprintf("consumer-%d", consumer))
+			devkitRoot := filepath.Join(root, "devkit")
+			controllerHome := filepath.Join(root, "controller-home")
+			fixtureBin := filepath.Join(root, "fixture-bin")
+			for _, dir := range []string{
+				devkitRoot,
+				filepath.Join(controllerHome, ".ssh"),
+				fixtureBin,
+			} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if entries, err := os.ReadDir(devkitRoot); err != nil || len(entries) != 0 {
+				t.Fatalf("controller Devkit root is not initially empty: entries=%v error=%v", entries, err)
+			}
+			for name, content := range map[string]string{
+				"id_ed25519":     "fixture private identity\n",
+				"id_ed25519.pub": "fixture public identity\n",
+				"known_hosts":    "[ssh.github.com]:443 fixture-host-key\n",
+			} {
+				mode := os.FileMode(0o600)
+				if name != "id_ed25519" {
+					mode = 0o644
+				}
+				if err := os.WriteFile(filepath.Join(controllerHome, ".ssh", name), []byte(content), mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sshLog := filepath.Join(root, "ssh.log")
+			sshScript := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$DEVKIT_TEST_PRODUCT_SSH_LOG"
+if [ "${1:-}" = -G ]; then
+  exit 0
+fi
+last=
+for arg in "$@"; do last="$arg"; done
+case "$last" in
+  "git-upload-pack "*)
+    exec git-upload-pack "$DEVKIT_TEST_PRODUCT_REMOTE"
+    ;;
+esac
+exit 71
+`
+			if err := os.WriteFile(filepath.Join(fixtureBin, "ssh"), []byte(sshScript), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			env := isolatedNativeFixtureEnv(
+				"HOME="+controllerHome,
+				"DEVKIT_ROOT="+devkitRoot,
+				"DEVKIT_OVERLAYS_DIR="+runtimeOverlays,
+				"DEVKIT_NO_TMUX=1",
+				"DEVKIT_RUNTIME_BROKER_BINARY="+runtimeBroker,
+				"DEVKIT_RUNTIME_BWRAP_BINARY="+runtimeBwrap,
+				"DEVKIT_RUNTIME_SHELL_LAUNCHER="+runtimeShell,
+				"DEVKIT_TEST_PRODUCT_REMOTE="+remote,
+				"DEVKIT_TEST_PRODUCT_SSH_LOG="+sshLog,
+				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+				"PATH="+fixtureBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			)
+			run := func(args ...string) ([]byte, error) {
+				command := exec.Command(runtimeDevctl, args...)
+				command.Env = env
+				return command.CombinedOutput()
+			}
+			t.Cleanup(func() {
+				_, _ = run("-p", "dev-all", "down", "--repo", "ouroboros-ide", "--count", "3")
+			})
+
+			output, err := run("-p", "dev-all", "reset", "3")
+			if err != nil {
+				t.Fatalf("installed empty-root reset failed: %v\n%s", err, output)
+			}
+			for _, want := range []string{
+				"capacity_available: 3/3",
+				"runtime_ready: 3/3",
+				"repo_ready: 3/3",
+				"agent1_status: status=ready worktree=ready broker=ready sandbox=ready tooling=ready",
+				"agent2_status: status=ready worktree=ready broker=ready sandbox=ready tooling=ready",
+				"agent3_status: status=ready worktree=ready broker=ready sandbox=ready tooling=ready",
+			} {
+				if !strings.Contains(string(output), want) {
+					t.Fatalf("installed reset omitted %q:\n%s", want, output)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(devkitRoot, "flake.nix")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("installed reset acquired a mutable Devkit flake: %v", err)
+			}
+			sshInvocations, err := os.ReadFile(sshLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
+				!strings.Contains(string(sshInvocations), "-F ") {
+				t.Fatalf("installed reset did not use one package-owned Product SSH bootstrap:\n%s", sshInvocations)
+			}
+			worktreesRoot := filepath.Join(root, "agent-worktrees")
+			for index := 1; index <= 3; index++ {
+				worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
+				if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", worktree, "rev-parse", "HEAD")); got != expectedHead {
+					t.Fatalf("agent%d HEAD = %s, want %s", index, got, expectedHead)
+				}
+				if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", worktree, "status", "--porcelain=v1")); got != "" {
+					t.Fatalf("agent%d is dirty: %s", index, got)
+				}
+				gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
+				if err != nil || filepath.IsAbs(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(gitFile)), "gitdir:"))) {
+					t.Fatalf("agent%d Git metadata is not portable: %q %v", index, gitFile, err)
+				}
+				hostHome := filepath.Join(filepath.Dir(worktree), fmt.Sprintf(".devhome-agent%d", index))
+				if index == 1 {
+					hostHome = filepath.Join(worktree, ".devhome-agent1")
+				}
+				if _, err := os.Stat(filepath.Join(hostHome, ".codex", "config.toml")); err != nil {
+					t.Fatalf("agent%d package app-server configuration is absent: %v", index, err)
+				}
+			}
+
+			planOutput, err := run("-p", "dev-all", "native", "plan", "--repo", "ouroboros-ide", "--index", "1", "--format", "json")
+			if err != nil {
+				t.Fatalf("installed plan failed: %v\n%s", err, planOutput)
+			}
+			var plan struct {
+				RuntimeLauncher  string `json:"runtime_launcher"`
+				BubblewrapBinary string `json:"bubblewrap_binary"`
+			}
+			if err := json.Unmarshal(planOutput, &plan); err != nil {
+				t.Fatalf("decode installed plan: %v\n%s", err, planOutput)
+			}
+			if plan.RuntimeLauncher != runtimeShell || plan.BubblewrapBinary != runtimeBwrap {
+				t.Fatalf("installed plan runtime executables = %#v, want shell=%s bwrap=%s", plan, runtimeShell, runtimeBwrap)
+			}
+
+			downOutput, err := run("-p", "dev-all", "down", "--repo", "ouroboros-ide", "--count", "3")
+			if err != nil {
+				t.Fatalf("installed down failed: %v\n%s", err, downOutput)
+			}
+			for _, residue := range []string{
+				filepath.Join(root, ".devkit", "native-broker", "broker.sock"),
+				filepath.Join(root, ".devkit", "native-broker", "broker.pid"),
+				filepath.Join(root, ".devkit", "native-broker", "broker.json"),
+			} {
+				if _, err := os.Lstat(residue); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("installed lifecycle left residue %s: %v", residue, err)
+				}
+			}
+			assertNoNativeResetProxyResidue(t, root)
+		})
+	}
 }
 
 func TestMain(m *testing.M) {

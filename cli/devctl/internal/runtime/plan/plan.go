@@ -49,6 +49,8 @@ type Plan struct {
 	SandboxStateRoot     string            `json:"sandbox_state_root"`
 	Flake                string            `json:"flake"`
 	FlakeInputOverrides  map[string]string `json:"flake_input_overrides,omitempty"`
+	RuntimeLauncher      string            `json:"runtime_launcher"`
+	BubblewrapBinary     string            `json:"bubblewrap_binary"`
 	Launcher             string            `json:"launcher"`
 	LauncherArgs         []string          `json:"launcher_args"`
 	IsolationProfile     string            `json:"isolation_profile,omitempty"`
@@ -71,6 +73,8 @@ type BuildOptions struct {
 	Repo                  string
 	Flake                 string
 	FlakeInputOverrides   map[string]string
+	RuntimeLauncher       string
+	BubblewrapBinary      string
 	Launcher              string
 	WorktreeRoot          string
 	StateRoot             string
@@ -272,7 +276,15 @@ func Build(opts BuildOptions) (Plan, error) {
 		"standard agents must use brokered OCI access only",
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		binds = workspaceEgressBinds(paths, project, repo, opts.Paths.Root, broker, resolvConf)
+		binds = workspaceEgressBinds(
+			paths,
+			project,
+			repo,
+			opts.Paths.Root,
+			runtimeAuthorityRoot,
+			broker,
+			resolvConf,
+		)
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
 		}
@@ -299,6 +311,14 @@ func Build(opts BuildOptions) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	runtimeLauncher := strings.TrimSpace(opts.RuntimeLauncher)
+	if runtimeLauncher != "" {
+		runtimeLauncher = filepath.Clean(runtimeLauncher)
+	}
+	bubblewrapBinary := strings.TrimSpace(opts.BubblewrapBinary)
+	if bubblewrapBinary != "" {
+		bubblewrapBinary = filepath.Clean(bubblewrapBinary)
+	}
 
 	p := Plan{
 		Agent: agent.Spec{
@@ -323,6 +343,8 @@ func Build(opts BuildOptions) (Plan, error) {
 		SandboxStateRoot:     paths.SandboxStateRoot,
 		Flake:                flake,
 		FlakeInputOverrides:  flakeInputOverrides,
+		RuntimeLauncher:      runtimeLauncher,
+		BubblewrapBinary:     bubblewrapBinary,
 		Launcher:             launcher,
 		IsolationProfile:     isolationProfile,
 		MountPolicyIdentity:  mountPolicyIdentity,
@@ -390,7 +412,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, broker string, resolvConf string) []Bind {
+func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string) []Bind {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -408,7 +430,11 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, b
 	add(paths.HostWorktree, "/workspace", "rw", true)
 	add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
-	add(devkitRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
+	runtimeRoot := filepath.Clean(strings.TrimSpace(runtimeAuthorityRoot))
+	if runtimeRoot == "" || runtimeRoot == "." {
+		runtimeRoot = devkitRoot
+	}
+	add(runtimeRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
 	if isGovernedRuntimePlan(project, repo) {
 		// launch.Prepare materializes the immutable runtime identity projection
 		// and governance catalog beneath the controller dev root before every
@@ -682,19 +708,32 @@ func projectSandboxPath(hostPath, hostRoot, sandboxRoot string) (string, bool) {
 }
 
 func launcherArgs(p Plan) []string {
+	runtimeLauncher := strings.TrimSpace(p.RuntimeLauncher)
+	if runtimeLauncher == "" {
+		runtimeLauncher = "<immutable-runtime-launcher-required>"
+	}
+	runtimeArgs := []string{
+		runtimeLauncher,
+		"bash",
+		"-lc",
+		"cd " + shellQuote(p.Agent.SandboxWorktree) + " && exec ${SHELL:-bash}",
+	}
 	switch p.Launcher {
 	case "systemd-run":
-		nixArgs := nixDevelopArgs(p)
 		args := []string{
 			"systemd-run",
 			"--user",
 			"--scope",
 			"--unit", p.Agent.ID.Name(),
 		}
-		args = append(args, appendNixShellArgs(nixArgs, "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")...)
+		args = append(args, runtimeArgs...)
 		return args
 	default:
-		args := []string{"bwrap"}
+		bubblewrapBinary := strings.TrimSpace(p.BubblewrapBinary)
+		if bubblewrapBinary == "" {
+			bubblewrapBinary = "<immutable-bubblewrap-required>"
+		}
+		args := []string{bubblewrapBinary}
 		for _, bind := range p.Binds {
 			switch bind.Mode {
 			case "ro":
@@ -720,29 +759,9 @@ func launcherArgs(p Plan) []string {
 		for _, key := range keys {
 			args = append(args, "--setenv", key, p.Env[key])
 		}
-		args = append(args, appendNixShellArgs(nixDevelopArgs(p), "cd "+shellQuote(p.Agent.SandboxWorktree)+" && exec ${SHELL:-bash}")...)
+		args = append(args, runtimeArgs...)
 		return args
 	}
-}
-
-func nixDevelopArgs(p Plan) []string {
-	args := []string{"nix", "--extra-experimental-features", "nix-command flakes", "--option", "flake-registry", "", "develop"}
-	names := make([]string, 0, len(p.FlakeInputOverrides))
-	for name := range p.FlakeInputOverrides {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		args = append(args, "--override-input", name, p.FlakeInputOverrides[name])
-	}
-	args = append(args, p.Flake, "--output-lock-file", "/dev/null")
-	return args
-}
-
-func appendNixShellArgs(nixArgs []string, script string) []string {
-	args := append([]string{}, nixArgs...)
-	args = append(args, "--command", "bash", "-lc", script)
-	return args
 }
 
 func shellQuote(s string) string {
