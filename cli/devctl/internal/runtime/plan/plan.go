@@ -715,7 +715,7 @@ func launcherArgs(p Plan) []string {
 	runtimeArgs := []string{
 		runtimeLauncher,
 		"bash",
-		"-lc",
+		"-c",
 		"cd " + shellQuote(p.Agent.SandboxWorktree) + " && exec ${SHELL:-bash}",
 	}
 	switch p.Launcher {

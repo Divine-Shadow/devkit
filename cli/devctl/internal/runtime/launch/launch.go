@@ -2614,7 +2614,7 @@ func shellCommand(devkitRoot string, project string, workdir string, command []s
 			script += " && exec " + strings.Join(quoted, " ")
 		}
 	}
-	return []string{"bash", "-lc", script}
+	return []string{"bash", "-c", script}
 }
 
 func proxyBridgeScript(devkitRoot string, project string, proxy nativeplan.ProxyConfig) string {

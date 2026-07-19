@@ -16,7 +16,7 @@ readiness:
     - name: required-tools
       command: |
         for tool in git ssh curl docker node npm purs spago vite netlify deno playwright; do
-          command -v "$tool" >/dev/null
+          command -v "$tool" >/dev/null || { echo "missing required runtime tool: $tool" >&2; exit 127; }
         done
     - name: docker-client
       command: docker --version >/dev/null

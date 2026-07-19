@@ -21,7 +21,7 @@ readiness:
     - name: required-tools
       command: |
         for tool in git ssh curl docker java sbt aws terraform packer node npm; do
-          command -v "$tool" >/dev/null
+          command -v "$tool" >/dev/null || { echo "missing required runtime tool: $tool" >&2; exit 127; }
         done
     - name: docker-client
       command: docker --version >/dev/null

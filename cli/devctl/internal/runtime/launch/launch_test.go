@@ -600,6 +600,41 @@ func runtimeLauncherFixture(t *testing.T) string {
 	return launcher
 }
 
+func TestShellCommandPreservesImmutableRuntimePathAgainstHostileLoginProfile(t *testing.T) {
+	tmp := t.TempDir()
+	runtimeBin := filepath.Join(tmp, "runtime-bin")
+	home := filepath.Join(tmp, "home")
+	workdir := filepath.Join(tmp, "work")
+	for _, dir := range []string{runtimeBin, home, workdir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	output := filepath.Join(tmp, "node-ran")
+	node := filepath.Join(runtimeBin, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\nprintf preserved > \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".bash_profile"), []byte("export PATH=/usr/bin:/bin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(tmp, "runtime-launcher")
+	launcherBody := "#!/bin/sh\nexport PATH=" + shellQuote(runtimeBin) + ":/usr/bin:/bin\nexec \"$@\"\n"
+	if err := os.WriteFile(launcher, []byte(launcherBody), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	args := shellCommand("", "", workdir, []string{"node", output}, nativeplan.ProxyConfig{}, nil, false)
+	cmd := exec.Command(launcher, args...)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runtime launcher command failed: %v\n%s", err, combined)
+	}
+	if got, err := os.ReadFile(output); err != nil || string(got) != "preserved" {
+		t.Fatalf("immutable runtime node was not selected: content=%q err=%v", got, err)
+	}
+}
+
 func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -654,7 +689,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
 		"'--setenv' 'TMPDIR' '/tmp'",
 		"'--setenv' 'XDG_CACHE_HOME' '/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.cache'",
-		"'" + runtimeLauncher + "' 'bash' '-lc'",
+		"'" + runtimeLauncher + "' 'bash' '-c'",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("command missing %q:\n%s", want, joined)
@@ -813,8 +848,11 @@ func TestBuildBubblewrapUsesImmutableRuntimeLauncherWithoutConsumerFlakeEvaluati
 		t.Fatalf("BuildBubblewrap: %v", err)
 	}
 	joined := ShellString(cmd)
-	if !strings.Contains(joined, "'"+runtimeLauncher+"' 'bash' '-lc'") {
+	if !strings.Contains(joined, "'"+runtimeLauncher+"' 'bash' '-c'") {
 		t.Fatalf("command did not select the immutable runtime launcher:\n%s", joined)
+	}
+	if strings.Contains(joined, "'"+runtimeLauncher+"' 'bash' '-lc'") {
+		t.Fatalf("command selected a login shell after the immutable runtime launcher:\n%s", joined)
 	}
 	for _, forbidden := range []string{
 		"nix' 'develop",

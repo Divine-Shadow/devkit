@@ -789,6 +789,12 @@ func TestBuildDevWorkspaceUsesWorkspaceRoot(t *testing.T) {
 	if !strings.Contains(joinedLauncher, "--symlink /run/current-system/sw/bin/bash /usr/bin/bash") {
 		t.Fatalf("workspace-root launcher must provide /usr/bin/bash compatibility: %#v", p.LauncherArgs)
 	}
+	if !strings.Contains(joinedLauncher, "bash -c") {
+		t.Fatalf("workspace-root launcher must preserve the immutable runtime environment: %#v", p.LauncherArgs)
+	}
+	if strings.Contains(joinedLauncher, "bash -lc") {
+		t.Fatalf("workspace-root launcher must not reset the immutable runtime environment with a login shell: %#v", p.LauncherArgs)
+	}
 }
 
 func TestBuildManifestIncludesEveryAgent(t *testing.T) {

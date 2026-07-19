@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -54,6 +56,55 @@ func TestFlakeBackedOverlaysDeclareReadinessContract(t *testing.T) {
 				t.Fatalf("%s missing core-check repo check", overlay)
 			}
 		})
+	}
+}
+
+func TestDevAllRequiredToolsFailsOnMissingIntermediateTool(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime caller unavailable")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
+	cfg, _, err := ReadAll([]string{filepath.Join(root, "overlays")}, "dev-all")
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	var command string
+	for _, check := range cfg.Readiness.RuntimeChecks {
+		if check.Name == "required-tools" {
+			command = check.Command
+			break
+		}
+	}
+	if command == "" {
+		t.Fatal("dev-all missing required-tools runtime check")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatalf("resolve package test shell: %v", err)
+	}
+
+	bin := t.TempDir()
+	for _, tool := range []string{
+		"git", "ssh", "curl", "docker", "go", "java", "sbt",
+		"npm", "purs", "spago", "vite", "netlify", "playwright",
+		"deno", "aws", "make", "gcc", "mgba-headless",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(bash, "-c", command)
+	cmd.Env = []string{"PATH=" + bin}
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("required-tools masked missing intermediate node; output=%q", output)
+	}
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 127 {
+		t.Fatalf("required-tools missing-node exit = %v; output=%q", err, output)
+	}
+	if !strings.Contains(string(output), "missing required runtime tool: node") {
+		t.Fatalf("required-tools missing-node detail = %q", output)
 	}
 }
 

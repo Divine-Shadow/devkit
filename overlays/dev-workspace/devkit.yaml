@@ -24,7 +24,7 @@ readiness:
     - name: required-tools
       command: |
         for tool in git ssh curl docker go java sbt node npm purs spago vite netlify playwright deno aws make gcc; do
-          command -v "$tool" >/dev/null
+          command -v "$tool" >/dev/null || { echo "missing required runtime tool: $tool" >&2; exit 127; }
         done
     - name: workspace-siblings
       command: |
