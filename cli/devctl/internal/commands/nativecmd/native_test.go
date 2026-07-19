@@ -880,6 +880,42 @@ func TestManagedEgressUpstreamProxyURLOnlyChainsNestedWorkspaceEgress(t *testing
 	}
 }
 
+func TestWithManagedEgressProxyEstablishesSocketBeforeBootstrapAndCleansUp(t *testing.T) {
+	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
+	tmp, err := os.MkdirTemp("", "dke-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	allowlistPath := filepath.Join(tmp, "allowlist.txt")
+	if err := os.WriteFile(allowlistPath, []byte("github.com\nssh.github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(tmp, "managed-egress.sock")
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{
+			UnixSocket:    socketPath,
+			AllowlistPath: allowlistPath,
+		},
+	}
+	called := false
+	if err := withManagedEgressProxy(p, false, func() error {
+		called = true
+		if !unixSocketAccepts(socketPath) {
+			t.Fatalf("managed proxy was not accepting before Git bootstrap")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("withManagedEgressProxy: %v", err)
+	}
+	if !called {
+		t.Fatal("Git bootstrap callback was not called")
+	}
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("managed proxy socket survived bootstrap: %v", err)
+	}
+}
+
 func TestTailLines(t *testing.T) {
 	got := tailLines("a\nb\nc", 2)
 	if len(got) != 2 || got[0] != "b" || got[1] != "c" {

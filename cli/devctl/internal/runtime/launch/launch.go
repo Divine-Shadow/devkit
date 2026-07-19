@@ -212,6 +212,45 @@ func ensureGitSSHConfig(p nativeplan.Plan) error {
 	return nil
 }
 
+// GitBootstrapSSHCommand returns the package-owned host command used by
+// native prepare before a linked worktree exists. The bootstrap command must
+// use the per-consumer home; the normal runtime preparation later rewrites the
+// same managed config block to sandbox-visible identity paths.
+func GitBootstrapSSHCommand(p nativeplan.Plan) (string, error) {
+	hostHome := strings.TrimSpace(p.Agent.HostHome)
+	if hostHome == "" {
+		return "", fmt.Errorf("native Git bootstrap requires an agent host home")
+	}
+	return "ssh -F " + filepath.Join(hostHome, ".ssh", "config"), nil
+}
+
+// PrepareGitBootstrap seeds and configures only the package-owned SSH identity
+// needed for the first remote fetch. It deliberately does not require or
+// configure a Git worktree because native prepare calls it before materializing
+// the linked worktree.
+func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
+	sshCommand, err := GitBootstrapSSHCommand(p)
+	if err != nil {
+		return "", err
+	}
+	hostHome := strings.TrimSpace(p.Agent.HostHome)
+	if err := SeedSSH(hostHome, false); err != nil {
+		return "", err
+	}
+	identityNames := existingSSHIdentities(filepath.Join(hostHome, ".ssh"))
+	if len(identityNames) == 0 {
+		return "", fmt.Errorf("native Git bootstrap requires a seeded SSH identity in %s", filepath.Join(hostHome, ".ssh"))
+	}
+	proxyURL := ""
+	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
+		proxyURL = p.Proxy.HTTPProxy
+	}
+	if err := writeGitSSHConfig(hostHome, hostHome, identityNames, proxyURL); err != nil {
+		return "", err
+	}
+	return sshCommand, nil
+}
+
 func existingSSHIdentities(sshDir string) []string {
 	var names []string
 	for _, name := range []string{"id_ed25519", "id_rsa"} {

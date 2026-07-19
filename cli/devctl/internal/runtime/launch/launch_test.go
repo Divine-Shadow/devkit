@@ -1075,6 +1075,64 @@ func TestPrepareConfiguresWorkspaceEgressGitSSHThroughManagedProxy(t *testing.T)
 	}
 }
 
+func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.T) {
+	tmp := t.TempDir()
+	hostUserHome := filepath.Join(tmp, "host-user")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
+	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "known_hosts"), "github.com ssh-ed25519 key")
+	t.Setenv("HOME", hostUserHome)
+
+	hostHome := filepath.Join(tmp, "agent-home")
+	p := nativeplan.Plan{
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		Agent: agent.Spec{
+			HostHome:    hostHome,
+			SandboxHome: "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
+		},
+		Proxy: nativeplan.ProxyConfig{HTTPProxy: "http://127.0.0.1:18888"},
+	}
+	sshCommand, err := PrepareGitBootstrap(p)
+	if err != nil {
+		t.Fatalf("PrepareGitBootstrap: %v", err)
+	}
+	expectedCommand := "ssh -F " + filepath.Join(hostHome, ".ssh", "config")
+	if sshCommand != expectedCommand {
+		t.Fatalf("bootstrap SSH command = %q, want %q", sshCommand, expectedCommand)
+	}
+	cfg := readTestFile(t, filepath.Join(hostHome, ".ssh", "config"))
+	for _, want := range []string{
+		"Host github.com",
+		"  HostName ssh.github.com",
+		"  Port 443",
+		"  ProxyCommand nc -X connect -x 127.0.0.1:18888 %h %p",
+		"  IdentityFile " + filepath.Join(hostHome, ".ssh", "id_ed25519"),
+		"  IdentitiesOnly yes",
+		"  BatchMode yes",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("bootstrap SSH config missing %q:\n%s", want, cfg)
+		}
+	}
+	if strings.Contains(cfg, p.Agent.SandboxHome) {
+		t.Fatalf("host bootstrap SSH config selected sandbox-only paths:\n%s", cfg)
+	}
+}
+
+func TestPrepareGitBootstrapRejectsMissingIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", filepath.Join(tmp, "empty-host-home"))
+	p := nativeplan.Plan{
+		Agent: agent.Spec{
+			HostHome: filepath.Join(tmp, "agent-home"),
+		},
+	}
+	_, err := PrepareGitBootstrap(p)
+	if err == nil || !strings.Contains(err.Error(), "requires a seeded SSH identity") {
+		t.Fatalf("PrepareGitBootstrap error = %v, want missing identity rejection", err)
+	}
+}
+
 func TestPrepareImportsMissingLegacyCodexStateWithoutClobber(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")

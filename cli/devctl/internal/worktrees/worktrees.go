@@ -314,13 +314,15 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 }
 
 type NativeOptions struct {
-	DevkitRoot   string
-	Repo         string
-	Count        int
-	BaseBranch   string
-	BranchPrefix string
-	WorktreeRoot string
-	DryRun       bool
+	DevkitRoot       string
+	Repo             string
+	Count            int
+	BaseBranch       string
+	BranchPrefix     string
+	WorktreeRoot     string
+	GitSSHCommand    string
+	RequireSSHOrigin bool
+	DryRun           bool
 }
 
 // SetupNative creates dedicated worktrees for every native agent, including
@@ -352,8 +354,18 @@ func SetupNative(opts NativeOptions) error {
 		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
 	}
 	repoPath := filepath.Join(devRoot, repo)
-	envGit := func(args ...string) []string {
-		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh -F /dev/null"}, args...)
+	gitSSHCommand := strings.TrimSpace(opts.GitSSHCommand)
+	envLocalGit := func(args ...string) []string {
+		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}, args...)
+	}
+	envRemoteGit := func(args ...string) []string {
+		prefix := []string{}
+		if gitSSHCommand != "" {
+			prefix = append(prefix, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_SSH_COMMAND="+gitSSHCommand)
+		} else {
+			prefix = append(prefix, "-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		}
+		return append(prefix, append([]string{"git"}, args...)...)
 	}
 	var repoWorktreesDir string
 	if !opts.DryRun {
@@ -375,12 +387,28 @@ func SetupNative(opts NativeOptions) error {
 			}
 		}
 	}
-	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "fetch", "--all", "--prune")...); err != nil {
-		if opts.DryRun || !nativeWorktreesExist(worktreesRoot, repo, count) {
+	remoteURL, result := execx.Capture(context.Background(), "git", "-C", repoPath, "remote", "get-url", "origin")
+	if result.Code != 0 && !opts.DryRun {
+		return fmt.Errorf("read native Git bootstrap origin: exit %d", result.Code)
+	}
+	sshOrigin := opts.RequireSSHOrigin
+	if result.Code == 0 {
+		sshOrigin = gitRemoteRequiresSSH(strings.TrimSpace(remoteURL))
+	}
+	if opts.RequireSSHOrigin && !sshOrigin {
+		return fmt.Errorf("native Git bootstrap requires the source-declared SSH origin; HTTPS, file, and ambient transport fallbacks are prohibited")
+	}
+	if gitSSHCommand == "" {
+		if sshOrigin {
+			return fmt.Errorf("native Git bootstrap for SSH origin requires a package-owned SSH command")
+		}
+	}
+	if err := run(opts.DryRun, "env", envRemoteGit("-C", repoPath, "fetch", "--all", "--prune")...); err != nil {
+		if opts.RequireSSHOrigin || opts.DryRun || !nativeWorktreesExist(worktreesRoot, repo, count) {
 			return err
 		}
 	}
-	if err := run(opts.DryRun, "env", envGit("-C", repoPath, "config", "worktree.useRelativePaths", "true")...); err != nil {
+	if err := run(opts.DryRun, "env", envLocalGit("-C", repoPath, "config", "worktree.useRelativePaths", "true")...); err != nil {
 		return err
 	}
 	if !opts.DryRun {
@@ -397,7 +425,7 @@ func SetupNative(opts NativeOptions) error {
 			if ok, err := existingGitCheckout(wt); err != nil {
 				return err
 			} else if ok {
-				if err := run(false, "env", envGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
+				if err := run(false, "env", envLocalGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
 					return err
 				}
 				if err := rewriteNativeGitdir(wt, devRoot); err != nil {
@@ -409,16 +437,16 @@ func SetupNative(opts NativeOptions) error {
 				return err
 			}
 		}
-		_ = run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "prune")...)
-		_ = run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "remove", "-f", wt)...)
-		if err := run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
+		_ = run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "prune")...)
+		_ = run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "remove", "-f", wt)...)
+		if err := run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
 			if opts.DryRun {
 				return err
 			}
 			if remErr := os.RemoveAll(wt); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
 				return fmt.Errorf("remove stale worktree %s: %w", wt, remErr)
 			}
-			if err2 := run(opts.DryRun, "env", envGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err2 != nil {
+			if err2 := run(opts.DryRun, "env", envLocalGit("-C", repoPath, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err2 != nil {
 				return err2
 			}
 		}
@@ -427,7 +455,7 @@ func SetupNative(opts NativeOptions) error {
 				return err
 			}
 		}
-		if err := run(opts.DryRun, "env", envGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
+		if err := run(opts.DryRun, "env", envLocalGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
 			return err
 		}
 		if !opts.DryRun {
@@ -437,6 +465,13 @@ func SetupNative(opts NativeOptions) error {
 		}
 	}
 	return nil
+}
+
+func gitRemoteRequiresSSH(remoteURL string) bool {
+	remoteURL = strings.TrimSpace(remoteURL)
+	return strings.HasPrefix(remoteURL, "ssh://") ||
+		(strings.Contains(remoteURL, "@") && strings.Contains(remoteURL, ":") &&
+			!strings.Contains(remoteURL, "://"))
 }
 
 func nativeWorktreesExist(worktreesRoot, repo string, count int) bool {

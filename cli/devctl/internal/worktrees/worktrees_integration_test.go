@@ -253,6 +253,149 @@ func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 	}
 }
 
+func TestSetupNativeSSHOriginUsesExplicitBootstrapCommand(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+	bare := filepath.Join(root, "remotes", "ouroboros-ide.git")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
+
+	logPath := filepath.Join(root, "ssh.log")
+	sshPath := filepath.Join(root, "package-owned-ssh")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\n" +
+		"if [ \"${1:-}\" = -G ]; then exit 0; fi\n" +
+		"last=\n" +
+		"for arg in \"$@\"; do last=$arg; done\n" +
+		"case \"$last\" in\n" +
+		"  \"git-upload-pack \"*) exec sh -c \"$last\" ;;\n" +
+		"esac\n" +
+		"exit 1\n"
+	if err := os.WriteFile(sshPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "package-owned-config")
+	if err := os.WriteFile(configPath, []byte("Host fixture.invalid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:    devkitRoot,
+		Repo:          "ouroboros-ide",
+		Count:         1,
+		BaseBranch:    "main",
+		BranchPrefix:  "agent",
+		GitSSHCommand: sshPath + " -F " + configPath,
+	}); err != nil {
+		t.Fatalf("native setup with package-owned SSH command failed: %v", err)
+	}
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logData)
+	for _, want := range []string{"-F " + configPath, "git-upload-pack"} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("SSH invocation missing %q:\n%s", want, logText)
+		}
+	}
+	if strings.Contains(logText, "/dev/null") {
+		t.Fatalf("SSH invocation selected the prohibited /dev/null transport:\n%s", logText)
+	}
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
+}
+
+func TestSetupNativeSSHOriginRejectsMissingBootstrapCommand(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "git@fixture.invalid:ouroboros-ide.git")
+
+	err := SetupNative(NativeOptions{
+		DevkitRoot: devkitRoot,
+		Repo:       "ouroboros-ide",
+		Count:      1,
+		DryRun:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a package-owned SSH command") {
+		t.Fatalf("SetupNative error = %v, want package-owned SSH command rejection", err)
+	}
+}
+
+func TestSetupNativeProductBootstrapRejectsHTTPSFallback(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "https://github.com/Divine-Shadow/ouroboros-ide.git")
+
+	err := SetupNative(NativeOptions{
+		DevkitRoot:       devkitRoot,
+		Repo:             "ouroboros-ide",
+		Count:            1,
+		GitSSHCommand:    "ssh -F /nix/store/package-owned/config",
+		RequireSSHOrigin: true,
+		DryRun:           true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "HTTPS, file, and ambient transport fallbacks are prohibited") {
+		t.Fatalf("SetupNative error = %v, want HTTPS fallback rejection", err)
+	}
+}
+
+func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	if err := SetupNative(NativeOptions{
+		DevkitRoot: devkitRoot,
+		Repo:       "ouroboros-ide",
+		Count:      1,
+	}); err != nil {
+		t.Fatalf("prepare existing worktree: %v", err)
+	}
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid/missing.git")
+
+	err := SetupNative(NativeOptions{
+		DevkitRoot:       devkitRoot,
+		Repo:             "ouroboros-ide",
+		Count:            1,
+		GitSSHCommand:    "/bin/false",
+		RequireSSHOrigin: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "fetch --all --prune") {
+		t.Fatalf("SetupNative error = %v, want fail-closed Product fetch error", err)
+	}
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
 func TestSetupNative_ReconstructsMissingRepoBesidePartialAgentHome(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

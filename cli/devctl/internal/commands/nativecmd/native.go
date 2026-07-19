@@ -1684,15 +1684,23 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
-	if err := wtx.SetupNative(wtx.NativeOptions{
-		DevkitRoot:   ctx.Paths.Root,
-		Repo:         repo,
-		Count:        count,
-		BaseBranch:   baseBranch,
-		BranchPrefix: branchPrefix,
-		WorktreeRoot: parsed.opts.WorktreeRoot,
-		DryRun:       ctx.DryRun || parsed.dryRun,
-	}); err != nil {
+	bootstrapOpts := parsed.opts
+	bootstrapOpts.Index = 1
+	bootstrapOpts.Repo = repo
+	bootstrapOpts.DedicatedWorktree = true
+	bootstrapPlan, err := nativeplan.BuildDevAll(bootstrapOpts)
+	if err != nil {
+		return err
+	}
+	if err := prepareNativeGitBootstrapAndWorktrees(bootstrapPlan, wtx.NativeOptions{
+		DevkitRoot:       ctx.Paths.Root,
+		Repo:             repo,
+		Count:            count,
+		BaseBranch:       baseBranch,
+		BranchPrefix:     branchPrefix,
+		WorktreeRoot:     parsed.opts.WorktreeRoot,
+		RequireSSHOrigin: repo == "ouroboros-ide",
+	}, ctx.DryRun || parsed.dryRun); err != nil {
 		return err
 	}
 	type preparedAgent struct {
@@ -1719,10 +1727,12 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 		if err != nil {
 			return err
 		}
-		if !ctx.DryRun && !parsed.dryRun {
-			if err := launch.Prepare(p); err != nil {
-				return err
-			}
+		if err := prepareWithManagedEgressProxy(
+			p,
+			ctx.DryRun || parsed.dryRun,
+			launch.Prepare,
+		); err != nil {
+			return err
 		}
 		out.Agents = append(out.Agents, preparedAgent{
 			Index:            i,
@@ -1861,6 +1871,50 @@ func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func(), error) {
 		case <-time.After(2 * time.Second):
 		}
 	}, nil
+}
+
+func withManagedEgressProxy(p nativeplan.Plan, dryRun bool, run func() error) error {
+	cleanupProxy, err := ensureManagedEgressProxy(p, dryRun)
+	if err != nil {
+		return err
+	}
+	defer cleanupProxy()
+	return run()
+}
+
+func prepareWithManagedEgressProxy(
+	p nativeplan.Plan,
+	dryRun bool,
+	prepare func(nativeplan.Plan) error,
+) error {
+	return withManagedEgressProxy(p, dryRun, func() error {
+		if dryRun {
+			return nil
+		}
+		return prepare(p)
+	})
+}
+
+func prepareNativeGitBootstrapAndWorktrees(
+	p nativeplan.Plan,
+	opts wtx.NativeOptions,
+	dryRun bool,
+) error {
+	return withManagedEgressProxy(p, dryRun, func() error {
+		sshCommand, err := launch.GitBootstrapSSHCommand(p)
+		if err != nil {
+			return err
+		}
+		if !dryRun {
+			sshCommand, err = launch.PrepareGitBootstrap(p)
+			if err != nil {
+				return err
+			}
+		}
+		opts.GitSSHCommand = sshCommand
+		opts.DryRun = dryRun
+		return wtx.SetupNative(opts)
+	})
 }
 
 func managedEgressUpstreamProxyURL() string {
