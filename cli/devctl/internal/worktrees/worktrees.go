@@ -10,21 +10,53 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-// run runs a host command with timeout and prints when DEVKIT_DEBUG=1.
-func run(dry bool, name string, args ...string) error {
+const (
+	nativeMetadataOperationLimit = 10 * time.Second
+	// Fetch is bounded by observable protocol progress rather than total
+	// transfer duration. This permits a healthy full pack to outlive the short
+	// metadata-operation limit while failing closed when Git/OpenSSH and its
+	// package-owned ProxyCommand make no progress for a complete idle window.
+	nativeFetchIdleLimit   = 2 * time.Minute
+	nativeTerminationGrace = 2 * time.Second
+)
+
+func runWithPolicy(dry bool, fixedLimit, idleLimit time.Duration, name string, args ...string) error {
 	if dry {
 		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(append([]string{name}, args...), " "))
 		return nil
 	}
-	ctx, cancel := execx.WithTimeout(10_000_000_000) // 10s default; outer callers usually wrap
+	ctx := context.Background()
+	cancel := func() {}
+	if fixedLimit > 0 {
+		ctx, cancel = context.WithTimeout(ctx, fixedLimit)
+	}
 	defer cancel()
-	res := execx.RunCtx(ctx, name, args...)
+	res := execx.RunManaged(ctx, execx.ManagedPolicy{
+		IdleTimeout:      idleLimit,
+		TerminationGrace: nativeTerminationGrace,
+	}, name, args...)
 	if res.Code != 0 {
+		if res.Err != nil {
+			return fmt.Errorf("%s %v: exit %d: %w", name, args, res.Code, res.Err)
+		}
 		return fmt.Errorf("%s %v: exit %d", name, args, res.Code)
 	}
 	return nil
+}
+
+// run preserves the short fixed wall-clock policy for local metadata commands.
+func run(dry bool, name string, args ...string) error {
+	return runWithPolicy(dry, nativeMetadataOperationLimit, 0, name, args...)
+}
+
+// runFetch uses an idle/progress deadline for a full remote smart-protocol
+// transfer. Its process group includes Git, OpenSSH, and the package-owned
+// ProxyCommand, so cancellation cannot leave a transport descendant behind.
+func runFetch(dry bool, name string, args ...string) error {
+	return runWithPolicy(dry, 0, nativeFetchIdleLimit, name, args...)
 }
 
 // rewriteGitdir writes a .git file pointing to a gitdir form suitable for the
@@ -373,7 +405,7 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 		}
 	}
 
-	if err := run(dry, "env", envGit("-C", repoPath, "fetch", "--all", "--prune")...); err != nil {
+	if err := runFetch(dry, "env", envGit("-C", repoPath, "fetch", "--all", "--prune", "--progress")...); err != nil {
 		return err
 	}
 	if err := run(dry, "env", envGit("-C", repoPath, "config", "push.default", "upstream")...); err != nil {
@@ -536,7 +568,7 @@ func ensureNativeOwnedCommonRepository(
 		if err := run(true, "env", envLocalGit("--git-dir", commonDir, "remote", "add", "origin", remoteURL)...); err != nil {
 			return "", err
 		}
-		if err := run(true, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune")...); err != nil {
+		if err := runFetch(true, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
 			return "", err
 		}
 		return commonDir, nil
@@ -552,7 +584,7 @@ func ensureNativeOwnedCommonRepository(
 		if err := validateNativeOwnedCommonRepository(worktreesRoot, commonDir, repo, remoteURL, envLocalGit); err != nil {
 			return "", err
 		}
-		if err := run(false, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune")...); err != nil {
+		if err := runFetch(false, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
 			return "", err
 		}
 		return commonDir, nil
@@ -583,7 +615,7 @@ func ensureNativeOwnedCommonRepository(
 	if err := run(false, "env", envLocalGit("--git-dir", staging, "remote", "add", "origin", remoteURL)...); err != nil {
 		return "", err
 	}
-	if err := run(false, "env", envRemoteGit("--git-dir", staging, "fetch", "--all", "--prune")...); err != nil {
+	if err := runFetch(false, "env", envRemoteGit("--git-dir", staging, "fetch", "--all", "--prune", "--progress")...); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(staging, "devkit-owned-common"), []byte(marker), 0o600); err != nil {

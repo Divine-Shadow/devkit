@@ -46,6 +46,11 @@ Git to receive that exact SSH command explicitly.
   that destination write side and cannot truncate a pack still draining in the
   opposite direction. Copy failure closes both peers with a directional error;
   cancellation closes the tunnel without waiting on an open child input stream.
+- Remote fetch is governed by observable protocol progress rather than the
+  ten-second wall-clock bound used for local metadata operations. Git,
+  OpenSSH, and the package-owned ProxyCommand run as one managed descendant
+  group; a truly idle or cancelled fetch terminates and waits for that complete
+  group before bootstrap cleanup.
 
 ## Progress
 
@@ -117,8 +122,21 @@ Git to receive that exact SSH command explicitly.
       creation and with complete proxy/bootstrap cleanup.
 - [x] Trace the shared failure to first-direction-wins tunnel relay logic in
       `egressproxy.handleConnect` and the compatibility bridge.
-- [ ] Publish the half-close-aware Devkit transport lifecycle and its declared
-      real Git upload-pack plus hostile peer regressions.
+- [x] Publish the half-close-aware Devkit transport lifecycle as
+      `6c609a64ce5632804afb9a2bf71adc7c29b6126c`, repin/publish WSL as
+      `1ac007b2ee2abb1a1ec19170350791ea6109b743`, and obtain an exact canonical
+      apply receipt.
+- [x] Reproduce the next two-consumer `early EOF` through the complete installed
+      Git -> OpenSSH -> package ProxyCommand -> Unix Serve -> outer CONNECT
+      chain. On unmodified `6c609a`, a deliberately healthy upload-pack still
+      draining after ten seconds is killed at 10.13 seconds by
+      `worktrees.run`, after which OpenSSH reports remote close/broken pipe.
+- [x] Identify why the earlier regression was not representative: it called
+      `Connect` from a fake SSH helper against a local upload-pack, completed
+      below one second, and never crossed either real OpenSSH process ownership
+      or the universal worktree-command deadline.
+- [ ] Publish the phase-aware Devkit fetch lifecycle and its declared actual
+      OpenSSH/ProxyCommand plus stall/cancellation/descendant regressions.
 - [ ] Rebase the WSL patches, repin the declared check, and repeat the clean
       full check plus direct/source-selected-Colmena equality gate.
 - [ ] Return the exact tuple to the protected apply owner; do not apply here.
@@ -157,6 +175,13 @@ Git to receive that exact SSH command explicitly.
   `rewriteNativeGitdir` used `devRoot` containment for both the worktree and
   gitdir. The controller's isolated worktree roots are outside `devRoot`, while
   their common repository is still the package-owned source under `devRoot`.
+- The first post-half-close regression was green because it omitted the actual
+  OpenSSH and ProxyCommand processes and finished in about 0.18 seconds. The
+  live fetch and the new installed-chain test instead enter `worktrees.run`,
+  whose unconditional ten-second `CommandContext` kills only top-level Git.
+  That makes OpenSSH and the package-owned CONNECT descendant unwind while a
+  healthy remote upload-pack is still draining, producing the observed
+  `early EOF`, remote close, and broken pipe.
 
 ## Decision log
 
@@ -201,11 +226,20 @@ Git to receive that exact SSH command explicitly.
   protocol, allowlist, launcher, timeout, or retry authority; it only prevents
   the selected CONNECT tunnel from closing its opposite direction when the
   first copy reaches EOF. No new Ouro decision is required.
+- Treat the fetch lifecycle correction as enforcement of the same accepted
+  single-SSH-authority decision, not a new Ouro choice. It retains the exact
+  Git/OpenSSH/ProxyCommand/Unix-proxy chain and replaces an unrelated universal
+  metadata-command wall clock with one progress-aware fetch policy. It adds no
+  endpoint, retry, fallback, caller override, or consumer exception. Short
+  metadata operations retain their fixed bound; idle/cancelled fetches
+  terminate and wait for the whole descendant group.
 
 ## Files
 
 - `cli/devctl/internal/worktrees/worktrees.go`
 - `cli/devctl/internal/worktrees/worktrees_integration_test.go`
+- `cli/devctl/internal/execx/run.go`
+- `cli/devctl/internal/execx/run_test.go`
 - `cli/devctl/internal/runtime/launch/launch.go`
 - `cli/devctl/internal/runtime/launch/launch_test.go`
 - `cli/devctl/internal/runtime/egressproxy/egressproxy.go`

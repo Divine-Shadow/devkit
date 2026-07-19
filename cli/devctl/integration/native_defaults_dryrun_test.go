@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func buildDevctlForNativeDefaults(t *testing.T) string {
@@ -1116,4 +1121,449 @@ windows:
 	if !strings.Contains(out, "only supports native single-overlay layouts") {
 		t.Fatalf("unexpected non-native layout failure:\n%s", out)
 	}
+}
+
+func TestNativePrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand(t *testing.T) {
+	base, err := os.MkdirTemp("", "dvc-ssh-chain-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	root := filepath.Join(base, "devkit")
+	packageDevctl := filepath.Join(root, "kit", "bin", "devctl")
+	if err := os.MkdirAll(filepath.Dir(packageDevctl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builtDevctl := buildDevctlForNativeDefaultsWithTags(t, "devkitintegration")
+	devctlBytes, err := os.ReadFile(builtDevctl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packageDevctl, devctlBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	overlay := `
+defaults:
+  repo: test-repo
+  agents: 1
+  base_branch: main
+  branch_prefix: agent
+runtime:
+  flake: ./overlays/dev-all#default
+readiness:
+  default_mode: runtime-only
+native:
+  worktree_root: ../agent-worktrees
+  state_root: ../.devkit/native-agents
+  worktree_container_root: /worktrees
+  state_container_root: /agent-state
+`
+	overlayPath := filepath.Join(root, "overlays", "dev-all", "devkit.yaml")
+	if err := os.MkdirAll(filepath.Dir(overlayPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overlayPath, []byte(overlay), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	allowlistPath := filepath.Join(root, "kit", "proxy", "allowlist.txt")
+	if err := os.MkdirAll(filepath.Dir(allowlistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceRepo := filepath.Join(base, "test-repo")
+	remoteRepo := filepath.Join(base, "remote.git")
+	runNativeFixtureCommand(t, "git", "init", "--initial-branch=main", sourceRepo)
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "config", "user.name", "Devkit OpenSSH Regression")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "config", "user.email", "devkit-openssh@example.invalid")
+	payload := make([]byte, 2<<20)
+	for index := range payload {
+		payload[index] = byte((index*131 + 17) % 251)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRepo, "pack.bin"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRepo, ".gitignore"), []byte(".devhome-agent*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "add", ".")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "commit", "-m", "delayed pack fixture")
+	runNativeFixtureCommand(t, "git", "clone", "--bare", sourceRepo, remoteRepo)
+
+	clientHome := filepath.Join(base, "client-home")
+	clientKey := filepath.Join(clientHome, ".ssh", "id_ed25519")
+	if err := os.MkdirAll(filepath.Dir(clientKey), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runNativeFixtureCommand(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", clientKey)
+	hostKey := filepath.Join(base, "sshd-host-ed25519")
+	runNativeFixtureCommand(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", hostKey)
+	publicKey, err := os.ReadFile(clientKey + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteHelper := filepath.Join(base, "delayed-upload-pack")
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitExecutable, err = filepath.Abs(gitExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperScript := fmt.Sprintf(
+		"#!/bin/sh\nexec %s -test.run=^TestNativeOpenSSHDelayedUploadPackHelper$ -- %s %s\n",
+		shellSingleQuoteForNativeFixture(os.Args[0]),
+		shellSingleQuoteForNativeFixture(remoteRepo),
+		shellSingleQuoteForNativeFixture(gitExecutable),
+	)
+	if err := os.WriteFile(remoteHelper, []byte(helperScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	authorizedKeys := filepath.Join(base, "authorized_keys")
+	authorizedLine := fmt.Sprintf(
+		"command=\"%s\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc %s",
+		strings.ReplaceAll(remoteHelper, `"`, `\"`),
+		string(publicKey),
+	)
+	if err := os.WriteFile(authorizedKeys, []byte(authorizedLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sshdAddress := reserveNativeFixtureAddress(t)
+	currentUser := strings.TrimSpace(runNativeFixtureCommand(t, "id", "-un"))
+	sshdConfig := strings.Join([]string{
+		"ListenAddress " + strings.Split(sshdAddress, ":")[0],
+		"Port " + strings.Split(sshdAddress, ":")[1],
+		"HostKey " + hostKey,
+		"PidFile " + filepath.Join(base, "sshd.pid"),
+		"AuthorizedKeysFile " + authorizedKeys,
+		"StrictModes no",
+		"PubkeyAuthentication yes",
+		"PasswordAuthentication no",
+		"KbdInteractiveAuthentication no",
+		"UsePAM no",
+		"UseDNS no",
+		"AllowUsers " + currentUser,
+		"LogLevel VERBOSE",
+	}, "\n") + "\n"
+	sshdConfigPath := filepath.Join(base, "sshd_config")
+	if err := os.WriteFile(sshdConfigPath, []byte(sshdConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sshdExecutable, err := exec.LookPath("sshd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshdExecutable, err = filepath.Abs(sshdExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sshdOutput strings.Builder
+	sshd := exec.Command(sshdExecutable, "-D", "-e", "-f", sshdConfigPath)
+	sshd.Env = os.Environ()
+	if nssWrapper := strings.TrimSpace(os.Getenv("DEVKIT_TEST_NSS_WRAPPER")); nssWrapper != "" {
+		currentUID := strings.TrimSpace(runNativeFixtureCommand(t, "id", "-u"))
+		currentGID := strings.TrimSpace(runNativeFixtureCommand(t, "id", "-g"))
+		loginShell, err := exec.LookPath("sh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		loginShell, err = filepath.Abs(loginShell)
+		if err != nil {
+			t.Fatal(err)
+		}
+		passwdPath := filepath.Join(base, "nss-passwd")
+		groupPath := filepath.Join(base, "nss-group")
+		if err := os.WriteFile(
+			passwdPath,
+			[]byte(fmt.Sprintf("%s:x:%s:%s:Devkit fixture:%s:%s\n", currentUser, currentUID, currentGID, clientHome, loginShell)),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			groupPath,
+			[]byte(fmt.Sprintf("%s:x:%s:\n", currentUser, currentGID)),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+		sshd.Env = append(sshd.Env,
+			"LD_PRELOAD="+nssWrapper,
+			"NSS_WRAPPER_PASSWD="+passwdPath,
+			"NSS_WRAPPER_GROUP="+groupPath,
+		)
+	}
+	sshd.Stdout = &sshdOutput
+	sshd.Stderr = &sshdOutput
+	if err := sshd.Start(); err != nil {
+		t.Fatalf("start sshd: %v", err)
+	}
+	t.Cleanup(func() {
+		if sshd.Process != nil {
+			_ = sshd.Process.Kill()
+		}
+		_ = sshd.Wait()
+	})
+	waitForNativeFixtureTCP(t, sshdAddress, &sshdOutput)
+
+	outerProxy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = outerProxy.Close() })
+	connectTarget := make(chan string, 1)
+	proxyErr := make(chan error, 1)
+	go func() {
+		client, err := outerProxy.Accept()
+		if err != nil {
+			proxyErr <- err
+			return
+		}
+		defer client.Close()
+		reader := bufio.NewReader(client)
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			proxyErr <- err
+			return
+		}
+		connectTarget <- req.Host
+		server, err := net.Dial("tcp", sshdAddress)
+		if err != nil {
+			proxyErr <- err
+			return
+		}
+		defer server.Close()
+		if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			proxyErr <- err
+			return
+		}
+		proxyErr <- relayNativeFixtureTunnel(client, reader, server)
+	}()
+
+	remoteURL := "ssh://" + currentUser + "@github.com" + remoteRepo
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "remote", "add", "origin", remoteURL)
+	isolatedRoot := filepath.Join(base, "consumer")
+	proxySocket := filepath.Join(base, "egress.sock")
+	resolvConf := filepath.Join(base, "resolv.conf")
+	if err := os.WriteFile(resolvConf, []byte("nameserver 127.0.0.1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nscdSource := filepath.Join(base, "integration-nscd.socket")
+	if err := os.WriteFile(nscdSource, []byte("integration-only bind source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	prepare := exec.Command(
+		packageDevctl,
+		"-p", "dev-all",
+		"native", "prepare",
+		"--repo", "test-repo",
+		"--count", "1",
+		"--base-branch", "main",
+		"--branch-prefix", "agent",
+		"--worktree-root", isolatedRoot,
+		"--worktree-container-root", "/workspaces/dev/installed-chain",
+		"--isolation-profile", "workspace-egress",
+		"--proxy-socket", proxySocket,
+		"--egress-allowlist", allowlistPath,
+		"--resolv-conf", resolvConf,
+		"--format", "json",
+	)
+	prepare.Env = isolatedNativeFixtureEnv(
+		"DEVKIT_ROOT="+root,
+		"DEVKIT_NO_TMUX=1",
+		"DEVKIT_NATIVE_ISOLATION_PROFILE=workspace-egress",
+		"HTTPS_PROXY=http://"+outerProxy.Addr().String(),
+		"HTTP_PROXY=http://"+outerProxy.Addr().String(),
+		"HOME="+clientHome,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
+	)
+	started := time.Now()
+	output, err := prepare.CombinedOutput()
+	if err != nil {
+		t.Fatalf(
+			"installed Git/OpenSSH/ProxyCommand chain failed after %s: %v\n%s\nsshd:\n%s",
+			time.Since(started),
+			err,
+			output,
+			sshdOutput.String(),
+		)
+	}
+	if elapsed := time.Since(started); elapsed <= 10*time.Second {
+		t.Fatalf("delayed pack completed before old universal deadline: %s", elapsed)
+	}
+	if _, err := os.Stat(filepath.Join(isolatedRoot, "agent1", "test-repo", ".git")); err != nil {
+		t.Fatalf("installed-chain worktree missing after fetch: %v", err)
+	}
+	select {
+	case target := <-connectTarget:
+		if target != "ssh.github.com:443" {
+			t.Fatalf("outer CONNECT target = %q", target)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("outer proxy did not receive installed ProxyCommand CONNECT")
+	}
+	if err := <-proxyErr; err != nil {
+		t.Fatalf("outer proxy tunnel: %v", err)
+	}
+	if _, err := os.Lstat(proxySocket); !os.IsNotExist(err) {
+		t.Fatalf("managed proxy socket remained after installed-chain prepare: %v", err)
+	}
+}
+
+func TestNativeOpenSSHDelayedUploadPackHelper(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("SSH_ORIGINAL_COMMAND")) == "" {
+		return
+	}
+	fail := func(code int, format string, values ...any) {
+		_, _ = fmt.Fprintf(os.Stderr, "delayed upload-pack helper: "+format+"\n", values...)
+		os.Exit(code)
+	}
+	arguments := nativeFixtureArgumentsAfterDoubleDash()
+	if len(arguments) != 2 {
+		fail(91, "expected repository and Git executable arguments, got %d", len(arguments))
+	}
+	uploadPack := exec.Command(arguments[1], "upload-pack", arguments[0])
+	stdin, err := uploadPack.StdinPipe()
+	if err != nil {
+		fail(92, "stdin pipe: %v", err)
+	}
+	stdout, err := uploadPack.StdoutPipe()
+	if err != nil {
+		fail(93, "stdout pipe: %v", err)
+	}
+	uploadPack.Stderr = os.Stderr
+	if err := uploadPack.Start(); err != nil {
+		fail(94, "start upload-pack: %v", err)
+	}
+	go func() {
+		_, _ = io.Copy(stdin, os.Stdin)
+		_ = stdin.Close()
+	}()
+	reader := bufio.NewReader(stdout)
+	for {
+		header := make([]byte, 4)
+		if _, err := io.ReadFull(reader, header); err != nil {
+			fail(95, "read advertisement header: %v", err)
+		}
+		if _, err := os.Stdout.Write(header); err != nil {
+			fail(96, "write advertisement header: %v", err)
+		}
+		if string(header) == "0000" {
+			break
+		}
+		length, err := strconv.ParseInt(string(header), 16, 32)
+		if err != nil || length < 4 {
+			fail(97, "parse advertisement header %q: length=%d err=%v", header, length, err)
+		}
+		if _, err := io.CopyN(os.Stdout, reader, length-4); err != nil {
+			fail(98, "write advertisement payload: %v", err)
+		}
+	}
+	nextHeader := make([]byte, 4)
+	if _, err := io.ReadFull(reader, nextHeader); err != nil {
+		fail(99, "read response header: %v", err)
+	}
+	time.Sleep(11 * time.Second)
+	if _, err := os.Stdout.Write(nextHeader); err != nil {
+		fail(100, "write response header: %v", err)
+	}
+	if _, err := io.Copy(os.Stdout, reader); err != nil {
+		fail(101, "write response: %v", err)
+	}
+	if err := uploadPack.Wait(); err != nil {
+		fail(102, "upload-pack wait: %v", err)
+	}
+	os.Exit(0)
+}
+
+func nativeFixtureArgumentsAfterDoubleDash() []string {
+	for index, argument := range os.Args {
+		if argument == "--" {
+			return os.Args[index+1:]
+		}
+	}
+	return nil
+}
+
+func runNativeFixtureCommand(t *testing.T, name string, args ...string) string {
+	t.Helper()
+	command := exec.Command(name, args...)
+	command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", name, args, err, output)
+	}
+	return string(output)
+}
+
+func shellSingleQuoteForNativeFixture(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func reserveNativeFixtureAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return address
+}
+
+func waitForNativeFixtureTCP(t *testing.T, address string, output *strings.Builder) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sshd did not listen on %s: %v\n%s", address, err, output.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func relayNativeFixtureTunnel(client net.Conn, clientReader io.Reader, server net.Conn) error {
+	results := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(server, clientReader)
+		if conn, ok := server.(interface{ CloseWrite() error }); ok {
+			err = errorsJoinNativeFixture(err, conn.CloseWrite())
+		}
+		results <- err
+	}()
+	go func() {
+		_, err := io.Copy(client, server)
+		if conn, ok := client.(interface{ CloseWrite() error }); ok {
+			err = errorsJoinNativeFixture(err, conn.CloseWrite())
+		}
+		results <- err
+	}()
+	first := <-results
+	if first != nil {
+		_ = client.Close()
+		_ = server.Close()
+	}
+	second := <-results
+	return errorsJoinNativeFixture(first, second)
+}
+
+func errorsJoinNativeFixture(values ...error) error {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }

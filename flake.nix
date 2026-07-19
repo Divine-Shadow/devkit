@@ -144,11 +144,15 @@
           vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
           subPackages = [ "." ];
           env.CGO_ENABLED = "0";
+          DEVKIT_TEST_NSS_WRAPPER = "${pkgs.nss_wrapper}/lib/libnss_wrapper.so";
           ldflags = [
             "-s"
             "-w"
           ];
-          nativeCheckInputs = [ pkgs.git ];
+          nativeCheckInputs = [
+            pkgs.git
+            pkgs.openssh
+          ];
           doCheck = true;
           checkPhase = ''
             runHook preCheck
@@ -156,8 +160,9 @@
             go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(UsesPackageOwnedConsumerIdentityAndProxy|RejectsMissingPackageOwnedProxyHelper|RejectsMissingIdentity)' -count=1
             go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly' -count=1
             go test ./internal/runtime/plan -run 'TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases' -count=1
+            go test ./internal/execx -run 'TestRunManaged(AllowsActiveCommandBeyondIdleWindow|IdleTimeoutTerminatesDescendantGroup|ContextDeadlineTerminatesDescendantGroup|PreservesCommandExitClassification)' -count=1
             go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal' -count=1
-            go test ./integration -run 'TestNativeTopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)' -count=1
+            go test ./integration -run 'TestNative(TopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)|PrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand)' -count=1
             runHook postCheck
           '';
         };
