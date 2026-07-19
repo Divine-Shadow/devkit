@@ -176,7 +176,11 @@
         let
           shell = self.devShells.${pkgs.system}.dev-all;
           runtimeInputs =
-            [ pkgs.nodejs_22 ]
+            [
+              pkgs.bashInteractive
+              pkgs.curl
+              pkgs.nodejs_22
+            ]
             ++ (shell.nativeBuildInputs or [ ])
             ++ (shell.buildInputs or [ ]);
           packageNamed =
@@ -687,10 +691,20 @@
           runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" {
             nativeBuildInputs = [ runtimeTools ];
           } ''
-            env -i PATH=${pkgs.bash}/bin \
+            env -i PATH=/nonexistent \
               ${runtimeTools}/bin/dev-all-runtime-tools \
-              bash -c '
+              ${pkgs.bash}/bin/bash -c '
                 set -eu
+                for tool in \
+                  bash git ssh curl docker go java sbt node npm purs spago \
+                  vite netlify playwright deno aws make gcc mgba-headless \
+                  timeout base64
+                do
+                  command -v "$tool" >/dev/null || {
+                    echo "immutable runtime is missing declared tool: $tool" >&2
+                    exit 127
+                  }
+                done
                 node_path="$(command -v node)"
                 case "$node_path" in
                   /nix/store/*-nodejs-22.*/bin/node) ;;
