@@ -11,6 +11,14 @@ import (
 
 func TestParseUsesOverlayBrokerConfig(t *testing.T) {
 	tmp := t.TempDir()
+	brokerBinary := filepath.Join(tmp, "immutable-runtime", "bin", "postgres-broker")
+	if err := os.MkdirAll(filepath.Dir(brokerBinary), 0o755); err != nil {
+		t.Fatalf("mkdir broker binary parent: %v", err)
+	}
+	if err := os.WriteFile(brokerBinary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write broker binary: %v", err)
+	}
+	t.Setenv("DEVKIT_RUNTIME_BROKER_BINARY", brokerBinary)
 	overlay := filepath.Join(tmp, "overlays", "dev-all")
 	if err := os.MkdirAll(overlay, 0o755); err != nil {
 		t.Fatalf("mkdir overlay: %v", err)
@@ -50,6 +58,29 @@ broker:
 	}
 	if parsed.cfg.LogLevel != "debug" {
 		t.Fatalf("log level = %q", parsed.cfg.LogLevel)
+	}
+	if parsed.cfg.Binary != brokerBinary {
+		t.Fatalf("binary = %q, want immutable runtime binary %q", parsed.cfg.Binary, brokerBinary)
+	}
+}
+
+func TestParseRejectsCallerSelectedBrokerBinary(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv(
+		"DEVKIT_RUNTIME_BROKER_BINARY",
+		filepath.Join(tmp, "immutable-runtime", "bin", "postgres-broker"),
+	)
+	_, err := parse(&cmdregistry.Context{
+		Project: "dev-all",
+		Args: []string{
+			"start",
+			"--binary",
+			filepath.Join(tmp, "caller", "postgres-broker"),
+		},
+		Paths: devkitpaths.Paths{Root: filepath.Join(tmp, "devkit")},
+	})
+	if err == nil || err.Error() != "--binary is not supported; use the immutable runtime package" {
+		t.Fatalf("parse error = %v", err)
 	}
 }
 

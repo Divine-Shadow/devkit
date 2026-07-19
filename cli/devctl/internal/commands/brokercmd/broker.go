@@ -58,6 +58,7 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 		Upstream:      strings.TrimSpace(overlayCfg.Broker.Upstream),
 		AllowedImages: append([]string{}, overlayCfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(overlayCfg.Broker.LogLevel),
+		Binary:        strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY")),
 	}
 	if overlayCfg.Broker.AllowPulls != nil {
 		cfg.AllowPulls = *overlayCfg.Broker.AllowPulls
@@ -95,11 +96,7 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 			parsed.cfg.StateRoot = ctx.Args[i+1]
 			i++
 		case "--binary":
-			if i+1 >= len(ctx.Args) {
-				return parsed, fmt.Errorf("--binary requires a value")
-			}
-			parsed.cfg.Binary = ctx.Args[i+1]
-			i++
+			return parsed, fmt.Errorf("--binary is not supported; use the immutable runtime package")
 		case "--log-level":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--log-level requires a value")
