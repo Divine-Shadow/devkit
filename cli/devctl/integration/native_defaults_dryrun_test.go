@@ -1012,6 +1012,355 @@ func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
 	}
 }
 
+func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.T) {
+	base, err := os.MkdirTemp("", "dvr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	root := filepath.Join(base, "devkit")
+	packageDevctl := filepath.Join(root, "kit", "bin", "devctl")
+	if err := os.MkdirAll(filepath.Dir(packageDevctl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	builtDevctl := buildDevctlForNativeDefaultsWithTags(t, "devkitintegration")
+	devctlBytes, err := os.ReadFile(builtDevctl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packageDevctl, devctlBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	allowlistPath := filepath.Join(root, "kit", "proxy", "allowlist.txt")
+	brokerSocket := filepath.Join(base, ".devkit", "native-broker", "broker.sock")
+	overlay := fmt.Sprintf(`
+defaults:
+  repo: ouroboros-ide
+  agents: 3
+  base_branch: main
+  branch_prefix: agent
+runtime:
+  flake: ./overlays/dev-all#default
+readiness:
+  default_mode: runtime-only
+broker:
+  socket: %s
+  upstream: unix:///fixture-docker.sock
+native:
+  worktree_root: ../agent-worktrees
+  state_root: ../.devkit/native-agents
+  worktree_container_root: /worktrees
+  state_container_root: /agent-state
+  required_isolation_profile: workspace-egress
+  isolation_profiles:
+    workspace-egress:
+      filesystem: workspace-only
+      egress_allowlist: %s
+`, brokerSocket, allowlistPath)
+	overlayPath := filepath.Join(root, "overlays", "dev-all", "devkit.yaml")
+	if err := os.MkdirAll(filepath.Dir(overlayPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overlayPath, []byte(overlay), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(allowlistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeNixCodexConfigSource(t, root)
+
+	sourceRepo := filepath.Join(base, "ouroboros-ide")
+	remoteRepo := filepath.Join(base, "remote.git")
+	runNativeFixtureCommand(t, "git", "init", "--bare", "--initial-branch=main", remoteRepo)
+	runNativeFixtureCommand(t, "git", "init", "--initial-branch=main", sourceRepo)
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "config", "user.name", "Devkit Reset Regression")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "config", "user.email", "devkit-reset@example.invalid")
+	if err := os.WriteFile(filepath.Join(sourceRepo, "README.md"), []byte("reset fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRepo, ".gitignore"), []byte(".devhome-agent*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "add", ".")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "commit", "-m", "reset fixture")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "remote", "add", "origin", remoteRepo)
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "push", "-u", "origin", "main")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "remote", "set-url", "origin", "ssh://git@github.com"+remoteRepo)
+
+	sshDir := filepath.Join(base, "fixture-bin")
+	sshLog := filepath.Join(base, "ssh.log")
+	sshAllow := filepath.Join(base, "allow-ssh-fetch")
+	if err := os.MkdirAll(sshDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sshScript := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + strconv.Quote(sshLog) + "\n" +
+		"if [ \"${1:-}\" = -G ]; then exit 0; fi\n" +
+		"if [ ! -f " + strconv.Quote(sshAllow) + " ]; then exit 72; fi\n" +
+		"last=\n" +
+		"for arg in \"$@\"; do last=$arg; done\n" +
+		"case \"$last\" in\n" +
+		"  \"git-upload-pack \"*) exec sh -c \"$last\" ;;\n" +
+		"esac\n" +
+		"exit 71\n"
+	if err := os.WriteFile(filepath.Join(sshDir, "ssh"), []byte(sshScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bwrapScript := "#!/bin/sh\n" +
+		"printf '__DEVKIT_READINESS_CHECK__\\truntime\\tsandbox-command\\t0\\t\\n'\n" +
+		"printf '__DEVKIT_READINESS_CHECK__\\truntime\\tbroker-socket\\t0\\t\\n'\n"
+	if err := os.WriteFile(filepath.Join(sshDir, "bwrap"), []byte(bwrapScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	brokerPackage := filepath.Join(base, "fixture-broker")
+	brokerExecutable := filepath.Join(brokerPackage, "bin", "postgres-broker")
+	if err := os.MkdirAll(filepath.Dir(brokerExecutable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testBinary, err := os.ReadFile(testExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brokerExecutable, testBinary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nixScript := "#!/bin/sh\nprintf '%s\\n' \"${DEVKIT_TEST_BROKER_PACKAGE:?}\"\n"
+	if err := os.WriteFile(filepath.Join(sshDir, "nix"), []byte(nixScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	controllerHome := filepath.Join(base, "controller-home")
+	if err := os.MkdirAll(filepath.Join(controllerHome, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"id_ed25519":     "integration private identity\n",
+		"id_ed25519.pub": "integration public identity\n",
+		"known_hosts":    "github.com fixture-host-key\n",
+	} {
+		mode := os.FileMode(0o600)
+		if name == "id_ed25519.pub" || name == "known_hosts" {
+			mode = 0o644
+		}
+		if err := os.WriteFile(filepath.Join(controllerHome, ".ssh", name), []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nscdSource := filepath.Join(base, "integration-nscd.socket")
+	if err := os.WriteFile(nscdSource, []byte("integration-only bind source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index <= 3; index++ {
+		resolver := filepath.Join(base, ".devkit", "native-agents", fmt.Sprintf("dev-all-agent%d", index), "resolv.conf")
+		if err := os.MkdirAll(filepath.Dir(resolver), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(resolver, []byte("nameserver 192.0.2.53\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staleHome := filepath.Join(base, "agent-worktrees", "agent2", "ouroboros-ide", ".devhome-agent2")
+	if err := os.MkdirAll(staleHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staleMarker := filepath.Join(staleHome, "preexisting-custody")
+	if err := os.WriteFile(staleMarker, []byte("preserve\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	env := isolatedNativeFixtureEnv(
+		"DEVKIT_ROOT="+root,
+		"DEVKIT_NO_TMUX=1",
+		"DEVKIT_TEST_BROKER_PACKAGE="+brokerPackage,
+		"DEVKIT_INTEGRATION_BROKER_HELPER=1",
+		"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
+		"HOME="+controllerHome,
+		"CODEX_AUTH_JSON="+filepath.Join(base, "missing-auth.json"),
+		"PATH="+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	runReset := func() ([]byte, error) {
+		command := exec.Command(packageDevctl, "-p", "dev-all", "reset", "3")
+		command.Env = env
+		return command.CombinedOutput()
+	}
+	t.Cleanup(func() {
+		command := exec.Command(packageDevctl, "-p", "dev-all", "down", "--repo", "ouroboros-ide", "--count", "3")
+		command.Env = env
+		_ = command.Run()
+	})
+
+	output, err := runReset()
+	if err == nil {
+		t.Fatalf("installed top-level reset accepted a failed package SSH fetch:\n%s", output)
+	}
+	if !strings.Contains(string(output), "fetch --all --prune") {
+		t.Fatalf("failed package SSH fetch was not classified at bootstrap: %v\n%s", err, output)
+	}
+	if data, readErr := os.ReadFile(staleMarker); readErr != nil || string(data) != "preserve\n" {
+		t.Fatalf("failed reset changed stale package-owned payload: %q %v", data, readErr)
+	}
+	for _, path := range []string{
+		filepath.Join(base, "agent-worktrees", "agent1"),
+		filepath.Join(base, "agent-worktrees", "agent3"),
+		filepath.Join(base, "agent-worktrees", ".devkit", "git", "ouroboros-ide.git"),
+		brokerSocket,
+		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
+		filepath.Join(base, ".devkit", "native-broker", "broker.json"),
+	} {
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("failed reset left package lifecycle residue %s: %v", path, statErr)
+		}
+	}
+	partialBootstrap, err := filepath.Glob(filepath.Join(base, "agent-worktrees", ".devkit", "git", ".ouroboros-ide.bootstrap-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(partialBootstrap) != 0 {
+		t.Fatalf("failed reset left partial bootstrap repositories: %v", partialBootstrap)
+	}
+	assertNoNativeResetProxyResidue(t, base)
+	if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sshLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err = runReset()
+	if err != nil {
+		t.Fatalf("installed top-level reset failed: %v\n%s", err, output)
+	}
+	worktreesRoot := filepath.Join(base, "agent-worktrees")
+	for index := 1; index <= 3; index++ {
+		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
+		gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
+		if err != nil {
+			t.Fatalf("agent%d linked worktree missing: %v", index, err)
+		}
+		if value := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(gitFile)), "gitdir:")); value == "" || filepath.IsAbs(value) {
+			t.Fatalf("agent%d gitdir is not package-relative: %q", index, gitFile)
+		}
+		if out := runNativeFixtureCommand(t, "git", "-C", worktree, "status", "--porcelain=v1"); strings.TrimSpace(out) != "" {
+			t.Fatalf("agent%d reset worktree is dirty: %s", index, out)
+		}
+		hostHome := filepath.Join(filepath.Dir(worktree), fmt.Sprintf(".devhome-agent%d", index))
+		if index == 1 {
+			hostHome = filepath.Join(worktree, ".devhome-agent1")
+		}
+		if _, err := os.Stat(filepath.Join(hostHome, ".codex", "config.toml")); err != nil {
+			t.Fatalf("agent%d source-defined app-server config missing: %v", index, err)
+		}
+	}
+	if data, err := os.ReadFile(staleMarker); err != nil || string(data) != "preserve\n" {
+		t.Fatalf("stale package-owned agent home was not preserved: %q %v", data, err)
+	}
+	sshInvocations, err := os.ReadFile(sshLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantConfig := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide", ".devhome-agent1", ".ssh", "config")
+	if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
+		!strings.Contains(string(sshInvocations), "-F "+wantConfig) {
+		t.Fatalf("reset did not use exactly one package-owned SSH bootstrap:\n%s", sshInvocations)
+	}
+	manifest := filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json")
+	manifestData, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("reset manifest missing: %v", err)
+	}
+	for index := 1; index <= 3; index++ {
+		if !strings.Contains(string(manifestData), fmt.Sprintf(`"index": %d`, index)) {
+			t.Fatalf("reset manifest omitted agent%d:\n%s", index, manifestData)
+		}
+	}
+	assertNoNativeResetProxyResidue(t, base)
+
+	foreignRoot := filepath.Join(base, "foreign-common.git", "worktrees", "protected")
+	if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreignGitFile := filepath.Join(worktreesRoot, "agent3", "ouroboros-ide", ".git")
+	foreignContent := []byte("gitdir: " + foreignRoot + "\n")
+	if err := os.WriteFile(foreignGitFile, foreignContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	beforeForeignSSH := append([]byte(nil), sshInvocations...)
+	output, err = runReset()
+	if err == nil || !strings.Contains(string(output), "foreign Git metadata") {
+		t.Fatalf("reset accepted foreign protected root: %v\n%s", err, output)
+	}
+	if after, readErr := os.ReadFile(foreignGitFile); readErr != nil || string(after) != string(foreignContent) {
+		t.Fatalf("foreign protected metadata changed: %q %v", after, readErr)
+	}
+	if after, readErr := os.ReadFile(sshLog); readErr != nil || string(after) != string(beforeForeignSSH) {
+		t.Fatalf("foreign-root rejection invoked SSH bootstrap: %q %v", after, readErr)
+	}
+	for _, path := range []string{
+		brokerSocket,
+		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
+		filepath.Join(base, ".devkit", "native-broker", "broker.json"),
+	} {
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("foreign-root rejection left broker residue %s: %v", path, statErr)
+		}
+	}
+	assertNoNativeResetProxyResidue(t, base)
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("DEVKIT_INTEGRATION_BROKER_HELPER") == "1" {
+		os.Exit(runNativeResetBrokerHelper())
+	}
+	os.Exit(m.Run())
+}
+
+func runNativeResetBrokerHelper() int {
+	listen := strings.TrimSpace(os.Getenv("BROKER_LISTEN"))
+	if listen == "" {
+		return 2
+	}
+	socket := strings.TrimPrefix(listen, "unix://")
+	if socket == listen || strings.TrimSpace(socket) == "" {
+		return 2
+	}
+	if err := os.MkdirAll(filepath.Dir(socket), 0o755); err != nil {
+		return 2
+	}
+	_ = os.Remove(socket)
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return 2
+	}
+	defer listener.Close()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return 0
+		}
+		_ = conn.Close()
+	}
+}
+
+func assertNoNativeResetProxyResidue(t *testing.T, root string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(root, ".devkit", "native-egress", "*.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("reset left managed egress proxy sockets: %v", matches)
+	}
+}
+
 func TestDevAllCheckAndHookHelpersUseNativeExecDryRun(t *testing.T) {
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)

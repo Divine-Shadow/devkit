@@ -751,6 +751,35 @@ type NativeOptions struct {
 	DryRun           bool
 }
 
+// PreflightNative validates every target in a multi-slot reconstruction before
+// bootstrap identity or transport state is materialized. Existing
+// package-owned worktrees and their exact per-agent homes are accepted;
+// foreign, standalone, partial, and traversing targets fail closed.
+func PreflightNative(opts NativeOptions) error {
+	devkitRoot := filepath.Clean(opts.DevkitRoot)
+	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
+	repo := strings.TrimSpace(opts.Repo)
+	if repo == "" {
+		return fmt.Errorf("repo is required")
+	}
+	if runtimeagent.IsWorkspaceRootRepo(repo) {
+		return nil
+	}
+	count := opts.Count
+	if count < 1 {
+		count = 1
+	}
+	worktreesRoot := strings.TrimSpace(opts.WorktreeRoot)
+	if worktreesRoot == "" {
+		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
+	}
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo)
+	if err != nil {
+		return err
+	}
+	return preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo, count)
+}
+
 // SetupNative creates dedicated worktrees for every native agent, including
 // agent1, without changing the primary checkout's current branch.
 func SetupNative(opts NativeOptions) error {
@@ -822,7 +851,7 @@ func SetupNative(opts NativeOptions) error {
 		}
 	}
 	if !opts.DryRun {
-		if err := preflightNativeOwnedWorktreeTargets(worktreesRoot, repoCommonDir, repo, count); err != nil {
+		if err := PreflightNative(opts); err != nil {
 			return err
 		}
 	}

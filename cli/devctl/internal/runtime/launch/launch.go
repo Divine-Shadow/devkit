@@ -251,6 +251,11 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 	if err := writeGitSSHConfigWithProxyCommand(hostHome, hostHome, identityNames, proxyCommand); err != nil {
 		return "", err
 	}
+	if !isDevWorkspacePlan(p) {
+		if err := configureWorktreeGitSSH(p.Agent.HostWorktree, sshCommand); err != nil {
+			return "", err
+		}
+	}
 	return sshCommand, nil
 }
 
@@ -456,21 +461,31 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 	if worktree == "" {
 		return nil
 	}
-	out, err := exec.Command("git", "-C", worktree, "rev-parse", "--is-inside-work-tree").CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != "true" {
+	gitMarker := filepath.Join(worktree, ".git")
+	if _, err := os.Lstat(gitMarker); errors.Is(err, os.ErrNotExist) {
 		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect Git metadata marker %s: %w", gitMarker, err)
 	}
-	if out, err := runGitConfigWithLockRetry("-C", worktree, "config", "extensions.worktreeConfig", "true"); err != nil {
+	out, err := exec.Command("git", "-C", worktree, "rev-parse", "--git-dir").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolve Git metadata for %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
+	}
+	gitDir := filepath.Clean(strings.TrimSpace(string(out)))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(worktree, gitDir)
+	}
+	if out, err := runGitConfigWithLockRetry("--git-dir", gitDir, "config", "extensions.worktreeConfig", "true"); err != nil {
 		return fmt.Errorf("git config extensions.worktreeConfig in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
 	// Package-owned native worktrees are linked from a bare common
 	// repository. Once worktreeConfig is enabled, preserve the selected
 	// worktree's non-bare identity explicitly; otherwise the shared
 	// core.bare=true makes subsequent Git and libgit2 opens lose the worktree.
-	if out, err := runGitConfigWithLockRetry("-C", worktree, "config", "--worktree", "core.bare", "false"); err != nil {
+	if out, err := runGitConfigWithLockRetry("--git-dir", gitDir, "config", "--worktree", "core.bare", "false"); err != nil {
 		return fmt.Errorf("git config --worktree core.bare in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
-	if out, err := runGitConfigWithLockRetry("-C", worktree, "config", "--worktree", "core.sshCommand", sshCommand); err != nil {
+	if out, err := runGitConfigWithLockRetry("--git-dir", gitDir, "config", "--worktree", "core.sshCommand", sshCommand); err != nil {
 		return fmt.Errorf("git config --worktree core.sshCommand in %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
 	return nil

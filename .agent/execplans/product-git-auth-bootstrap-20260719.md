@@ -51,6 +51,14 @@ Git to receive that exact SSH command explicitly.
   OpenSSH, and the package-owned ProxyCommand run as one managed descendant
   group; a truly idle or cancelled fetch terminates and waits for that complete
   group before bootstrap cleanup.
+- Every lifecycle that reconstructs native worktrees, including the installed
+  top-level `-p dev-all reset 3` path, derives the same agent-1 bootstrap plan,
+  starts the same managed egress proxy, and supplies the same immutable
+  package-owned SSH command to `SetupNative`.
+- After materialization, every requested linked worktree receives its own
+  package-owned SSH/worktree config before normal preparation or readiness.
+  Readiness owns a bounded managed-proxy lifetime and reports cleanup failure;
+  it never relies on a socket left by preparation.
 
 ## Progress
 
@@ -135,8 +143,23 @@ Git to receive that exact SSH command explicitly.
       `Connect` from a fake SSH helper against a local upload-pack, completed
       below one second, and never crossed either real OpenSSH process ownership
       or the universal worktree-command deadline.
-- [ ] Publish the phase-aware Devkit fetch lifecycle and its declared actual
-      OpenSSH/ProxyCommand plus stall/cancellation/descendant regressions.
+- [x] Publish the phase-aware Devkit fetch lifecycle and its declared actual
+      OpenSSH/ProxyCommand plus stall/cancellation/descendant regressions as
+      Devkit `9697daaf39a9fbdba677d78e9766ad0573dae23a` and consume it in WSL/Nix
+      `cb6729b49c0f9259f255caacaeac9c5ea2ec651e`.
+- [x] Reproduce the installed `-p dev-all reset 3` failure before workspace
+      mutation: lifecycle reconstruction reached `SetupNative` without the
+      package-owned SSH command required for the declared Product origin.
+- [x] Route reset/up reconstruction through the same
+      `prepareNativeGitBootstrapAndWorktrees` authority as native prepare,
+      preflight protected roots before broker or bootstrap effects, bind each
+      materialized slot to its package SSH command, and give readiness its own
+      managed-proxy lifetime.
+- [x] Add an executable exact top-level reset regression proving one SSH fetch,
+      three clean relative worktrees, source-defined app-server preparation,
+      clean proxy lifecycle, preservation of owned stale payload, and
+      pre-effect rejection of foreign metadata.
+- [ ] Publish the reset lifecycle repair through the declared Devkit checks.
 - [ ] Rebase the WSL patches, repin the declared check, and repeat the clean
       full check plus direct/source-selected-Colmena equality gate.
 - [ ] Return the exact tuple to the protected apply owner; do not apply here.
@@ -182,6 +205,19 @@ Git to receive that exact SSH command explicitly.
   That makes OpenSSH and the package-owned CONNECT descendant unwind while a
   healthy remote upload-pack is still draining, producing the observed
   `early EOF`, remote close, and broken pipe.
+- The installed top-level reset command did not call native prepare. Its
+  `reset -> down -> up -> lifecycleUp -> SetupNative` path started the broker
+  and then invoked worktree reconstruction directly, omitting the agent plan,
+  package SSH command, and managed proxy used by one-shot prepare.
+- Once reset used the shared bootstrap helper, multi-slot preparation exposed
+  a second ordering dependency: configuring agent 1 enabled shared
+  `extensions.worktreeConfig` while agents 2/3 still inherited the common
+  bare repository. Addressing each owned gitdir directly lets every slot set
+  `core.bare=false` before the normal `git -C` worktree proof.
+- Lifecycle readiness also called `launch.Prepare` after preparation had
+  correctly removed its proxy socket. Giving each readiness report its own
+  package-managed proxy lifetime makes the required bind truthful and preserves
+  cleanup on every result.
 
 ## Decision log
 
@@ -233,6 +269,11 @@ Git to receive that exact SSH command explicitly.
   endpoint, retry, fallback, caller override, or consumer exception. Short
   metadata operations retain their fixed bound; idle/cancelled fetches
   terminate and wait for the whole descendant group.
+- Treat reset/up coverage as mechanical enforcement of the same accepted
+  single-SSH-authority decision. It reuses the existing plan, identity,
+  `GIT_SSH_COMMAND`, managed proxy, and owned-root preflight; it introduces no
+  endpoint, credential, transport, launcher, caller input, or alternate
+  convergence choice, so no additional Ouro decision is required.
 
 ## Files
 

@@ -162,7 +162,7 @@
             go test ./internal/runtime/plan -run 'TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases' -count=1
             go test ./internal/execx -run 'TestRunManaged(AllowsActiveCommandBeyondIdleWindow|IdleTimeoutTerminatesDescendantGroup|ContextDeadlineTerminatesDescendantGroup|PreservesCommandExitClassification)' -count=1
             go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal' -count=1
-            go test ./integration -run 'TestNative(TopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)|PrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand)' -count=1
+            go test ./integration -run 'Test(DevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority|Native(TopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)|PrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand))' -count=1
             runHook postCheck
           '';
         };

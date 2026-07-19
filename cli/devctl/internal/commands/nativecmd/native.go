@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -1231,7 +1232,7 @@ func writeNativeManifest(ctx *cmdregistry.Context, opts nativeplan.BuildOptions,
 	return manifest, path, nil
 }
 
-func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string) error {
+func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string) (retErr error) {
 	cfg, repo, count, baseBranch, branchPrefix, err := lifecycleDefaults(ctx, parsed)
 	if err != nil {
 		return err
@@ -1241,29 +1242,60 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 			return err
 		}
 	}
+	parsed.baseBranch = baseBranch
+	parsed.branchPrefix = branchPrefix
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
+	preflightPlanOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
+	worktreeOpts := wtx.NativeOptions{
+		DevkitRoot:       ctx.Paths.Root,
+		Repo:             repo,
+		Count:            count,
+		BaseBranch:       baseBranch,
+		BranchPrefix:     branchPrefix,
+		WorktreeRoot:     preflightPlanOpts.WorktreeRoot,
+		RequireSSHOrigin: repo == "ouroboros-ide",
+	}
+	if !parsed.skipPrepare && !ctx.DryRun {
+		if err := wtx.PreflightNative(worktreeOpts); err != nil {
+			return err
+		}
+	}
 	status := lifecycleStatus{Command: command, Runtime: "native", Repo: repo, Count: count, ReadinessMode: parsed.readinessMode}
+	stopBrokerOnFailure := false
 	if !parsed.skipBroker {
+		brokerBefore, err := runtimebroker.Inspect(brokerCfg)
+		if err != nil {
+			return err
+		}
 		brokerStatus, err := runtimebroker.Start(context.Background(), brokerCfg, ctx.DryRun)
 		if err != nil {
 			return err
 		}
+		stopBrokerOnFailure = !ctx.DryRun && !brokerBefore.Running && brokerStatus.Running
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
 		status.attachBrokerStatus(brokerStatus, false)
 	}
-	parsed.baseBranch = baseBranch
-	parsed.branchPrefix = branchPrefix
+	defer func() {
+		if retErr == nil || !stopBrokerOnFailure {
+			return
+		}
+		_, stopErr := runtimebroker.Stop(brokerCfg, false)
+		if stopErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("rollback native broker after lifecycle failure: %w", stopErr))
+		}
+	}()
 	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 	if !parsed.skipPrepare {
-		if err := wtx.SetupNative(wtx.NativeOptions{
-			DevkitRoot:   ctx.Paths.Root,
-			Repo:         repo,
-			Count:        count,
-			BaseBranch:   baseBranch,
-			BranchPrefix: branchPrefix,
-			WorktreeRoot: planOpts.WorktreeRoot,
-			DryRun:       ctx.DryRun,
-		}); err != nil {
+		bootstrapOpts := planOpts
+		bootstrapOpts.Index = 1
+		bootstrapOpts.Repo = repo
+		bootstrapOpts.DedicatedWorktree = true
+		bootstrapPlan, err := nativeplan.BuildDevAll(bootstrapOpts)
+		if err != nil {
+			return err
+		}
+		worktreeOpts.WorktreeRoot = planOpts.WorktreeRoot
+		if err := prepareNativeGitBootstrapAndWorktrees(bootstrapPlan, worktreeOpts, ctx.DryRun); err != nil {
 			return err
 		}
 		for i := 1; i <= count; i++ {
@@ -1273,10 +1305,8 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 			if err != nil {
 				return err
 			}
-			if !ctx.DryRun {
-				if err := launch.Prepare(p); err != nil {
-					return err
-				}
+			if err := prepareWithManagedEgressProxy(p, ctx.DryRun, launch.Prepare); err != nil {
+				return err
 			}
 			status.Agents = append(status.Agents, preparedLifecycleAgent{
 				Index:            i,
@@ -1973,6 +2003,9 @@ func prepareWithManagedEgressProxy(
 		if dryRun {
 			return nil
 		}
+		if _, err := launch.PrepareGitBootstrap(p); err != nil {
+			return err
+		}
 		return prepare(p)
 	})
 }
@@ -1982,21 +2015,70 @@ func prepareNativeGitBootstrapAndWorktrees(
 	opts wtx.NativeOptions,
 	dryRun bool,
 ) error {
+	if !dryRun {
+		if err := wtx.PreflightNative(opts); err != nil {
+			return err
+		}
+	}
 	return withManagedEgressProxy(p, dryRun, func() error {
 		sshCommand, err := launch.GitBootstrapSSHCommand(p)
 		if err != nil {
 			return err
 		}
+		hostHome := strings.TrimSpace(p.Agent.HostHome)
+		homeWasAbsent := false
+		var ownedHome os.FileInfo
 		if !dryRun {
+			if _, statErr := os.Lstat(hostHome); errors.Is(statErr, os.ErrNotExist) {
+				homeWasAbsent = true
+			} else if statErr != nil {
+				return fmt.Errorf("inspect native Git bootstrap home %s: %w", hostHome, statErr)
+			}
 			sshCommand, err = launch.PrepareGitBootstrap(p)
 			if err != nil {
 				return err
 			}
+			if homeWasAbsent {
+				ownedHome, err = os.Lstat(hostHome)
+				if err != nil {
+					return fmt.Errorf("inspect created native Git bootstrap home %s: %w", hostHome, err)
+				}
+			}
 		}
 		opts.GitSSHCommand = sshCommand
 		opts.DryRun = dryRun
-		return wtx.SetupNative(opts)
+		setupErr := wtx.SetupNative(opts)
+		if setupErr == nil || !homeWasAbsent {
+			return setupErr
+		}
+		cleanupErr := removeOwnedBootstrapHome(hostHome, ownedHome)
+		return errors.Join(setupErr, cleanupErr)
 	})
+}
+
+func removeOwnedBootstrapHome(path string, owned os.FileInfo) error {
+	if owned == nil {
+		return nil
+	}
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect failed native Git bootstrap home %s: %w", path, err)
+	}
+	if !current.IsDir() || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(owned, current) {
+		return fmt.Errorf("refusing to clean changed native Git bootstrap home %s", path)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove failed native Git bootstrap home %s: %w", path, err)
+	}
+	for _, parent := range []string{filepath.Dir(path), filepath.Dir(filepath.Dir(path))} {
+		if err := os.Remove(parent); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+			return fmt.Errorf("remove empty native Git bootstrap parent %s: %w", parent, err)
+		}
+	}
+	return nil
 }
 
 func managedEgressUpstreamProxyURL() string {
@@ -2301,8 +2383,17 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 	return checks, nil
 }
 
-func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChecks []repoCheck) readiness.Report {
-	var report readiness.Report
+func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChecks []repoCheck) (report readiness.Report) {
+	cleanupProxy, err := ensureManagedEgressProxy(p, false)
+	if err != nil {
+		report.AddRuntime("prepare-state", false, err.Error())
+		return report
+	}
+	defer func() {
+		if err := cleanupProxy(); err != nil {
+			report.AddRuntime("managed-egress-cleanup", false, err.Error())
+		}
+	}()
 	if err := launch.Prepare(p); err != nil {
 		report.AddRuntime("prepare-state", false, err.Error())
 		return report
