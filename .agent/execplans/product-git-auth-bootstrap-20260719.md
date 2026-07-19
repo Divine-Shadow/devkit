@@ -41,6 +41,11 @@ Git to receive that exact SSH command explicitly.
   root. Agent and nested worktrees are linked beneath the root, so host and
   sandbox projections preserve one relative topology without an ambient source
   checkout, host alias, or metadata rewrite during launch.
+- The package-owned Unix CONNECT tunnel remains full-duplex for the complete
+  Git smart-protocol lifetime. A clean EOF in either direction half-closes only
+  that destination write side and cannot truncate a pack still draining in the
+  opposite direction. Copy failure closes both peers with a directional error;
+  cancellation closes the tunnel without waiting on an open child input stream.
 
 ## Progress
 
@@ -101,9 +106,21 @@ Git to receive that exact SSH command explicitly.
       states.
 - [x] Extend the declared WSL Nix compatibility check with a real authoritative
       Nix flake check after projection to an unrelated root.
-- [ ] Publish the follow-up Devkit master commit.
-- [ ] Rebase the WSL patches, repin both declared checks, and repeat the clean full
-      check plus direct/source-selected-Colmena equality gate.
+- [x] Publish the owned-topology repair as Devkit
+      `bbcb9e9692e828740205a46d44df6d77f5119370`.
+- [x] Publish the authoritative WSL repin as
+      `d709d4490fa6818c479203ae6c224c6b7498e994` after the real projected Nix
+      regression, full clean gate, and direct/source-selected-Colmena equality.
+- [x] Obtain the terminal canonical apply and two independent fresh Product
+      receipts. Both select the exact package SSH/Unix-proxy authority and then
+      fail their first nontrivial fetch with `early EOF`, before worktree
+      creation and with complete proxy/bootstrap cleanup.
+- [x] Trace the shared failure to first-direction-wins tunnel relay logic in
+      `egressproxy.handleConnect` and the compatibility bridge.
+- [ ] Publish the half-close-aware Devkit transport lifecycle and its declared
+      real Git upload-pack plus hostile peer regressions.
+- [ ] Rebase the WSL patches, repin the declared check, and repeat the clean
+      full check plus direct/source-selected-Colmena equality gate.
 - [ ] Return the exact tuple to the protected apply owner; do not apply here.
 
 ## Surprises and discoveries
@@ -179,6 +196,11 @@ Git to receive that exact SSH command explicitly.
   moving that same repository authority beneath the root removes the ambient
   authority without adding a new transport, credential, launcher, mount, or
   consumer exception.
+- Treat the full-duplex relay correction as enforcement of the existing
+  single-SSH-authority decision. It changes no endpoint, identity, credential,
+  protocol, allowlist, launcher, timeout, or retry authority; it only prevents
+  the selected CONNECT tunnel from closing its opposite direction when the
+  first copy reaches EOF. No new Ouro decision is required.
 
 ## Files
 

@@ -152,7 +152,7 @@
           doCheck = true;
           checkPhase = ''
             runHook preCheck
-            go test ./internal/runtime/egressproxy -run 'Test(ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|DialConnectTargetPreservesBannerBufferedWithUpstreamResponse|ServeRefusesExistingSocketAuthority)' -count=1
+            go test ./internal/runtime/egressproxy -run 'Test(ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|ConnectCancellationClosesTunnelWithoutWaitingForOpenInput|DialConnectTargetPreservesBannerBufferedWithUpstreamResponse|ServeRefusesExistingSocketAuthority|ServeDrainsFullPackAfterClientHalfClose|RelayFullDuplexPropagatesPeerWriteFailure|ServeAndConnectCarryCompleteGitSmartProtocolFetch)' -count=1
             go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(UsesPackageOwnedConsumerIdentityAndProxy|RejectsMissingPackageOwnedProxyHelper|RejectsMissingIdentity)' -count=1
             go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly' -count=1
             go test ./internal/runtime/plan -run 'TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases' -count=1

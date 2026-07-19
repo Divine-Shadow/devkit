@@ -35,6 +35,20 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
 }
 
+func (c *bufferedConn) CloseRead() error {
+	if conn, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return conn.CloseRead()
+	}
+	return nil
+}
+
+func (c *bufferedConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return nil
+}
+
 func LoadAllowlist(path string) (Allowlist, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -179,12 +193,19 @@ func Connect(ctx context.Context, socketPath string, target string, input io.Rea
 		return fmt.Errorf("managed CONNECT returned %s", resp.Status)
 	}
 
+	tunnelDone := make(chan struct{})
+	defer close(tunnelDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-tunnelDone:
+		}
+	}()
 	inputErr := make(chan error, 1)
 	go func() {
 		_, copyErr := io.Copy(conn, input)
-		if unixConn, ok := conn.(*net.UnixConn); ok {
-			_ = unixConn.CloseWrite()
-		}
+		_ = closeWrite(conn)
 		inputErr <- copyErr
 	}()
 	_, outputErr := io.Copy(output, reader)
@@ -192,9 +213,10 @@ func Connect(ctx context.Context, socketPath string, target string, input io.Rea
 	select {
 	case copyErr := <-inputErr:
 		return errors.Join(outputErr, copyErr)
-	case <-ctx.Done():
-		return errors.Join(outputErr, ctx.Err())
-	case <-time.After(time.Second):
+	default:
+		if ctx.Err() != nil {
+			return errors.Join(outputErr, ctx.Err())
+		}
 		return outputErr
 	}
 }
@@ -236,16 +258,7 @@ func bridgeConn(client net.Conn, socketPath string) {
 		return
 	}
 	defer upstream.Close()
-	done := make(chan struct{}, 2)
-	go func() {
-		_, _ = io.Copy(upstream, client)
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(client, upstream)
-		done <- struct{}{}
-	}()
-	<-done
+	_ = relayFullDuplex(client, client, upstream, upstream)
 }
 
 func handleConn(conn net.Conn, allowlist Allowlist, upstreamProxy *url.URL) {
@@ -282,16 +295,55 @@ func handleConnect(client net.Conn, reader *bufio.Reader, req *http.Request, all
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	done := make(chan struct{}, 2)
-	go func() {
-		_, _ = io.Copy(upstream, reader)
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(client, upstream)
-		done <- struct{}{}
-	}()
-	<-done
+	_ = relayFullDuplex(client, reader, upstream, upstream)
+}
+
+type relayResult struct {
+	direction string
+	err       error
+}
+
+// relayFullDuplex preserves both halves of a CONNECT tunnel until each source
+// reaches EOF. A clean EOF in one direction half-closes only the destination's
+// write side, allowing an already-negotiated response or Git pack to drain in
+// the opposite direction. A real copy failure closes both peers so the other
+// copy cannot outlive the failed tunnel.
+func relayFullDuplex(left net.Conn, leftReader io.Reader, right net.Conn, rightReader io.Reader) error {
+	results := make(chan relayResult, 2)
+	copyDirection := func(direction string, destination net.Conn, source io.Reader) {
+		_, err := io.Copy(destination, source)
+		if err == nil {
+			err = closeWrite(destination)
+		}
+		results <- relayResult{direction: direction, err: err}
+	}
+	go copyDirection("left-to-right", right, leftReader)
+	go copyDirection("right-to-left", left, rightReader)
+
+	first := <-results
+	if first.err != nil {
+		_ = left.Close()
+		_ = right.Close()
+	}
+	second := <-results
+	return errors.Join(
+		relayDirectionError(first),
+		relayDirectionError(second),
+	)
+}
+
+func relayDirectionError(result relayResult) error {
+	if result.err == nil || errors.Is(result.err, net.ErrClosed) {
+		return nil
+	}
+	return fmt.Errorf("%s tunnel copy: %w", result.direction, result.err)
+}
+
+func closeWrite(conn net.Conn) error {
+	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return nil
 }
 
 func handleHTTP(client net.Conn, req *http.Request, allowlist Allowlist, upstreamProxy *url.URL) {
