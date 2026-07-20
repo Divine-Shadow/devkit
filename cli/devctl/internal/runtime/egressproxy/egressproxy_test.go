@@ -409,6 +409,38 @@ func TestServeRefusesExistingSocketAuthority(t *testing.T) {
 	}
 }
 
+func TestRemoveOwnedSocketNeverRemovesReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "consumer.sock")
+	if err := os.WriteFile(path, []byte("owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedFile, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ownedFile.Close()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removeOwnedSocket(path, owned)
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("replacement was removed: %v", err)
+	}
+	if string(content) != "replacement" {
+		t.Fatalf("replacement content = %q", content)
+	}
+}
+
 func TestServeDrainsFullPackAfterClientHalfClose(t *testing.T) {
 	pack := make([]byte, 2<<20)
 	if _, err := rand.New(rand.NewSource(20260719)).Read(pack); err != nil {
