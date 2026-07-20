@@ -180,17 +180,36 @@
           knownHostsFile ? mkGitHubSSHKnownHosts pkgs,
         }:
         let
+          outputPlaceholder = placeholder "out";
+          sourceAllowlist = pkgs.writeText "devkit-source-transport-allowlist" ''
+            ssh.github.com
+          '';
+          networkContractFields = {
+            schemaVersion = "devkit/source-transport-network/v1";
+            mode = "direct-allowlisted-connect";
+            allowlistPath = sourceAllowlist;
+            connectTarget = "ssh.github.com:443";
+          };
+          networkContract = pkgs.writeText "devkit-source-transport-network.json" (
+            builtins.toJSON networkContractFields
+          );
           sourceTransport = pkgs.buildGoModule {
             pname = "devkit-source-transport";
             version = "dev";
             src = ./cli/devctl;
             modRoot = ".";
             vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
-            subPackages = [ "cmd/source-transport" ];
+            subPackages = [
+              "cmd/source-transport"
+              "cmd/source-transport-git-ssh"
+            ];
             env.CGO_ENABLED = "0";
             ldflags = [
               "-s"
               "-w"
+              "-X=devkit/cli/devctl/internal/sourcetransport.packageOpenSSHExecutable=${outputPlaceholder}/libexec/devkit-source-transport/ssh"
+              "-X=devkit/cli/devctl/internal/sourcetransport.packageSSHConfig=${outputPlaceholder}/share/devkit-source-transport/ssh-config"
+              "-X=devkit/cli/devctl/internal/sourcetransport.packageTransport=${outputPlaceholder}/bin/devkit-source-transport"
             ];
             nativeCheckInputs = [ pkgs.git ];
             doCheck = true;
@@ -199,11 +218,14 @@
               go test ./cmd/source-transport ./internal/runtime/egressproxy \
                 -run 'Test(Run|ConnectTarget|ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|ConnectCancellationClosesTunnelWithoutWaitingForOpenInput|ServeRefusesExistingSocketAuthority|RemoveOwnedSocketNeverRemovesReplacement|ServeDrainsFullPackAfterClientHalfClose|ServeAndConnectCarryCompleteGitSmartProtocolFetch)' \
                 -count=1
+              go test ./internal/sourcetransport -run '^TestValidateGitSSHArgs$' -count=1
               runHook postCheck
             '';
             postInstall = ''
               mv "$out/bin/source-transport" \
                 "$out/bin/devkit-source-transport"
+              mv "$out/bin/source-transport-git-ssh" \
+                "$out/bin/devkit-source-git-ssh"
               mkdir -p \
                 "$out/libexec/devkit-source-transport" \
                 "$out/share/devkit-source-transport"
@@ -211,14 +233,26 @@
                 "$out/libexec/devkit-source-transport/ssh"
               cp '${knownHostsFile}' \
                 "$out/share/devkit-source-transport/github-ssh-known-hosts"
+              substitute '${./nix/source-transport-ssh-config}' \
+                "$out/share/devkit-source-transport/ssh-config" \
+                --replace-fail '@knownHostsPath@' \
+                  "$out/share/devkit-source-transport/github-ssh-known-hosts"
             '';
             passthru.sourceTransport = {
-              schemaVersion = "devkit/source-transport/v1";
+              schemaVersion = "devkit/source-transport/v2";
               executablePath = "${sourceTransport}/bin/devkit-source-transport";
-              openSSHExecutablePath =
-                "${sourceTransport}/libexec/devkit-source-transport/ssh";
-              knownHostsPath =
-                "${sourceTransport}/share/devkit-source-transport/github-ssh-known-hosts";
+              openSSHExecutablePath = "${sourceTransport}/libexec/devkit-source-transport/ssh";
+              knownHostsPath = "${sourceTransport}/share/devkit-source-transport/github-ssh-known-hosts";
+              gitSSH = {
+                schemaVersion = "devkit/source-transport-git-ssh/v1";
+                executablePath = "${sourceTransport}/bin/devkit-source-git-ssh";
+                configPath = "${sourceTransport}/share/devkit-source-transport/ssh-config";
+                identityEnvironment = "DEVKIT_SOURCE_TRANSPORT_IDENTITY";
+                socketEnvironment = "DEVKIT_SOURCE_TRANSPORT_SOCKET";
+              };
+              network = networkContractFields // {
+                contractPath = networkContract;
+              };
             };
           };
         in
@@ -229,51 +263,74 @@
           sourceTransport = mkSourceTransportPackage { inherit pkgs; };
           interface = sourceTransport.sourceTransport;
         in
-        assert interface.schemaVersion == "devkit/source-transport/v1";
-        pkgs.runCommand "devkit-source-transport-interface" {
-          nativeBuildInputs = [
-            pkgs.coreutils
-            pkgs.gnugrep
-          ];
-        } ''
-          set -eu
-          test -x '${interface.executablePath}'
-          test -x '${interface.openSSHExecutablePath}'
-          test -f '${interface.knownHostsPath}'
-          test "$(readlink '${interface.openSSHExecutablePath}')" = \
-            '${pkgs.openssh}/bin/ssh'
-          grep -qF '[ssh.github.com]:443 ' \
-            '${interface.knownHostsPath}'
-
-          if env -i PATH=/hostile \
-            '${interface.executablePath}' \
-            > "$TMPDIR/refusal.out" 2>&1
-          then
-            echo "source transport accepted an absent command" >&2
-            exit 1
-          fi
-          grep -qF 'usage: devkit-source-transport serve' \
-            "$TMPDIR/refusal.out"
-
-          if grep -aE \
-            'wsl-nix-dev-all-runtime-authority|controller-runtime-authority|product-adapter|sourceRevision' \
-            '${interface.executablePath}'
-          then
-            echo "source transport contains a forbidden runtime/source authority" >&2
-            exit 1
-          fi
-
-          mkdir -p "$out"
+        assert interface.schemaVersion == "devkit/source-transport/v2";
+        assert interface.gitSSH.schemaVersion == "devkit/source-transport-git-ssh/v1";
+        assert interface.network.schemaVersion == "devkit/source-transport-network/v1";
+        pkgs.runCommand "devkit-source-transport-interface"
           {
-            printf '%s\n' \
-              'schemaVersion=${interface.schemaVersion}' \
-              'executablePath=${interface.executablePath}' \
-              'openSSHExecutablePath=${interface.openSSHExecutablePath}' \
-              'knownHostsPath=${interface.knownHostsPath}'
-            printf '%s\n' \
-              'diagnostic=hostile PATH refusal and transport-only binary passed'
-          } > "$out/evidence.txt"
-        '';
+            nativeBuildInputs = [
+              pkgs.coreutils
+              pkgs.gnugrep
+            ];
+          }
+          ''
+            set -eu
+            test -x '${interface.executablePath}'
+            test -x '${interface.openSSHExecutablePath}'
+            test -f '${interface.knownHostsPath}'
+            test -x '${interface.gitSSH.executablePath}'
+            test -f '${interface.gitSSH.configPath}'
+            test -f '${interface.network.contractPath}'
+            test '${interface.network.mode}' = 'direct-allowlisted-connect'
+            test '${interface.network.connectTarget}' = 'ssh.github.com:443'
+            test "$(grep -Ev '^[[:space:]]*(#|$)' '${interface.network.allowlistPath}')" = \
+              'ssh.github.com'
+            test "$(readlink '${interface.openSSHExecutablePath}')" = \
+              '${pkgs.openssh}/bin/ssh'
+            grep -qF '[ssh.github.com]:443 ' \
+              '${interface.knownHostsPath}'
+
+            if env -i PATH=/hostile \
+              '${interface.executablePath}' \
+              > "$TMPDIR/refusal.out" 2>&1
+            then
+              echo "source transport accepted an absent command" >&2
+              exit 1
+            fi
+            grep -qF 'usage: devkit-source-transport serve' \
+              "$TMPDIR/refusal.out"
+
+            if grep -aE \
+              'wsl-nix-dev-all-runtime-authority|controller-runtime-authority|product-adapter|sourceRevision' \
+              '${interface.executablePath}'
+            then
+              echo "source transport contains a forbidden runtime/source authority" >&2
+              exit 1
+            fi
+
+            mkdir -p "$out"
+            {
+              printf '%s\n' \
+                'schemaVersion=${interface.schemaVersion}' \
+                'executablePath=${interface.executablePath}' \
+                'openSSHExecutablePath=${interface.openSSHExecutablePath}' \
+                'knownHostsPath=${interface.knownHostsPath}' \
+                'gitSSHExecutablePath=${interface.gitSSH.executablePath}' \
+                'gitSSHConfigPath=${interface.gitSSH.configPath}' \
+                'gitSSHIdentityEnvironment=${interface.gitSSH.identityEnvironment}' \
+                'gitSSHSocketEnvironment=${interface.gitSSH.socketEnvironment}' \
+                'networkContractPath=${interface.network.contractPath}' \
+                'networkMode=${interface.network.mode}' \
+                'networkAllowlistPath=${interface.network.allowlistPath}'
+              printf '%s\n' \
+                'diagnostic=hostile PATH refusal and transport-only binary passed'
+            } > "$out/evidence.txt"
+          '';
+      mkSourceTransportGitSSHCheck =
+        pkgs:
+        import ./nix/source-transport-git-ssh-check.nix {
+          inherit mkSourceTransportPackage pkgs;
+        };
       mkProductAdapterPackage =
         {
           pkgs,
@@ -986,8 +1043,8 @@
         in
         {
           source-transport = mkSourceTransportPackage { inherit pkgs; };
-          source-transport-interface =
-            mkSourceTransportInterfaceCheck pkgs;
+          source-transport-interface = mkSourceTransportInterfaceCheck pkgs;
+          source-transport-git-ssh-lifecycle = mkSourceTransportGitSSHCheck pkgs;
           dev-all-runtime-bundle = runtimeBundle;
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {

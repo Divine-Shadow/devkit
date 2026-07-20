@@ -55,6 +55,11 @@ func TestRunServeRequiresExplicitAbsoluteTransportInputs(t *testing.T) {
 			args: []string{"serve", "--socket", "/run/proxy.sock", "--allowlist", "/nix/store/allowlist", "--revision", "1111111111111111111111111111111111111111"},
 			want: `unknown option "--revision"`,
 		},
+		{
+			name: "alternate-upstream-option",
+			args: []string{"serve", "--socket", "/run/proxy.sock", "--allowlist", "/nix/store/allowlist", "--upstream-proxy", "http://127.0.0.1:18888"},
+			want: `unknown option "--upstream-proxy"`,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

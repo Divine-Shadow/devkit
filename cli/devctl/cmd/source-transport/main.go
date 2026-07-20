@@ -15,7 +15,7 @@ import (
 	"devkit/cli/devctl/internal/runtime/egressproxy"
 )
 
-const usage = "usage: devkit-source-transport serve --socket ABSOLUTE_PATH --allowlist ABSOLUTE_PATH [--upstream-proxy HTTP_URL]\n" +
+const usage = "usage: devkit-source-transport serve --socket ABSOLUTE_PATH --allowlist ABSOLUTE_PATH\n" +
 	"       devkit-source-transport connect --socket ABSOLUTE_PATH --target HOST:PORT"
 
 func main() {
@@ -43,9 +43,8 @@ func run(ctx context.Context, args []string, input io.Reader, output io.Writer) 
 
 func runServe(ctx context.Context, args []string) error {
 	options, err := parseOptions(args, map[string]bool{
-		"--socket":         true,
-		"--allowlist":      true,
-		"--upstream-proxy": false,
+		"--socket":    true,
+		"--allowlist": true,
 	})
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
@@ -59,9 +58,8 @@ func runServe(ctx context.Context, args []string) error {
 		return fmt.Errorf("serve: %w", err)
 	}
 	return egressproxy.Serve(ctx, egressproxy.Config{
-		SocketPath:       socketPath,
-		AllowlistPath:    allowlistPath,
-		UpstreamProxyURL: options["--upstream-proxy"],
+		SocketPath:    socketPath,
+		AllowlistPath: allowlistPath,
 	})
 }
 
