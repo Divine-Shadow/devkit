@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -15,8 +14,8 @@ import (
 func TestRunManagedAllowsActiveCommandBeyondIdleWindow(t *testing.T) {
 	result := RunManaged(
 		context.Background(),
-		ManagedPolicy{IdleTimeout: 120 * time.Millisecond, TerminationGrace: 100 * time.Millisecond},
-		"sh", "-c", `for value in 1 2 3 4; do printf 'progress-%s\n' "$value"; sleep 0.08; done`,
+		ManagedPolicy{IdleTimeout: time.Second, TerminationGrace: 100 * time.Millisecond},
+		"sh", "-c", `for value in 1 2 3 4 5 6; do printf 'progress-%s\n' "$value"; sleep 0.2; done`,
 	)
 	if result.Code != 0 || result.Err != nil {
 		t.Fatalf("active managed command = %#v, want success", result)
@@ -94,13 +93,24 @@ func assertManagedTestProcessGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
+		if !managedTestProcessAlive(pid) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("managed descendant %d survived cancellation: %v", pid, err)
+			t.Fatalf("managed descendant %d survived cancellation", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+func managedTestProcessAlive(pid int) bool {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	fields := strings.Fields(string(data))
+	return len(fields) < 3 || fields[2] != "Z"
 }

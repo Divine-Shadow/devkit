@@ -18,10 +18,23 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	ambientCodexConfig, hadAmbientCodexConfig := os.LookupEnv("DEVKIT_CODEX_CONFIG_SOURCE")
+	if err := os.Unsetenv("DEVKIT_CODEX_CONFIG_SOURCE"); err != nil {
+		panic(err)
+	}
 	testExecutable, err := os.Executable()
 	if err != nil {
 		panic(err)
 	}
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		panic(err)
+	}
+	gitExecutable, err = filepath.Abs(gitExecutable)
+	if err != nil {
+		panic(err)
+	}
+	packageGitExecutable = gitExecutable
 	knownHosts, err := os.CreateTemp("", "devkit-launch-known-hosts-")
 	if err != nil {
 		panic(err)
@@ -47,7 +60,11 @@ func TestMain(m *testing.M) {
 			RuntimeBundlePath: "/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle",
 		}, nil
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if hadAmbientCodexConfig {
+		_ = os.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", ambientCodexConfig)
+	}
+	os.Exit(code)
 }
 
 func testPackageSSHCommand(t *testing.T, configPath string) string {
@@ -1235,7 +1252,7 @@ func TestPrepareConfiguresWorkspaceEgressGitSSHThroughManagedProxy(t *testing.T)
 	}
 }
 
-func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.T) {
+func TestPrepareGitBootstrapRefusesUncomposedProductAuthority(t *testing.T) {
 	tmp := t.TempDir()
 	hostUserHome := filepath.Join(tmp, "host-user")
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
@@ -1253,6 +1270,7 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	socketPath := filepath.Join(tmp, "native-egress", "product-a.sock")
 	p := nativeplan.Plan{
 		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		ProductCount:         1,
 		RuntimeAuthorityRoot: runtimeRoot,
 		Agent: agent.Spec{
 			ID:          agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
@@ -1264,40 +1282,13 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 			UnixSocket: socketPath,
 		},
 	}
-	sshCommand, err := PrepareGitBootstrap(p)
-	if err != nil {
-		t.Fatalf("PrepareGitBootstrap: %v", err)
-	}
-	expectedCommand := testPackageSSHCommand(t, filepath.Join(hostHome, ".ssh", "config"))
-	if sshCommand != expectedCommand {
-		t.Fatalf("bootstrap SSH command = %q, want %q", sshCommand, expectedCommand)
-	}
-	cfg := readTestFile(t, filepath.Join(hostHome, ".ssh", "config"))
-	for _, want := range []string{
-		"Host github.com ssh.github.com",
-		"  HostName ssh.github.com",
-		"  Port 443",
-		"  ProxyCommand '" + devctlPath + "' -p 'dev-all' native proxy-connect --socket '" + socketPath + "' --target %h:%p",
-		"  IdentityFile " + filepath.Join(hostHome, ".ssh", "id_ed25519"),
-		"  IdentitiesOnly yes",
-		"  BatchMode yes",
-		"  StrictHostKeyChecking yes",
-	} {
-		if !strings.Contains(cfg, want) {
-			t.Fatalf("bootstrap SSH config missing %q:\n%s", want, cfg)
-		}
-	}
-	if strings.Contains(cfg, p.Agent.SandboxHome) {
-		t.Fatalf("host bootstrap SSH config selected sandbox-only paths:\n%s", cfg)
-	}
-	for _, forbidden := range []string{"127.0.0.1:18888", "ProxyCommand nc ", "https://"} {
-		if strings.Contains(cfg, forbidden) {
-			t.Fatalf("host bootstrap SSH config selected forbidden transport %q:\n%s", forbidden, cfg)
-		}
+	_, err := PrepareGitBootstrap(p)
+	if err == nil || !strings.Contains(err.Error(), "manifest-selected absolute executable") {
+		t.Fatalf("PrepareGitBootstrap error = %v, want missing composed helper refusal", err)
 	}
 }
 
-func TestPrepareGitBootstrapRejectsMissingPackageOwnedProxyHelper(t *testing.T) {
+func TestPrepareGitBootstrapDoesNotFallBackWhenUncomposedProductHelperIsMissing(t *testing.T) {
 	tmp := t.TempDir()
 	hostUserHome := filepath.Join(tmp, "host-user")
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519"), "private")
@@ -1306,6 +1297,7 @@ func TestPrepareGitBootstrapRejectsMissingPackageOwnedProxyHelper(t *testing.T) 
 
 	p := nativeplan.Plan{
 		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		ProductCount:         1,
 		RuntimeAuthorityRoot: filepath.Join(tmp, "missing-runtime"),
 		Agent: agent.Spec{
 			ID:       agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
@@ -1314,8 +1306,8 @@ func TestPrepareGitBootstrapRejectsMissingPackageOwnedProxyHelper(t *testing.T) 
 		Proxy: nativeplan.ProxyConfig{UnixSocket: filepath.Join(tmp, "proxy.sock")},
 	}
 	_, err := PrepareGitBootstrap(p)
-	if err == nil || !strings.Contains(err.Error(), "package-owned proxy helper") {
-		t.Fatalf("PrepareGitBootstrap error = %v, want package-owned proxy helper rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "manifest-selected absolute executable") {
+		t.Fatalf("PrepareGitBootstrap error = %v, want missing composed helper refusal", err)
 	}
 }
 
@@ -2033,9 +2025,7 @@ func TestPrepareOuroTerraformRequiresAuthoritativeOpenAICodexConfig(t *testing.T
 		t.Fatalf("expected missing openai Codex config to fail")
 	}
 	for _, want := range []string{
-		"authoritative Codex config",
-		"# source = nixos-wsl codex config",
-		"top-level model_provider",
+		"Nix-authored Codex config",
 		"refusing to synthesize a base-only config.toml",
 	} {
 		if !strings.Contains(err.Error(), want) {

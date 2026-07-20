@@ -57,7 +57,37 @@
       };
       codexVersion = "0.144.0";
       codexReleaseTag = "rust-v${codexVersion}";
+      mkPinnedCodex =
+        pkgs:
+        let
+          details = systemDetails.${pkgs.system};
+        in
+        pkgs.stdenvNoCC.mkDerivation {
+          pname = "codex";
+          version = codexReleaseTag;
+          src = pkgs.fetchurl {
+            url = "https://github.com/openai/codex/releases/download/${codexReleaseTag}/${details.codexAsset}.tar.gz";
+            hash = details.codexHash;
+          };
+          dontUnpack = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin"
+            tar --no-same-owner -xzf "$src" -C "$out"
+            test -x "$out/bin/codex"
+            test -x "$out/bin/codex-code-mode-host"
+            test -x "$out/codex-path/rg"
+            test -x "$out/codex-resources/bwrap"
+            test -x "$out/codex-resources/zsh/bin/zsh"
+            runHook postInstall
+          '';
+        };
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
+      mkGitHubSSHKnownHosts =
+        pkgs:
+        pkgs.writeText "devkit-github-ssh-known-hosts" (
+          builtins.readFile githubSSHKnownHosts
+        );
       productRuntimeVersion = "6826ff0ad172d35ce2eaeb62473ae26facb765a0";
       governanceJarVersion = productRuntimeVersion;
       submitRuntimeVersion = productRuntimeVersion;
@@ -113,6 +143,9 @@
           bundle = mkDevAllRuntimeBundle pkgs;
           inherit pkgs;
         };
+      mkPackageEnv =
+        pkgs:
+        "${pkgs.coreutils}/bin/coreutils";
       mkDevctl =
         {
           pkgs,
@@ -120,6 +153,9 @@
           knownHostsFile,
           tags ? [ ],
         }:
+        let
+          envExecutable = mkPackageEnv pkgs;
+        in
         pkgs.buildGoModule {
           pname = "devkit-devctl";
           version = "dev";
@@ -134,243 +170,119 @@
             "-w"
             "-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=${sshExecutable}"
             "-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=${knownHostsFile}"
+            "-X=devkit/cli/devctl/internal/worktrees.packageGitExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${envExecutable}"
+            "-X=devkit/cli/devctl/internal/runtime/launch.packageGitExecutable=${pkgs.git}/bin/git"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"
-            mv "$out/bin/devctl" "$out/kit/bin/devctl"
+            mv "$out/bin/"* "$out/kit/bin/"
             rmdir "$out/bin"
             cp "$src/flake.nix" "$src/flake.lock" "$out/"
             cp -R "$src/nix" "$src/overlays" "$out/"
           '';
+          passthru.productAdapterResources = {
+            env = envExecutable;
+            git = "${pkgs.git}/bin/git";
+            inherit knownHostsFile sshExecutable;
+          };
         };
       mkProductionDevctl =
         pkgs:
         mkDevctl {
           inherit pkgs;
           sshExecutable = "${pkgs.openssh}/bin/ssh";
-          knownHostsFile = githubSSHKnownHosts;
+          knownHostsFile = mkGitHubSSHKnownHosts pkgs;
         };
-      mkProductFreshConsumerSSHAuthorityCheck =
-        pkgs:
+      mkProductAdapterPackage =
+        {
+          pkgs,
+          runtimeLauncher,
+          bubblewrap,
+          broker,
+          runtimeRoot,
+          egressAllowlist,
+          codexConfig,
+          governanceEnv,
+          governanceRepoConfig,
+          governanceRules,
+          shellHook,
+          codexExecutable,
+          firstExecutable,
+          sshExecutable ? "${pkgs.openssh}/bin/ssh",
+          knownHostsFile ? mkGitHubSSHKnownHosts pkgs,
+          tags ? [ ],
+          fixtureAuthorityLocator ? null,
+          fixturePostFixup ? "",
+        }:
         let
-          fixtureSSHPackage = pkgs.writeShellApplication {
-            name = "ssh";
-            runtimeInputs = [
-              pkgs.bash
-              pkgs.coreutils
-              pkgs.diffutils
-              pkgs.git
-              pkgs.gnugrep
-              pkgs.gnused
-            ];
-            text = ''
-              set -eu
-              : "''${DEVKIT_TEST_PRODUCT_REMOTE:?}"
-              : "''${DEVKIT_TEST_PRODUCT_SSH_LOG:?}"
-              : "''${DEVKIT_TEST_PRODUCT_PROXY_USED:?}"
-              : "''${DEVKIT_TEST_INSTALLED_KNOWN_HOSTS:?}"
-
-              printf '%s\n' "$*" >> "$DEVKIT_TEST_PRODUCT_SSH_LOG"
-              config=
-              previous=
-              configuration_query=0
-              for argument in "$@"; do
-                if [ "$previous" = "-F" ]; then
-                  config="$argument"
-                fi
-                if [ "$argument" = "-G" ]; then
-                  configuration_query=1
-                fi
-                previous="$argument"
-              done
-              test -n "$config"
-              test -r "$config"
-
-              identity="$(sed -n 's/^  IdentityFile //p' "$config" | head -n 1)"
-              test -n "$identity"
-              test -r "$identity"
-              proxy_command="$(sed -n 's/^  ProxyCommand //p' "$config" | head -n 1)"
-              test -n "$proxy_command"
-              known_hosts="$(sed -n 's/^  UserKnownHostsFile //p' "$config" | head -n 1)"
-              test -n "$known_hosts"
-              cmp "$DEVKIT_TEST_INSTALLED_KNOWN_HOSTS" "$known_hosts"
-              grep -q '^Host github.com ssh.github.com$' "$config"
-              grep -q '^  StrictHostKeyChecking yes$' "$config"
-
-              if [ "$configuration_query" = 1 ]; then
-                exit 0
-              fi
-              proxy_command="''${proxy_command//%h/ssh.github.com}"
-              proxy_command="''${proxy_command//%p/443}"
-              bash -c "$proxy_command" </dev/null >/dev/null
-              printf '%s\n' "$config" > "$DEVKIT_TEST_PRODUCT_PROXY_USED"
-              exec git-upload-pack "$DEVKIT_TEST_PRODUCT_REMOTE"
-            '';
-          };
-          fixtureSSH = "${fixtureSSHPackage}/bin/ssh";
-          fixtureBwrap = pkgs.writeShellScript "devkit-fresh-consumer-bwrap" ''
-            set -eu
-            all_arguments="$*"
-            governance_env=
-            governance_catalog=
-            governance_state=
-            host_home=
-            host_worktree=
-            sandbox_home=
-            codex_home=
-            rollout_dir=
-            mount_policy=
-            while [ "$#" -gt 0 ]; do
-              case "$1" in
-                --ro-bind|--bind)
-                  source_path="$2"
-                  target_path="$3"
-                  case "$target_path" in
-                    /workspaces/dev/.devkit/ouro8-governance-env.sh) governance_env="$source_path" ;;
-                    /workspaces/dev/.devkit/ouro8-governance-repo-env.json) governance_catalog="$source_path" ;;
-                    /workspaces/dev/.devkit/governance-control-plane) governance_state="$source_path" ;;
-                    /workspaces/dev/agent-worktrees/agent*/ouroboros-ide)
-                      host_worktree="$source_path"
-                      ;;
-                    /workspaces/dev/agent-worktrees/agent*/ouroboros-ide/.devhome-agent*|\
-                    /workspaces/dev/agent-worktrees/agent*/.devhome-agent*)
-                      host_home="$source_path"
-                      ;;
-                  esac
-                  shift 3
-                  ;;
-                --setenv)
-                  case "$2" in
-                    HOME) sandbox_home="$3" ;;
-                    CODEX_HOME) codex_home="$3" ;;
-                    CODEX_ROLLOUT_DIR) rollout_dir="$3" ;;
-                    DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY) mount_policy="$3" ;;
-                  esac
-                  shift 3
-                  ;;
-                *)
-                  shift
-                  ;;
-              esac
-            done
-
-            case "$all_arguments" in
-              *__DEVKIT_READINESS_CHECK__*)
-                emit() {
-                  name="$1"
-                  result="$2"
-                  detail="$3"
-                  encoded="$(printf '%s' "$detail" | ${pkgs.coreutils}/bin/base64 -w0)"
-                  printf '__DEVKIT_READINESS_CHECK__\truntime\t%s\t%s\t%s\n' "$name" "$result" "$encoded"
-                }
-                emit sandbox-command 0 ""
-                emit broker-socket 0 ""
-                emit required-tools 0 ""
-                emit docker-client 0 ""
-                emit purescript-spago-netlify 0 ""
-                emit playwright-browser 0 ""
-                emit codex-version 0 ""
-                if [ "$mount_policy" = devkit/workspace-egress/v3 ] &&
-                   [ -n "$host_worktree" ] &&
-                   ${pkgs.git}/bin/git -C "$host_worktree" diff --quiet &&
-                   ${pkgs.git}/bin/git -C "$host_worktree" diff --cached --quiet &&
-                   [ "$(${pkgs.git}/bin/git -C "$host_worktree" rev-parse HEAD)" = "$(${pkgs.git}/bin/git -C "$host_worktree" rev-parse refs/remotes/origin/main)" ]; then
-                  emit package-runtime-tools 0 ""
-                else
-                  emit package-runtime-tools 1 "package runtime identity or clean current Product worktree is missing"
-                fi
-                if [ -r "$governance_env" ] && [ -r "$governance_catalog" ] && [ -d "$governance_state" ]; then
-                  emit governance-provenance 0 ""
-                else
-                  emit governance-provenance 1 "prepared governance runtime support is not projected into the sandbox"
-                fi
-                if [ -r "$host_home/.codex/config.toml" ]; then
-                  emit codex-provider-config 0 ""
-                  emit app-server-preparation 0 ""
-                else
-                  emit codex-provider-config 1 "Nix-authored Codex config is missing"
-                  emit app-server-preparation 1 "source-defined app-server preparation is missing"
-                fi
-                exit 0
-                ;;
-            esac
-
-            : "''${DEVKIT_TEST_APP_SERVER_BOUNDARY_LOG:?}"
-            config_present=0
-            if [ -r "$host_home/.codex/config.toml" ]; then
-              config_present=1
-            fi
-            {
-              printf 'HOME=%s\n' "$sandbox_home"
-              printf 'CODEX_HOME=%s\n' "$codex_home"
-              printf 'CODEX_ROLLOUT_DIR=%s\n' "$rollout_dir"
-              printf 'CONFIG_PRESENT=%s\n' "$config_present"
-            } > "$DEVKIT_TEST_APP_SERVER_BOUNDARY_LOG"
-            printf '__DEVKIT_APP_SERVER_BOUNDARY__=PASS\n'
-          '';
-          fixtureAllowlist = pkgs.writeText "devkit-fresh-consumer-egress-allowlist" ''
-            ssh.github.com
-          '';
-          fixtureKnownHosts = pkgs.writeText "devkit-product-fixture-known-hosts" ''
-            [ssh.github.com]:443 ssh-ed25519 fixture-host-key
-          '';
-          fixtureCodexConfig = pkgs.writeText "devkit-fresh-consumer-codex-config.toml" ''
-            # source = nixos-wsl codex config
-            model = "gpt-5.5"
-            model_provider = "openai"
-
-            [profiles.openai]
-            model = "gpt-5.5"
-            model_provider = "openai"
-          '';
-          fixtureDevctlBase = mkDevctl {
-            inherit pkgs;
-            sshExecutable = fixtureSSH;
-            knownHostsFile = fixtureKnownHosts;
-            tags = [ "devkitintegration" ];
-          };
-          fixtureDevctl = fixtureDevctlBase.overrideAttrs (old: {
-            postInstall = old.postInstall + ''
-              substituteInPlace "$out/overlays/dev-all/devkit.yaml" \
-                --replace-fail "../../../ouroboros-ide/infra/docker/dev/tinyproxy/allowlist.txt" "${fixtureAllowlist}"
-            '';
-          });
+          envExecutable = mkPackageEnv pkgs;
+          outputPlaceholder = placeholder "out";
         in
         pkgs.buildGoModule {
-          pname = "devkit-product-fresh-consumer-ssh-authority-check";
+          pname = "devkit-product-adapter";
           version = "dev";
           src = ./cli/devctl;
           modRoot = ".";
           vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
-          subPackages = [ "." ];
-          env.CGO_ENABLED = "0";
-          DEVKIT_TEST_INSTALLED_RUNTIME_DEVCTL = "${fixtureDevctl}/kit/bin/devctl";
-          DEVKIT_TEST_INSTALLED_RUNTIME_OVERLAYS = "${fixtureDevctl}/overlays";
-          DEVKIT_TEST_INSTALLED_RUNTIME_BROKER = "${self.packages.${pkgs.system}.postgres-broker}/bin/postgres-broker";
-          DEVKIT_TEST_INSTALLED_RUNTIME_SHELL = "${pkgs.bash}/bin/bash";
-          DEVKIT_TEST_INSTALLED_RUNTIME_BWRAP = fixtureBwrap;
-          DEVKIT_TEST_INSTALLED_SSH_EXECUTABLE = fixtureSSH;
-          DEVKIT_TEST_INSTALLED_KNOWN_HOSTS = fixtureKnownHosts;
-          DEVKIT_TEST_INSTALLED_CODEX_CONFIG_SOURCE = fixtureCodexConfig;
-          DEVKIT_TEST_NSS_WRAPPER = "${pkgs.nss_wrapper}/lib/libnss_wrapper.so";
-          DEVKIT_TEST_SINGLE_FRESH_CONSUMER = "1";
-          nativeCheckInputs = [
-            pkgs.git
-            pkgs.openssh
+          subPackages = [
+            "cmd/product-adapter"
+            "cmd/product-proxy"
+            "cmd/product-readiness"
           ];
-          doCheck = true;
-          checkPhase = ''
-            runHook preCheck
-            go test ./integration -run '^TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness$' -count=1 -v
-            go test ./integration -run '^TestNativePrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand$' -count=1 -v
-            runHook postCheck
-          '';
-          installPhase = ''
-            mkdir -p "$out"
-            printf '%s\n' ${fixtureDevctl} > "$out/fixture-devctl"
-            printf '%s\n' ${fixtureSSH} > "$out/fixture-ssh"
-            cp ${fixtureKnownHosts} "$out/fixture-known-hosts"
-          '';
+          inherit tags;
+          env.CGO_ENABLED = "0";
+          ldflags = [
+            "-s"
+            "-w"
+            "-X=devkit/cli/devctl/internal/worktrees.packageGitExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${envExecutable}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageMode=composed"
+            "-X=devkit/cli/devctl/internal/productadapter.packageAdapterExecutable=${outputPlaceholder}/bin/product-adapter"
+            "-X=devkit/cli/devctl/internal/productadapter.packageGitExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/productadapter.packageEnvExecutable=${envExecutable}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageSSHExecutable=${sshExecutable}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageKnownHosts=${knownHostsFile}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageRuntimeLauncher=${runtimeLauncher}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageBubblewrapExecutable=${bubblewrap}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageBrokerExecutable=${broker}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageRuntimeRoot=${runtimeRoot}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageEgressAllowlist=${egressAllowlist}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageCodexConfig=${codexConfig}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageGovernanceEnv=${governanceEnv}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageGovernanceRepoConfig=${governanceRepoConfig}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageGovernanceRules=${governanceRules}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageShellHook=${shellHook}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageCodexExecutable=${codexExecutable}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageReadinessExecutable=${outputPlaceholder}/bin/product-readiness"
+            "-X=devkit/cli/devctl/internal/productadapter.packageFirstExecutable=${firstExecutable}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageProductProxyExecutable=${outputPlaceholder}/bin/product-proxy"
+          ] ++ (
+            if fixtureAuthorityLocator == null
+            then [ ]
+            else [ "-X=devkit/cli/devctl/internal/productadapter.testAuthorityLocator=${fixtureAuthorityLocator}" ]
+          );
+          postFixup = fixturePostFixup;
+          passthru.productAdapterResources = {
+            env = envExecutable;
+            git = "${pkgs.git}/bin/git";
+            inherit
+              broker
+              bubblewrap
+              codexConfig
+              codexExecutable
+              egressAllowlist
+              firstExecutable
+              governanceEnv
+              governanceRepoConfig
+              governanceRules
+              knownHostsFile
+              runtimeLauncher
+              runtimeRoot
+              shellHook
+              sshExecutable
+              ;
+          };
         };
       mkNativeBootstrapStdioCleanupCheck =
         pkgs:
@@ -395,16 +307,131 @@
           checkPhase = ''
             runHook preCheck
             go test ./internal/runtime/egressproxy -run 'Test(ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|ConnectCancellationClosesTunnelWithoutWaitingForOpenInput|DialConnectTargetPreservesBannerBufferedWithUpstreamResponse|ServeRefusesExistingSocketAuthority|ServeDrainsFullPackAfterClientHalfClose|RelayFullDuplexPropagatesPeerWriteFailure|ServeAndConnectCarryCompleteGitSmartProtocolFetch)' -count=1
-            go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(UsesPackageOwnedConsumerIdentityAndProxy|RejectsMissingPackageOwnedProxyHelper|RejectsMissingIdentity)' -count=1
-            go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly|TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables' -count=1
+            go test ./internal/runtime/launch -run 'TestPrepareGitBootstrap(RefusesUncomposedProductAuthority|DoesNotFallBackWhenUncomposedProductHelperIsMissing|RejectsMissingIdentity)' -count=1
+            go test ./internal/commands/nativecmd -run 'TestWithManagedEgressProxy(EstablishesSocketBeforeBootstrapAndCleansUp|CleansExactSocketWhenCallbackFails)|TestEnsureManagedEgressProxyRefusesArbitraryExistingListener|TestRunCommandPreservingExitProjectsStdoutByteExactly|TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables|TestReadinessBatchDeadlineReturnsTypedResultsAndTerminatesDescendants|TestRawProductSourceRevisionAuthorityIsUnavailable' -count=1
             go test ./internal/runtime/broker -run 'TestResolveBinaryRequiresImmutableAbsoluteExecutable' -count=1
             go test ./internal/runtime/plan -run 'Test(WorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases|BuildDevAllWorkspaceEgressProjectsPreparedRuntimeSupportExactly)' -count=1
             go test ./internal/runtime/launch -run 'TestBuildBubblewrap(UsesImmutableRuntimeLauncherWithoutConsumerFlakeEvaluation|RejectsMissingOrUntrustedRuntimeLauncher)' -count=1
             go test ./internal/execx -run 'TestRunManaged(AllowsActiveCommandBeyondIdleWindow|IdleTimeoutTerminatesDescendantGroup|ContextDeadlineTerminatesDescendantGroup|PreservesCommandExitClassification)' -count=1
-            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapRejectsAmbientCheckoutOriginAuthority|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal|TestNativeReset(DisposesOpaqueInPrefixPayloadWithoutForeignCustody|RejectsOwnershipEscapesBeforeDisposal|RevalidatesCompleteBoundaryBeforeDisposal)' -count=1
-            go test ./integration -run 'Test(DevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority|Native(TopLevel(ExecProjectsStdoutAndCleansProxyOnEveryExit|PrepareAndExecUseIsolatedRelativeMetadata)|PrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand))' -count=1
+            go test ./internal/worktrees -run 'TestSetupNative(SSHOriginUsesExplicitBootstrapCommand|SSHOriginRejectsMissingBootstrapCommand|ProductBootstrapRejectsHTTPSFallback|ProductBootstrapRejectsAmbientCheckoutOriginAuthority|ProductBootstrapDoesNotReuseWorktreeAfterFetchFailure|IsolatedOwnedRootsUseRelativeCanonicalMetadata|RejectsStaleCommonRepositoryWithoutOwnershipMarker|FailedFetchCleansPartialOwnedRepository|RejectsRepositoryPathTraversalBeforeBootstrap|RejectsAndPreservesPartialWorktreeBeforeBootstrap)|TestRewriteNativeGitdirRejectsForeignCommondirTraversal' -count=1
+            go test -tags devkitintegration ./integration -run '^TestDevAllFreshOpenAndResetRefuseLegacyProductConstruction$' -count=1
             runHook postCheck
           '';
+        };
+      mkNativeAbsentIndexConstructionCheck =
+        pkgs:
+        let
+          packageEnv = mkPackageEnv pkgs;
+          fixtureText = name: text: pkgs.writeText "devkit-product-${name}" text;
+          fixtureExecutable = name: text: pkgs.writeShellScript "devkit-product-${name}" text;
+          runtimeRoot = pkgs.runCommand "devkit-product-runtime-root" { } ''
+            mkdir -p "$out"
+          '';
+          productionAdapter = mkProductAdapterPackage {
+            inherit pkgs runtimeRoot;
+            runtimeLauncher = fixtureExecutable "runtime-launcher" ''exec "$@"'';
+            bubblewrap = "${pkgs.bubblewrap}/bin/bwrap";
+            broker = fixtureExecutable "broker" ''exit 0'';
+            egressAllowlist = fixtureText "egress-allowlist" "ssh.github.com\n";
+            codexConfig = fixtureText "codex-config" "";
+            governanceEnv = fixtureText "governance-env" "";
+            governanceRepoConfig = fixtureText "governance-repo-config" "{}\n";
+            governanceRules = fixtureText "governance-rules" "";
+            shellHook = fixtureText "shell-hook" "";
+            codexExecutable = "${mkPinnedCodex pkgs}/bin/codex";
+            firstExecutable = fixtureExecutable "first-executable" ''
+              test "$#" -eq 1
+              printf %s "$1"
+            '';
+          };
+        in
+        pkgs.buildGoModule {
+          pname = "devkit-native-absent-index-construction-check";
+          version = "dev";
+          src = ./cli/devctl;
+          modRoot = ".";
+          vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+          subPackages = [ "." ];
+          env.CGO_ENABLED = "0";
+          DEVKIT_TEST_NSS_WRAPPER = "${pkgs.nss_wrapper}/lib/libnss_wrapper.so";
+          DEVKIT_TEST_REAL_SLOT_GIT = "${pkgs.git}/bin/git";
+          DEVKIT_TEST_REAL_SLOT_ENV = packageEnv;
+          DEVKIT_TEST_REAL_SLOT_SSH = "${pkgs.openssh}/bin/ssh";
+          DEVKIT_TEST_REAL_SLOT_SSHD = "${pkgs.openssh}/bin/sshd";
+          DEVKIT_TEST_REAL_SLOT_SSH_KEYGEN = "${pkgs.openssh}/bin/ssh-keygen";
+          DEVKIT_TEST_REAL_SLOT_UPLOAD_PACK = "${pkgs.git}/bin/git-upload-pack";
+          DEVKIT_TEST_REAL_SLOT_SHELL = "${pkgs.bash}/bin/bash";
+          DEVKIT_TEST_IMMUTABLE_RUNTIME_AUTHORITY = pkgs.writeText "devkit-dispatch-runtime-authority.json" ''
+            {
+              "schemaVersion": "wsl-nix-dev-all-runtime-authority/v1",
+              "sources": {
+                "product": {
+                  "rev": "87f5631f87f0be3a731e3d41aa98f9ac6d7d90d3"
+                }
+              }
+            }
+          '';
+          nativeCheckInputs = [
+            pkgs.coreutils
+            pkgs.git
+            pkgs.openssh
+          ];
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test ./internal/productadapter ./internal/worktrees \
+              -run '^Test(ParseAcceptsOnlyDedicatedProductGrammar|ParseRejectsAliasesDuplicatesAndAuthorityOptions|InvocationSelectsCanonicalProductAliases|LegacySetupNativeRejectsCanonicalProductIdentityBeforeEffects)$' \
+              -count=1 -v
+            if ! test_output="$(
+              go test -tags devkitintegration ./integration \
+                -run '^TestDevAllProductMutationDispatchIsDeniedBeforeEffects$' \
+                -count=1 -v 2>&1
+            )"; then
+              printf '%s\n' "$test_output"
+              exit 1
+            fi
+            printf '%s\n' "$test_output"
+            grep -q -- '--- PASS: TestDevAllProductMutationDispatchIsDeniedBeforeEffects' \
+              <<<"$test_output"
+            grep -aqF '/etc/fleet/dev-all-runtime-bundle/authority.json' \
+              ${productionAdapter}/bin/product-adapter
+            if grep -aqF 'DEVKIT_TEST_PRODUCT_AUTHORITY_LOCATOR' \
+              ${productionAdapter}/bin/product-adapter; then
+              echo "production Product adapter contains the integration locator seam" >&2
+              exit 1
+            fi
+            for forbidden in \
+              'git+file:///workspaces/dev/ouroboros-ide' \
+              'DEVKIT_GOVERNANCE_' \
+              '#dev-all-runtime-bundle'
+            do
+              if grep -aF "$forbidden" ${productionAdapter}/bin/product-adapter \
+                ${productionAdapter}/bin/product-proxy; then
+                echo "production Product adapter closure contains forbidden authority: $forbidden" >&2
+                exit 1
+              fi
+            done
+            runHook postCheck
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            printf '%s\n' \
+              'diagnostic-only prerequisite; not lifecycle promotion evidence' \
+              'slot-private common repository' \
+              'absent selected agent and state boundary' \
+              'raw Product dispatch refusal and composition constructor only' \
+              'does not claim installed Product lifecycle execution' \
+              > "$out/contract"
+          '';
+        };
+      mkProductAdapterLifecycleCheck =
+        pkgs:
+        import ./nix/product-adapter-lifecycle-check.nix {
+          inherit
+            mkPinnedCodex
+            mkProductAdapterPackage
+            pkgs
+            ;
         };
       mkDevAllRuntimeTools =
         {
@@ -507,30 +534,15 @@
         };
     in
     {
+      lib = {
+        inherit mkProductAdapterPackage;
+      };
+
       devShells = forEachSystem (
         { system, pkgs, pkgsPlaywright, ... }:
         let
           details = systemDetails.${system};
-          pinnedCodex = pkgs.stdenvNoCC.mkDerivation {
-            pname = "codex";
-            version = codexReleaseTag;
-            src = pkgs.fetchurl {
-              url = "https://github.com/openai/codex/releases/download/${codexReleaseTag}/${details.codexAsset}.tar.gz";
-              hash = details.codexHash;
-            };
-            dontUnpack = true;
-            installPhase = ''
-              runHook preInstall
-              mkdir -p "$out/bin"
-              tar --no-same-owner -xzf "$src" -C "$out"
-              test -x "$out/bin/codex"
-              test -x "$out/bin/codex-code-mode-host"
-              test -x "$out/codex-path/rg"
-              test -x "$out/codex-resources/bwrap"
-              test -x "$out/codex-resources/zsh/bin/zsh"
-              runHook postInstall
-            '';
-          };
+          pinnedCodex = mkPinnedCodex pkgs;
 
           pinnedDockerCli = pkgs.stdenvNoCC.mkDerivation {
             pname = "docker-cli";
@@ -852,6 +864,7 @@
         in
         {
           devctl = mkProductionDevctl pkgs;
+          github-ssh-known-hosts = mkGitHubSSHKnownHosts pkgs;
           dev-all-runtime-bundle = runtimeBundle;
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {
@@ -907,11 +920,16 @@
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
           management-inspection-cli = mkProductionDevctl pkgs;
           native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
-          product-fresh-consumer-ssh-authority = mkProductFreshConsumerSSHAuthorityCheck pkgs;
+          native-absent-index-construction = mkNativeAbsentIndexConstructionCheck pkgs;
+          # The prior fixture-only fresh-consumer check silently succeeded when
+          # its selected test no longer existed. Keep one source-selected
+          # diagnostic authority: the exact public composed adapter lifecycle.
+          product-fresh-consumer-ssh-authority = mkProductAdapterLifecycleCheck pkgs;
 
           devctl-openssh-executable-authority =
             let
               devctl = mkProductionDevctl pkgs;
+              knownHostsAuthority = mkGitHubSSHKnownHosts pkgs;
               closure = pkgs.closureInfo {
                 rootPaths = [ devctl ];
               };
@@ -924,15 +942,15 @@
               ];
             } ''
               grep -aqF '${pkgs.openssh}/bin/ssh' ${devctl}/kit/bin/devctl
-              grep -aqF '${githubSSHKnownHosts}' ${devctl}/kit/bin/devctl
+              grep -aqF '${knownHostsAuthority}' ${devctl}/kit/bin/devctl
               grep -qFx '${pkgs.openssh}' ${closure}/store-paths
-              grep -qFx '${githubSSHKnownHosts}' ${closure}/store-paths
-              grep -qF '[ssh.github.com]:443 ' '${githubSSHKnownHosts}'
+              grep -qFx '${knownHostsAuthority}' ${closure}/store-paths
+              grep -qF '[ssh.github.com]:443 ' '${knownHostsAuthority}'
               ! rg -n 'StrictHostKeyChecking[[:space:]]+accept-new' "$src/cli/devctl"
-              ! rg -n 'copyNativeSSHFile\\([^,]*known|BuildWriteSteps' "$src/cli/devctl"
+              ! rg -n 'copyNativeSSHFile\([^,]*known|BuildWriteSteps' "$src/cli/devctl"
               mkdir -p "$out"
               printf '%s\n' '${pkgs.openssh}/bin/ssh' > "$out/ssh-executable"
-              cp '${githubSSHKnownHosts}' "$out/github-ssh-known-hosts"
+              cp '${knownHostsAuthority}' "$out/github-ssh-known-hosts"
               cp ${closure}/store-paths "$out/store-paths"
             '';
 

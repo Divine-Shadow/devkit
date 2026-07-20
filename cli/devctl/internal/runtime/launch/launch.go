@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"devkit/cli/devctl/internal/governanceentrypoint"
+	"devkit/cli/devctl/internal/productadapter"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
@@ -24,6 +26,39 @@ type Command struct {
 	Path string
 	Args []string
 	Dir  string
+}
+
+// packageGitExecutable is injected by the immutable Devkit package build.
+// Launch preparation must never rediscover Git from the caller's PATH.
+var packageGitExecutable string
+
+func resolvedPackageGitExecutable() (string, error) {
+	path := filepath.Clean(strings.TrimSpace(packageGitExecutable))
+	if path == "" || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("native launch preparation requires the package-owned absolute Git executable")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect package-owned Git executable %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("package-owned Git executable is not executable: %s", path)
+	}
+	return path, nil
+}
+
+func packageGitCommand(args ...string) (*exec.Cmd, error) {
+	gitExecutable, err := resolvedPackageGitExecutable()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(gitExecutable, args...)
+	cmd.Env = []string{
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+	}
+	return cmd, nil
 }
 
 func Prepare(p nativeplan.Plan) error {
@@ -87,14 +122,27 @@ func Prepare(p nativeplan.Plan) error {
 	if err := capCodexTUILog(p.Agent.HostHome); err != nil {
 		return err
 	}
-	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
-		return err
-	}
-	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
-		return err
-	}
-	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
-		return err
+	if p.ProductComposed {
+		if err := seedExactCredential(
+			p.CodexAuthSource,
+			filepath.Join(p.Agent.HostHome, ".codex", "auth.json"),
+			0o600,
+		); err != nil {
+			return err
+		}
+		if err := seedProductSSHIdentity(p); err != nil {
+			return err
+		}
+	} else {
+		if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
+			return err
+		}
+		if err := SeedSSH(p.Agent.HostHome, false); err != nil {
+			return err
+		}
+		if err := SeedAWS(p.Agent.HostHome, false); err != nil {
+			return err
+		}
 	}
 	if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
 		return err
@@ -114,7 +162,10 @@ func Prepare(p nativeplan.Plan) error {
 }
 
 func requireGitWorktree(worktree string) error {
-	cmd := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
+	cmd, err := packageGitCommand("-C", worktree, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return err
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("host worktree %s is not a Git worktree: %w: %s", worktree, err, strings.TrimSpace(string(out)))
@@ -254,8 +305,14 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := SeedSSH(hostHome, false); err != nil {
-		return "", err
+	if p.ProductComposed {
+		if err := seedProductSSHIdentity(p); err != nil {
+			return "", err
+		}
+	} else {
+		if err := SeedSSH(hostHome, false); err != nil {
+			return "", err
+		}
 	}
 	if err := sshAuthority.InstallKnownHosts(filepath.Join(hostHome, ".ssh", "known_hosts")); err != nil {
 		return "", err
@@ -283,29 +340,22 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 }
 
 func gitBootstrapProxyCommand(p nativeplan.Plan) (string, error) {
-	runtimeRoot := strings.TrimSpace(p.RuntimeAuthorityRoot)
-	if runtimeRoot == "" {
-		return "", fmt.Errorf("native Git bootstrap requires a source-derived runtime authority root")
+	if p.Agent.ID.Project == productadapter.ProductProject &&
+		p.Agent.ID.Repo == productadapter.ProductRepo {
+		if p.ProductCount < 1 || p.Agent.ID.Index < 1 || p.Agent.ID.Index > p.ProductCount {
+			return "", fmt.Errorf("Product proxy helper requires exact count and index")
+		}
+		helper := filepath.Clean(strings.TrimSpace(p.ProductProxyHelper))
+		if helper == "." || !filepath.IsAbs(helper) {
+			return "", fmt.Errorf("Product proxy helper requires the manifest-selected absolute executable")
+		}
+		return strings.Join([]string{
+			shellQuote(helper),
+			"--count", strconv.Itoa(p.ProductCount),
+			"--index", strconv.Itoa(p.Agent.ID.Index),
+		}, " "), nil
 	}
-	project := strings.TrimSpace(p.Agent.ID.Project)
-	if project == "" {
-		return "", fmt.Errorf("native Git bootstrap requires a project identity")
-	}
-	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
-	if socketPath == "" {
-		return "", fmt.Errorf("native Git bootstrap requires a managed egress proxy socket")
-	}
-	devctlPath := filepath.Join(filepath.Clean(runtimeRoot), "kit", "bin", "devctl")
-	if !isExecutable(devctlPath) {
-		return "", fmt.Errorf("native Git bootstrap requires package-owned proxy helper %s", devctlPath)
-	}
-	return strings.Join([]string{
-		shellQuote(devctlPath),
-		"-p", shellQuote(project),
-		"native", "proxy-connect",
-		"--socket", shellQuote(socketPath),
-		"--target", "%h:%p",
-	}, " "), nil
+	return "", fmt.Errorf("raw Devkit exposes no public managed Git proxy helper")
 }
 
 func existingSSHIdentities(sshDir string) []string {
@@ -488,7 +538,11 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 	} else if err != nil {
 		return fmt.Errorf("inspect Git metadata marker %s: %w", gitMarker, err)
 	}
-	out, err := exec.Command("git", "-C", worktree, "rev-parse", "--git-dir").CombinedOutput()
+	cmd, err := packageGitCommand("-C", worktree, "rev-parse", "--git-dir")
+	if err != nil {
+		return err
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("resolve Git metadata for %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
@@ -513,14 +567,22 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 }
 
 func runGitConfigWithLockRetry(args ...string) ([]byte, error) {
+	command, resolveErr := packageGitCommand(args...)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
 	var out []byte
 	var err error
 	for attempt := 0; attempt < 6; attempt++ {
-		out, err = exec.Command("git", args...).CombinedOutput()
+		out, err = command.CombinedOutput()
 		if err == nil || !isGitConfigLockError(out) {
 			return out, err
 		}
 		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		command, resolveErr = packageGitCommand(args...)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 	}
 	return out, err
 }
@@ -1613,7 +1675,10 @@ func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan, runtime
 }
 
 func authoritativeCodexConfig(configPath string, p nativeplan.Plan) (string, string, error) {
-	explicitSource := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
+	explicitSource := strings.TrimSpace(p.CodexConfigSource)
+	if explicitSource == "" && !isOuroGovernedPlan(p) {
+		explicitSource = strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
+	}
 	if explicitSource != "" {
 		config, err := readRequiredNixCodexConfig(explicitSource)
 		if err != nil {
@@ -2213,6 +2278,53 @@ func SeedSSH(hostHome string, force bool) error {
 		if err := os.WriteFile(target, data, mode); err != nil {
 			return fmt.Errorf("write SSH seed %s: %w", target, err)
 		}
+	}
+	return nil
+}
+
+func seedProductSSHIdentity(p nativeplan.Plan) error {
+	if !p.ProductComposed {
+		return fmt.Errorf("package-owned Product SSH identity requires the composed adapter")
+	}
+	sshDir := filepath.Join(p.Agent.HostHome, ".ssh")
+	if err := seedExactCredential(p.SSHIdentitySource, filepath.Join(sshDir, "id_ed25519"), 0o600); err != nil {
+		return err
+	}
+	return seedExactCredential(p.SSHPublicKeySource, filepath.Join(sshDir, "id_ed25519.pub"), 0o644)
+}
+
+func seedExactCredential(source, target string, mode os.FileMode) error {
+	source = filepath.Clean(strings.TrimSpace(source))
+	target = filepath.Clean(strings.TrimSpace(target))
+	if !filepath.IsAbs(source) || !filepath.IsAbs(target) {
+		return fmt.Errorf("composed credential source and destination must be exact absolute paths")
+	}
+	sourceInfo, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect composed credential source %s: %w", source, err)
+	}
+	if !sourceInfo.Mode().IsRegular() || sourceInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("composed credential source %s must be a non-symlink regular file", source)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read composed credential source %s: %w", source, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if existing, err := os.ReadFile(target); err == nil {
+		info, statErr := os.Lstat(target)
+		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+			info.Mode().Perm() != mode || !bytes.Equal(existing, data) {
+			return fmt.Errorf("composed credential destination %s does not match the manifest-selected source", target)
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.WriteFile(target, data, mode); err != nil {
+		return fmt.Errorf("write composed credential destination %s: %w", target, err)
 	}
 	return nil
 }

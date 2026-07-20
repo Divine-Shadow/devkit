@@ -40,6 +40,7 @@ type ResourceLimits struct {
 
 type Plan struct {
 	Agent                agent.Spec        `json:"agent"`
+	ProductCount         int               `json:"product_count,omitempty"`
 	DevkitHostRoot       string            `json:"devkit_host_root"`
 	RuntimeAuthorityRoot string            `json:"runtime_authority_root"`
 	DevkitSandboxRoot    string            `json:"devkit_sandbox_root"`
@@ -60,6 +61,13 @@ type Plan struct {
 	Env                  map[string]string `json:"env"`
 	Proxy                ProxyConfig       `json:"proxy"`
 	DNS                  DNSConfig         `json:"dns"`
+	NSCDSource           string            `json:"nscd_source"`
+	CodexConfigSource    string            `json:"codex_config_source"`
+	ProductComposed      bool              `json:"product_composed,omitempty"`
+	SSHIdentitySource    string            `json:"ssh_identity_source,omitempty"`
+	SSHPublicKeySource   string            `json:"ssh_public_key_source,omitempty"`
+	CodexAuthSource      string            `json:"codex_auth_source,omitempty"`
+	ProductProxyHelper   string            `json:"product_proxy_helper,omitempty"`
 	BrokerEndpoint       string            `json:"broker_endpoint"`
 	DirectDockerSocket   bool              `json:"direct_docker_socket"`
 	ResourceLimits       ResourceLimits    `json:"resource_limits"`
@@ -69,6 +77,7 @@ type Plan struct {
 type BuildOptions struct {
 	Paths                 devkitpaths.Paths
 	Project               string
+	ProductCount          int
 	Index                 int
 	Repo                  string
 	Flake                 string
@@ -88,6 +97,13 @@ type BuildOptions struct {
 	IsolationProfile      string
 	EgressAllowlist       string
 	DNSResolvConf         string
+	NSCDSource            string
+	CodexConfigSource     string
+	ProductComposed       bool
+	SSHIdentitySource     string
+	SSHPublicKeySource    string
+	CodexAuthSource       string
+	ProductProxyHelper    string
 	DedicatedWorktree     bool
 }
 
@@ -104,6 +120,15 @@ func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 		return flake
 	}
 	return "path:" + runtimeAuthorityRoot + "?" + strings.TrimPrefix(flake, rootedPrefix)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func Build(opts BuildOptions) (Plan, error) {
@@ -284,6 +309,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			runtimeAuthorityRoot,
 			broker,
 			resolvConf,
+			firstNonEmpty(strings.TrimSpace(opts.NSCDSource), workspaceEgressNSCDSource),
 		)
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
@@ -334,6 +360,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			StateRoot:        paths.HostAgentStateRoot,
 			SandboxStateRoot: paths.SandboxAgentStateRoot,
 		},
+		ProductCount:         opts.ProductCount,
 		DevkitHostRoot:       opts.Paths.Root,
 		RuntimeAuthorityRoot: runtimeAuthorityRoot,
 		DevkitSandboxRoot:    filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
@@ -362,6 +389,13 @@ func Build(opts BuildOptions) (Plan, error) {
 			ResolvConf: resolvConf,
 			ManagedBy:  "devkit-host-service",
 		},
+		NSCDSource:         firstNonEmpty(strings.TrimSpace(opts.NSCDSource), workspaceEgressNSCDSource),
+		CodexConfigSource:  strings.TrimSpace(opts.CodexConfigSource),
+		ProductComposed:    opts.ProductComposed,
+		SSHIdentitySource:  strings.TrimSpace(opts.SSHIdentitySource),
+		SSHPublicKeySource: strings.TrimSpace(opts.SSHPublicKeySource),
+		CodexAuthSource:    strings.TrimSpace(opts.CodexAuthSource),
+		ProductProxyHelper: strings.TrimSpace(opts.ProductProxyHelper),
 		BrokerEndpoint:     broker,
 		DirectDockerSocket: false,
 		ResourceLimits: ResourceLimits{
@@ -412,7 +446,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string) []Bind {
+func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, nscdSource string) []Bind {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -469,7 +503,7 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 	// The isolated network namespace cannot reach the host loopback resolver.
 	// nsncd exposes DNS through this narrowly scoped Unix capability; network
 	// egress remains restricted to the managed proxy.
-	add(workspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
+	add(nscdSource, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	return binds

@@ -1,6 +1,7 @@
 package nativecmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/productadapter"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
@@ -26,6 +28,12 @@ import (
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/runtime/readiness"
 	wtx "devkit/cli/devctl/internal/worktrees"
+)
+
+const (
+	readinessBatchTimeout   = 100 * time.Second
+	readinessSandboxTimeout = 110 * time.Second
+	readinessKillGrace      = 5 * time.Second
 )
 
 // Register adds Nix-native runtime commands.
@@ -52,6 +60,11 @@ func handle(ctx *cmdregistry.Context) error {
 		return handlePlan(ctx)
 	case "prepare":
 		return handlePrepare(ctx)
+	case "down":
+		if err := RejectLegacyProductConstruction(ctx.Project, "", "native down"); err != nil {
+			return err
+		}
+		return fmt.Errorf("native down is not a supported subcommand; use top-level down")
 	case "governance-env":
 		return handleGovernanceEnv(ctx)
 	case "exec":
@@ -62,12 +75,6 @@ func handle(ctx *cmdregistry.Context) error {
 		return handleCapacity(ctx)
 	case "shell":
 		return handleShell(ctx)
-	case "egress-proxy":
-		return handleEgressProxy(ctx)
-	case "proxy-bridge":
-		return handleProxyBridge(ctx)
-	case "proxy-connect":
-		return handleProxyConnect(ctx)
 	default:
 		return fmt.Errorf("unknown native command %s", ctx.Args[0])
 	}
@@ -674,6 +681,16 @@ func handleLifecycle(ctx *cmdregistry.Context, command string) error {
 		return err
 	}
 	switch command {
+	case "up", "down", "scale", "restart":
+		_, repo, _, _, _, err := lifecycleDefaults(ctx, parsed)
+		if err != nil {
+			return err
+		}
+		if err := RejectLegacyProductConstruction(ctx.Project, repo, "native "+command); err != nil {
+			return err
+		}
+	}
+	switch command {
 	case "up":
 		return lifecycleUp(ctx, parsed, "up")
 	case "scale":
@@ -716,6 +733,9 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 	}
 	cfg, repo, count, _, _, err := lifecycleDefaults(ctx, parsed)
 	if err != nil {
+		return err
+	}
+	if err := RejectLegacyProductConstruction(ctx.Project, repo, "native ensure-ready"); err != nil {
 		return err
 	}
 	if err := applyLifecycleReadinessMode(&parsed, cfg); err != nil {
@@ -898,6 +918,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
+	if err := RejectLegacyProductConstruction(ctx.Project, repo, "exec"); err != nil {
+		return err
+	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleParsed)
 	opts := lifecyclePlanOptions(ctx, cfg, lifecycleParsed, repo, brokerCfg)
 	opts.Index = parsed.index
@@ -921,11 +944,6 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	defer func() {
 		retErr = errors.Join(retErr, cleanupProxy())
 	}()
-	if !ctx.DryRun {
-		if err := launch.Prepare(p); err != nil {
-			return err
-		}
-	}
 	cmdSpec, err := launch.BuildBubblewrap(p, command)
 	if err != nil {
 		return err
@@ -1216,6 +1234,17 @@ func defaultRepoForProject(project string) string {
 	return project
 }
 
+// RejectLegacyProductConstruction prevents public multi-slot or
+// ambient-checkout Product construction from becoming a second bootstrap
+// authority. Non-Product overlays retain their legacy behavior.
+func RejectLegacyProductConstruction(project, repo string, surface string) error {
+	if strings.TrimSpace(project) != "dev-all" &&
+		strings.TrimSpace(repo) != productadapter.ProductRepo {
+		return nil
+	}
+	return fmt.Errorf("%s cannot construct Product; use the manifest-bound WSL/Nix product-adapter", surface)
+}
+
 func resolveNativeRoot(devkitRoot, value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || filepath.IsAbs(value) {
@@ -1236,75 +1265,21 @@ func writeNativeManifest(ctx *cmdregistry.Context, opts nativeplan.BuildOptions,
 	return manifest, path, nil
 }
 
-// ResetOwnedPrefix is the sole destructive native reconstruction path. The
-// explicit reset command and source-declared dev-all roots establish the
-// disposal boundary; no caller force switch or ambient path can expand it.
-// stopSessions runs only after the full boundary has passed preflight.
-func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr error) {
+// ResetOwnedPrefix refuses Product reset before any session, broker, workspace,
+// or home effect. Fleet/WSL owns whole-candidate stop and destruction.
+func ResetOwnedPrefix(ctx *cmdregistry.Context, _ func()) error {
 	if ctx == nil {
 		return fmt.Errorf("native reset context is required")
 	}
-	if strings.TrimSpace(ctx.Project) != "dev-all" {
-		return fmt.Errorf("native destructive reset requires the exact dev-all prefix")
-	}
-	parsed, err := parseLifecycleArgs(ctx)
-	if err != nil {
-		return err
-	}
-	cfg, repo, count, _, _, err := lifecycleDefaults(ctx, parsed)
-	if err != nil {
-		return err
-	}
-	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
-	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
-	protectedRoots := []string{
-		ctx.Paths.Root,
-		ctx.Paths.RuntimeAuthorityRoot,
-		filepath.Join(filepath.Dir(filepath.Clean(ctx.Paths.Root)), repo),
-	}
-	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
-	resetOptions := wtx.NativeResetOptions{
-		Project:        ctx.Project,
-		Repo:           repo,
-		Count:          count,
-		WorktreeRoot:   planOpts.WorktreeRoot,
-		StateRoot:      planOpts.StateRoot,
-		ProtectedRoots: protectedRoots,
-		DryRun:         ctx.DryRun,
-	}
-	resetPlan, err := wtx.PlanNativeReset(resetOptions)
-	if err != nil {
-		return err
-	}
-	if err := lifecycleDown(ctx, parsed); err != nil {
-		return err
-	}
-	if stopSessions != nil {
-		stopSessions()
-	}
-	if err := resetPlan.Apply(); err != nil {
-		return err
-	}
-	if err := lifecycleUp(ctx, parsed, "reset"); err != nil {
-		if ctx.DryRun {
-			return err
-		}
-		cleanupPlan, planErr := wtx.PlanNativeReset(resetOptions)
-		if planErr != nil {
-			return errors.Join(err, fmt.Errorf("plan cleanup after failed native reset reconstruction: %w", planErr))
-		}
-		cleanupErr := cleanupPlan.Apply()
-		if cleanupErr != nil {
-			return errors.Join(err, fmt.Errorf("cleanup failed native reset reconstruction: %w", cleanupErr))
-		}
-		return err
-	}
-	return nil
+	return RejectLegacyProductConstruction(ctx.Project, "", "reset")
 }
 
 func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string) (retErr error) {
 	cfg, repo, count, baseBranch, branchPrefix, err := lifecycleDefaults(ctx, parsed)
 	if err != nil {
+		return err
+	}
+	if err := RejectLegacyProductConstruction(ctx.Project, repo, "native "+command); err != nil {
 		return err
 	}
 	if !parsed.skipReady {
@@ -1352,7 +1327,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 		}
 		_, stopErr := runtimebroker.Stop(brokerCfg, false)
 		if stopErr != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("rollback native broker after lifecycle failure: %w", stopErr))
+			retErr = errors.Join(retErr, fmt.Errorf("stop newly started native broker after lifecycle failure: %w", stopErr))
 		}
 	}()
 	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
@@ -1669,6 +1644,9 @@ func handlePlan(ctx *cmdregistry.Context) error {
 	}
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
+	if err := RejectLegacyProductConstruction(ctx.Project, parsed.opts.Repo, "native exec"); err != nil {
+		return err
+	}
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
@@ -1828,6 +1806,9 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
+	if err := RejectLegacyProductConstruction(ctx.Project, repo, "native prepare"); err != nil {
+		return err
+	}
 	bootstrapOpts := parsed.opts
 	bootstrapOpts.Index = 1
 	bootstrapOpts.Repo = repo
@@ -1953,11 +1934,6 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	defer func() {
 		retErr = errors.Join(retErr, cleanupProxy())
 	}()
-	if !dryRun {
-		if err := launch.Prepare(p); err != nil {
-			return err
-		}
-	}
 	cmdSpec, err := launch.BuildBubblewrap(p, parsed.command)
 	if err != nil {
 		return err
@@ -1982,6 +1958,14 @@ func runCommandPreservingExit(cmd *exec.Cmd) error {
 }
 
 func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func() error, error) {
+	return ensureManagedEgressProxyWithUpstream(p, dryRun, managedEgressUpstreamProxyURL())
+}
+
+func ensureManagedEgressProxyWithUpstream(
+	p nativeplan.Plan,
+	dryRun bool,
+	upstreamProxyURL string,
+) (func() error, error) {
 	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
 	allowlistPath := strings.TrimSpace(p.Proxy.AllowlistPath)
 	if allowlistPath == "" {
@@ -1995,15 +1979,11 @@ func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func() error, err
 		return func() error { return nil }, nil
 	}
 	if info, err := os.Lstat(socketPath); err == nil {
-		if info.Mode()&os.ModeSocket == 0 {
-			return nil, fmt.Errorf("managed native egress proxy refuses non-socket path %s", socketPath)
-		}
-		if unixSocketAccepts(socketPath) {
-			return nil, fmt.Errorf("managed native egress proxy refuses an existing listener at %s", socketPath)
-		}
-		if err := os.Remove(socketPath); err != nil {
-			return nil, fmt.Errorf("remove stale managed egress proxy socket %s: %w", socketPath, err)
-		}
+		return nil, fmt.Errorf(
+			"managed native egress proxy refuses preexisting path %s (mode %s)",
+			socketPath,
+			info.Mode(),
+		)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect managed egress proxy socket %s: %w", socketPath, err)
 	}
@@ -2013,12 +1993,11 @@ func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func() error, err
 		errCh <- egressproxy.Serve(proxyCtx, egressproxy.Config{
 			SocketPath:       socketPath,
 			AllowlistPath:    allowlistPath,
-			UpstreamProxyURL: managedEgressUpstreamProxyURL(),
+			UpstreamProxyURL: strings.TrimSpace(upstreamProxyURL),
 		})
 	}()
 	if err := waitForUnixSocketOrExit(socketPath, errCh, 5*time.Second); err != nil {
 		cancel()
-		_ = os.Remove(socketPath)
 		return nil, err
 	}
 	ownedInfo, err := os.Lstat(socketPath)
@@ -2500,19 +2479,47 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 }
 
 func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChecks []repoCheck) (report readiness.Report) {
-	cleanupProxy, err := ensureManagedEgressProxy(p, false)
-	if err != nil {
-		report.AddRuntime("prepare-state", false, err.Error())
-		return report
+	return runReadinessReportWithProxy(p, runtimeChecks, repoChecks, false)
+}
+
+func runReadinessReportWithExistingProxy(
+	p nativeplan.Plan,
+	runtimeChecks []runtimeCheck,
+	repoChecks []repoCheck,
+) readiness.Report {
+	return runReadinessReportWithProxy(p, runtimeChecks, repoChecks, true)
+}
+
+func runReadinessReportWithProxy(
+	p nativeplan.Plan,
+	runtimeChecks []runtimeCheck,
+	repoChecks []repoCheck,
+	proxyAlreadyOwned bool,
+) (report readiness.Report) {
+	cleanupProxy := func() error { return nil }
+	if proxyAlreadyOwned {
+		if !unixSocketAccepts(p.Proxy.UnixSocket) {
+			report.AddRuntime("prepare-state", false, "owned Product construction proxy is unavailable")
+			return report
+		}
+	} else {
+		var err error
+		cleanupProxy, err = ensureManagedEgressProxy(p, false)
+		if err != nil {
+			report.AddRuntime("prepare-state", false, err.Error())
+			return report
+		}
 	}
 	defer func() {
 		if err := cleanupProxy(); err != nil {
 			report.AddRuntime("managed-egress-cleanup", false, err.Error())
 		}
 	}()
-	if err := launch.Prepare(p); err != nil {
-		report.AddRuntime("prepare-state", false, err.Error())
-		return report
+	if !proxyAlreadyOwned {
+		if err := launch.Prepare(p); err != nil {
+			report.AddRuntime("prepare-state", false, err.Error())
+			return report
+		}
 	}
 	report.AddRuntime("prepare-state", true, "")
 
@@ -2596,7 +2603,9 @@ func runSandboxReadinessChecks(p nativeplan.Plan, checks []sandboxReadinessCheck
 	if len(checks) == 0 {
 		return nil, nil
 	}
-	out, err := runSandboxCommand(p, sandboxReadinessCommand(checks))
+	ctx, cancel := context.WithTimeout(context.Background(), readinessSandboxTimeout)
+	defer cancel()
+	out, err := runSandboxCommandContext(ctx, p, sandboxReadinessCommand(checks))
 	if err != nil {
 		return nil, fmt.Errorf("%s", detail(err, out))
 	}
@@ -2608,15 +2617,35 @@ func sandboxReadinessCommand(checks []sandboxReadinessCheck) []string {
 }
 
 func buildSandboxReadinessScript(checks []sandboxReadinessCheck) string {
+	return buildSandboxReadinessScriptWithTimeout(checks, readinessBatchTimeout)
+}
+
+func buildSandboxReadinessScriptWithTimeout(checks []sandboxReadinessCheck, budget time.Duration) string {
+	budgetSeconds := int64(budget / time.Second)
+	if budgetSeconds < 1 {
+		budgetSeconds = 1
+	}
 	var script strings.Builder
 	script.WriteString("set +e\n")
+	script.WriteString("devkit_readiness_deadline=$(($(date +%s) + ")
+	script.WriteString(strconv.FormatInt(budgetSeconds, 10))
+	script.WriteString("))\n")
 	script.WriteString("devkit_run_readiness_check() {\n")
 	script.WriteString("  phase=\"$1\"\n")
 	script.WriteString("  name=\"$2\"\n")
 	script.WriteString("  command=\"$3\"\n")
 	script.WriteString("  out=\"$(mktemp)\"\n")
-	script.WriteString("  timeout \"${DEVKIT_READINESS_CHECK_TIMEOUT_SECONDS:-1200}\" bash -c \"$command\" >\"$out\" 2>&1\n")
-	script.WriteString("  rc=\"$?\"\n")
+	script.WriteString("  remaining=$((devkit_readiness_deadline - $(date +%s)))\n")
+	script.WriteString("  if [ \"$remaining\" -le 0 ]; then\n")
+	script.WriteString("    printf '%s\\n' 'readiness batch deadline exhausted before check execution' >\"$out\"\n")
+	script.WriteString("    rc=124\n")
+	script.WriteString("  else\n")
+	script.WriteString("    timeout --kill-after=5 \"$remaining\" bash -c \"$command\" >\"$out\" 2>&1\n")
+	script.WriteString("    rc=\"$?\"\n")
+	script.WriteString("    if [ \"$rc\" -eq 124 ]; then\n")
+	script.WriteString("      printf '%s\\n' 'readiness batch deadline expired while this check was active' >>\"$out\"\n")
+	script.WriteString("    fi\n")
+	script.WriteString("  fi\n")
 	script.WriteString("  encoded=\"$(base64 -w0 \"$out\" 2>/dev/null || base64 \"$out\" | tr -d '\\n')\"\n")
 	script.WriteString("  rm -f \"$out\"\n")
 	script.WriteString("  printf '__DEVKIT_READINESS_CHECK__\\t%s\\t%s\\t%s\\t%s\\n' \"$phase\" \"$name\" \"$rc\" \"$encoded\"\n")
@@ -2669,14 +2698,42 @@ func readinessDetail(ok bool, out string, rc string) string {
 }
 
 func runSandboxCommand(p nativeplan.Plan, command []string) (string, error) {
+	return runSandboxCommandContext(context.Background(), p, command)
+}
+
+func runSandboxCommandContext(ctx context.Context, p nativeplan.Plan, command []string) (string, error) {
 	cmdSpec, err := launch.BuildBubblewrap(p, command)
 	if err != nil {
 		return "", err
 	}
 	cmd := exec.Command(cmdSpec.Path, cmdSpec.Args...)
 	cmd.Dir = cmdSpec.Dir
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	waited := make(chan error, 1)
+	go func() {
+		waited <- cmd.Wait()
+	}()
+	select {
+	case err := <-waited:
+		return output.String(), err
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		timer := time.NewTimer(readinessKillGrace)
+		defer timer.Stop()
+		select {
+		case <-waited:
+		case <-timer.C:
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-waited
+		}
+		return output.String(), fmt.Errorf("native sandbox command deadline exceeded: %w", ctx.Err())
+	}
 }
 
 func detail(err error, out string) string {

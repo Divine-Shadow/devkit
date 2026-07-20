@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// TestRun_DryRun ensures the run command produces expected native invocations
-// and does not error when invoked in dry-run mode with a minimal dev-all overlay.
+// TestRun_DryRun ensures the legacy Product shortcut refuses before invoking
+// another lifecycle or container authority, even in dry-run mode.
 func TestRun_DryRun(t *testing.T) {
 	root := t.TempDir()
 	write := func(p, s string) {
@@ -39,20 +39,16 @@ func TestRun_DryRun(t *testing.T) {
 	cmd.Env = append(os.Environ(), "DEVKIT_ROOT="+root)
 	cmd.Stderr = &stderr
 	cmd.Stdout = &bytes.Buffer{}
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("run dry-run failed: %v\nstderr=%s", err, stderr.String())
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("run dry-run unexpectedly succeeded\nstderr=%s", stderr.String())
 	}
 	out := stderr.String()
-	// Expect native lifecycle and tmux commands, not container-backed agent execs.
-	wants := []string{
-		" -p dev-all up --repo testrepo --count 2",
+	if !strings.Contains(out, "raw devctl refuses Product") {
+		t.Fatalf("run dry-run omitted Product dispatch refusal:\n%s", out)
 	}
-	for _, w := range wants {
-		if !strings.Contains(out, w) {
-			t.Fatalf("missing %q in:\n%s", w, out)
-		}
-	}
-	if strings.Contains(out, "docker "+"compose") || strings.Contains(out, "docker "+"exec") {
-		t.Fatalf("run dry-run should not use retired container commands for dev-all:\n%s", out)
+	if strings.Contains(out, " -p dev-all up ") ||
+		strings.Contains(out, "docker "+"compose") ||
+		strings.Contains(out, "docker "+"exec") {
+		t.Fatalf("run dry-run started a child lifecycle:\n%s", out)
 	}
 }
