@@ -35,6 +35,7 @@ import (
 	runner "devkit/cli/devctl/internal/runner"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativelaunch "devkit/cli/devctl/internal/runtime/launch"
+	"devkit/cli/devctl/internal/sshauthority"
 	"devkit/cli/devctl/internal/tmuxutil"
 	wtx "devkit/cli/devctl/internal/worktrees"
 	"devkit/cli/devctl/internal/wtutil"
@@ -1151,10 +1152,6 @@ exit 0`
 	case "ssh-test":
 		mustProject(project)
 		if !isNativeRuntime {
-			if project == "dev-all" {
-				runner.Host(dryRun, "bash", "-lc", "ssh -T github.com -o BatchMode=yes || true")
-				break
-			}
 			die("ssh-test requires runtime.flake")
 		}
 		idx := "1"
@@ -1162,7 +1159,20 @@ exit 0`
 			idx = sub[0]
 		}
 		repo := readDefaultRepo(project, paths)
-		cmd := "set -euo pipefail; cfg=\"$HOME/.ssh/config\"; if [ -s \"$cfg\" ]; then ssh -F \"$cfg\" -T github.com -o BatchMode=yes || true; else ssh -T github.com -o BatchMode=yes || true; fi"
+		resolved, err := nativeResolvedAgentPaths(paths, project, repo, mustAtoi(idx))
+		if err != nil {
+			die(err.Error())
+		}
+		authority, err := sshauthority.Package()
+		if err != nil {
+			die(err.Error())
+		}
+		configPath := filepath.Join(resolved.SandboxHome, ".ssh", "config")
+		sshCommand, err := authority.Command(configPath)
+		if err != nil {
+			die(err.Error())
+		}
+		cmd := "set -euo pipefail; test -s " + shSingleQuote(configPath) + "; " + sshCommand + " -T github.com -o BatchMode=yes || true"
 		nativeExecScriptCommand(dryRun, exe, project, repo, mustAtoi(idx), cmd)
 	case "repo-config-ssh":
 		mustProject(project)
@@ -2192,12 +2202,16 @@ func readDefaultRepo(project string, paths devkitpaths.Paths) string {
 	return project
 }
 
-func gitIdentityForRepoCommand(home, repoPath, name, email string) string {
+func gitIdentityForRepoCommand(authority sshauthority.Authority, home, repoPath, name, email string) (string, error) {
+	sshCommand, err := authority.Command(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(
 		`set -e; if [ -d %[1]s/.git ] || git -C %[1]s rev-parse --git-dir >/dev/null 2>&1; then git -C %[1]s config extensions.worktreeConfig true; git -C %[1]s config --worktree user.name %[3]s; git -C %[1]s config --worktree user.email %[4]s; git -C %[1]s config --worktree core.sshCommand %[2]s; fi`,
 		shSingleQuote(repoPath),
-		shSingleQuote("ssh -F "+filepath.Join(home, ".ssh", "config")),
+		shSingleQuote(sshCommand),
 		shSingleQuote(name),
 		shSingleQuote(email),
-	)
+	), nil
 }

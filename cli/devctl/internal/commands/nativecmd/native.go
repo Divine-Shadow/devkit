@@ -905,6 +905,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
+	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
+		return err
+	}
 	if !ctx.DryRun {
 		p, err = isolateManagedEgressProxyForRun(p, os.Getpid())
 		if err != nil {
@@ -1939,6 +1942,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if p.Launcher != "bubblewrap" {
 		return fmt.Errorf("native exec currently supports --launcher bubblewrap only")
 	}
+	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
+		return err
+	}
 	dryRun := ctx.DryRun || parsed.dryRun
 	cleanupProxy, err := ensureManagedEgressProxy(p, dryRun)
 	if err != nil {
@@ -2072,6 +2078,9 @@ func prepareWithManagedEgressProxy(
 	dryRun bool,
 	prepare func(nativeplan.Plan) error,
 ) error {
+	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
+		return err
+	}
 	return withManagedEgressProxy(p, dryRun, func() error {
 		if dryRun {
 			return nil
@@ -2088,16 +2097,16 @@ func prepareNativeGitBootstrapAndWorktrees(
 	opts wtx.NativeOptions,
 	dryRun bool,
 ) error {
+	sshCommand, err := launch.GitBootstrapSSHCommand(p)
+	if err != nil {
+		return err
+	}
 	if !dryRun {
 		if err := wtx.PreflightNative(opts); err != nil {
 			return err
 		}
 	}
 	return withManagedEgressProxy(p, dryRun, func() error {
-		sshCommand, err := launch.GitBootstrapSSHCommand(p)
-		if err != nil {
-			return err
-		}
 		hostHome := strings.TrimSpace(p.Agent.HostHome)
 		homeWasAbsent := false
 		var ownedHome os.FileInfo

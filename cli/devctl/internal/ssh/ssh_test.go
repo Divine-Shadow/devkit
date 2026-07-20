@@ -1,11 +1,29 @@
 package ssh
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"devkit/cli/devctl/internal/sshauthority"
+)
 
 func TestBuildConfigureScripts(t *testing.T) {
 	home := "/workspace/.devhome"
 	repo := "/workspace"
-	scripts := BuildConfigureScripts(home, repo)
+	executable := filepath.Join(t.TempDir(), "package-ssh")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := sshauthority.New(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scripts, err := BuildConfigureScripts(authority, home, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(scripts) != 5 {
 		t.Fatalf("expected 5 scripts, got %d", len(scripts))
 	}
@@ -24,8 +42,15 @@ func TestBuildConfigureScripts(t *testing.T) {
 	if !contains(scripts[3], repo) {
 		t.Fatalf("unset repo-level core.sshCommand missing repo: %q", scripts[3])
 	}
-	if !contains(scripts[4], "GIT_SSH_COMMAND=\"ssh -F ~/.ssh/config\"") && !contains(scripts[4], "GIT_SSH_COMMAND=\"ssh -F $home/.ssh/config\"") {
+	if !contains(scripts[4], "GIT_SSH_COMMAND=") ||
+		!contains(scripts[4], executable) ||
+		!contains(scripts[4], filepath.Join(home, ".ssh", "config")) {
 		t.Fatalf("pull cmd missing explicit GIT_SSH_COMMAND: %q", scripts[4])
+	}
+	for _, script := range scripts {
+		if strings.Contains(script, "ssh -F") {
+			t.Fatalf("script emitted ambient SSH authority: %q", script)
+		}
 	}
 }
 

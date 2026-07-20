@@ -379,9 +379,10 @@ func verifyFreshNativeWorktree(wt, baseRef string) error {
 func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry bool) error {
 	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
 	repoPath := filepath.Join(devRoot, repo)
-	// Host git should not inherit container SSH settings; force ssh
+	// Legacy local worktree setup must not invent an SSH executable or config.
+	// Promoted SSH bootstrap uses SetupNative with the package-owned command.
 	envGit := func(args ...string) []string {
-		return append([]string{"-u", "GIT_SSH_COMMAND", "git", "-c", "core.sshCommand=ssh -F /dev/null"}, args...)
+		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}, args...)
 	}
 
 	var repoWorktreesDir string

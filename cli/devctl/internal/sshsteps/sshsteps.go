@@ -1,5 +1,12 @@
 package sshsteps
 
+import (
+	"path/filepath"
+	"strings"
+
+	"devkit/cli/devctl/internal/sshauthority"
+)
+
 // Small helpers that return minimal bash snippets to avoid large inline scripts.
 
 // MkdirSSH returns a command to create ~/.ssh with safe perms.
@@ -13,18 +20,30 @@ func WaitConfigNonEmpty(home string) string {
 }
 
 // GitSetGlobalSSH sets git global core.sshCommand to use the per-agent config.
-func GitSetGlobalSSH(home string) string {
-	return "export HOME='" + home + "' && git config --global core.sshCommand 'ssh -F '" + home + "'/.ssh/config'"
+func GitSetGlobalSSH(authority sshauthority.Authority, home string) (string, error) {
+	command, err := authority.Command(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return "", err
+	}
+	return "export HOME=" + shellQuote(home) + " && git config --global core.sshCommand " + shellQuote(command), nil
 }
 
 // GitSetRepoSSH sets repo-level core.sshCommand in the given repo path.
-func GitSetRepoSSH(repoPath, home string) string {
-	return "cd '" + repoPath + "' && git config core.sshCommand 'ssh -F '" + home + "'/.ssh/config'"
+func GitSetRepoSSH(authority sshauthority.Authority, repoPath, home string) (string, error) {
+	command, err := authority.Command(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return "", err
+	}
+	return "cd " + shellQuote(repoPath) + " && git config core.sshCommand " + shellQuote(command), nil
 }
 
 // GitPullWithSSH runs git pull --ff-only with the per-agent SSH config.
-func GitPullWithSSH(repoPath, home string) string {
-	return "set -e; cd '" + repoPath + "'; GIT_SSH_COMMAND=\"ssh -F '" + home + "'/.ssh/config\" git pull --ff-only || true"
+func GitPullWithSSH(authority sshauthority.Authority, repoPath, home string) (string, error) {
+	command, err := authority.Command(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return "", err
+	}
+	return "set -e; cd " + shellQuote(repoPath) + "; GIT_SSH_COMMAND=" + shellQuote(command) + " git pull --ff-only || true", nil
 }
 
 // Paths to common SSH files under the agent home
@@ -36,4 +55,8 @@ func ConfigPath(home string) string     { return home + "/.ssh/config" }
 // WriteCmd returns a tiny shell snippet to write to 'path' via stdin then chmod to mode.
 func WriteCmd(path string, mode string) string {
 	return "cat > '" + path + "' && chmod " + mode + " '" + path + "'"
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }

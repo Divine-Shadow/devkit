@@ -14,9 +14,21 @@ import (
 	"devkit/cli/devctl/internal/governanceentrypoint"
 	"devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/sshauthority"
 )
 
 func TestMain(m *testing.M) {
+	testExecutable, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	testSSHAuthority, err := sshauthority.New(testExecutable)
+	if err != nil {
+		panic(err)
+	}
+	resolvePackageSSHAuthority = func() (sshauthority.Authority, error) {
+		return testSSHAuthority, nil
+	}
 	codexSystemConfigPath = filepath.Join(os.TempDir(), "devkit-launch-test-missing-codex-config.toml")
 	resolveOuroGovernanceRuntimeIdentityForPlan = func(string) (ouroGovernanceRuntimeIdentity, error) {
 		return ouroGovernanceRuntimeIdentity{
@@ -24,6 +36,19 @@ func TestMain(m *testing.M) {
 		}, nil
 	}
 	os.Exit(m.Run())
+}
+
+func testPackageSSHCommand(t *testing.T, configPath string) string {
+	t.Helper()
+	authority, err := resolvePackageSSHAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := authority.Command(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return command
 }
 
 func devkitRootFromPackage(t *testing.T) string {
@@ -1100,7 +1125,7 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 
-	sshCommand := "ssh -F " + filepath.Join(p.Agent.SandboxHome, ".ssh", "config")
+	sshCommand := testPackageSSHCommand(t, filepath.Join(p.Agent.SandboxHome, ".ssh", "config"))
 	cfg := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
 	for _, want := range []string{
 		gitSSHManagedBegin,
@@ -1218,7 +1243,7 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	if err != nil {
 		t.Fatalf("PrepareGitBootstrap: %v", err)
 	}
-	expectedCommand := "ssh -F " + filepath.Join(hostHome, ".ssh", "config")
+	expectedCommand := testPackageSSHCommand(t, filepath.Join(hostHome, ".ssh", "config"))
 	if sshCommand != expectedCommand {
 		t.Fatalf("bootstrap SSH command = %q, want %q", sshCommand, expectedCommand)
 	}

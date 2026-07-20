@@ -113,7 +113,11 @@
           inherit pkgs;
         };
       mkDevctl =
-        pkgs:
+        {
+          pkgs,
+          sshExecutable,
+          tags ? [ ],
+        }:
         pkgs.buildGoModule {
           pname = "devkit-devctl";
           version = "dev";
@@ -121,10 +125,12 @@
           modRoot = "cli/devctl";
           vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
           subPackages = [ "." ];
+          inherit tags;
           env.CGO_ENABLED = "0";
           ldflags = [
             "-s"
             "-w"
+            "-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=${sshExecutable}"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"
@@ -132,6 +138,207 @@
             rmdir "$out/bin"
             cp "$src/flake.nix" "$src/flake.lock" "$out/"
             cp -R "$src/nix" "$src/overlays" "$out/"
+          '';
+        };
+      mkProductionDevctl =
+        pkgs:
+        mkDevctl {
+          inherit pkgs;
+          sshExecutable = "${pkgs.openssh}/bin/ssh";
+        };
+      mkProductFreshConsumerSSHAuthorityCheck =
+        pkgs:
+        let
+          fixtureSSH = pkgs.writeShellScript "devkit-product-fixture-ssh" ''
+            set -eu
+            : "''${DEVKIT_TEST_PRODUCT_REMOTE:?}"
+            : "''${DEVKIT_TEST_PRODUCT_SSH_LOG:?}"
+            : "''${DEVKIT_TEST_PRODUCT_PROXY_USED:?}"
+
+            printf '%s\n' "$*" >> "$DEVKIT_TEST_PRODUCT_SSH_LOG"
+            config=
+            previous=
+            configuration_query=0
+            for argument in "$@"; do
+              if [ "$previous" = "-F" ]; then
+                config="$argument"
+              fi
+              if [ "$argument" = "-G" ]; then
+                configuration_query=1
+              fi
+              previous="$argument"
+            done
+            test -n "$config"
+            test -r "$config"
+
+            identity="$(${pkgs.gnused}/bin/sed -n 's/^  IdentityFile //p' "$config" | ${pkgs.coreutils}/bin/head -n 1)"
+            test -n "$identity"
+            test -r "$identity"
+            proxy_command="$(${pkgs.gnused}/bin/sed -n 's/^  ProxyCommand //p' "$config" | ${pkgs.coreutils}/bin/head -n 1)"
+            test -n "$proxy_command"
+
+            if [ "$configuration_query" = 1 ]; then
+              exit 0
+            fi
+            proxy_command="''${proxy_command//%h/ssh.github.com}"
+            proxy_command="''${proxy_command//%p/443}"
+            ${pkgs.bash}/bin/bash -c "$proxy_command" </dev/null >/dev/null
+            printf '%s\n' "$config" > "$DEVKIT_TEST_PRODUCT_PROXY_USED"
+            exec ${pkgs.git}/bin/git-upload-pack "$DEVKIT_TEST_PRODUCT_REMOTE"
+          '';
+          fixtureBwrap = pkgs.writeShellScript "devkit-fresh-consumer-bwrap" ''
+            set -eu
+            all_arguments="$*"
+            governance_env=
+            governance_catalog=
+            governance_state=
+            host_home=
+            host_worktree=
+            sandbox_home=
+            codex_home=
+            rollout_dir=
+            mount_policy=
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --ro-bind|--bind)
+                  source_path="$2"
+                  target_path="$3"
+                  case "$target_path" in
+                    /workspaces/dev/.devkit/ouro8-governance-env.sh) governance_env="$source_path" ;;
+                    /workspaces/dev/.devkit/ouro8-governance-repo-env.json) governance_catalog="$source_path" ;;
+                    /workspaces/dev/.devkit/governance-control-plane) governance_state="$source_path" ;;
+                    /workspaces/dev/agent-worktrees/agent*/ouroboros-ide)
+                      host_worktree="$source_path"
+                      ;;
+                    /workspaces/dev/agent-worktrees/agent*/ouroboros-ide/.devhome-agent*|\
+                    /workspaces/dev/agent-worktrees/agent*/.devhome-agent*)
+                      host_home="$source_path"
+                      ;;
+                  esac
+                  shift 3
+                  ;;
+                --setenv)
+                  case "$2" in
+                    HOME) sandbox_home="$3" ;;
+                    CODEX_HOME) codex_home="$3" ;;
+                    CODEX_ROLLOUT_DIR) rollout_dir="$3" ;;
+                    DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY) mount_policy="$3" ;;
+                  esac
+                  shift 3
+                  ;;
+                *)
+                  shift
+                  ;;
+              esac
+            done
+
+            case "$all_arguments" in
+              *__DEVKIT_READINESS_CHECK__*)
+                emit() {
+                  name="$1"
+                  result="$2"
+                  detail="$3"
+                  encoded="$(printf '%s' "$detail" | ${pkgs.coreutils}/bin/base64 -w0)"
+                  printf '__DEVKIT_READINESS_CHECK__\truntime\t%s\t%s\t%s\n' "$name" "$result" "$encoded"
+                }
+                emit sandbox-command 0 ""
+                emit broker-socket 0 ""
+                emit required-tools 0 ""
+                emit docker-client 0 ""
+                emit purescript-spago-netlify 0 ""
+                emit playwright-browser 0 ""
+                emit codex-version 0 ""
+                if [ "$mount_policy" = devkit/workspace-egress/v3 ] &&
+                   [ -n "$host_worktree" ] &&
+                   ${pkgs.git}/bin/git -C "$host_worktree" diff --quiet &&
+                   ${pkgs.git}/bin/git -C "$host_worktree" diff --cached --quiet &&
+                   [ "$(${pkgs.git}/bin/git -C "$host_worktree" rev-parse HEAD)" = "$(${pkgs.git}/bin/git -C "$host_worktree" rev-parse refs/remotes/origin/main)" ]; then
+                  emit package-runtime-tools 0 ""
+                else
+                  emit package-runtime-tools 1 "package runtime identity or clean current Product worktree is missing"
+                fi
+                if [ -r "$governance_env" ] && [ -r "$governance_catalog" ] && [ -d "$governance_state" ]; then
+                  emit governance-provenance 0 ""
+                else
+                  emit governance-provenance 1 "prepared governance runtime support is not projected into the sandbox"
+                fi
+                if [ -r "$host_home/.codex/config.toml" ]; then
+                  emit codex-provider-config 0 ""
+                  emit app-server-preparation 0 ""
+                else
+                  emit codex-provider-config 1 "Nix-authored Codex config is missing"
+                  emit app-server-preparation 1 "source-defined app-server preparation is missing"
+                fi
+                exit 0
+                ;;
+            esac
+
+            : "''${DEVKIT_TEST_APP_SERVER_BOUNDARY_LOG:?}"
+            config_present=0
+            if [ -r "$host_home/.codex/config.toml" ]; then
+              config_present=1
+            fi
+            {
+              printf 'HOME=%s\n' "$sandbox_home"
+              printf 'CODEX_HOME=%s\n' "$codex_home"
+              printf 'CODEX_ROLLOUT_DIR=%s\n' "$rollout_dir"
+              printf 'CONFIG_PRESENT=%s\n' "$config_present"
+            } > "$DEVKIT_TEST_APP_SERVER_BOUNDARY_LOG"
+            printf '__DEVKIT_APP_SERVER_BOUNDARY__=PASS\n'
+          '';
+          fixtureAllowlist = pkgs.writeText "devkit-fresh-consumer-egress-allowlist" ''
+            ssh.github.com
+          '';
+          fixtureCodexConfig = pkgs.writeText "devkit-fresh-consumer-codex-config.toml" ''
+            # source = nixos-wsl codex config
+            model = "gpt-5.5"
+            model_provider = "openai"
+
+            [profiles.openai]
+            model = "gpt-5.5"
+            model_provider = "openai"
+          '';
+          fixtureDevctlBase = mkDevctl {
+            inherit pkgs;
+            sshExecutable = fixtureSSH;
+            tags = [ "devkitintegration" ];
+          };
+          fixtureDevctl = fixtureDevctlBase.overrideAttrs (old: {
+            postInstall = old.postInstall + ''
+              substituteInPlace "$out/overlays/dev-all/devkit.yaml" \
+                --replace-fail "../../../ouroboros-ide/infra/docker/dev/tinyproxy/allowlist.txt" "${fixtureAllowlist}"
+            '';
+          });
+        in
+        pkgs.buildGoModule {
+          pname = "devkit-product-fresh-consumer-ssh-authority-check";
+          version = "dev";
+          src = ./cli/devctl;
+          modRoot = ".";
+          vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+          subPackages = [ "." ];
+          env.CGO_ENABLED = "0";
+          DEVKIT_TEST_INSTALLED_RUNTIME_DEVCTL = "${fixtureDevctl}/kit/bin/devctl";
+          DEVKIT_TEST_INSTALLED_RUNTIME_OVERLAYS = "${fixtureDevctl}/overlays";
+          DEVKIT_TEST_INSTALLED_RUNTIME_BROKER = "${self.packages.${pkgs.system}.postgres-broker}/bin/postgres-broker";
+          DEVKIT_TEST_INSTALLED_RUNTIME_SHELL = "${pkgs.bash}/bin/bash";
+          DEVKIT_TEST_INSTALLED_RUNTIME_BWRAP = fixtureBwrap;
+          DEVKIT_TEST_INSTALLED_SSH_EXECUTABLE = fixtureSSH;
+          DEVKIT_TEST_INSTALLED_CODEX_CONFIG_SOURCE = fixtureCodexConfig;
+          DEVKIT_TEST_SINGLE_FRESH_CONSUMER = "1";
+          nativeCheckInputs = [
+            pkgs.git
+          ];
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test ./integration -run '^TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness$' -count=1 -v
+            runHook postCheck
+          '';
+          installPhase = ''
+            mkdir -p "$out"
+            printf '%s\n' ${fixtureDevctl} > "$out/fixture-devctl"
+            printf '%s\n' ${fixtureSSH} > "$out/fixture-ssh"
           '';
         };
       mkNativeBootstrapStdioCleanupCheck =
@@ -245,7 +452,7 @@
       mkManagementInspectionApp =
         pkgs:
         let
-          devctl = mkDevctl pkgs;
+          devctl = mkProductionDevctl pkgs;
         in
         pkgs.writeShellApplication {
           name = "management-inspection";
@@ -613,7 +820,7 @@
           };
         in
         {
-          devctl = mkDevctl pkgs;
+          devctl = mkProductionDevctl pkgs;
           dev-all-runtime-bundle = runtimeBundle;
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {
@@ -667,12 +874,30 @@
           };
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
-          management-inspection-cli = mkDevctl pkgs;
+          management-inspection-cli = mkProductionDevctl pkgs;
           native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
+          product-fresh-consumer-ssh-authority = mkProductFreshConsumerSSHAuthorityCheck pkgs;
+
+          devctl-openssh-executable-authority =
+            let
+              devctl = mkProductionDevctl pkgs;
+              closure = pkgs.closureInfo {
+                rootPaths = [ devctl ];
+              };
+            in
+            pkgs.runCommand "devkit-devctl-openssh-executable-authority" {
+              nativeBuildInputs = [ pkgs.gnugrep ];
+            } ''
+              grep -aqF '${pkgs.openssh}/bin/ssh' ${devctl}/kit/bin/devctl
+              grep -qFx '${pkgs.openssh}' ${closure}/store-paths
+              mkdir -p "$out"
+              printf '%s\n' '${pkgs.openssh}/bin/ssh' > "$out/ssh-executable"
+              cp ${closure}/store-paths "$out/store-paths"
+            '';
 
           devctl-overlay-runtime-authority-layout =
             let
-              devctl = mkDevctl pkgs;
+              devctl = mkProductionDevctl pkgs;
             in
             pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
               nativeBuildInputs = [ pkgs.gnugrep ];

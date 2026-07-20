@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/sshauthority"
 )
 
 // TestResolveServiceOverlay ensures overlays can declare a default service name.
@@ -67,17 +68,31 @@ func TestApplyOverlayEnvLoadsEnvFiles(t *testing.T) {
 func TestGitIdentityForRepoCommandUsesIdentityValues(t *testing.T) {
 	home := "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2"
 	repoPath := "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide"
-	cmd := gitIdentityForRepoCommand(
+	executable := filepath.Join(t.TempDir(), "package-ssh")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := sshauthority.New(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := gitIdentityForRepoCommand(
+		authority,
 		home,
 		repoPath,
 		"Agent 2 of BayeSartre",
 		"agent+2@ouroboros-ai.com",
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, want := range []string{
 		"config --worktree user.name 'Agent 2 of BayeSartre'",
 		"config --worktree user.email 'agent+2@ouroboros-ai.com'",
-		"config --worktree core.sshCommand 'ssh -F /workspaces/dev/agent-worktrees/agent2/.devhome-agent2/.ssh/config'",
+		"config --worktree core.sshCommand",
+		executable,
+		filepath.Join(home, ".ssh", "config"),
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("command missing %q:\n%s", want, cmd)
@@ -86,6 +101,9 @@ func TestGitIdentityForRepoCommandUsesIdentityValues(t *testing.T) {
 
 	if strings.Contains(cmd, "user.name '"+home+"'") || strings.Contains(cmd, "user.email '"+home+"'") {
 		t.Fatalf("command used agent home as git identity:\n%s", cmd)
+	}
+	if strings.Contains(cmd, "ssh -F") {
+		t.Fatalf("command used ambient SSH executable:\n%s", cmd)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"devkit/cli/devctl/internal/governanceentrypoint"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/sshauthority"
 )
 
 type Command struct {
@@ -26,6 +27,10 @@ type Command struct {
 }
 
 func Prepare(p nativeplan.Plan) error {
+	sshAuthority, err := resolvePackageSSHAuthority()
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(p.Agent.HostWorktree) == "" {
 		return fmt.Errorf("host worktree is empty")
 	}
@@ -91,7 +96,7 @@ func Prepare(p nativeplan.Plan) error {
 	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
 		return err
 	}
-	if err := ensureGitSSHConfig(p); err != nil {
+	if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
 		return err
 	}
 	if err := ensureResolvConf(p.DNS.ResolvConf); err != nil {
@@ -178,8 +183,9 @@ const (
 )
 
 var codexSystemConfigPath = "/etc/codex/config.toml"
+var resolvePackageSSHAuthority = sshauthority.Package
 
-func ensureGitSSHConfig(p nativeplan.Plan) error {
+func ensureGitSSHConfig(p nativeplan.Plan, sshAuthority sshauthority.Authority) error {
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
 	sandboxHome := strings.TrimSpace(p.Agent.SandboxHome)
 	if hostHome == "" || sandboxHome == "" {
@@ -193,7 +199,10 @@ func ensureGitSSHConfig(p nativeplan.Plan) error {
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", sshDir, err)
 	}
-	sshCommand := "ssh -F " + filepath.Join(sandboxHome, ".ssh", "config")
+	sshCommand, err := sshAuthority.Command(filepath.Join(sandboxHome, ".ssh", "config"))
+	if err != nil {
+		return err
+	}
 	proxyURL := ""
 	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
 		proxyURL = p.Proxy.HTTPProxy
@@ -221,7 +230,11 @@ func GitBootstrapSSHCommand(p nativeplan.Plan) (string, error) {
 	if hostHome == "" {
 		return "", fmt.Errorf("native Git bootstrap requires an agent host home")
 	}
-	return "ssh -F " + filepath.Join(hostHome, ".ssh", "config"), nil
+	sshAuthority, err := resolvePackageSSHAuthority()
+	if err != nil {
+		return "", err
+	}
+	return sshAuthority.Command(filepath.Join(hostHome, ".ssh", "config"))
 }
 
 // PrepareGitBootstrap seeds and configures only the package-owned SSH identity

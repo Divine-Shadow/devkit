@@ -984,7 +984,7 @@ func TestSetupNativeProductBootstrapRejectsHTTPSFallback(t *testing.T) {
 		Repo:             "ouroboros-ide",
 		Origin:           "https://github.com/Divine-Shadow/ouroboros-ide.git",
 		Count:            1,
-		GitSSHCommand:    "ssh -F /nix/store/package-owned/config",
+		GitSSHCommand:    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openssh/bin/ssh -F /nix/store/package-owned/config",
 		RequireSSHOrigin: true,
 		DryRun:           true,
 	})
@@ -1008,7 +1008,7 @@ func TestSetupNativeProductBootstrapRejectsAmbientCheckoutOriginAuthority(t *tes
 		DevkitRoot:       devkitRoot,
 		Repo:             "ouroboros-ide",
 		Count:            1,
-		GitSSHCommand:    "ssh -F /nix/store/package-owned/config",
+		GitSSHCommand:    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openssh/bin/ssh -F /nix/store/package-owned/config",
 		RequireSSHOrigin: true,
 		DryRun:           true,
 	})

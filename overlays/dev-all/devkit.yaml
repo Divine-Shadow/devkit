@@ -170,7 +170,7 @@ readiness:
         }
   repo_checks:
     - name: git-remote
-      command: GIT_SSH_COMMAND="ssh -o ProxyCommand=none -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts -i $HOME/.ssh/id_ed25519" git ls-remote --heads origin >/dev/null
+      command: test -n "$(git config --worktree --get core.sshCommand)" && GIT_CONFIG_NOSYSTEM=1 git ls-remote --heads origin >/dev/null
     - name: frontend-warm
       command: |
         if [ -f frontend/package.json ]; then

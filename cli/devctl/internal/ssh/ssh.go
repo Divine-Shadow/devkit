@@ -1,5 +1,12 @@
 package ssh
 
+import (
+	"path/filepath"
+	"strings"
+
+	"devkit/cli/devctl/internal/sshauthority"
+)
+
 // WriteStep represents a content write into a file accompanied by a chmod.
 // The Script should be a tiny bash -lc snippet that reads from stdin and writes the file.
 type WriteStep struct {
@@ -30,15 +37,24 @@ func BuildWriteSteps(home string, key, pub, known []byte, cfg string) []WriteSte
 // for the given agent HOME and repository path inside the container.
 // Includes: wait for ~/.ssh/config to be non-empty, set global core.sshCommand,
 // set repo-level core.sshCommand, and git pull --ff-only using the config.
-func BuildConfigureScripts(home string, repoPath string) []string {
-	// Use tilde-based ssh config anchored at the provided home, set global core.sshCommand,
-	// align the container user's HOME with the anchored ~/.ssh and ~/.gitconfig, scrub any
-	// repo-local override, then validate via explicit GIT_SSH_COMMAND.
+func BuildConfigureScripts(authority sshauthority.Authority, home string, repoPath string) ([]string, error) {
+	sshCommand, err := authority.Command(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return nil, err
+	}
+	// Use the absolute source-derived config anchored at the provided home, set
+	// global core.sshCommand, align the container user's HOME with the anchored
+	// ~/.ssh and ~/.gitconfig, scrub any repo-local override, then validate via
+	// explicit GIT_SSH_COMMAND.
 	return []string{
 		"home=\"" + home + "\"; for i in $(seq 1 20); do [ -s \"$home/.ssh/config\" ] && break || sleep 0.25; done",
-		"home=\"" + home + "\"; HOME=\"$home\" git config --global core.sshCommand \"ssh -F ~/.ssh/config\"",
+		"home=\"" + home + "\"; HOME=\"$home\" git config --global core.sshCommand " + shellQuote(sshCommand),
 		"home=\"" + home + "\"; user_home=\"${HOME:-}\"; if [ -z \"$user_home\" ] || [ ! -d \"$user_home\" ] || [ ! -w \"$user_home\" ]; then for candidate in /home/dev /home/node; do if [ -d \"$candidate\" ] && [ -w \"$candidate\" ]; then user_home=\"$candidate\"; break; fi; done; fi; if [ -n \"$user_home\" ] && [ \"$user_home\" != \"$home\" ]; then mkdir -p \"$user_home\"; if [ -e \"$user_home/.ssh\" ] && [ ! -L \"$user_home/.ssh\" ]; then rm -rf \"$user_home/.ssh\"; fi; ln -sfn \"$home/.ssh\" \"$user_home/.ssh\"; if [ -e \"$user_home/.gitconfig\" ] && [ ! -L \"$user_home/.gitconfig\" ]; then rm -f \"$user_home/.gitconfig\"; fi; ln -sfn \"$home/.gitconfig\" \"$user_home/.gitconfig\"; fi",
 		"cd '" + repoPath + "' && git config --unset core.sshCommand || true",
-		"home=\"" + home + "\"; set -e; cd '" + repoPath + "'; HOME=\"$home\" GIT_SSH_COMMAND=\"ssh -F ~/.ssh/config\" git pull --ff-only || true",
-	}
+		"home=\"" + home + "\"; set -e; cd '" + repoPath + "'; HOME=\"$home\" GIT_SSH_COMMAND=" + shellQuote(sshCommand) + " git pull --ff-only || true",
+	}, nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
