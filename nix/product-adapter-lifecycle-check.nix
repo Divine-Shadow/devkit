@@ -1,5 +1,6 @@
 {
   pkgs,
+  mkDevAllRuntimeBundle,
   mkPinnedCodex,
   mkProductAdapterPackage,
 }:
@@ -7,12 +8,18 @@ let
   fixtureRoot = "/run/product-adapter-lifecycle";
   candidateParent = "/var/lib/product-adapter-candidates";
   pinnedCodex = mkPinnedCodex pkgs;
-  runtimeRoot = pkgs.runCommand "devkit-product-lifecycle-runtime-root" { } ''
-    mkdir -p "$out"
-  '';
+  lifecycleProductRevision = "7c49b072973e6ea3ced9515352c79cfbd915754e";
+  runtimeBundleFixture =
+    import ./dev-all-runtime-bundle-fixture.nix {
+      inherit pkgs;
+      productSourceRev = lifecycleProductRevision;
+    };
+  runtimeBundle =
+    mkDevAllRuntimeBundle ({ inherit pkgs; } // runtimeBundleFixture);
   runtimeLauncher = pkgs.writeShellScript "devkit-product-runtime-launcher" ''
-    exec "$@"
+    exec '${runtimeBundle}/bin/dev-all-runtime-bundle' exec "$@"
   '';
+  runtimeRoot = runtimeBundle;
   brokerExecutable = pkgs.writeShellScript "devkit-product-fixture-broker" ''
     exit 0
   '';
@@ -27,9 +34,8 @@ let
     model = "gpt-5.5"
     model_provider = "openai"
   '';
-  governanceEnv = pkgs.writeText "devkit-product-governance-env" ''
-    GOVERNANCE_MODE=source-derived
-  '';
+  governanceEnv =
+    "${runtimeBundle}/share/dev-all-runtime-bundle/identity.env";
   governanceRepoConfig = pkgs.writeText "devkit-product-governance-repo-config" ''
     {}
   '';
@@ -73,7 +79,8 @@ let
       git -C "$seed" commit -m fixture
     git init --bare --initial-branch=main "$out/ouroboros-ide.git"
     git -C "$seed" push "$out/ouroboros-ide.git" main:main
-    git -C "$seed" rev-parse HEAD > "$out/revision"
+    test "$(git -C "$seed" rev-parse HEAD)" = '${lifecycleProductRevision}'
+    printf '%s\n' '${lifecycleProductRevision}' > "$out/revision"
   '';
 
   fixtureManifestRelative = "share/devkit-product-adapter-fixture/authority.json";
@@ -407,6 +414,17 @@ EOF
     adapter=${fixtureAdapter}/bin/product-adapter
     revision="$(${pkgs.coreutils}/bin/cat ${fixtureSource}/revision)"
     test -f ${fixtureAdapter}/${fixtureManifestRelative}
+    env -i PATH=/nonexistent \
+      ${runtimeBundle}/bin/dev-all-runtime-bundle validate
+    env -i PATH=/nonexistent ${runtimeLauncher} ${pkgs.coreutils}/bin/true
+    ${pkgs.jq}/bin/jq -e \
+      --arg launcher '${runtimeLauncher}' \
+      --arg root '${runtimeBundle}' \
+      --arg governance '${runtimeBundle}/share/dev-all-runtime-bundle/identity.env' \
+      '.devkitProductAdapter.runtimeLauncherPath == $launcher and
+       .devkitProductAdapter.runtimeRoot == $root and
+       .devkitProductAdapter.governanceEnvPath == $governance' \
+      ${fixtureAdapter}/${fixtureManifestRelative} >/dev/null
     if ${fixtureAdapter}/bin/product-proxy supervise \
       >${fixtureRoot}/direct-supervise.stdout \
       2>${fixtureRoot}/direct-supervise.stderr; then

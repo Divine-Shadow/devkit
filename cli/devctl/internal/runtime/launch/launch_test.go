@@ -17,6 +17,10 @@ import (
 	"devkit/cli/devctl/internal/sshauthority"
 )
 
+const testRuntimeSourceRev = "1111111111111111111111111111111111111111"
+const testArtifactColumnVersion = "0.0.0-runtime-constructor-test"
+const testArtifactColumnJarSHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestMain(m *testing.M) {
 	ambientCodexConfig, hadAmbientCodexConfig := os.LookupEnv("DEVKIT_CODEX_CONFIG_SOURCE")
 	if err := os.Unsetenv("DEVKIT_CODEX_CONFIG_SOURCE"); err != nil {
@@ -98,43 +102,13 @@ func initTestGitWorktree(t *testing.T, path string) {
 	runTestCommand(t, "", "git", "init", path)
 }
 
-func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnRepository(t *testing.T) {
+func TestDevAllRuntimeExportsSourceFreePublicBundleConstructor(t *testing.T) {
 	root := devkitRootFromPackage(t)
 	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-all", "runtime.nix"))
 	for _, want := range []string{
-		"packages.pinnedGovernanceJar",
-		"packages.pinnedArtifactColumnPluginRepository",
-		"packages.pinnedSbtControlPlaneRuntimeJar",
-		"export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar",
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
-		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH",
-		"export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=$(cat ${packages.pinnedGovernanceJar}/share/subagent-governance/subagent-governance.jar.sha256)",
-		"export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256",
-		"packages.pinnedSubmitToCiJar",
-		"export SUBMIT_TO_CI_JAR=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar",
-		"export SUBMIT_TO_CI_HASH_PATH=${packages.pinnedSubmitToCiJar}/share/submit-to-ci/submit-to-ci.jar.sha256",
-		"export SUBMIT_TO_CI_BUILD_POLICY=reuse",
-		"export SUBMIT_TO_CI_EXTERNAL_JAR=1",
-		"export SUBMIT_TO_CI_FLAKE_ARTIFACT=0",
-		"export SUBMIT_TO_CI_PINNED_ARTIFACT=0",
-		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=$SUBMIT_TO_CI_JAR",
-		"export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=$(cat \"$SUBMIT_TO_CI_HASH_PATH\")",
-		"export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH=${packages.pinnedArtifactColumnPluginRepository}",
-		"export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV=$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH/share/artifact-column-plugin/metadata.env",
-		"export ARTIFACT_COLUMN_PLUGIN_VERSION=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_VERSION=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
-		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
-		"export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
-		"export ARTIFACT_COLUMN_PLUGIN_IVY_PATH=$(awk -F= '/^ARTIFACT_COLUMN_PLUGIN_IVY_PATH=/{print $2; exit}' \"$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV\")",
-		"export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=$(cat ${packages.pinnedArtifactColumnPluginRepository}/share/artifact-column-plugin/artifact-column-plugin.jar.sha256)",
-		"export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT=1",
-		"export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT=0",
-		"export SBT_CONTROL_PLANE_RUNTIME_JAR=${packages.pinnedSbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar",
-		"export SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256=$(cat ${packages.pinnedSbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar.sha256)",
-		"export SBT_CONTROL_PLANE_PINNED_ARTIFACT=1",
-		"export SBT_CONTROL_PLANE_FLAKE_ARTIFACT=0",
-		"export SBT2_CLIENT_MODE=force",
-		"export SBT2_JAVA_XMX=6g",
-		"export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off",
+		"packages.diagnosticRuntimeBundle",
+		"source ${packages.diagnosticRuntimeBundle}/share/dev-all-runtime-bundle/identity.env",
+		"Production Fleet composition",
 	} {
 		if !strings.Contains(runtimeNix, want) {
 			t.Fatalf("dev-all runtime missing %q:\n%s", want, runtimeNix)
@@ -143,47 +117,25 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 
 	flakeNix := readTestFile(t, filepath.Join(root, "flake.nix"))
 	for _, want := range []string{
-		`governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";`,
-		`submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";`,
-		`artifactColumnRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${artifactColumnRuntimeVersion}";`,
-		`sbtControlPlaneRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${sbtControlPlaneRuntimeVersion}";`,
-		`mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;`,
-		`mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;`,
-		`mkPinnedArtifactColumnPluginRepository = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;`,
-		`mkPinnedArtifactColumnPluginSmoke = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-adoption-check;`,
-		`mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-current-source;`,
-		`assert toString submitToCiJar == "/nix/store/iymxmh43af91w1rh1i58xrs9a3cvd3kz-submit-to-ci-dev";`,
-		`assert submitToCiJar.drvPath == "/nix/store/bh31sf8fy6najxayfq74h8p2sy74178g-submit-to-ci-dev.drv";`,
-		`dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;`,
+		`mkDevAllRuntimeBundle = import ./nix/mk-dev-all-runtime-bundle.nix;`,
+		`mkDiagnosticRuntimeFixture =`,
+		`mkDiagnosticRuntimeBundle =`,
+		`runtimeBundle = mkDiagnosticRuntimeBundle pkgs;`,
+		`dev-all-runtime-bundle = runtimeBundle;`,
 		`dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;`,
-		`pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;`,
-		`pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;`,
-		`pinnedArtifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;`,
-		`pinnedSbtControlPlaneRuntimeJar = mkPinnedSbtControlPlaneRuntimeJar pkgs;`,
-		`pinned-governance-jar = mkPinnedGovernanceJar pkgs;`,
-		`pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;`,
-		`pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;`,
-		`pinned-sbt-control-plane-runtime-jar = mkPinnedSbtControlPlaneRuntimeJar pkgs;`,
+		`dev-all-runtime-bundle-public-constructor =`,
+		`mkDevAllRuntimeBundleConstructorContract pkgs;`,
 	} {
 		if !strings.Contains(flakeNix, want) {
 			t.Fatalf("flake missing %q:\n%s", want, flakeNix)
 		}
 	}
-	for _, forbidden := range []string{
-		`mkPinnedArtifactColumnPluginRepository = pkgs: submitRuntimeSourceFlake`,
-		`mkPinnedArtifactColumnPluginSmoke = pkgs: submitRuntimeSourceFlake`,
-	} {
-		if strings.Contains(flakeNix, forbidden) {
-			t.Fatalf("Artifact Column consumer still derives from submit runtime authority %q:\n%s", forbidden, flakeNix)
-		}
-	}
-
 	bundleNix := readTestFile(t, filepath.Join(root, "nix", "dev-all-runtime-bundle.nix"))
 	for _, want := range []string{
 		`identitySchema = "devkit-dev-all-runtime-identity/v1";`,
-		`artifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712";`,
-		`artifactColumnJarSha256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347";`,
-		`submitJarSha256 = "510a1bfa0d793a43b00298ff83327e5e933451c7aa4743ecf09a187799ed6ccd";`,
+		`governanceJarVersion = sourceRevisions.governance;`,
+		`artifactColumnShortRevision =`,
+		`metadata_value()`,
 		`identity.env`,
 		`identity.json`,
 		`identity-fingerprint`,
@@ -195,6 +147,75 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 	} {
 		if !strings.Contains(bundleNix, want) {
 			t.Fatalf("runtime bundle missing %q:\n%s", want, bundleNix)
+		}
+	}
+	publicConstructorNix := readTestFile(t, filepath.Join(root, "nix", "mk-dev-all-runtime-bundle.nix"))
+	for _, want := range []string{
+		`productSourceRev`,
+		`governance = productSourceRev;`,
+		`submitToCi = productSourceRev;`,
+		`artifactColumn = productSourceRev;`,
+		`sbtControlPlane = productSourceRev;`,
+	} {
+		if !strings.Contains(publicConstructorNix, want) {
+			t.Fatalf("public runtime constructor missing %q:\n%s", want, publicConstructorNix)
+		}
+	}
+	launchGo := readTestFile(t, filepath.Join(root, "cli", "devctl", "internal", "runtime", "launch", "launch.go"))
+	resolverStart := strings.Index(launchGo, "func selectOuroGovernanceSystemRuntimeLauncher(")
+	resolverEnd := strings.Index(launchGo, "\nfunc metadataEnvValue(")
+	if resolverStart < 0 || resolverEnd <= resolverStart {
+		t.Fatal("cannot isolate production governance runtime resolver")
+	}
+	resolverGo := launchGo[resolverStart:resolverEnd]
+	for _, forbidden := range []string{
+		`6826ff0ad172d35ce2eaeb62473ae26facb765a0`,
+		`8e23ded5579e896c95b5a751f4d4a18da70049a9`,
+		`builtins.getFlake`,
+		`builtins.fetchGit`,
+		`builtins.fetchTree`,
+		`RuntimeSourceFlake`,
+		`mkPinnedGovernanceJar`,
+		`mkPinnedSubmitToCiJar`,
+		`mkPinnedArtifactColumnPlugin`,
+		`mkPinnedSbtControlPlaneRuntimeJar`,
+		`mkDefaultDevAllRuntimeBundle`,
+	} {
+		for label, content := range map[string]string{
+			"flake":              flakeNix,
+			"public constructor": publicConstructorNix,
+			"bundle":             bundleNix,
+			"runtime resolver":   resolverGo,
+		} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s contains forbidden runtime authority %q", label, forbidden)
+			}
+		}
+	}
+	for _, forbidden := range []string{
+		`git+file:///workspaces/dev/ouroboros-ide`,
+		`/workspaces/dev/ouroboros-ide`,
+	} {
+		for label, content := range map[string]string{
+			"public constructor": publicConstructorNix,
+			"bundle":             bundleNix,
+			"runtime resolver":   resolverGo,
+		} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s contains forbidden runtime source locator %q", label, forbidden)
+			}
+		}
+	}
+	for _, forbidden := range []string{
+		`exec.LookPath("nix")`,
+		`/run/current-system/sw/bin/nix`,
+		`#dev-all-runtime-bundle`,
+		`"--print-out-paths"`,
+		`DEVKIT_GOVERNANCE_RUNTIME_LAUNCHER`,
+		`validateOuroGovernanceActivationRuntimeLauncher`,
+	} {
+		if strings.Contains(resolverGo, forbidden) {
+			t.Fatalf("runtime resolver contains forbidden Nix build fallback %q", forbidden)
 		}
 	}
 	if strings.Contains(bundleNix, "cp ") || strings.Contains(bundleNix, "cp -") {
@@ -222,6 +243,20 @@ func TestDevAllRuntimeExportsPinnedGovernanceSubmitToCiAndArtifactColumnReposito
 			t.Fatalf("retired Artifact Column repository alias survived:\n%s", content)
 		}
 	}
+	lifecycleNix := readTestFile(t, filepath.Join(root, "nix", "product-adapter-lifecycle-check.nix"))
+	for _, want := range []string{
+		`runtimeBundle =`,
+		`mkDevAllRuntimeBundle ({ inherit pkgs; } // runtimeBundleFixture);`,
+		`exec '${runtimeBundle}/bin/dev-all-runtime-bundle' exec "$@"`,
+		`runtimeRoot = runtimeBundle;`,
+		`.devkitProductAdapter.runtimeLauncherPath == $launcher`,
+		`.devkitProductAdapter.runtimeRoot == $root`,
+		`.devkitProductAdapter.governanceEnvPath == $governance`,
+	} {
+		if !strings.Contains(lifecycleNix, want) {
+			t.Fatalf("Product adapter lifecycle does not consume public runtime bundle %q:\n%s", want, lifecycleNix)
+		}
+	}
 }
 
 func TestDevWorkspaceRuntimeExportsNestedCodexConfigSource(t *testing.T) {
@@ -239,17 +274,18 @@ func TestDevWorkspaceRuntimeExportsNestedCodexConfigSource(t *testing.T) {
 	}
 }
 
-func TestOuroGovernanceRuntimeIdentitySourcePinsMatchFlake(t *testing.T) {
-	flakeNix := readTestFile(t, filepath.Join(devkitRootFromPackage(t), "flake.nix"))
-	for _, want := range []string{
-		fmt.Sprintf(`productRuntimeVersion = %q;`, ouroProductRuntimeSourceRev),
-		`governanceJarVersion = productRuntimeVersion;`,
-		`submitRuntimeVersion = productRuntimeVersion;`,
-		fmt.Sprintf(`artifactColumnRuntimeVersion = %q;`, ouroGovernanceArtifactColumnSourceRev),
-		`sbtControlPlaneRuntimeVersion = productRuntimeVersion;`,
+func TestRuntimeSourceRevisionRequiresExactLowercaseCommit(t *testing.T) {
+	if !isExactRuntimeSourceRevision("1111111111111111111111111111111111111111") {
+		t.Fatal("exact lowercase revision rejected")
+	}
+	for _, invalid := range []string{
+		"",
+		"1111111",
+		"111111111111111111111111111111111111111g",
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	} {
-		if !strings.Contains(flakeNix, want) {
-			t.Fatalf("runtime identity validator pin does not match flake authority: missing %q", want)
+		if isExactRuntimeSourceRevision(invalid) {
+			t.Fatalf("invalid runtime source revision accepted: %q", invalid)
 		}
 	}
 }
@@ -258,24 +294,24 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	bundlePath := "/nix/store/ffffffffffffffffffffffffffffffff-dev-all-runtime-bundle"
 	jarPath := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-subagent-governance-dev/share/subagent-governance/subagent-governance.jar"
 	submitJarPath := "/nix/store/cccccccccccccccccccccccccccccccc-submit-to-ci-dev/share/submit-to-ci/submit-to-ci.jar"
-	artifactRepoPath := "/nix/store/dddddddddddddddddddddddddddddddd-artifact-column-plugin-repository-" + ouroGovernanceArtifactColumnVersion
+	artifactRepoPath := "/nix/store/dddddddddddddddddddddddddddddddd-artifact-column-plugin-repository-" + testArtifactColumnVersion
 	artifactMetadataPath := artifactRepoPath + "/share/artifact-column-plugin/metadata.env"
-	artifactIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/" + ouroGovernanceArtifactColumnVersion
+	artifactIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/" + testArtifactColumnVersion
 	sbtRuntimeJarPath := "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-sbt-control-plane-runtime-dev/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar"
 	javaHome := "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk"
 	fields := []string{
 		ouroGovernanceRuntimeIdentitySchema,
 		bundlePath,
-		ouroGovernanceSourceRev,
-		ouroGovernanceSubmitRuntimeSourceRev,
-		ouroGovernanceArtifactColumnSourceRev,
-		ouroGovernanceSbtControlPlaneSourceRev,
+		testRuntimeSourceRev,
+		testRuntimeSourceRev,
+		testRuntimeSourceRev,
+		testRuntimeSourceRev,
 		jarPath, jarPath, jarPath, "deadbeef", "deadbeef",
 		submitJarPath, submitJarPath + ".sha256", submitJarPath, "facefeed",
 		"force", "6g", "force",
 		artifactRepoPath, artifactMetadataPath,
-		ouroGovernanceArtifactColumnVersion, ouroGovernanceArtifactColumnSourceRev, "8e23ded",
-		artifactIvyPath, ouroGovernanceArtifactColumnJarSHA256, "1", "0",
+		testArtifactColumnVersion, testRuntimeSourceRev, testRuntimeSourceRev[:7],
+		artifactIvyPath, testArtifactColumnJarSHA256, "1", "0",
 		sbtRuntimeJarPath, "54907ebe40a4cc7598dba7774a2d793fc7ca83d9c11811cc98fe96d189413872", "1", "0",
 		javaHome,
 	}
@@ -286,8 +322,8 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 		t.Fatalf("parse runtime identity: %v", err)
 	}
 	if identity.SchemaVersion != ouroGovernanceRuntimeIdentitySchema || identity.RuntimeBundlePath != bundlePath ||
-		identity.SubmitToCiSourceRev != ouroGovernanceSubmitRuntimeSourceRev ||
-		identity.ArtifactColumnRuntimeSourceRev != ouroGovernanceArtifactColumnSourceRev {
+		identity.SubmitToCiSourceRev != testRuntimeSourceRev ||
+		identity.ArtifactColumnRuntimeSourceRev != testRuntimeSourceRev {
 		t.Fatalf("bundle identity parsed incorrectly: %#v", identity)
 	}
 	if identity.LatestJarPath != jarPath || identity.ControlPlaneJar != jarPath || identity.ExpectedJarPath != jarPath {
@@ -307,11 +343,11 @@ func TestParseOuroGovernanceRuntimeIdentityOutputIgnoresNixChatter(t *testing.T)
 	}
 	if identity.ArtifactColumnRepositoryPath != artifactRepoPath ||
 		identity.ArtifactColumnMetadataEnv != artifactMetadataPath ||
-		identity.ArtifactColumnVersion != ouroGovernanceArtifactColumnVersion ||
-		identity.ArtifactColumnSourceRev != ouroGovernanceArtifactColumnSourceRev ||
-		identity.ArtifactColumnSourceShortRev != "8e23ded" ||
+		identity.ArtifactColumnVersion != testArtifactColumnVersion ||
+		identity.ArtifactColumnSourceRev != testRuntimeSourceRev ||
+		identity.ArtifactColumnSourceShortRev != testRuntimeSourceRev[:7] ||
 		identity.ArtifactColumnIvyPath != artifactIvyPath ||
-		identity.ArtifactColumnJarSHA256 != ouroGovernanceArtifactColumnJarSHA256 ||
+		identity.ArtifactColumnJarSHA256 != testArtifactColumnJarSHA256 ||
 		identity.ArtifactColumnPinnedArtifact != "1" ||
 		identity.ArtifactColumnFlakeArtifact != "0" {
 		t.Fatalf("artifact-column plugin repository identity parsed incorrectly: %#v", identity)
@@ -341,24 +377,20 @@ func TestParseOuroGovernanceRuntimeIdentityOutputRejectsClosedOrIncompleteIdenti
 	}
 }
 
-func TestOuroGovernanceRuntimeBundleFlakeUsesExplicitDevkitRoot(t *testing.T) {
-	got := ouroGovernanceRuntimeBundleFlake("/tmp/relocated-devkit")
-	if got != "/tmp/relocated-devkit#dev-all-runtime-bundle" {
-		t.Fatalf("bundle flake = %q", got)
-	}
-	for _, forbidden := range []string{"/workspaces/dev/devkit", "/workspaces/dev/devkit#dev-all"} {
-		if strings.Contains(got, forbidden) {
-			t.Fatalf("bundle flake retained mutable protected-checkout authority %q: %s", forbidden, got)
-		}
-	}
-}
-
-func TestResolveOuroGovernanceRuntimeIdentityRejectsMissingFlake(t *testing.T) {
+func TestResolveOuroGovernanceRuntimeIdentityRequiresInstalledAuthorityWithoutEffects(t *testing.T) {
 	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "")
-	missingRoot := t.TempDir()
-	_, err := resolveOuroGovernanceRuntimeIdentity(missingRoot)
-	if err == nil || !strings.Contains(err.Error(), "missing devkit flake") {
-		t.Fatalf("missing flake error = %v", err)
+	sentinel := filepath.Join(t.TempDir(), "ambient-nix-ran")
+	fakeNix := filepath.Join(t.TempDir(), "nix")
+	if err := os.WriteFile(fakeNix, []byte("#!/bin/sh\n: > "+sentinel+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(fakeNix))
+	_, err := resolveOuroGovernanceRuntimeIdentity(t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "installed authoritative system launcher is required") {
+		t.Fatalf("missing installed authority error = %v", err)
+	}
+	if pathExists(sentinel) {
+		t.Fatal("runtime identity resolution executed ambient Nix")
 	}
 }
 
@@ -370,7 +402,6 @@ func TestSelectOuroGovernanceSystemRuntimeLauncherRequiresAuthoritativeEnv(t *te
 		t.Fatal(err)
 	}
 	ouroGovernanceSystemRuntimeLauncherPath = launcher
-	t.Setenv(ouroGovernanceActivationRuntimeLauncherEnv, "")
 
 	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "")
 	if got, selected, err := selectOuroGovernanceSystemRuntimeLauncher(); err != nil || selected || got != "" {
@@ -383,76 +414,22 @@ func TestSelectOuroGovernanceSystemRuntimeLauncherRequiresAuthoritativeEnv(t *te
 	}
 }
 
-func TestValidateOuroGovernanceActivationRuntimeLauncherRequiresStoreBackedBundle(t *testing.T) {
-	storeRoot := t.TempDir()
-	launcher := filepath.Join(storeRoot, "fixture-dev-all-runtime-bundle", "bin", "dev-all-runtime-bundle")
-	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+func TestSelectOuroGovernanceSystemRuntimeLauncherIgnoresHostileCallerOverride(t *testing.T) {
+	original := ouroGovernanceSystemRuntimeLauncherPath
+	t.Cleanup(func() { ouroGovernanceSystemRuntimeLauncherPath = original })
+	installedLauncher := filepath.Join(t.TempDir(), "dev-all-runtime-bundle")
+	if err := os.WriteFile(installedLauncher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := validateOuroGovernanceActivationRuntimeLauncher(launcher, storeRoot); err != nil || got != launcher {
-		t.Fatalf("validated activation launcher = %q, %v", got, err)
-	}
-	for _, candidate := range []string{
-		filepath.Join(t.TempDir(), "dev-all-runtime-bundle"),
-		filepath.Join(storeRoot, "fixture-dev-all-runtime-bundle", "dev-all-runtime-bundle"),
-	} {
-		if _, err := validateOuroGovernanceActivationRuntimeLauncher(candidate, storeRoot); err == nil {
-			t.Fatalf("accepted invalid activation launcher %q", candidate)
-		}
-	}
-	externalLauncher := filepath.Join(t.TempDir(), "dev-all-runtime-bundle")
-	if err := os.WriteFile(externalLauncher, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	escapedLauncher := filepath.Join(storeRoot, "escaped-dev-all-runtime-bundle", "bin", "dev-all-runtime-bundle")
-	if err := os.MkdirAll(filepath.Dir(escapedLauncher), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(externalLauncher, escapedLauncher); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := validateOuroGovernanceActivationRuntimeLauncher(escapedLauncher, storeRoot); err == nil {
-		t.Fatalf("accepted activation launcher symlink escape %q", escapedLauncher)
-	}
-}
-
-func TestSelectOuroGovernanceSystemRuntimeLauncherRejectsUntrustedActivationOverride(t *testing.T) {
+	ouroGovernanceSystemRuntimeLauncherPath = installedLauncher
 	t.Setenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV", "1")
-	t.Setenv(ouroGovernanceActivationRuntimeLauncherEnv, filepath.Join(t.TempDir(), "dev-all-runtime-bundle"))
-	if _, _, err := selectOuroGovernanceSystemRuntimeLauncher(); err == nil || !strings.Contains(err.Error(), "must be under /nix/store") {
-		t.Fatalf("activation override error = %v", err)
-	}
-}
-
-func TestOuroGovernanceRuntimeBundleSelectionUsesExecutableAuthorityRoot(t *testing.T) {
-	trustedRoot := filepath.Join(t.TempDir(), "trusted-devkit")
-	hostileRoot := filepath.Join(t.TempDir(), "hostile-devkit")
-	executable := filepath.Join(trustedRoot, "kit", "bin", "devctl")
-	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(executable, []byte("test binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DEVKIT_ROOT", hostileRoot)
-
-	paths, err := devkitpaths.DetectPathsFromExe(executable)
-	if err != nil {
-		t.Fatalf("DetectPathsFromExe: %v", err)
-	}
-	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{Paths: paths, Repo: "ouroboros-ide"})
-	if err != nil {
-		t.Fatalf("BuildDevAll: %v", err)
-	}
-	got := ouroGovernanceRuntimeBundleFlake(p.RuntimeAuthorityRoot)
-	if got != trustedRoot+"#dev-all-runtime-bundle" {
-		t.Fatalf("runtime bundle selection = %q, want executable-derived trusted root", got)
-	}
-	if strings.Contains(got, hostileRoot) {
-		t.Fatalf("hostile DEVKIT_ROOT selected runtime bundle: %s", got)
+	t.Setenv(
+		"DEVKIT_GOVERNANCE_RUNTIME_LAUNCHER",
+		"/nix/store/00000000000000000000000000000000-hostile-runtime-bundle/bin/dev-all-runtime-bundle",
+	)
+	got, selected, err := selectOuroGovernanceSystemRuntimeLauncher()
+	if err != nil || !selected || got != installedLauncher {
+		t.Fatalf("hostile caller override redirected selection: path %q selected %t err %v", got, selected, err)
 	}
 }
 
@@ -480,15 +457,15 @@ func TestImmutableRuntimeBundleRejectsMutableIdentityOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read physical Artifact Column Ivy jar: %v", err)
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(jarData)); got != ouroGovernanceArtifactColumnJarSHA256 {
-		t.Fatalf("physical Artifact Column Ivy jar sha256 = %s, want %s", got, ouroGovernanceArtifactColumnJarSHA256)
+	if got := fmt.Sprintf("%x", sha256.Sum256(jarData)); got != identity.ArtifactColumnJarSHA256 {
+		t.Fatalf("physical Artifact Column Ivy jar sha256 = %s, want %s", got, identity.ArtifactColumnJarSHA256)
 	}
 	metadata := readTestFile(t, identity.ArtifactColumnMetadataEnv)
 	for key, want := range map[string]string{
 		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV": identity.ArtifactColumnSourceRev,
 		"ARTIFACT_COLUMN_PLUGIN_VERSION":    identity.ArtifactColumnVersion,
 		"ARTIFACT_COLUMN_PLUGIN_IVY_PATH":   identity.ArtifactColumnIvyPath,
-		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256": ouroGovernanceArtifactColumnJarSHA256,
+		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256": identity.ArtifactColumnJarSHA256,
 	} {
 		if got := metadataEnvValue(metadata, key); got != want {
 			t.Fatalf("physical Artifact Column metadata %s = %q, want %q", key, got, want)
@@ -512,9 +489,9 @@ func TestImmutableRuntimeBundleRejectsMutableIdentityOverride(t *testing.T) {
 		"BASH_ENV="+bashEnv,
 		"ENV="+bashEnv,
 		"DEVKIT_TEST_BASH_ENV_SENTINEL="+bashEnvSentinel,
-		"EXPECTED_ARTIFACT_REV="+ouroGovernanceArtifactColumnSourceRev,
-		"EXPECTED_ARTIFACT_VERSION="+ouroGovernanceArtifactColumnVersion,
-		"EXPECTED_ARTIFACT_SHA="+ouroGovernanceArtifactColumnJarSHA256,
+		"EXPECTED_ARTIFACT_REV="+identity.ArtifactColumnSourceRev,
+		"EXPECTED_ARTIFACT_VERSION="+identity.ArtifactColumnVersion,
+		"EXPECTED_ARTIFACT_SHA="+identity.ArtifactColumnJarSHA256,
 		"EXPECTED_BUNDLE="+bundlePath,
 		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=attacker",
 		"ARTIFACT_COLUMN_PLUGIN_VERSION=attacker",

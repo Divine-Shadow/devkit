@@ -88,60 +88,39 @@
         pkgs.writeText "devkit-github-ssh-known-hosts" (
           builtins.readFile githubSSHKnownHosts
         );
-      productRuntimeVersion = "6826ff0ad172d35ce2eaeb62473ae26facb765a0";
-      governanceJarVersion = productRuntimeVersion;
-      submitRuntimeVersion = productRuntimeVersion;
-      artifactColumnRuntimeVersion = "8e23ded5579e896c95b5a751f4d4a18da70049a9";
-      sbtControlPlaneRuntimeVersion = productRuntimeVersion;
-      governanceJarSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${governanceJarVersion}";
-      submitRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${submitRuntimeVersion}";
-      artifactColumnRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${artifactColumnRuntimeVersion}";
-      sbtControlPlaneRuntimeSourceFlake = builtins.getFlake "git+file:///workspaces/dev/ouroboros-ide?rev=${sbtControlPlaneRuntimeVersion}";
-      mkPinnedGovernanceJar = pkgs: governanceJarSourceFlake.packages.${pkgs.system}.governance-jar;
-      mkPinnedSubmitToCiJar = pkgs: submitRuntimeSourceFlake.packages.${pkgs.system}.submit-to-ci-jar;
-      mkPinnedArtifactColumnPluginRepository = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-repository;
-      mkPinnedArtifactColumnPluginSmoke = pkgs: artifactColumnRuntimeSourceFlake.packages.${pkgs.system}.artifact-column-plugin-adoption-check;
-      mkPinnedSbtControlPlaneRuntimeJar = pkgs: sbtControlPlaneRuntimeSourceFlake.packages.${pkgs.system}.sbt-control-plane-runtime-current-source;
-      mkDevAllRuntimeBundle =
+      mkDevAllRuntimeBundle = import ./nix/mk-dev-all-runtime-bundle.nix;
+      mkDiagnosticRuntimeFixture =
         pkgs:
-        let
-          submitToCiJar = mkPinnedSubmitToCiJar pkgs;
-          x86SubmitBaselineIsExact =
-            if pkgs.system == "x86_64-linux" then
-              assert toString submitToCiJar == "/nix/store/iymxmh43af91w1rh1i58xrs9a3cvd3kz-submit-to-ci-dev";
-              assert submitToCiJar.drvPath == "/nix/store/bh31sf8fy6najxayfq74h8p2sy74178g-submit-to-ci-dev.drv";
-              true
-            else
-              true;
-        in
-        assert x86SubmitBaselineIsExact;
-        import ./nix/dev-all-runtime-bundle.nix {
-          inherit
-            artifactColumnRuntimeVersion
-            governanceJarVersion
-            pkgs
-            sbtControlPlaneRuntimeVersion
-            submitRuntimeVersion
-            ;
-          artifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;
-          artifactColumnPluginSmoke = mkPinnedArtifactColumnPluginSmoke pkgs;
-          governanceJar = mkPinnedGovernanceJar pkgs;
-          java = pkgs.jdk21;
-          sbtControlPlaneRuntimeJar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
-          inherit submitToCiJar;
+        import ./nix/dev-all-runtime-bundle-fixture.nix {
+          inherit pkgs;
+          productSourceRev = "1111111111111111111111111111111111111111";
         };
+      # Devkit's own package/check surfaces are source-free diagnostics. Fleet
+      # consumers compose production artifacts through lib.mkDevAllRuntimeBundle.
+      mkDiagnosticRuntimeBundle =
+        pkgs:
+        mkDevAllRuntimeBundle ({
+          inherit pkgs;
+        } // (mkDiagnosticRuntimeFixture pkgs));
       mkDevAllRuntimeBundleBridgeSmoke =
         pkgs:
         import ./nix/dev-all-runtime-bundle-bridge-smoke.nix {
-          bundle = mkDevAllRuntimeBundle pkgs;
-          governanceSource = governanceJarSourceFlake.outPath;
+          bundle = mkDiagnosticRuntimeBundle pkgs;
           inherit pkgs;
         };
       mkDevAllRuntimeBundleProfileSmoke =
         pkgs:
         import ./nix/dev-all-runtime-bundle-profile-smoke.nix {
-          bundle = mkDevAllRuntimeBundle pkgs;
+          bundle = mkDiagnosticRuntimeBundle pkgs;
           inherit pkgs;
+        };
+      mkDevAllRuntimeBundleConstructorContract =
+        pkgs:
+        import ./nix/dev-all-runtime-bundle-constructor-contract.nix {
+          inherit
+            mkDevAllRuntimeBundle
+            pkgs
+            ;
         };
       mkPackageEnv =
         pkgs:
@@ -428,6 +407,7 @@
         pkgs:
         import ./nix/product-adapter-lifecycle-check.nix {
           inherit
+            mkDevAllRuntimeBundle
             mkPinnedCodex
             mkProductAdapterPackage
             pkgs
@@ -535,7 +515,10 @@
     in
     {
       lib = {
-        inherit mkProductAdapterPackage;
+        inherit
+          mkDevAllRuntimeBundle
+          mkProductAdapterPackage
+          ;
       };
 
       devShells = forEachSystem (
@@ -639,10 +622,7 @@
             '';
           };
 
-          pinnedGovernanceJar = mkPinnedGovernanceJar pkgs;
-          pinnedSubmitToCiJar = mkPinnedSubmitToCiJar pkgs;
-          pinnedArtifactColumnPluginRepository = mkPinnedArtifactColumnPluginRepository pkgs;
-          pinnedSbtControlPlaneRuntimeJar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
+          diagnosticRuntimeBundle = mkDiagnosticRuntimeBundle pkgs;
 
           mgbaRuntimeLibs = with pkgs; [
             libedit
@@ -791,16 +771,13 @@
             inherit mkShell pkgs pkgsPlaywright;
             packages = {
               inherit
+                diagnosticRuntimeBundle
                 pinnedCodex
-                pinnedArtifactColumnPluginRepository
                 pinnedDockerCli
                 pinnedGo
-                pinnedGovernanceJar
                 pinnedMgbaHeadless
                 pinnedNpmTools
                 pinnedPacker
-                pinnedSbtControlPlaneRuntimeJar
-                pinnedSubmitToCiJar
                 pinnedTerraform
                 ;
             };
@@ -857,7 +834,7 @@
       packages = forEachSystem (
         { pkgs, pkgsPlaywright, ... }:
         let
-          runtimeBundle = mkDevAllRuntimeBundle pkgs;
+          runtimeBundle = mkDiagnosticRuntimeBundle pkgs;
           runtimeTools = mkDevAllRuntimeTools {
             inherit pkgs pkgsPlaywright;
           };
@@ -872,11 +849,6 @@
             inherit pkgs runtimeTools;
           };
           management-inspection = mkManagementInspectionApp pkgs;
-          pinned-artifact-column-plugin-repository = mkPinnedArtifactColumnPluginRepository pkgs;
-          pinned-governance-jar = mkPinnedGovernanceJar pkgs;
-          pinned-sbt-control-plane-runtime-jar = mkPinnedSbtControlPlaneRuntimeJar pkgs;
-          pinned-submit-to-ci-jar = mkPinnedSubmitToCiJar pkgs;
-
           postgres-broker = pkgs.buildGoModule {
             pname = "devkit-postgres-broker";
             version = "dev";
@@ -904,13 +876,13 @@
       checks = forEachSystem (
         { pkgs, pkgsPlaywright, ... }:
         let
-          runtimeBundle = mkDevAllRuntimeBundle pkgs;
+          runtimeBundle = mkDiagnosticRuntimeBundle pkgs;
           runtimeTools = mkDevAllRuntimeTools {
             inherit pkgs pkgsPlaywright;
           };
         in
         {
-          dev-all-runtime-bundle = mkDevAllRuntimeBundle pkgs;
+          dev-all-runtime-bundle = runtimeBundle;
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {
             bundle = runtimeBundle;
@@ -918,6 +890,8 @@
           };
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
+          dev-all-runtime-bundle-public-constructor =
+            mkDevAllRuntimeBundleConstructorContract pkgs;
           management-inspection-cli = mkProductionDevctl pkgs;
           native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
           native-absent-index-construction = mkNativeAbsentIndexConstructionCheck pkgs;

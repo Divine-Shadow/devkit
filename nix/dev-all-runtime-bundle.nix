@@ -1,29 +1,37 @@
 {
   artifactColumnPluginRepository,
   artifactColumnPluginSmoke,
-  artifactColumnRuntimeVersion,
   governanceJar,
-  governanceJarVersion,
   java,
   pkgs,
   sbtControlPlaneRuntimeJar,
-  sbtControlPlaneRuntimeVersion,
-  submitRuntimeVersion,
+  sourceRevisions,
   submitToCiJar,
 }:
 
 let
   identitySchema = "devkit-dev-all-runtime-identity/v1";
-  artifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712";
-  artifactColumnJarSha256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347";
-  submitJarSha256 = "510a1bfa0d793a43b00298ff83327e5e933451c7aa4743ecf09a187799ed6ccd";
-  artifactColumnIvyPath =
-    "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/${artifactColumnVersion}";
+  governanceJarVersion = sourceRevisions.governance;
+  submitRuntimeVersion = sourceRevisions.submitToCi;
+  artifactColumnRuntimeVersion = sourceRevisions.artifactColumn;
+  sbtControlPlaneRuntimeVersion = sourceRevisions.sbtControlPlane;
+  artifactColumnShortRevision =
+    builtins.substring 0 7 artifactColumnRuntimeVersion;
+  validSourceRevision =
+    revision:
+    builtins.isString revision
+    && builtins.match "[0-9a-f]{40}" revision != null;
+  sourceRevisionsAreExact =
+    builtins.all validSourceRevision [
+      governanceJarVersion
+      submitRuntimeVersion
+      artifactColumnRuntimeVersion
+      sbtControlPlaneRuntimeVersion
+    ];
   launcherTemplate = pkgs.writeText "dev-all-runtime-bundle-template" ''
     #!${pkgs.dash}/bin/dash
     set -eu
-    caller_path="''${PATH:-}"
-    export PATH='${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.gawk}/bin:${pkgs.gnugrep}/bin:${pkgs.jq}/bin'
+    export PATH='${pkgs.bash}/bin:${pkgs.coreutils}/bin:${pkgs.gawk}/bin:${pkgs.gnugrep}/bin:${pkgs.jq}/bin:${pkgs.python3}/bin'
 
     # The immutable package root is substituted while the outer derivation is
     # built. Never derive it from $0: aggregate profiles invoke this script
@@ -80,11 +88,14 @@ let
       [ "$(tr -d '[:space:]' < "$SUBMIT_TO_CI_HASH_PATH")" = "$DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256" ] || fail "submit-to-ci packaged hash mismatch"
 
       [ "$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV" = "$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH/share/artifact-column-plugin/metadata.env" ] || fail "Artifact Column metadata path mismatch"
-      [ "$ARTIFACT_COLUMN_PLUGIN_VERSION" = '${artifactColumnVersion}' ] || fail "Artifact Column version mismatch"
+      [ -n "$ARTIFACT_COLUMN_PLUGIN_VERSION" ] || fail "Artifact Column version is empty"
       [ "$ARTIFACT_COLUMN_PLUGIN_SOURCE_REV" = '${artifactColumnRuntimeVersion}' ] || fail "Artifact Column metadata source revision mismatch"
-      [ "$ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV" = '8e23ded' ] || fail "Artifact Column short source revision mismatch"
-      [ "$ARTIFACT_COLUMN_PLUGIN_IVY_PATH" = '${artifactColumnIvyPath}' ] || fail "Artifact Column Ivy path mismatch"
-      [ "$ARTIFACT_COLUMN_PLUGIN_JAR_SHA256" = '${artifactColumnJarSha256}' ] || fail "Artifact Column jar sha256 identity mismatch"
+      [ "$ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV" = '${artifactColumnShortRevision}' ] || fail "Artifact Column short source revision mismatch"
+      [ -n "$ARTIFACT_COLUMN_PLUGIN_IVY_PATH" ] || fail "Artifact Column Ivy path is empty"
+      case "$ARTIFACT_COLUMN_PLUGIN_JAR_SHA256" in
+        *[!0-9a-f]*|"") fail "Artifact Column jar sha256 identity is invalid" ;;
+      esac
+      [ "''${#ARTIFACT_COLUMN_PLUGIN_JAR_SHA256}" -eq 64 ] || fail "Artifact Column jar sha256 identity is invalid"
       [ "$ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT" = 1 ] || fail "Artifact Column pinned-artifact identity mismatch"
       [ "$ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT" = 0 ] || fail "Artifact Column flake-artifact identity mismatch"
       [ -r "$ARTIFACT_COLUMN_PLUGIN_METADATA_ENV" ] || fail "missing Artifact Column metadata"
@@ -111,8 +122,10 @@ let
       ${pkgs.jq}/bin/jq -e \
         --arg schema "$DEVKIT_RUNTIME_IDENTITY_SCHEMA_VERSION" \
         --arg bundle "$DEVKIT_RUNTIME_BUNDLE_PATH" \
+        --arg governanceRev "$DEVKIT_GOVERNANCE_SOURCE_REV" \
         --arg submitRev "$DEVKIT_SUBMIT_TO_CI_SOURCE_REV" \
         --arg artifactRev "$DEVKIT_ARTIFACT_COLUMN_SOURCE_REV" \
+        --arg sbtRev "$DEVKIT_SBT_CONTROL_PLANE_SOURCE_REV" \
         --arg artifactVersion "$ARTIFACT_COLUMN_PLUGIN_VERSION" \
         --arg artifactRepo "$ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH" \
         --arg artifactIvy "$ARTIFACT_COLUMN_PLUGIN_IVY_PATH" \
@@ -120,10 +133,12 @@ let
         --arg submitJar "$SUBMIT_TO_CI_JAR" \
         --arg submitSha "$DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256" \
         '.schemaVersion == $schema and .bundlePath == $bundle and
+         .governance.sourceRev == $governanceRev and
          .submitToCi.sourceRev == $submitRev and .submitToCi.jarPath == $submitJar and .submitToCi.jarSha256 == $submitSha and
          .artifactColumnPlugin.sourceRev == $artifactRev and .artifactColumnPlugin.version == $artifactVersion and
          .artifactColumnPlugin.repositoryPath == $artifactRepo and .artifactColumnPlugin.ivyPath == $artifactIvy and
-         .artifactColumnPlugin.jarSha256 == $artifactSha' \
+         .artifactColumnPlugin.jarSha256 == $artifactSha and
+         .sbtControlPlane.sourceRev == $sbtRev' \
         "$identity_json" >/dev/null || fail "identity JSON disagrees with identity env"
     }
 
@@ -212,7 +227,6 @@ let
         validate
         shift
         [ "$#" -gt 0 ] || fail "exec requires a command"
-        export PATH="$caller_path"
         unset BASH_ENV ENV
         exec "$@"
         ;;
@@ -222,7 +236,6 @@ let
         [ "$#" -eq 1 ] || fail "governance-forward requires exactly one forwarder path"
         [ -x "$1" ] || fail "governance forwarder is missing or not executable: $1"
         export DEVKIT_GOVERNANCE_ENV="$identity_env"
-        export PATH="$caller_path"
         unset BASH_ENV ENV
         exec '${pkgs.bash}/bin/bash' "$1"
         ;;
@@ -232,6 +245,7 @@ let
     esac
   '';
 in
+assert sourceRevisionsAreExact;
 pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
   set -euo pipefail
 
@@ -244,15 +258,31 @@ pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
   sbt_runtime_jar="${sbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar"
   sbt_runtime_sha="$(cat "$sbt_runtime_jar.sha256")"
 
-  test "$submit_sha" = '${submitJarSha256}'
-  test "$(sha256sum "$submit_jar" | awk '{print $1}')" = '${submitJarSha256}'
-  test "$artifact_sha" = '${artifactColumnJarSha256}'
-  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_VERSION=${artifactColumnVersion}' "$artifact_metadata" >/dev/null
+  metadata_value() {
+    key="$1"
+    test "$(grep -c "^$key=" "$artifact_metadata")" -eq 1
+    sed -n "s/^$key=//p" "$artifact_metadata"
+  }
+  artifact_version="$(metadata_value ARTIFACT_COLUMN_PLUGIN_VERSION)"
+  artifact_source_rev="$(metadata_value ARTIFACT_COLUMN_PLUGIN_SOURCE_REV)"
+  artifact_source_short_rev="$(metadata_value ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV)"
+  artifact_repository_path="$(metadata_value ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH)"
+  artifact_ivy_path="$(metadata_value ARTIFACT_COLUMN_PLUGIN_IVY_PATH)"
+  artifact_metadata_sha="$(metadata_value ARTIFACT_COLUMN_PLUGIN_JAR_SHA256)"
+
+  test "$(sha256sum "$submit_jar" | awk '{print $1}')" = "$submit_sha"
+  test "$(sha256sum "$governance_jar" | awk '{print $1}')" = "$governance_sha"
+  test "$(sha256sum "$sbt_runtime_jar" | awk '{print $1}')" = "$sbt_runtime_sha"
+  test "$artifact_sha" = "$artifact_metadata_sha"
+  test "$(printf %s "$artifact_sha" | grep -Ec '^[0-9a-f]{64}$')" -eq 1
+  test "$(printf %s "$artifact_version" | grep -Ec '^[A-Za-z0-9._+:-]+$')" -eq 1
+  test "$(printf %s "$artifact_ivy_path" | grep -Ec '^[A-Za-z0-9._/+:-]+$')" -eq 1
+  grep -Fx "ARTIFACT_COLUMN_PLUGIN_VERSION=$artifact_version" "$artifact_metadata" >/dev/null
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=${artifactColumnRuntimeVersion}' "$artifact_metadata" >/dev/null
-  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=8e23ded' "$artifact_metadata" >/dev/null
+  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=${artifactColumnShortRevision}' "$artifact_metadata" >/dev/null
   grep -Fx 'ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH=${artifactColumnPluginRepository}' "$artifact_metadata" >/dev/null
-  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_IVY_PATH=${artifactColumnIvyPath}' "$artifact_metadata" >/dev/null
-  grep -Fx 'ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=${artifactColumnJarSha256}' "$artifact_metadata" >/dev/null
+  grep -Fx "ARTIFACT_COLUMN_PLUGIN_IVY_PATH=$artifact_ivy_path" "$artifact_metadata" >/dev/null
+  grep -Fx "ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=$artifact_sha" "$artifact_metadata" >/dev/null
 
   mkdir -p "$out/bin" "$out/runtime" "$out/share/dev-all-runtime-bundle/plugin-smoke"
   substitute '${launcherTemplate}' "$out/bin/dev-all-runtime-bundle" \
@@ -299,10 +329,10 @@ pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
   export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE='off'
   export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH='${artifactColumnPluginRepository}'
   export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV='$artifact_metadata'
-  export ARTIFACT_COLUMN_PLUGIN_VERSION='${artifactColumnVersion}'
+  export ARTIFACT_COLUMN_PLUGIN_VERSION='$artifact_version'
   export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV='${artifactColumnRuntimeVersion}'
-  export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV='8e23ded'
-  export ARTIFACT_COLUMN_PLUGIN_IVY_PATH='${artifactColumnIvyPath}'
+  export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV='${artifactColumnShortRevision}'
+  export ARTIFACT_COLUMN_PLUGIN_IVY_PATH='$artifact_ivy_path'
   export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256='$artifact_sha'
   export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT='1'
   export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT='0'
@@ -328,10 +358,10 @@ pkgs.runCommand "dev-all-runtime-bundle" { nativeBuildInputs = [ pkgs.jq ]; } ''
     --arg submitJar "$submit_jar" \
     --arg submitSha "$submit_sha" \
     --arg artifactRev '${artifactColumnRuntimeVersion}' \
-    --arg artifactVersion '${artifactColumnVersion}' \
+    --arg artifactVersion "$artifact_version" \
     --arg artifactRepository '${artifactColumnPluginRepository}' \
     --arg artifactMetadata "$artifact_metadata" \
-    --arg artifactIvy '${artifactColumnIvyPath}' \
+    --arg artifactIvy "$artifact_ivy_path" \
     --arg artifactSha "$artifact_sha" \
     --arg artifactSmoke '${artifactColumnPluginSmoke}/adoption-check.txt' \
     --arg sbtRev '${sbtControlPlaneRuntimeVersion}' \

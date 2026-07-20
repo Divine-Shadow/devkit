@@ -28,6 +28,28 @@ Source-derived operator apps:
   separate revision-specific writable state. See
   `kit/docs/management-readonly-inspection-profile.md`.
 
+Fleet composition uses the revision-neutral public constructor:
+
+```nix
+devkit.lib.mkDevAllRuntimeBundle {
+  inherit
+    artifactColumnPluginRepository
+    artifactColumnPluginSmoke
+    governanceJar
+    java
+    pkgs
+    sbtControlPlaneRuntimeJar
+    submitToCiJar
+    ;
+  productSourceRev = ouroboros-ide.rev;
+}
+```
+
+The caller derives every artifact from the same authoritative Product input.
+Devkit does not select or evaluate Product source. Its own default bundle and
+shell surfaces use synthetic diagnostic fixtures; they are not Fleet runtime
+promotion evidence.
+
 Use explicit experimental feature flags on hosts that do not enable flakes by
 default:
 

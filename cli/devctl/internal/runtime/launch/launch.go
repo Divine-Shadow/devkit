@@ -1082,31 +1082,12 @@ func validOuroGovernanceJavaXmx(value string) bool {
 }
 
 const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
-const ouroProductRuntimeSourceRev = "6826ff0ad172d35ce2eaeb62473ae26facb765a0"
-const ouroGovernanceSourceRev = ouroProductRuntimeSourceRev
-const ouroGovernanceSubmitRuntimeSourceRev = ouroProductRuntimeSourceRev
-const ouroGovernanceArtifactColumnSourceRev = "8e23ded5579e896c95b5a751f4d4a18da70049a9"
-const ouroGovernanceArtifactColumnVersion = "0.1.0-artifact-column-v2-direct-import-enforcement-20260712"
-const ouroGovernanceArtifactColumnJarSHA256 = "d6d9656108daf1296766bcfcbc8bc4ca0f9abd6ccd1fef6329dbb87ebc5ec347"
-const ouroGovernanceSbtControlPlaneSourceRev = ouroProductRuntimeSourceRev
 
 var ouroGovernanceSystemRuntimeLauncherPath = "/run/current-system/sw/bin/dev-all-runtime-bundle"
-
-const ouroGovernanceActivationRuntimeLauncherEnv = "DEVKIT_GOVERNANCE_RUNTIME_LAUNCHER"
 
 func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
 	if strings.TrimSpace(os.Getenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV")) != "1" {
 		return "", false, nil
-	}
-	if override := strings.TrimSpace(os.Getenv(ouroGovernanceActivationRuntimeLauncherEnv)); override != "" {
-		launcherPath, err := validateOuroGovernanceActivationRuntimeLauncher(override, "/nix/store")
-		if err != nil {
-			return "", false, err
-		}
-		if !isExecutable(launcherPath) {
-			return "", false, fmt.Errorf("authoritative governance runtime launcher override is missing or not executable: %s", launcherPath)
-		}
-		return launcherPath, true, nil
 	}
 	launcherPath := filepath.Clean(ouroGovernanceSystemRuntimeLauncherPath)
 	if !isExecutable(launcherPath) {
@@ -1115,83 +1096,30 @@ func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
 	return launcherPath, true, nil
 }
 
-func validateOuroGovernanceActivationRuntimeLauncher(launcherPath string, storeRoot string) (string, error) {
-	launcherPath = filepath.Clean(strings.TrimSpace(launcherPath))
-	storeRoot = filepath.Clean(strings.TrimSpace(storeRoot))
-	relative, err := filepath.Rel(storeRoot, launcherPath)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("authoritative governance runtime launcher override must be under %s: %s", storeRoot, launcherPath)
+func isExactRuntimeSourceRevision(value string) bool {
+	if len(value) != 40 {
+		return false
 	}
-	if filepath.Base(launcherPath) != "dev-all-runtime-bundle" || filepath.Base(filepath.Dir(launcherPath)) != "bin" {
-		return "", fmt.Errorf("authoritative governance runtime launcher override must name a Nix dev-all-runtime-bundle launcher: %s", launcherPath)
+	for _, character := range value {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
 	}
-	resolvedLauncherPath, err := filepath.EvalSymlinks(launcherPath)
-	if err != nil {
-		return "", fmt.Errorf("resolve authoritative governance runtime launcher override %s: %w", launcherPath, err)
-	}
-	resolvedLauncherPath = filepath.Clean(resolvedLauncherPath)
-	relative, err = filepath.Rel(storeRoot, resolvedLauncherPath)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("authoritative governance runtime launcher override resolves outside %s: %s", storeRoot, resolvedLauncherPath)
-	}
-	if filepath.Base(resolvedLauncherPath) != "dev-all-runtime-bundle" || filepath.Base(filepath.Dir(resolvedLauncherPath)) != "bin" {
-		return "", fmt.Errorf("authoritative governance runtime launcher override resolves to a non-bundle launcher: %s", resolvedLauncherPath)
-	}
-	return resolvedLauncherPath, nil
+	return true
 }
 
-func ouroGovernanceRuntimeBundleFlake(devkitRoot string) string {
-	return filepath.Clean(devkitRoot) + "#dev-all-runtime-bundle"
-}
-
-func resolveOuroGovernanceRuntimeIdentity(devkitRoot string) (ouroGovernanceRuntimeIdentity, error) {
-	devkitRoot = filepath.Clean(strings.TrimSpace(devkitRoot))
-	runtimeBundleFlake := ouroGovernanceRuntimeBundleFlake(devkitRoot)
-	runtimeAuthority := runtimeBundleFlake
-	bundlePath := ""
-	launcherPath, useSystemLauncher, err := selectOuroGovernanceSystemRuntimeLauncher()
+func resolveOuroGovernanceRuntimeIdentity(_ string) (ouroGovernanceRuntimeIdentity, error) {
+	launcherPath, selected, err := selectOuroGovernanceSystemRuntimeLauncher()
 	if err != nil {
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
-	if useSystemLauncher {
-		runtimeAuthority = launcherPath
-	} else {
-		flakePath := filepath.Join(devkitRoot, "flake.nix")
-		if !pathExists(flakePath) {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle: missing devkit flake %s", flakePath)
-		}
-		nixBin, err := exec.LookPath("nix")
-		if err != nil {
-			if pathExists("/run/current-system/sw/bin/nix") {
-				nixBin = "/run/current-system/sw/bin/nix"
-			} else {
-				return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env: nix not found")
-			}
-		}
-		cmd := exec.Command(
-			nixBin,
-			"--extra-experimental-features", "nix-command flakes",
-			"--no-warn-dirty",
-			"--option", "eval-cache", "false",
-			"build", "--no-link", "--print-out-paths", runtimeBundleFlake,
+	if !selected {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf(
+			"resolve governance runtime bundle: installed authoritative system launcher is required",
 		)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("build governance runtime bundle from %s: %w: %s", runtimeBundleFlake, err, strings.TrimSpace(string(out)))
-		}
-		var bundlePaths []string
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "/nix/store/") && !strings.ContainsAny(line, " \t") {
-				bundlePaths = append(bundlePaths, line)
-			}
-		}
-		if len(bundlePaths) != 1 {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("build governance runtime bundle from %s: expected one Nix-store output, got %d", runtimeBundleFlake, len(bundlePaths))
-		}
-		bundlePath = bundlePaths[0]
-		launcherPath = filepath.Join(bundlePath, "bin", "dev-all-runtime-bundle")
 	}
+	runtimeAuthority := launcherPath
 	if !isExecutable(launcherPath) {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: missing executable launcher %s", runtimeAuthority, launcherPath)
 	}
@@ -1204,12 +1132,6 @@ func resolveOuroGovernanceRuntimeIdentity(devkitRoot string) (ouroGovernanceRunt
 	if err != nil {
 		return ouroGovernanceRuntimeIdentity{}, err
 	}
-	if useSystemLauncher {
-		bundlePath = identity.RuntimeBundlePath
-	}
-	if identity.RuntimeBundlePath != bundlePath {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: launcher bundle path mismatch: expected %s got %s", runtimeAuthority, bundlePath, identity.RuntimeBundlePath)
-	}
 	runtimeFlake := runtimeAuthority
 	if !identity.Complete() {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci/SBT control-plane runtime jar, artifact-column plugin repository, Java, or submit runtime authority identity", runtimeFlake)
@@ -1220,29 +1142,28 @@ func resolveOuroGovernanceRuntimeIdentity(devkitRoot string) (ouroGovernanceRunt
 	if !strings.HasPrefix(identity.RuntimeBundlePath, "/nix/store/") {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: runtime bundle is not in /nix/store: %s", runtimeFlake, identity.RuntimeBundlePath)
 	}
-	if identity.SubmitToCiSourceRev != ouroGovernanceSubmitRuntimeSourceRev {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci source revision mismatch", runtimeFlake)
+	authoritativeProductRevision := identity.GovernanceSourceRev
+	if !isExactRuntimeSourceRevision(authoritativeProductRevision) {
+		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Product source revision is not exact", runtimeFlake)
 	}
-	if identity.GovernanceSourceRev != ouroGovernanceSourceRev {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: governance source revision mismatch", runtimeFlake)
+	for label, revision := range map[string]string{
+		"submit-to-ci":      identity.SubmitToCiSourceRev,
+		"Artifact Column":   identity.ArtifactColumnRuntimeSourceRev,
+		"SBT control-plane": identity.SbtControlPlaneRuntimeSourceRev,
+		"plugin metadata":   identity.ArtifactColumnSourceRev,
+	} {
+		if revision != authoritativeProductRevision {
+			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf(
+				"resolve governance runtime env from %s: %s source revision does not match authoritative Product revision",
+				runtimeFlake,
+				label,
+			)
+		}
 	}
-	if identity.SbtControlPlaneRuntimeSourceRev != ouroGovernanceSbtControlPlaneSourceRev {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT control-plane source revision mismatch", runtimeFlake)
-	}
-	if identity.ArtifactColumnRuntimeSourceRev != ouroGovernanceArtifactColumnSourceRev ||
-		identity.ArtifactColumnSourceRev != identity.ArtifactColumnRuntimeSourceRev {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column source revision mismatch", runtimeFlake)
-	}
-	if identity.ArtifactColumnVersion != ouroGovernanceArtifactColumnVersion {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column version mismatch", runtimeFlake)
-	}
-	if identity.ArtifactColumnJarSHA256 != ouroGovernanceArtifactColumnJarSHA256 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column jar sha256 identity mismatch", runtimeFlake)
-	}
-	if identity.ArtifactColumnSourceShortRev != ouroGovernanceArtifactColumnSourceRev[:7] {
+	if identity.ArtifactColumnSourceShortRev != authoritativeProductRevision[:7] {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column short source revision mismatch", runtimeFlake)
 	}
-	expectedArtifactColumnIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/" + ouroGovernanceArtifactColumnVersion
+	expectedArtifactColumnIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/" + identity.ArtifactColumnVersion
 	if identity.ArtifactColumnIvyPath != expectedArtifactColumnIvyPath {
 		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column Ivy path mismatch", runtimeFlake)
 	}
