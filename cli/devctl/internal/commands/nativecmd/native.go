@@ -2101,7 +2101,14 @@ func prepareNativeGitBootstrapAndWorktrees(
 	if err != nil {
 		return err
 	}
+	worktreeRoot := strings.TrimSpace(opts.WorktreeRoot)
+	worktreeRootWasAbsent := false
 	if !dryRun {
+		if _, statErr := os.Lstat(worktreeRoot); errors.Is(statErr, os.ErrNotExist) {
+			worktreeRootWasAbsent = true
+		} else if statErr != nil {
+			return fmt.Errorf("inspect native Git bootstrap worktree root %s: %w", worktreeRoot, statErr)
+		}
 		if err := wtx.PreflightNative(opts); err != nil {
 			return err
 		}
@@ -2130,12 +2137,39 @@ func prepareNativeGitBootstrapAndWorktrees(
 		opts.GitSSHCommand = sshCommand
 		opts.DryRun = dryRun
 		setupErr := wtx.SetupNative(opts)
-		if setupErr == nil || !homeWasAbsent {
+		if setupErr == nil {
 			return setupErr
 		}
-		cleanupErr := removeOwnedBootstrapHome(hostHome, ownedHome)
+		var cleanupErr error
+		if homeWasAbsent {
+			cleanupErr = errors.Join(cleanupErr, removeOwnedBootstrapHome(hostHome, ownedHome))
+		}
+		if worktreeRootWasAbsent {
+			cleanupErr = errors.Join(cleanupErr, removeFailedBootstrapWorktreeRoot(worktreeRoot))
+		}
 		return errors.Join(setupErr, cleanupErr)
 	})
+}
+
+func removeFailedBootstrapWorktreeRoot(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect failed native Git bootstrap worktree root %s: %w", path, err)
+	}
+	if !current.IsDir() || current.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to clean changed native Git bootstrap worktree root %s", path)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove failed native Git bootstrap worktree root %s: %w", path, err)
+	}
+	return nil
 }
 
 func removeOwnedBootstrapHome(path string, owned os.FileInfo) error {

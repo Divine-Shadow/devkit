@@ -14,7 +14,11 @@ func TestGitSSHStepsUseInjectedImmutableAuthority(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	authority, err := sshauthority.New(executable)
+	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte("fixture.invalid ssh-ed25519 fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := sshauthority.New(executable, knownHosts)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,3 +1,6 @@
+// Package sshcfg contains retired Compose-era emitters retained for archived
+// callers. Product native bootstrap does not import this package; keep its
+// emitted policy fail-closed so it cannot reintroduce accept-new if reused.
 package sshcfg
 
 // BuildGitHubConfig returns an SSH config that routes github.com via proxy
@@ -20,7 +23,7 @@ func BuildGitHubConfigFor(home string, ed25519, rsa bool) string {
 		cfg += "  IdentityFile " + home + "/.ssh/id_rsa\n"
 	}
 	cfg += "  IdentitiesOnly yes\n" +
-		"  StrictHostKeyChecking accept-new\n" +
+		"  StrictHostKeyChecking yes\n" +
 		"  UserKnownHostsFile " + home + "/.ssh/known_hosts\n"
 	return cfg
 }
@@ -39,7 +42,7 @@ func BuildGitHubConfigMany(home string, files []string) string {
 		cfg += "  IdentityFile " + home + "/.ssh/" + f + "\n"
 	}
 	cfg += "  IdentitiesOnly yes\n" +
-		"  StrictHostKeyChecking accept-new\n" +
+		"  StrictHostKeyChecking yes\n" +
 		"  UserKnownHostsFile " + home + "/.ssh/known_hosts\n"
 	return cfg
 }
@@ -54,6 +57,6 @@ func BuildGitHubConfigTilde() string {
 		"  ProxyCommand nc -X connect -x tinyproxy:8888 %h %p\n" +
 		"  IdentityFile ~/.ssh/id_ed25519\n" +
 		"  IdentitiesOnly yes\n" +
-		"  StrictHostKeyChecking accept-new\n" +
+		"  StrictHostKeyChecking yes\n" +
 		"  UserKnownHostsFile ~/.ssh/known_hosts\n"
 }

@@ -22,7 +22,19 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	testSSHAuthority, err := sshauthority.New(testExecutable)
+	knownHosts, err := os.CreateTemp("", "devkit-launch-known-hosts-")
+	if err != nil {
+		panic(err)
+	}
+	knownHostsPath := knownHosts.Name()
+	if _, err := knownHosts.WriteString("[ssh.github.com]:443 ssh-ed25519 fixture\n"); err != nil {
+		panic(err)
+	}
+	if err := knownHosts.Close(); err != nil {
+		panic(err)
+	}
+	defer os.Remove(knownHostsPath)
+	testSSHAuthority, err := sshauthority.New(testExecutable, knownHostsPath)
 	if err != nil {
 		panic(err)
 	}
@@ -1129,10 +1141,11 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	cfg := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
 	for _, want := range []string{
 		gitSSHManagedBegin,
-		"Host github.com",
+		"Host github.com ssh.github.com",
 		"  IdentityFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "id_ed25519"),
 		"  IdentitiesOnly yes",
 		"  BatchMode yes",
+		"  StrictHostKeyChecking yes",
 		"  UserKnownHostsFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "known_hosts"),
 		gitSSHManagedEnd,
 		"Host example.invalid",
@@ -1161,11 +1174,22 @@ func TestPrepareConfiguresGitSSHForSeededNativeIdentity(t *testing.T) {
 	if count := strings.Count(cfg, gitSSHManagedBegin); count != 1 {
 		t.Fatalf("managed block count = %d, want 1:\n%s", count, cfg)
 	}
-	if strings.Contains(cfg, "ssh.github.com") || strings.Contains(cfg, "Port 443") || strings.Contains(cfg, "/old/home") {
+	if !strings.Contains(cfg, "Host github.com ssh.github.com") || strings.Contains(cfg, "/old/home") {
 		t.Fatalf("legacy github host block was preserved:\n%s", cfg)
 	}
-	if count := strings.Count(cfg, "Host github.com"); count != 1 {
+	if count := strings.Count(cfg, "Host github.com ssh.github.com"); count != 1 {
 		t.Fatalf("github host block count = %d, want 1:\n%s", count, cfg)
+	}
+	authority, err := resolvePackageSSHAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKnownHosts, err := os.ReadFile(authority.KnownHostsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "known_hosts")); got != string(wantKnownHosts) {
+		t.Fatalf("consumer known-hosts = %q, want exact package material %q", got, wantKnownHosts)
 	}
 }
 
@@ -1198,11 +1222,12 @@ func TestPrepareConfiguresWorkspaceEgressGitSSHThroughManagedProxy(t *testing.T)
 	}
 	cfg := readTestFile(t, filepath.Join(p.Agent.HostHome, ".ssh", "config"))
 	for _, want := range []string{
-		"Host github.com",
+		"Host github.com ssh.github.com",
 		"  HostName ssh.github.com",
 		"  Port 443",
 		"  ProxyCommand nc -X connect -x 127.0.0.1:18888 %h %p",
 		"  IdentityFile " + filepath.Join(p.Agent.SandboxHome, ".ssh", "id_ed25519"),
+		"  StrictHostKeyChecking yes",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Fatalf("workspace-egress SSH config missing %q:\n%s", want, cfg)
@@ -1249,13 +1274,14 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	}
 	cfg := readTestFile(t, filepath.Join(hostHome, ".ssh", "config"))
 	for _, want := range []string{
-		"Host github.com",
+		"Host github.com ssh.github.com",
 		"  HostName ssh.github.com",
 		"  Port 443",
 		"  ProxyCommand '" + devctlPath + "' -p 'dev-all' native proxy-connect --socket '" + socketPath + "' --target %h:%p",
 		"  IdentityFile " + filepath.Join(hostHome, ".ssh", "id_ed25519"),
 		"  IdentitiesOnly yes",
 		"  BatchMode yes",
+		"  StrictHostKeyChecking yes",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Fatalf("bootstrap SSH config missing %q:\n%s", want, cfg)
@@ -2198,7 +2224,7 @@ func TestPrepareCreatesSharedScalaCachesAndCapsOnlyCodexTUILog(t *testing.T) {
 	}
 }
 
-func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
+func TestSeedSSHSeedsOnlyCallerIdentityAndNeverCallerKnownHosts(t *testing.T) {
 	hostUserHome := t.TempDir()
 	srcSSH := filepath.Join(hostUserHome, ".ssh")
 	if err := os.MkdirAll(srcSSH, 0o700); err != nil {
@@ -2222,7 +2248,6 @@ func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 	for name, wantMode := range map[string]os.FileMode{
 		"id_ed25519":     0o600,
 		"id_ed25519.pub": 0o644,
-		"known_hosts":    0o644,
 	} {
 		info, err := os.Stat(filepath.Join(nativeHome, ".ssh", name))
 		if err != nil {
@@ -2231,6 +2256,9 @@ func TestSeedSSHSeedsHostKeysAndKnownHosts(t *testing.T) {
 		if got := info.Mode().Perm(); got != wantMode {
 			t.Fatalf("%s mode = %v, want %v", name, got, wantMode)
 		}
+	}
+	if _, err := os.Lstat(filepath.Join(nativeHome, ".ssh", "known_hosts")); !os.IsNotExist(err) {
+		t.Fatalf("SeedSSH copied caller known_hosts: %v", err)
 	}
 }
 

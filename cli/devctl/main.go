@@ -1941,6 +1941,13 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 		if err := nativelaunch.SeedSSH(resolved.HostHome, true); err != nil {
 			die(err.Error())
 		}
+		authority, err := sshauthority.Package()
+		if err != nil {
+			die(err.Error())
+		}
+		if err := authority.InstallKnownHosts(filepath.Join(sshDir, "known_hosts")); err != nil {
+			die(err.Error())
+		}
 		if err := writeNativeSSHConfig(resolved.HostHome, resolved.HostHome, nil); err != nil {
 			die(err.Error())
 		}
@@ -1958,13 +1965,12 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 			die(err.Error())
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		known := filepath.Join(home, ".ssh", "known_hosts")
-		if _, err := os.Stat(known); err == nil {
-			if err := copyNativeSSHFile(known, filepath.Join(sshDir, "known_hosts"), 0o644); err != nil {
-				die(err.Error())
-			}
-		}
+	authority, err := sshauthority.Package()
+	if err != nil {
+		die(err.Error())
+	}
+	if err := authority.InstallKnownHosts(filepath.Join(sshDir, "known_hosts")); err != nil {
+		die(err.Error())
 	}
 	if err := writeNativeSSHConfig(resolved.HostHome, resolved.HostHome, []string{keyName}); err != nil {
 		die(err.Error())

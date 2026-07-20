@@ -72,7 +72,11 @@ func TestGitIdentityForRepoCommandUsesIdentityValues(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	authority, err := sshauthority.New(executable)
+	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte("fixture.invalid ssh-ed25519 fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := sshauthority.New(executable, knownHosts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +128,9 @@ func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	if !strings.Contains(text, "HostName github.com") || !strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+	if !strings.Contains(text, "Host github.com ssh.github.com") ||
+		!strings.Contains(text, "StrictHostKeyChecking yes") ||
+		!strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
 		t.Fatalf("default config missing github host/default key:\n%s", text)
 	}
 

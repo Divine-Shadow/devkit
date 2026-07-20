@@ -3,10 +3,11 @@
 ## Purpose
 
 Make every promoted Devkit Product reset/bootstrap and every persisted or
-explicit Git SSH command use one absolute OpenSSH executable selected by the
-immutable Devkit package, together with the existing source-derived SSH
-configuration. This closes the fresh-consumer failure where the configuration
-was correct but Git evaluated a bare `ssh` under a protected empty `PATH`.
+explicit Git SSH command use one absolute OpenSSH executable and one pinned
+host-key set selected by the immutable Devkit package. This closes both the
+fresh-consumer failure where Git evaluated a bare `ssh` under a protected
+empty `PATH` and the Derpinator failure where bootstrap inherited caller
+`known_hosts` state and rejected the Product endpoint.
 
 The accepted decision is Management
 `9bb328ef7c72d944e5a23dc52c8d2034a63137a0`,
@@ -22,6 +23,10 @@ gate.
   system path, fallback, or second launcher can replace it.
 - The Devkit package directly references OpenSSH and its transitive closure
   contains the selected OpenSSH store path.
+- The same package directly references source-pinned GitHub host keys. Native
+  Product paths replace, rather than read or merge, caller `known_hosts`;
+  `StrictHostKeyChecking yes` is mandatory for both `github.com` and the
+  direct `[ssh.github.com]:443` endpoint.
 - Reset/bootstrap preflight rejects an empty, relative, missing, directory, or
   non-executable bound path before proxy, Git, network, common-repository, or
   worktree effects.
@@ -53,9 +58,16 @@ gate.
 - [x] Export and pass the named packaged absent-consumer lifecycle flake check.
 - [x] Prove the built package embeds the exact OpenSSH store executable and its
       closure contains OpenSSH.
+- [x] Pin official GitHub raw host keys from `https://api.github.com/meta`
+      (`ssh_keys`, retrieved 2026-07-20), independently verify their
+      fingerprints against GitHub's fingerprint documentation, and bind the
+      immutable file into the package authority.
+- [x] Add real OpenSSH matching/mismatching host-key lifecycle coverage,
+      including fail-before-checkout cleanup.
 - [x] Run focused Go tests, full `go test ./...`, the named check, and full
       `nix flake check --show-trace`.
-- [ ] Review, commit, push to Devkit `master`, and read back a clean matching
+- [x] Review and complete the clean 14-check source gate.
+- [ ] Commit, push to Devkit `master`, and read back a clean matching
       local/remote commit and tree.
 
 ## Surprises and discoveries
@@ -80,6 +92,9 @@ gate.
   credential, SSH daemon, or network. The independent production derivation
   binds `${pkgs.openssh}/bin/ssh` and proves the exact store reference and
   closure membership.
+- The direct Product origin is `ssh.github.com:443`, while the generated block
+  previously matched only `github.com`. The strict block must match both names,
+  and the pinned key aliases must include `[ssh.github.com]:443`.
 
 ## Decision log
 
@@ -100,6 +115,10 @@ gate.
 - Treat stale, unused bare SSH helper emitters as invariant violations even if
   they are not on the current reset path: migrate or remove their command
   generation so a future promoted path cannot reintroduce ambient authority.
+- Extend that same accepted authority to the host-key file rather than create a
+  second transport choice. Source-controlled raw keys are authenticated by the
+  upstream API provenance and documented fingerprints; builds and runtimes
+  never refresh them from the network.
 
 ## Files
 
@@ -173,6 +192,11 @@ packaged binary and the exact OpenSSH output in closure metadata.
 
 Full `go test -count=1 ./...` is green, including the complete integration
 package. Full host-system `nix flake check --show-trace` is green across all 14
-checks; its named fresh-consumer run completed in 1.50 seconds and the existing
-focused native bootstrap/stdio/cleanup integration run completed in 40.39
-seconds. Publication remains in progress.
+checks. The named lifecycle output is
+`/nix/store/nxa4r4qgj0wwb0rrxasan5qw05z8mvgw-devkit-product-fresh-consumer-ssh-authority-check-dev`;
+the production package-authority output is
+`/nix/store/zjib6zgg75xrx2pdvs45c5sdxw242d5b-devkit-devctl-openssh-executable-authority`.
+The real OpenSSH regression carried a delayed Git smart-protocol pack through
+the package proxy and strict matching host key, and the mismatch case failed
+before checkout with no owned-root or socket residue. Publication remains in
+progress.

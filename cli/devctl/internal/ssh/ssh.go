@@ -14,18 +14,16 @@ type WriteStep struct {
 	Script  string
 }
 
-// BuildWriteSteps constructs WriteSteps to write SSH private/public keys, known_hosts, and config
-// into the agent's HOME, with correct permissions. Nil/empty contents are skipped.
-func BuildWriteSteps(home string, key, pub, known []byte, cfg string) []WriteStep {
-	steps := make([]WriteStep, 0, 4)
+// BuildIdentityWriteSteps constructs WriteSteps for caller-held identity keys
+// and a source-defined config. Host keys are intentionally not accepted here:
+// native Product bootstrap installs them only through sshauthority.Authority.
+func BuildIdentityWriteSteps(home string, key, pub []byte, cfg string) []WriteStep {
+	steps := make([]WriteStep, 0, 3)
 	if len(key) > 0 {
 		steps = append(steps, WriteStep{Content: key, Script: "cat > '" + home + "'/.ssh/id_ed25519 && chmod 600 '" + home + "'/.ssh/id_ed25519"})
 	}
 	if len(pub) > 0 {
 		steps = append(steps, WriteStep{Content: pub, Script: "cat > '" + home + "'/.ssh/id_ed25519.pub && chmod 644 '" + home + "'/.ssh/id_ed25519.pub"})
-	}
-	if len(known) > 0 {
-		steps = append(steps, WriteStep{Content: known, Script: "cat > '" + home + "'/.ssh/known_hosts && chmod 644 '" + home + "'/.ssh/known_hosts"})
 	}
 	if cfg != "" {
 		steps = append(steps, WriteStep{Content: []byte(cfg), Script: "cat > '" + home + "'/.ssh/config && chmod 600 '" + home + "'/.ssh/config"})

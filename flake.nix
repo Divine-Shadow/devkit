@@ -57,6 +57,7 @@
       };
       codexVersion = "0.144.0";
       codexReleaseTag = "rust-v${codexVersion}";
+      githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
       productRuntimeVersion = "6826ff0ad172d35ce2eaeb62473ae26facb765a0";
       governanceJarVersion = productRuntimeVersion;
       submitRuntimeVersion = productRuntimeVersion;
@@ -116,6 +117,7 @@
         {
           pkgs,
           sshExecutable,
+          knownHostsFile,
           tags ? [ ],
         }:
         pkgs.buildGoModule {
@@ -131,6 +133,7 @@
             "-s"
             "-w"
             "-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=${sshExecutable}"
+            "-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=${knownHostsFile}"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"
@@ -145,47 +148,66 @@
         mkDevctl {
           inherit pkgs;
           sshExecutable = "${pkgs.openssh}/bin/ssh";
+          knownHostsFile = githubSSHKnownHosts;
         };
       mkProductFreshConsumerSSHAuthorityCheck =
         pkgs:
         let
-          fixtureSSH = pkgs.writeShellScript "devkit-product-fixture-ssh" ''
-            set -eu
-            : "''${DEVKIT_TEST_PRODUCT_REMOTE:?}"
-            : "''${DEVKIT_TEST_PRODUCT_SSH_LOG:?}"
-            : "''${DEVKIT_TEST_PRODUCT_PROXY_USED:?}"
+          fixtureSSHPackage = pkgs.writeShellApplication {
+            name = "ssh";
+            runtimeInputs = [
+              pkgs.bash
+              pkgs.coreutils
+              pkgs.diffutils
+              pkgs.git
+              pkgs.gnugrep
+              pkgs.gnused
+            ];
+            text = ''
+              set -eu
+              : "''${DEVKIT_TEST_PRODUCT_REMOTE:?}"
+              : "''${DEVKIT_TEST_PRODUCT_SSH_LOG:?}"
+              : "''${DEVKIT_TEST_PRODUCT_PROXY_USED:?}"
+              : "''${DEVKIT_TEST_INSTALLED_KNOWN_HOSTS:?}"
 
-            printf '%s\n' "$*" >> "$DEVKIT_TEST_PRODUCT_SSH_LOG"
-            config=
-            previous=
-            configuration_query=0
-            for argument in "$@"; do
-              if [ "$previous" = "-F" ]; then
-                config="$argument"
+              printf '%s\n' "$*" >> "$DEVKIT_TEST_PRODUCT_SSH_LOG"
+              config=
+              previous=
+              configuration_query=0
+              for argument in "$@"; do
+                if [ "$previous" = "-F" ]; then
+                  config="$argument"
+                fi
+                if [ "$argument" = "-G" ]; then
+                  configuration_query=1
+                fi
+                previous="$argument"
+              done
+              test -n "$config"
+              test -r "$config"
+
+              identity="$(sed -n 's/^  IdentityFile //p' "$config" | head -n 1)"
+              test -n "$identity"
+              test -r "$identity"
+              proxy_command="$(sed -n 's/^  ProxyCommand //p' "$config" | head -n 1)"
+              test -n "$proxy_command"
+              known_hosts="$(sed -n 's/^  UserKnownHostsFile //p' "$config" | head -n 1)"
+              test -n "$known_hosts"
+              cmp "$DEVKIT_TEST_INSTALLED_KNOWN_HOSTS" "$known_hosts"
+              grep -q '^Host github.com ssh.github.com$' "$config"
+              grep -q '^  StrictHostKeyChecking yes$' "$config"
+
+              if [ "$configuration_query" = 1 ]; then
+                exit 0
               fi
-              if [ "$argument" = "-G" ]; then
-                configuration_query=1
-              fi
-              previous="$argument"
-            done
-            test -n "$config"
-            test -r "$config"
-
-            identity="$(${pkgs.gnused}/bin/sed -n 's/^  IdentityFile //p' "$config" | ${pkgs.coreutils}/bin/head -n 1)"
-            test -n "$identity"
-            test -r "$identity"
-            proxy_command="$(${pkgs.gnused}/bin/sed -n 's/^  ProxyCommand //p' "$config" | ${pkgs.coreutils}/bin/head -n 1)"
-            test -n "$proxy_command"
-
-            if [ "$configuration_query" = 1 ]; then
-              exit 0
-            fi
-            proxy_command="''${proxy_command//%h/ssh.github.com}"
-            proxy_command="''${proxy_command//%p/443}"
-            ${pkgs.bash}/bin/bash -c "$proxy_command" </dev/null >/dev/null
-            printf '%s\n' "$config" > "$DEVKIT_TEST_PRODUCT_PROXY_USED"
-            exec ${pkgs.git}/bin/git-upload-pack "$DEVKIT_TEST_PRODUCT_REMOTE"
-          '';
+              proxy_command="''${proxy_command//%h/ssh.github.com}"
+              proxy_command="''${proxy_command//%p/443}"
+              bash -c "$proxy_command" </dev/null >/dev/null
+              printf '%s\n' "$config" > "$DEVKIT_TEST_PRODUCT_PROXY_USED"
+              exec git-upload-pack "$DEVKIT_TEST_PRODUCT_REMOTE"
+            '';
+          };
+          fixtureSSH = "${fixtureSSHPackage}/bin/ssh";
           fixtureBwrap = pkgs.writeShellScript "devkit-fresh-consumer-bwrap" ''
             set -eu
             all_arguments="$*"
@@ -289,6 +311,9 @@
           fixtureAllowlist = pkgs.writeText "devkit-fresh-consumer-egress-allowlist" ''
             ssh.github.com
           '';
+          fixtureKnownHosts = pkgs.writeText "devkit-product-fixture-known-hosts" ''
+            [ssh.github.com]:443 ssh-ed25519 fixture-host-key
+          '';
           fixtureCodexConfig = pkgs.writeText "devkit-fresh-consumer-codex-config.toml" ''
             # source = nixos-wsl codex config
             model = "gpt-5.5"
@@ -301,6 +326,7 @@
           fixtureDevctlBase = mkDevctl {
             inherit pkgs;
             sshExecutable = fixtureSSH;
+            knownHostsFile = fixtureKnownHosts;
             tags = [ "devkitintegration" ];
           };
           fixtureDevctl = fixtureDevctlBase.overrideAttrs (old: {
@@ -324,21 +350,26 @@
           DEVKIT_TEST_INSTALLED_RUNTIME_SHELL = "${pkgs.bash}/bin/bash";
           DEVKIT_TEST_INSTALLED_RUNTIME_BWRAP = fixtureBwrap;
           DEVKIT_TEST_INSTALLED_SSH_EXECUTABLE = fixtureSSH;
+          DEVKIT_TEST_INSTALLED_KNOWN_HOSTS = fixtureKnownHosts;
           DEVKIT_TEST_INSTALLED_CODEX_CONFIG_SOURCE = fixtureCodexConfig;
+          DEVKIT_TEST_NSS_WRAPPER = "${pkgs.nss_wrapper}/lib/libnss_wrapper.so";
           DEVKIT_TEST_SINGLE_FRESH_CONSUMER = "1";
           nativeCheckInputs = [
             pkgs.git
+            pkgs.openssh
           ];
           doCheck = true;
           checkPhase = ''
             runHook preCheck
             go test ./integration -run '^TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness$' -count=1 -v
+            go test ./integration -run '^TestNativePrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand$' -count=1 -v
             runHook postCheck
           '';
           installPhase = ''
             mkdir -p "$out"
             printf '%s\n' ${fixtureDevctl} > "$out/fixture-devctl"
             printf '%s\n' ${fixtureSSH} > "$out/fixture-ssh"
+            cp ${fixtureKnownHosts} "$out/fixture-known-hosts"
           '';
         };
       mkNativeBootstrapStdioCleanupCheck =
@@ -886,12 +917,22 @@
               };
             in
             pkgs.runCommand "devkit-devctl-openssh-executable-authority" {
-              nativeBuildInputs = [ pkgs.gnugrep ];
+              src = ./.;
+              nativeBuildInputs = [
+                pkgs.gnugrep
+                pkgs.ripgrep
+              ];
             } ''
               grep -aqF '${pkgs.openssh}/bin/ssh' ${devctl}/kit/bin/devctl
+              grep -aqF '${githubSSHKnownHosts}' ${devctl}/kit/bin/devctl
               grep -qFx '${pkgs.openssh}' ${closure}/store-paths
+              grep -qFx '${githubSSHKnownHosts}' ${closure}/store-paths
+              grep -qF '[ssh.github.com]:443 ' '${githubSSHKnownHosts}'
+              ! rg -n 'StrictHostKeyChecking[[:space:]]+accept-new' "$src/cli/devctl"
+              ! rg -n 'copyNativeSSHFile\\([^,]*known|BuildWriteSteps' "$src/cli/devctl"
               mkdir -p "$out"
               printf '%s\n' '${pkgs.openssh}/bin/ssh' > "$out/ssh-executable"
+              cp '${githubSSHKnownHosts}' "$out/github-ssh-known-hosts"
               cp ${closure}/store-paths "$out/store-paths"
             '';
 

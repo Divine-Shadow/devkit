@@ -38,6 +38,20 @@ func buildDevctlForNativeDefaultsWithTags(t *testing.T, tags ...string) string {
 
 func buildDevctlForNativeDefaultsWithSSHAndTags(t *testing.T, sshExecutable string, tags ...string) string {
 	t.Helper()
+	knownHosts := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(knownHosts, []byte("fixture.invalid ssh-ed25519 fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(t, sshExecutable, knownHosts, tags...)
+}
+
+func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
+	t *testing.T,
+	sshExecutable string,
+	knownHosts string,
+	tags ...string,
+) string {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "runtime", "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
@@ -49,7 +63,10 @@ func buildDevctlForNativeDefaultsWithSSHAndTags(t *testing.T, sshExecutable stri
 	args = append(
 		args,
 		"-ldflags",
-		"-X=devkit/cli/devctl/internal/sshauthority.packageExecutable="+sshExecutable,
+		strings.Join([]string{
+			"-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=" + sshExecutable,
+			"-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=" + knownHosts,
+		}, " "),
 	)
 	args = append(args, "-o", bin, "./")
 	cmd := exec.Command("go", args...)
@@ -1631,9 +1648,11 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 	runtimeShell := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_SHELL"))
 	runtimeBwrap := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_RUNTIME_BWRAP"))
 	runtimeSSH := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_SSH_EXECUTABLE"))
+	runtimeKnownHosts := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_KNOWN_HOSTS"))
 	runtimeCodexConfig := strings.TrimSpace(os.Getenv("DEVKIT_TEST_INSTALLED_CODEX_CONFIG_SOURCE"))
 	if runtimeDevctl == "" || runtimeOverlays == "" || runtimeBroker == "" ||
-		runtimeShell == "" || runtimeBwrap == "" || runtimeSSH == "" || runtimeCodexConfig == "" {
+		runtimeShell == "" || runtimeBwrap == "" || runtimeSSH == "" ||
+		runtimeKnownHosts == "" || runtimeCodexConfig == "" {
 		t.Skip("installed immutable runtime inputs are not supplied")
 	}
 	for label, path := range map[string]string{
@@ -1652,6 +1671,10 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 	}
 	if info, err := os.Stat(runtimeCodexConfig); err != nil || info.IsDir() {
 		t.Fatalf("runtime Codex config source is not usable: %s: %v", runtimeCodexConfig, err)
+	}
+	expectedKnownHosts, err := os.ReadFile(runtimeKnownHosts)
+	if err != nil || len(expectedKnownHosts) == 0 {
+		t.Fatalf("runtime known-hosts source is not usable: %s: %v", runtimeKnownHosts, err)
 	}
 
 	fixtureRoot, err := os.MkdirTemp("/tmp", "drr-")
@@ -1704,7 +1727,7 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 			for name, content := range map[string]string{
 				"id_ed25519":     "fixture private identity\n",
 				"id_ed25519.pub": "fixture public identity\n",
-				"known_hosts":    "[ssh.github.com]:443 fixture-host-key\n",
+				"known_hosts":    "[ssh.github.com]:443 ambient-wrong-host-key\n",
 			} {
 				mode := os.FileMode(0o600)
 				if name != "id_ed25519" {
@@ -1897,6 +1920,16 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 				identity, err := os.ReadFile(filepath.Join(hostHome, ".ssh", "id_ed25519"))
 				if err != nil || string(identity) != "fixture private identity\n" {
 					t.Fatalf("agent%d did not preserve the protected source identity: %q %v", index, identity, err)
+				}
+				knownHosts, err := os.ReadFile(filepath.Join(hostHome, ".ssh", "known_hosts"))
+				if err != nil || string(knownHosts) != string(expectedKnownHosts) {
+					t.Fatalf(
+						"agent%d known-hosts = %q error=%v, want exact immutable package material %q",
+						index,
+						knownHosts,
+						err,
+						expectedKnownHosts,
+					)
 				}
 				sshConfig, err := os.ReadFile(filepath.Join(hostHome, ".ssh", "config"))
 				if err != nil {
@@ -2264,14 +2297,6 @@ func TestNativePrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	builtDevctl := buildDevctlForNativeDefaultsWithSSHAndTags(t, sshExecutable, "devkitintegration")
-	devctlBytes, err := os.ReadFile(builtDevctl)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(packageDevctl, devctlBytes, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	overlay := `
 defaults:
   repo: test-repo
@@ -2330,6 +2355,70 @@ native:
 	runNativeFixtureCommand(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", clientKey)
 	hostKey := filepath.Join(base, "sshd-host-ed25519")
 	runNativeFixtureCommand(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", hostKey)
+	hostPublicKey, err := os.ReadFile(hostKey + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostKeyFields := strings.Fields(string(hostPublicKey))
+	if len(hostKeyFields) < 2 {
+		t.Fatalf("invalid fixture host public key: %q", hostPublicKey)
+	}
+	matchingKnownHosts := filepath.Join(base, "package-known-hosts")
+	if err := os.WriteFile(
+		matchingKnownHosts,
+		[]byte("[ssh.github.com]:443 "+hostKeyFields[0]+" "+hostKeyFields[1]+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	wrongHostKey := filepath.Join(base, "wrong-sshd-host-ed25519")
+	runNativeFixtureCommand(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", wrongHostKey)
+	wrongPublicKey, err := os.ReadFile(wrongHostKey + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongKeyFields := strings.Fields(string(wrongPublicKey))
+	if len(wrongKeyFields) < 2 {
+		t.Fatalf("invalid wrong fixture host public key: %q", wrongPublicKey)
+	}
+	mismatchingKnownHosts := filepath.Join(base, "mismatching-package-known-hosts")
+	if err := os.WriteFile(
+		mismatchingKnownHosts,
+		[]byte("[ssh.github.com]:443 "+wrongKeyFields[0]+" "+wrongKeyFields[1]+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(clientHome, ".ssh", "known_hosts"),
+		[]byte("[ssh.github.com]:443 "+wrongKeyFields[0]+" "+wrongKeyFields[1]+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	matchingDevctl := buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
+		t,
+		sshExecutable,
+		matchingKnownHosts,
+		"devkitintegration",
+	)
+	mismatchingDevctl := buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
+		t,
+		sshExecutable,
+		mismatchingKnownHosts,
+		"devkitintegration",
+	)
+	installPackageDevctl := func(source string) {
+		t.Helper()
+		devctlBytes, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(packageDevctl, devctlBytes, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installPackageDevctl(mismatchingDevctl)
 	publicKey, err := os.ReadFile(clientKey + ".pub")
 	if err != nil {
 		t.Fatal(err)
@@ -2444,33 +2533,39 @@ native:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = outerProxy.Close() })
-	connectTarget := make(chan string, 1)
-	proxyErr := make(chan error, 1)
+	connectTarget := make(chan string, 2)
+	proxyErr := make(chan error, 2)
 	go func() {
-		client, err := outerProxy.Accept()
-		if err != nil {
-			proxyErr <- err
-			return
+		for attempt := 0; attempt < 2; attempt++ {
+			client, err := outerProxy.Accept()
+			if err != nil {
+				proxyErr <- err
+				return
+			}
+			reader := bufio.NewReader(client)
+			req, err := http.ReadRequest(reader)
+			if err != nil {
+				_ = client.Close()
+				proxyErr <- err
+				return
+			}
+			connectTarget <- req.Host
+			server, err := net.Dial("tcp", sshdAddress)
+			if err != nil {
+				_ = client.Close()
+				proxyErr <- err
+				return
+			}
+			if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+				_ = server.Close()
+				_ = client.Close()
+				proxyErr <- err
+				return
+			}
+			proxyErr <- relayNativeFixtureTunnel(client, reader, server)
+			_ = server.Close()
+			_ = client.Close()
 		}
-		defer client.Close()
-		reader := bufio.NewReader(client)
-		req, err := http.ReadRequest(reader)
-		if err != nil {
-			proxyErr <- err
-			return
-		}
-		connectTarget <- req.Host
-		server, err := net.Dial("tcp", sshdAddress)
-		if err != nil {
-			proxyErr <- err
-			return
-		}
-		defer server.Close()
-		if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-			proxyErr <- err
-			return
-		}
-		proxyErr <- relayNativeFixtureTunnel(client, reader, server)
 	}()
 
 	remoteURL := "ssh://" + currentUser + "@github.com" + remoteRepo
@@ -2485,33 +2580,62 @@ native:
 	if err := os.WriteFile(nscdSource, []byte("integration-only bind source\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	prepare := exec.Command(
-		packageDevctl,
-		"-p", "dev-all",
-		"native", "prepare",
-		"--repo", "test-repo",
-		"--count", "1",
-		"--base-branch", "main",
-		"--branch-prefix", "agent",
-		"--worktree-root", isolatedRoot,
-		"--worktree-container-root", "/workspaces/dev/installed-chain",
-		"--isolation-profile", "workspace-egress",
-		"--proxy-socket", proxySocket,
-		"--egress-allowlist", allowlistPath,
-		"--resolv-conf", resolvConf,
-		"--format", "json",
-	)
-	prepare.Env = isolatedNativeFixtureEnv(
-		"DEVKIT_ROOT="+root,
-		"DEVKIT_NO_TMUX=1",
-		"DEVKIT_NATIVE_ISOLATION_PROFILE=workspace-egress",
-		"HTTPS_PROXY=http://"+outerProxy.Addr().String(),
-		"HTTP_PROXY=http://"+outerProxy.Addr().String(),
-		"HOME="+clientHome,
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
-	)
+	newPrepare := func(worktreeRoot, socketPath string) *exec.Cmd {
+		command := exec.Command(
+			packageDevctl,
+			"-p", "dev-all",
+			"native", "prepare",
+			"--repo", "test-repo",
+			"--count", "1",
+			"--base-branch", "main",
+			"--branch-prefix", "agent",
+			"--worktree-root", worktreeRoot,
+			"--worktree-container-root", "/workspaces/dev/installed-chain",
+			"--isolation-profile", "workspace-egress",
+			"--proxy-socket", socketPath,
+			"--egress-allowlist", allowlistPath,
+			"--resolv-conf", resolvConf,
+			"--format", "json",
+		)
+		command.Env = isolatedNativeFixtureEnv(
+			"DEVKIT_ROOT="+root,
+			"DEVKIT_NO_TMUX=1",
+			"DEVKIT_NATIVE_ISOLATION_PROFILE=workspace-egress",
+			"HTTPS_PROXY=http://"+outerProxy.Addr().String(),
+			"HTTP_PROXY=http://"+outerProxy.Addr().String(),
+			"HOME="+clientHome,
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_NOSYSTEM=1",
+			"DEVKIT_INTEGRATION_NSCD_SOURCE="+nscdSource,
+		)
+		return command
+	}
+	mismatchingRoot := filepath.Join(base, "mismatching-consumer")
+	mismatchingSocket := filepath.Join(base, "mismatching-egress.sock")
+	mismatchingOutput, mismatchingErr := newPrepare(mismatchingRoot, mismatchingSocket).CombinedOutput()
+	if mismatchingErr == nil {
+		t.Fatalf("mismatching package host key unexpectedly created a consumer:\n%s", mismatchingOutput)
+	}
+	if !strings.Contains(string(mismatchingOutput), "Host key verification failed") &&
+		!strings.Contains(string(mismatchingOutput), "REMOTE HOST IDENTIFICATION HAS CHANGED") {
+		t.Fatalf("mismatching package host key failure was not explicit: %v\n%s", mismatchingErr, mismatchingOutput)
+	}
+	if entries, err := os.ReadDir(mismatchingRoot); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inspect mismatching bootstrap root: %v", err)
+	} else if len(entries) != 0 {
+		t.Fatalf("mismatching package host key left consumer payload in declared empty root: %v", entries)
+	}
+	for _, residue := range []string{
+		mismatchingSocket,
+		filepath.Join(mismatchingRoot, "agent1", "test-repo"),
+		filepath.Join(mismatchingRoot, ".devkit", "git", "test-repo.git"),
+	} {
+		if _, err := os.Lstat(residue); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mismatching package host key left bootstrap residue %s: %v", residue, err)
+		}
+	}
+	installPackageDevctl(matchingDevctl)
+	prepare := newPrepare(isolatedRoot, proxySocket)
 	started := time.Now()
 	output, err := prepare.CombinedOutput()
 	if err != nil {
@@ -2529,16 +2653,44 @@ native:
 	if _, err := os.Stat(filepath.Join(isolatedRoot, "agent1", "test-repo", ".git")); err != nil {
 		t.Fatalf("installed-chain worktree missing after fetch: %v", err)
 	}
-	select {
-	case target := <-connectTarget:
-		if target != "ssh.github.com:443" {
-			t.Fatalf("outer CONNECT target = %q", target)
+	var installedKnownHosts []string
+	if err := filepath.WalkDir(isolatedRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-	case <-time.After(time.Second):
-		t.Fatal("outer proxy did not receive installed ProxyCommand CONNECT")
+		if !entry.IsDir() && filepath.Base(path) == "known_hosts" && filepath.Base(filepath.Dir(path)) == ".ssh" {
+			installedKnownHosts = append(installedKnownHosts, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if err := <-proxyErr; err != nil {
-		t.Fatalf("outer proxy tunnel: %v", err)
+	if len(installedKnownHosts) != 1 {
+		t.Fatalf("installed package host-key files = %v, want exactly one consumer authority", installedKnownHosts)
+	}
+	gotKnownHosts, err := os.ReadFile(installedKnownHosts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKnownHosts, err := os.ReadFile(matchingKnownHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotKnownHosts) != string(wantKnownHosts) {
+		t.Fatalf("consumer known-hosts did not exactly match immutable package material:\ngot %q\nwant %q", gotKnownHosts, wantKnownHosts)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		select {
+		case target := <-connectTarget:
+			if target != "ssh.github.com:443" {
+				t.Fatalf("outer CONNECT target = %q", target)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("outer proxy did not receive installed ProxyCommand CONNECT")
+		}
+		if err := <-proxyErr; err != nil {
+			t.Fatalf("outer proxy tunnel: %v", err)
+		}
 	}
 	if _, err := os.Lstat(proxySocket); !os.IsNotExist(err) {
 		t.Fatalf("managed proxy socket remained after installed-chain prepare: %v", err)

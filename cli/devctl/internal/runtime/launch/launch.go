@@ -199,6 +199,9 @@ func ensureGitSSHConfig(p nativeplan.Plan, sshAuthority sshauthority.Authority) 
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", sshDir, err)
 	}
+	if err := sshAuthority.InstallKnownHosts(filepath.Join(sshDir, "known_hosts")); err != nil {
+		return err
+	}
 	sshCommand, err := sshAuthority.Command(filepath.Join(sandboxHome, ".ssh", "config"))
 	if err != nil {
 		return err
@@ -242,12 +245,19 @@ func GitBootstrapSSHCommand(p nativeplan.Plan) (string, error) {
 // configure a Git worktree because native prepare calls it before materializing
 // the linked worktree.
 func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
-	sshCommand, err := GitBootstrapSSHCommand(p)
+	sshAuthority, err := resolvePackageSSHAuthority()
 	if err != nil {
 		return "", err
 	}
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
+	sshCommand, err := sshAuthority.Command(filepath.Join(hostHome, ".ssh", "config"))
+	if err != nil {
+		return "", err
+	}
 	if err := SeedSSH(hostHome, false); err != nil {
+		return "", err
+	}
+	if err := sshAuthority.InstallKnownHosts(filepath.Join(hostHome, ".ssh", "known_hosts")); err != nil {
 		return "", err
 	}
 	identityNames := existingSSHIdentities(filepath.Join(hostHome, ".ssh"))
@@ -355,13 +365,11 @@ func buildGitSSHConfig(configHome string, identityNames []string, proxyURL strin
 func buildGitSSHConfigWithProxyCommand(configHome string, identityNames []string, proxyCommand string) string {
 	var b strings.Builder
 	b.WriteString(gitSSHManagedBegin + "\n")
-	b.WriteString("Host github.com\n")
+	b.WriteString("Host github.com ssh.github.com\n")
 	if proxyCommand = strings.TrimSpace(proxyCommand); proxyCommand != "" {
 		b.WriteString("  HostName ssh.github.com\n")
 		b.WriteString("  Port 443\n")
 		b.WriteString("  ProxyCommand " + proxyCommand + "\n")
-	} else {
-		b.WriteString("  HostName github.com\n")
 	}
 	b.WriteString("  User git\n")
 	for _, name := range identityNames {
@@ -373,7 +381,7 @@ func buildGitSSHConfigWithProxyCommand(configHome string, identityNames []string
 	}
 	b.WriteString("  IdentitiesOnly yes\n")
 	b.WriteString("  BatchMode yes\n")
-	b.WriteString("  StrictHostKeyChecking accept-new\n")
+	b.WriteString("  StrictHostKeyChecking yes\n")
 	b.WriteString("  UserKnownHostsFile " + filepath.Join(configHome, ".ssh", "known_hosts") + "\n")
 	b.WriteString(gitSSHManagedEnd + "\n")
 	return b.String()
@@ -2181,7 +2189,6 @@ func SeedSSH(hostHome string, force bool) error {
 		"id_ed25519.pub",
 		"id_rsa",
 		"id_rsa.pub",
-		"known_hosts",
 	} {
 		src := filepath.Join(srcDir, file)
 		data, err := os.ReadFile(src)
@@ -2200,7 +2207,7 @@ func SeedSSH(hostHome string, force bool) error {
 			}
 		}
 		mode := os.FileMode(0o600)
-		if strings.HasSuffix(file, ".pub") || file == "known_hosts" {
+		if strings.HasSuffix(file, ".pub") {
 			mode = 0o644
 		}
 		if err := os.WriteFile(target, data, mode); err != nil {
