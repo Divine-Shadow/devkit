@@ -1,6 +1,6 @@
 # Devkit
 
-Devkit runs project agents through Nix flakes and the native devkit sandbox. The supported entrypoint is `kit/scripts/devkit`, which execs the compiled CLI at `kit/bin/devctl`.
+Devkit runs project agents through Nix flakes and the native devkit sandbox. For ordinary non-Product overlays, the supported entrypoint is `kit/scripts/devkit`, which execs the compiled CLI at `kit/bin/devctl`.
 
 ## Requirements
 
@@ -18,14 +18,26 @@ make -C cli/devctl build
 Run commands through the wrapper:
 
 ```bash
-kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 2
-kit/scripts/devkit -p dev-all status --repo ouroboros-ide --ready
-kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'codex --version'
-kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --runtime-only
-kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 2
+kit/scripts/devkit -p ouroboros-static-front-end up --repo ouroboros-static-front-end --count 2
+kit/scripts/devkit -p ouroboros-static-front-end status --repo ouroboros-static-front-end --ready
+kit/scripts/devkit -p ouroboros-static-front-end exec 1 --repo ouroboros-static-front-end -- bash -lc 'codex --version'
+kit/scripts/devkit -p ouroboros-static-front-end ensure-ready --repo ouroboros-static-front-end --runtime-only
+kit/scripts/devkit -p ouroboros-static-front-end down --repo ouroboros-static-front-end --count 2
 ```
 
 If `kit/bin/devctl` is missing or not executable, the wrapper fails loudly and prints the build command. It does not silently choose another implementation.
+
+## Product Authority Boundary
+
+Product (`ouroboros-ide`) is not constructed or launched through the raw
+wrapper examples above. The authoritative Nix derivation emits one immutable
+`fleet-runtime-authority/v1` manifest. Product consumers must use only the
+adapter and launcher paths named by that installed manifest; those consumers
+may verify the manifest but may not select source, rebuild a runtime, or
+reinterpret identity. The Devkit `product-consumer-boundary-diagnostic` check
+is prerequisite evidence only. Product promotion requires the governed
+Product-owned promotion app to complete the entire lifecycle on two fresh
+consumers.
 
 ## Runtime Model
 

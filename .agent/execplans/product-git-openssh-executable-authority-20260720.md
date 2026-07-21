@@ -1,13 +1,53 @@
 # Product Git OpenSSH Executable Authority
 
+> **Current status: prerequisite-only implementation record.** This plan does
+> not define Product publication, deployment, or promotion. Its focused/full
+> checks and consumer fixture establish Devkit package prerequisites only.
+> Current Product promotion belongs exclusively to the governed Product-owned
+> twice-fresh promotion app consuming the sole installed
+> `fleet-runtime-authority/v1` manifest. Devkit work freezes on an immutable
+> candidate branch until that promotion accepts it.
+>
+> Candidate `9a5381d97bf7f5671853e379bd59722bf59f50a4` is preserved as
+> rejected audit history, not a promotion input. Its successor must close the
+> independent-review findings for descriptor-rooted stopped-volume writes,
+> exact Codex PID/listener ownership, recursively closed manifest objects,
+> cross-consumer geometry separation, and operative skill/plan routing before
+> another candidate freeze.
+>
+> Candidate `cb7ce7279a190efe175f2e66ebcae2a1e0fdf6bd` is also rejected
+> audit history. It closed the broader consumer acceptance findings but did
+> not recursively close the runtime authority envelope.
+>
+> Candidate `7e91f99bd1edd5cbd28eb358927db055845c9f12` is also rejected
+> audit history. It closed the individual object shapes but did not prove that
+> top-level artifact and Codex authorization values were projections of the
+> runtime identity and byte-verified adapter inputs.
+>
+> Candidate `09f48351d1f4974873ba001cb0616bebddbdc959` is also rejected
+> audit history. It equated the Codex path and digest projections but left the
+> Nix constructor able to accept coordinated projections that did not match
+> the selected immutable config bytes.
+>
+> Candidate `4cb5b0699d4a3abf6af5f0d7a7d9f82503c76f97` is also rejected
+> audit history. It proved those bytes by reading a derivation path during Nix
+> evaluation and tested rejection through `builtins.tryEval`/`deepSeq`, making
+> the public constructor gate depend on import-from-derivation semantics.
+>
+> The commit containing this plan is the additive successor candidate. Its
+> immutable commit hash, tree hash, remote-branch readback, and gate receipts
+> are external freeze evidence; embedding them here would make the source
+> record self-referential.
+
 ## Purpose
 
-Make every promoted Devkit Product reset/bootstrap and every persisted or
-explicit Git SSH command use one absolute OpenSSH executable and one pinned
-host-key set selected by the immutable Devkit package. This closes both the
-fresh-consumer failure where Git evaluated a bare `ssh` under a protected
-empty `PATH` and the Derpinator failure where bootstrap inherited caller
-`known_hosts` state and rejected the Product endpoint.
+Make the Devkit-owned Product source-acquisition prerequisite and every
+persisted or explicit Git SSH command use one absolute OpenSSH executable and
+one pinned host-key set selected by the immutable Devkit package. This closes
+both the fresh-consumer failure where Git evaluated a bare `ssh` under a
+protected empty `PATH` and the Derpinator failure where bootstrap inherited
+caller `known_hosts` state and rejected the Product endpoint. It does not by
+itself promote a Product runtime.
 
 The accepted decision is Management
 `9bb328ef7c72d944e5a23dc52c8d2034a63137a0`,
@@ -31,7 +71,7 @@ gate.
   non-executable bound path before proxy, Git, network, common-repository, or
   worktree effects.
 - Bootstrap `GIT_SSH_COMMAND`, per-home global `core.sshCommand`, linked
-  worktree `core.sshCommand`, and promoted explicit Git SSH emitters use the
+  worktree `core.sshCommand`, and Product-bound explicit Git SSH emitters use the
   same authority and exact source-derived config path.
 - Existing identity, managed CONNECT proxy, GitHub port 443, relative metadata,
   bwrap, mount, cleanup, and owned-root contracts remain unchanged.
@@ -39,14 +79,15 @@ gate.
   manifest. Its only public operations are exact `prepare --count C --index I`
   and validation-only `exec --count C --index I -- ARGV`; raw `devctl`
   Product construction and lifecycle paths fail before effects.
-- The Devkit named lifecycle check executes a composed installed adapter whose
+- The Devkit named consumer-boundary diagnostic executes a composed installed adapter whose
   test-only locator is compiled to a manifest inside the same immutable Nix
   store output. It uses real bwrap, package Git, package OpenSSH, strict
   fixture known-hosts, the managed proxy, and two independent absent
-  candidates. Its app-server proposition is deliberately bounded: initialize,
-  an ephemeral thread plus `thread/read`, and a standalone `command/exec`
-  first-executable boundary. `command/exec` is not a turn and this check does
-  not claim governed task admission.
+  candidates. Its app-server prerequisite proves the exact pinned Codex PID
+  owns the declared listening socket, then performs initialize, ephemeral
+  thread creation/readback, and declared governance MCP inventory through the
+  managed app-server protocol. It does not claim governed task admission or
+  Product promotion.
 - SSH private/public and Codex auth handles are declared per consumer, owned
   by that consumer UID, copied only into that consumer's claimed boundary, and
   represented in receipts only by path identity and digest. The real VM uses
@@ -57,12 +98,22 @@ gate.
   exact package identities, unlinks it before use, and exposes no
   caller-selected destination or socket.
 - A separate production-package contract proves that the production adapter
-  contains only the canonical
-  `/etc/fleet/dev-all-runtime-bundle/authority.json` locator and no integration
-  locator, caller authority, independent Product revision, or local
-  `#dev-all-runtime-bundle` fallback. WSL owns the mandatory NixOS
-  `environment.etc` target, root ownership, immutable store leaf, and
-  `/run/current-system` same-file verification.
+  consumes only the root-owned atomic Product runtime selector and its held
+  immutable `fleet-runtime-authority/v1` generation, with no integration
+  locator, caller authority, independent Product revision, or local bundle
+  build fallback. The authoritative WSL derivation owns selector publication;
+  `/run/current-system` is same-file verification only.
+- Top-level artifact digests exactly equal their corresponding runtime-identity
+  JAR digests. Codex authorization selects the adapter's exact config path and
+  `codex_config` digest, and the only declared installation target is
+  `/etc/codex/config.toml`. A package-owned build-time verifier hashes the
+  selected immutable file with the exact coreutils `sha256sum`; its successful
+  receipt is an explicit bundle dependency. The package launcher repeats that
+  byte proof at build and runtime validation. The Go consumer independently
+  preserves the same adapter-digest-to-byte proof without creating another
+  expected digest. The authoritative WSL caller remains responsible for
+  selecting the config path and digest; this Devkit constructor does not and
+  cannot reject a wholly new self-consistent authoritative input.
 
 ## Progress
 
@@ -75,8 +126,8 @@ gate.
 - [x] Implement the compile-time package authority and migrate emitters.
 - [x] Add focused unit, integration, persistence, and pre-effect rejection
       tests.
-- [x] Export and pass the replacement composed-adapter, twice-absent lifecycle
-      flake check; the historical fixture result below is diagnostic only.
+- [x] Export and pass the replacement composed-adapter, twice-absent
+      consumer-boundary diagnostic; this remains prerequisite evidence only.
 - [x] Prove the built package embeds the exact OpenSSH store executable and its
       closure contains OpenSSH.
 - [x] Pin official GitHub raw host keys from `https://api.github.com/meta`
@@ -88,8 +139,23 @@ gate.
 - [x] Run focused Go tests, full `go test ./...`, the replacement named check,
       and full `nix flake check --show-trace` on one frozen tree.
 - [x] Review and complete the clean full source gate.
-- [ ] Commit, push to Devkit `master`, and read back a clean matching
-      local/remote commit and tree.
+- [x] Freeze and preserve candidate `9a5381d` as rejected audit history.
+- [x] Freeze and preserve candidate `cb7ce72` as rejected audit history after
+      independent review found the recursively open runtime envelope.
+- [x] Freeze and preserve candidate `7e91f99` as rejected audit history after
+      independent review found the cross-value authority gap.
+- [x] Freeze and preserve candidate `09f48351` as rejected audit history after
+      independent review found the missing Nix-side byte proof.
+- [x] Freeze and preserve candidate `4cb5b06` as rejected audit history after
+      independent review found evaluation-time derivation reads and
+      `tryEval`/`deepSeq` realization gates.
+- [x] Close every independent-review finding in the additive successor and
+      rerun the expanded sabotage, full Go, all 19 flake, and twice-absent
+      diagnostic gates.
+- [x] Keep the successor candidate identity external to this plan. The freeze
+      receipt records the immutable commit/tree and matching remote branch;
+      `master` remains unchanged until Product-owned twice-fresh promotion
+      accepts a candidate.
 
 ## Surprises and discoveries
 
@@ -132,11 +198,12 @@ gate.
   fallback is not.
 - Keep the existing SSH configuration and ProxyCommand generator. Only the
   executable prefix changes.
-- Build one fixture-only composed adapter with a compile-time locator beneath
+- Build one fixture-only diagnostic adapter with a compile-time locator beneath
   its own immutable output. Its manifest names that exact adapter, real
   package Git/OpenSSH/bwrap/Codex artifacts, deterministic local SSH host
   authority, and two absent candidate geometries. Runtime client keys remain
-  disposable. This fixture does not prove production `/etc` ownership.
+  disposable. This fixture does not establish the installed selector,
+  deployment, governed GUI-task admission, or Product promotion.
 - Bubblewrap 0.11 `--sync-fd` keeps an FD in bubblewrap but does not expose it
   to the sandbox command. The composed adapter therefore uses `--file` with an
   inherited pipe and a fixed private 0600 sandbox path; the subordinate
@@ -174,6 +241,16 @@ gate.
 - `cli/devctl/main.go`
 - `cli/devctl/service_test.go`
 - `cli/devctl/integration/native_defaults_dryrun_test.go`
+- `cli/devctl/internal/productadapter/authority.go`
+- `cli/devctl/internal/productadapter/authority_shape_test.go`
+- `cli/devctl/internal/productseed/seed.go`
+- `cli/devctl/internal/productseed/seed_test.go`
+- `cli/devctl/internal/productsession/protocol.go`
+- `cli/devctl/cmd/product-adapter-supervisor/main.go`
+- `cli/devctl/cmd/product-adapter-supervisor/main_test.go`
+- `cli/devctl/cmd/product-adapter-supervisor/ownership_integration_test.go`
+- `nix/product-adapter-lifecycle-check.nix`
+- `.codex/skills/fleet-devkit-readiness/SKILL.md`
 - `.agent/execplans/product-git-openssh-executable-authority-20260720.md`
 
 ## Verification
@@ -191,10 +268,25 @@ Full Go and Nix gates:
 ```bash
 go test ./...
 nix build .#packages.x86_64-linux.devctl --print-out-paths
-nix build .#checks.x86_64-linux.product-fresh-consumer-ssh-authority \
+nix build .#checks.x86_64-linux.product-consumer-boundary-diagnostic \
   --print-out-paths --show-trace
 nix flake check --show-trace
 ```
+
+Successor-tree verification before freeze:
+
+- Focused adapter, stopped-volume seed, session, supervisor, and packaged
+  real-pinned-Codex/same-UID-decoy sabotage tests passed.
+- `go test -count=1 ./...` passed.
+- `checks.x86_64-linux.product-consumer-boundary-diagnostic` passed and
+  constructed and destroyed both consumers from absent state. Its exact output
+  path is recorded in the external freeze receipt so this source plan does not
+  recursively alter the artifact it names.
+- `nix flake check --show-trace` passed all 19 declared checks.
+- The candidate `devctl` package's direct references include package Git
+  2.50.1 and exactly package OpenSSH 10.0p2. Its final output path is recorded
+  outside this source tree so the receipt cannot recursively alter the package
+  it identifies.
 
 Package receipt:
 
@@ -205,13 +297,16 @@ nix-store -q --references '<devctl-package>'
 nix-store -qR '<devctl-package>'
 ```
 
-## Acceptance
+## Devkit candidate freeze
 
-Publication is allowed only when the fresh checkout is clean except for the
-intended committed change, every focused/full gate is green, the named packaged
-fresh-consumer check is present in the full flake check, the package and
-closure receipts select exactly one OpenSSH store authority, and pushed
-`origin/master` matches the accepted local commit and tree.
+The Devkit candidate may be frozen only when the checkout contains exactly the
+intended change, every focused/full prerequisite gate is green, the named
+packaged consumer-boundary diagnostic is present in the full flake check, and
+the package/closure receipts select exactly one OpenSSH store authority. Freeze
+means commit and push an immutable candidate branch with matching local/remote
+commit and tree. It is not Product acceptance, publication, deployment, or
+promotion, and it must not update `origin/master` before the Product-owned
+twice-fresh promotion app accepts the complete lifecycle.
 
 ## Outcomes and retrospective
 
@@ -225,13 +320,16 @@ child. It did not prove the proposition its old text claimed.
 production package. It finds the exact `${pkgs.openssh}/bin/ssh` string in the
 packaged binary and the exact OpenSSH output in closure metadata.
 
-The replacement
-`checks.x86_64-linux.product-fresh-consumer-ssh-authority` is terminal green at
+The historical replacement
+`checks.x86_64-linux.product-fresh-consumer-ssh-authority` was terminal green at
 `/nix/store/dc7nhskh8261m7m35kzzb97mb25q7rnl-vm-test-run-product-fresh-consumer-ssh-authority`.
 It ran both consumers under distinct UIDs from absent boundaries through
 package Git, real OpenSSH, strict fixture known-hosts, the managed proxy, real
-bubblewrap, pinned Codex app-server initialize/thread/read/MCP, standalone
-`command/exec`, validation-only adapter exec, and total disposable teardown.
+bubblewrap, pinned Codex app-server initialize/thread/read/MCP, a historical
+standalone command diagnostic, and total disposable teardown. The standalone
+command observation was never governed task admission and is explicitly
+insufficient for publication or promotion. The current diagnostic deliberately
+does not repeat or report `command/exec` as a lifecycle or admission boundary.
 The associated diagnostic outputs are
 `/nix/store/b0w0z89cs3mscm22v76h4cqkkib38dfn-devkit-native-bootstrap-stdio-cleanup-check-dev`,
 `/nix/store/8rv0mjp3lr13f4f7wpcxis0d9xrp9q6f-devkit-native-absent-index-construction-check-dev`,
@@ -247,8 +345,9 @@ authority branch, local Product flake fallback, global shared secret handles,
 or unsupported inherited-FD flag; its exact closure contains package OpenSSH
 10.0p2, bubblewrap 0.11.0, and Codex 0.144.0.
 
-Independent source audit remains outstanding. The later
-Management/WSL/Product twice-fresh gate remains responsible for governed
-turn/task admission, external GUI effects, distinct-UID production
-composition, and production NixOS `/etc`/current-generation binding.
-Publication remains blocked.
+Independent source audit remained outstanding at that historical boundary.
+The current governed Product-owned twice-fresh promotion app remains solely
+responsible for governed turn/task admission, external GUI effects,
+distinct-UID production composition, production NixOS
+`/etc`/current-generation binding, and promotion. Passing Devkit diagnostics
+or freezing a candidate branch cannot substitute for that gate.

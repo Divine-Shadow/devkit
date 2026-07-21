@@ -8,9 +8,14 @@ let
     inherit pkgs;
     productSourceRev = "1111111111111111111111111111111111111111";
   };
-  bundle = mkDevAllRuntimeBundle ({
+  constructorArgs = {
     inherit pkgs;
-  } // fixture);
+  } // fixture.constructorArgs;
+  alternateCodexConfig = pkgs.writeText "alternate-codex-authorization.toml" ''
+    approval_policy = "on-request"
+    sandbox_mode = "workspace-write"
+  '';
+  bundle = mkDevAllRuntimeBundle constructorArgs;
   closure = pkgs.closureInfo {
     rootPaths = [ bundle ];
   };
@@ -28,16 +33,71 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   launcher='${bundle}/bin/dev-all-runtime-bundle'
   identity='${bundle}/share/dev-all-runtime-bundle/identity.json'
   revision='${fixture.productSourceRev}'
+  verifier='${bundle.codexAuthorizationVerifierPath}'
+  config_path='${constructorArgs.codexAuthorization.configPath}'
+  config_sha256='${constructorArgs.codexAuthorization.configSha256}'
+  system_path='${constructorArgs.codexAuthorization.systemPath}'
+  alternate_config='${alternateCodexConfig}'
+  wrong_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+
+  expect_rejection() {
+    label="$1"
+    shift
+    if "$verifier" "$@"; then
+      echo "Codex authorization verifier accepted $label sabotage" >&2
+      exit 1
+    fi
+  }
+
+  test -r '${bundle.codexAuthorizationByteProofPath}/verified'
+  "$verifier" "$config_path" "$config_sha256" "$config_path" "$config_sha256" "$system_path"
+  expect_rejection coordinated-digest \
+    "$config_path" "$wrong_sha256" "$config_path" "$wrong_sha256" "$system_path"
+  expect_rejection coordinated-path \
+    "$alternate_config" "$config_sha256" "$alternate_config" "$config_sha256" "$system_path"
+  expect_rejection coordinated-path-and-digest \
+    "$alternate_config" "$wrong_sha256" "$alternate_config" "$wrong_sha256" "$system_path"
+  expect_rejection one-sided-path \
+    "$alternate_config" "$config_sha256" "$config_path" "$config_sha256" "$system_path"
+  expect_rejection one-sided-digest \
+    "$config_path" "$wrong_sha256" "$config_path" "$config_sha256" "$system_path"
+  expect_rejection noncanonical-system-path \
+    "$config_path" "$config_sha256" "$config_path" "$config_sha256" /etc/codex/other.toml
 
   env -i PATH=/nonexistent "$launcher" validate
+  env -i PATH=/nonexistent "$launcher" identity-nul > "$TMPDIR/identity.nul"
+  test "$(tr -cd '\000' < "$TMPDIR/identity.nul" | wc -c)" = 33
   env -i PATH=/nonexistent "$launcher" plugin-smoke > "$TMPDIR/plugin-smoke"
   grep -Fx 'sourceRev=${fixture.productSourceRev}' "$TMPDIR/plugin-smoke" >/dev/null
   jq -e --arg revision "$revision" '
-    .governance.sourceRev == $revision and
-    .submitToCi.sourceRev == $revision and
-    .artifactColumnPlugin.sourceRev == $revision and
-    .sbtControlPlane.sourceRev == $revision
+    .schemaVersion == "fleet-runtime-authority/v1" and
+    .sources["ouroboros-ide"].rev == $revision and
+    (.sources | keys) == [
+      "dev-workspace", "devkit", "fleet-control", "microvm",
+      "nixos-wsl", "nixpkgs", "ouroboros-ide", "wsl"
+    ] and
+    (.sources | all(.[]; (keys == ["rev"]))) and
+    (.runtimeIdentity.governance.jarPath | startswith("/nix/store/")) and
+    (.runtimeIdentity.submitToCi.jarPath | startswith("/nix/store/")) and
+    (.runtimeIdentity.artifactColumnPlugin.repositoryPath | startswith("/nix/store/")) and
+    (.runtimeIdentity.sbtControlPlane.jarPath | startswith("/nix/store/")) and
+    .artifactDigests.governance == .runtimeIdentity.governance.jarSha256 and
+    .artifactDigests.submitToCi == .runtimeIdentity.submitToCi.jarSha256 and
+    .artifactDigests.artifactColumnPlugin == .runtimeIdentity.artifactColumnPlugin.jarSha256 and
+    .artifactDigests.sbtControlPlane == .runtimeIdentity.sbtControlPlane.jarSha256 and
+    .codexAuthorization.configPath == .devkitProductAdapter.codexConfigPath and
+    .codexAuthorization.configSha256 == .devkitProductAdapter.artifactDigests.codex_config and
+    .codexAuthorization.systemPath == "/etc/codex/config.toml"
   ' "$identity" >/dev/null
+
+  forbidden_hash="builtins.hash""File"
+  forbidden_read="builtins.read""File"
+  forbidden_try="builtins.try""Eval"
+  forbidden_deep="builtins.deep""Seq"
+  ! grep -F "$forbidden_hash" '${./dev-all-runtime-bundle.nix}'
+  ! grep -F "$forbidden_read" '${./dev-all-runtime-bundle.nix}'
+  ! grep -F -e "$forbidden_try" -e "$forbidden_deep" \
+    '${./dev-all-runtime-bundle-constructor-contract.nix}'
 
   scan_forbidden() {
     label="$1"
@@ -77,6 +137,10 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
       'builtins.getFlake' \
       'builtins.fetchGit' \
       'builtins.fetchTree' \
+      '/var/lib/product-runtime/authority-selector.json' \
+      'product-adapter-connect-proxy.py' \
+      'python' \
+      'colmena' \
       'PATH:-' \
       'mkDefaultDevAllRuntimeBundle'
     do
@@ -136,9 +200,9 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   cp '${closure}/store-paths' "$out/store-paths"
   printf '%s\n' \
     'blocking public constructor contract passed' \
-    'all artifacts and revision metadata were caller supplied' \
-    'one authoritative Product revision reached every runtime identity' \
+    'all artifacts and source revisions were caller supplied by the authoritative derivation' \
+    'one fleet-runtime-authority/v1 manifest carries the exact Product revision' \
     'no historical Product or Artifact Column source authority entered the closure' \
-    'no source evaluator, local checkout, ambient PATH, or fallback entered the public implementation' \
+    'no source evaluator, selector writer, deployment route, local checkout, Python adapter, ambient PATH, or fallback entered the public implementation' \
     > "$out/contract"
 ''

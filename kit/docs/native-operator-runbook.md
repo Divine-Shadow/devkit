@@ -1,8 +1,17 @@
 # Native Operator Runbook
 
-Devkit's supported runtime is Nix flakes plus the native sandbox. Use
-`kit/scripts/devkit` as the operator entrypoint. It execs `kit/bin/devctl` and
-fails loudly if the compiled binary is missing.
+Devkit's supported runtime is Nix flakes plus the native sandbox. For ordinary
+non-Product overlays, use `kit/scripts/devkit` as the operator entrypoint. It
+execs `kit/bin/devctl` and fails loudly if the compiled binary is missing.
+
+Product (`ouroboros-ide`) is outside this raw native operator surface. Product
+source acquisition, consumer construction, auth seeding, and GUI lifecycle
+must use only the adapter and launcher named by the installed
+`fleet-runtime-authority/v1` manifest. Do not use raw `kit/scripts/devkit`,
+`devctl`, `native prepare`, `native exec`, `attach`, `ssh-setup`, or
+`codex-auth reseed` to construct or repair a Product consumer. The Devkit
+consumer-boundary diagnostic cannot promote Product; the governed Product-owned
+promotion app must prove the complete lifecycle twice from absent consumers.
 
 ## Build
 
@@ -10,16 +19,17 @@ fails loudly if the compiled binary is missing.
 make -C cli/devctl build
 ```
 
-The build writes `kit/bin/devctl`. Direct binary invocation is allowed for power
-users, but scripts and runbooks should use `kit/scripts/devkit`.
+The build writes `kit/bin/devctl`. Direct binary invocation is diagnostic only;
+scripts and runbooks for ordinary non-Product overlays should use
+`kit/scripts/devkit`.
 
 ## Launch
 
 Start one or more agents for an overlay:
 
 ```bash
-kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 2
-kit/scripts/devkit -p dev-all status --repo ouroboros-ide --ready
+kit/scripts/devkit -p ouroboros-static-front-end up --repo ouroboros-static-front-end --count 2
+kit/scripts/devkit -p ouroboros-static-front-end status --repo ouroboros-static-front-end --ready
 ```
 
 For a single-overlay repo, use that overlay:
@@ -33,20 +43,19 @@ kit/scripts/devkit -p ouroboros-static-front-end up --repo ouroboros-static-fron
 Run a non-interactive command inside an agent sandbox:
 
 ```bash
-kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'pwd && codex --version'
+kit/scripts/devkit -p ouroboros-static-front-end exec 1 --repo ouroboros-static-front-end -- bash -lc 'pwd && codex --version'
 ```
 
 Open an interactive shell:
 
 ```bash
-kit/scripts/devkit -p dev-all attach 1 --repo ouroboros-ide
+kit/scripts/devkit -p ouroboros-static-front-end attach 1 --repo ouroboros-static-front-end
 ```
 
 The sandbox should expose:
 
 - `DEVKIT_NATIVE_AGENT=1`
-- for `dev-all`, `CODEX_HOME` under the repo-local per-agent `.devhome-agentN`
-  directory so tmux and `codex resume` see the same session history
+- the overlay-declared `CODEX_HOME` and agent-state paths
 - `DOCKER_HOST=unix://...` only when brokered OCI access is configured
 - no direct `/var/run/docker.sock` bind for standard agents
 
@@ -55,8 +64,8 @@ The sandbox should expose:
 Resize the agent set:
 
 ```bash
-kit/scripts/devkit -p dev-all scale 3 --repo ouroboros-ide
-kit/scripts/devkit -p dev-all status --repo ouroboros-ide --ready
+kit/scripts/devkit -p ouroboros-static-front-end scale 3 --repo ouroboros-static-front-end
+kit/scripts/devkit -p ouroboros-static-front-end status --repo ouroboros-static-front-end --ready
 ```
 
 `scale` updates native manifests and preserves per-agent state under the native
@@ -67,7 +76,7 @@ state root.
 Stop broker state for the overlay and clean lifecycle metadata:
 
 ```bash
-kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 3
+kit/scripts/devkit -p ouroboros-static-front-end down --repo ouroboros-static-front-end --count 3
 ```
 
 Use the same broker socket and state-root overrides on `down` that were used on
@@ -78,8 +87,8 @@ Use the same broker socket and state-root overrides on `down` that were used on
 Broker:
 
 ```bash
-kit/scripts/devkit -p dev-all broker status --format json
-kit/scripts/devkit -p dev-all logs --repo ouroboros-ide --tail 50 --format json
+kit/scripts/devkit -p ouroboros-static-front-end broker status --format json
+kit/scripts/devkit -p ouroboros-static-front-end logs --repo ouroboros-static-front-end --tail 50 --format json
 ```
 
 If brokered OCI commands fail, confirm that `DOCKER_HOST` points at the
@@ -89,7 +98,7 @@ allowed by overlay policy.
 Egress:
 
 ```bash
-kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'env | grep -E "HTTP_PROXY|HTTPS_PROXY|NO_PROXY"'
+kit/scripts/devkit -p ouroboros-static-front-end exec 1 --repo ouroboros-static-front-end -- bash -lc 'env | grep -E "HTTP_PROXY|HTTPS_PROXY|NO_PROXY"'
 ```
 
 A blocked host should fail through the proxy; an allowed host should connect.
@@ -111,8 +120,8 @@ for direct overlay checks.
 
 Auth:
 
-Codex and SSH state live under each agent home. For `dev-all`, the active
-Codex home is repo-local:
+Codex and SSH state for ordinary non-Product overlays live under each agent
+home. For overlays using the repo-local home layout, the active Codex home is:
 
 - agent 1: `<dev-root>/<repo>/.devhome-agent1/.codex`
 - agent N: `<dev-root>/agent-worktrees/agentN/.devhome-agentN/.codex`
@@ -127,14 +136,14 @@ shell snapshots, or SQLite state.
 To inspect the active state:
 
 ```bash
-kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'printf "HOME=%s\nCODEX_HOME=%s\n" "$HOME" "$CODEX_HOME"; ls -la "$CODEX_HOME"'
+kit/scripts/devkit -p ouroboros-static-front-end exec 1 --repo ouroboros-static-front-end -- bash -lc 'printf "HOME=%s\nCODEX_HOME=%s\n" "$HOME" "$CODEX_HOME"; ls -la "$CODEX_HOME"'
 ```
 
 Use the native reseed commands when auth needs to be refreshed:
 
 ```bash
-kit/scripts/devkit -p dev-all codex-auth reseed 1 --repo ouroboros-ide
-kit/scripts/devkit -p dev-all ssh-setup /path/to/id_ed25519 --index 1
+kit/scripts/devkit -p ouroboros-static-front-end codex-auth reseed 1 --repo ouroboros-static-front-end
+kit/scripts/devkit -p ouroboros-static-front-end ssh-setup /path/to/id_ed25519 --index 1
 ```
 
 ## Add A New Overlay Flake
@@ -152,7 +161,7 @@ kit/scripts/devkit -p dev-all ssh-setup /path/to/id_ed25519 --index 1
 ```bash
 nix --extra-experimental-features 'nix-command flakes' flake check
 nix --extra-experimental-features 'nix-command flakes' develop --command nix/validate-overlay-runtimes.py overlays
-kit/scripts/devkit --dry-run -p dev-all runtime-matrix --all --check
+kit/scripts/devkit --dry-run -p ouroboros-static-front-end runtime-matrix --all --check
 make overlay-runtime-smoke
 make native-overlay-matrix
 ```

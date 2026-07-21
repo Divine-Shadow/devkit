@@ -20,9 +20,9 @@ pkgs.runCommand "dev-all-runtime-bundle-bridge-smoke" {
   # shellcheck disable=SC1090
   source "$DEVKIT_GOVERNANCE_ENV"
   test "$DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV" = 1
-  actual_sha="$(sha256sum "$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH" | awk '{print $1}')"
+  actual_sha="$(${pkgs.coreutils}/bin/sha256sum "$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH" | ${pkgs.gawk}/bin/awk '{print $1}')"
   test "$actual_sha" = "$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256"
-  jq -n \
+  ${pkgs.jq}/bin/jq -n \
     --arg identityEnv "$DEVKIT_GOVERNANCE_ENV" \
     --arg bundle "$DEVKIT_RUNTIME_BUNDLE_PATH" \
     --arg sourceRev "$DEVKIT_GOVERNANCE_SOURCE_REV" \

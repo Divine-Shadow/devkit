@@ -36,11 +36,21 @@ func claimCandidate(
 		return nil, productadapter.Geometry{}, err
 	}
 	parentFD := int(parentFile.Fd())
+	created := true
 	if err := syscall.Mkdirat(parentFD, leaf, 0o700); err != nil {
-		parentFile.Close()
 		if errors.Is(err, syscall.EEXIST) {
-			return nil, productadapter.Geometry{}, fmt.Errorf("Product construction requires absent whole-candidate boundary")
+			created = false
+		} else {
+			parentFile.Close()
+			return nil, productadapter.Geometry{}, err
 		}
+	}
+	if created {
+		parentFile.Close()
+		return nil, productadapter.Geometry{}, fmt.Errorf("Product construction requires the canonical offline-seeded candidate boundary")
+	}
+	if err := validateOfflineSeededCandidate(authority, consumer); err != nil {
+		parentFile.Close()
 		return nil, productadapter.Geometry{}, err
 	}
 	rootFD, err := syscall.Openat(parentFD, leaf, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
@@ -56,10 +66,10 @@ func claimCandidate(
 		return nil, productadapter.Geometry{}, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
+	if !ok || int(stat.Uid) != consumer.UID || int(stat.Gid) != consumer.GID || info.Mode().Perm() != 0o700 {
 		rootFile.Close()
 		parentFile.Close()
-		return nil, productadapter.Geometry{}, fmt.Errorf("claimed Product candidate has no Unix identity")
+		return nil, productadapter.Geometry{}, fmt.Errorf("offline-seeded Product candidate has unsafe root identity")
 	}
 	claim := &candidateClaim{
 		root:       consumer.CandidateRoot,

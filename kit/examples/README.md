@@ -1,8 +1,17 @@
 # Native Layout Examples
 
+> **Historical Product-layout fixtures.** The `dev-all`/`ouroboros-ide`
+> commands and YAML in this directory predate the sole
+> `fleet-runtime-authority/v1` Product lifecycle. They are retained as layout
+> parser/test evidence only and must not be used to construct, launch, repair,
+> or promote Product consumers. Current Product work uses the installed
+> manifest-bound adapter and governed Product-owned twice-fresh promotion app.
+> The command blocks below record the historical interface; they are not
+> operator instructions.
+
 Examples in this directory are for native flake-backed agents.
 
-Useful commands:
+Historical command shapes:
 
 ```bash
 kit/scripts/devkit --dry-run -p dev-all layout-apply --file kit/examples/orchestration-ouro8-devall.yaml

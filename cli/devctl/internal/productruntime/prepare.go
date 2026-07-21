@@ -2,12 +2,13 @@ package productruntime
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
+	"syscall"
 
 	"devkit/cli/devctl/internal/productadapter"
 )
@@ -59,28 +60,7 @@ func preparedFiles(
 	consumer productadapter.ConsumerManifest,
 	command productadapter.Command,
 ) []preparedFile {
-	sshDir := filepath.Join(consumer.HomePath, ".ssh")
 	return []preparedFile{
-		{
-			name: "ssh_private", source: consumer.SSHIdentityPath,
-			target: filepath.Join(sshDir, "id_ed25519"), mode: 0o600, secret: true,
-		},
-		{
-			name: "ssh_public", source: consumer.SSHPublicKeyPath,
-			target: filepath.Join(sshDir, "id_ed25519.pub"), mode: 0o600,
-		},
-		{
-			name: "ssh_known_hosts", source: authority.Adapter.KnownHostsPath,
-			target: filepath.Join(sshDir, "known_hosts"), mode: 0o600,
-		},
-		{
-			name: "ssh_config", generated: productSSHConfig(authority, consumer, command),
-			target: filepath.Join(sshDir, "config"), mode: 0o600,
-		},
-		{
-			name: "codex_auth", source: consumer.CodexAuthPath,
-			target: filepath.Join(consumer.HomePath, ".codex", "auth.json"), mode: 0o600, secret: true,
-		},
 		{
 			name: "codex_config", source: authority.Adapter.CodexConfigPath,
 			target: filepath.Join(consumer.HomePath, ".codex", "config.toml"), mode: 0o600,
@@ -102,6 +82,80 @@ func preparedFiles(
 			target: consumer.GovernanceRepoConfigTarget, mode: 0o600,
 		},
 	}
+}
+
+func validateOfflineSeededCandidate(
+	authority productadapter.Authority,
+	consumer productadapter.ConsumerManifest,
+) error {
+	if err := requireOwnedPlainFile(consumer.CodexAuthPath, 0o600, consumer.UID); err != nil {
+		return fmt.Errorf("validate Fleet-prehydrated Codex auth handle: %w", err)
+	}
+	for _, path := range []string{consumer.AgentRoot, consumer.StateRoot} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			if err == nil {
+				return fmt.Errorf("offline Product seed contains runtime construction state: %s", path)
+			}
+			return err
+		}
+	}
+	markerPath := productadapter.OfflineSeedMarkerPath(consumer)
+	if err := requireOwnedPlainFile(markerPath, 0o600, consumer.UID); err != nil {
+		return fmt.Errorf("validate offline Product seed marker: %w", err)
+	}
+	markerPayload, err := os.ReadFile(markerPath)
+	if err != nil {
+		return err
+	}
+	var marker struct {
+		SchemaVersion string `json:"schema_version"`
+		ConsumerIndex int    `json:"consumer_index"`
+		CandidateRoot string `json:"candidate_root"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(markerPayload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&marker); err != nil || marker.SchemaVersion != productadapter.OfflineSeedSchema ||
+		marker.ConsumerIndex != consumer.Index || marker.CandidateRoot != consumer.CandidateRoot {
+		return fmt.Errorf("offline Product seed marker does not match authority")
+	}
+	sshConfig, err := productadapter.ProductSSHConfig(authority, consumer, authority.Adapter.Count, consumer.Index)
+	if err != nil {
+		return err
+	}
+	knownHosts, err := os.ReadFile(authority.Adapter.KnownHostsPath)
+	if err != nil {
+		return fmt.Errorf("read immutable Product known-hosts: %w", err)
+	}
+	for name, expected := range map[string][]byte{
+		"known-hosts": knownHosts,
+		"SSH config":  sshConfig,
+	} {
+		path := filepath.Join(consumer.HomePath, ".ssh", map[string]string{
+			"known-hosts": "known_hosts", "SSH config": "config",
+		}[name])
+		if err := requireOwnedPlainFile(path, 0o600, consumer.UID); err != nil {
+			return fmt.Errorf("validate prehydrated %s: %w", name, err)
+		}
+		actual, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(actual, expected) {
+			return fmt.Errorf("prehydrated %s does not match immutable package authority", name)
+		}
+	}
+	privatePublic := exec.Command(authority.Adapter.SSHKeygenPath, "-y", "-f", consumer.SSHIdentityPath)
+	privatePublic.Env = []string{}
+	derived, err := privatePublic.Output()
+	if err != nil {
+		return fmt.Errorf("validate prehydrated Product SSH identity: %w", err)
+	}
+	public, err := os.ReadFile(consumer.SSHPublicKeyPath)
+	if err != nil || !bytes.Equal(bytes.TrimSpace(derived), bytes.TrimSpace(public)) {
+		return fmt.Errorf("prehydrated Product SSH public key does not match private identity")
+	}
+	authorized, err := os.ReadFile(consumer.AuthorizedKeysPath)
+	if err != nil || !bytes.Equal(authorized, append([]byte("restrict "), public...)) {
+		return fmt.Errorf("prehydrated Product authorized_keys does not match the SSH identity")
+	}
+	return nil
 }
 
 func preparedPathSet(
@@ -229,31 +283,19 @@ func requirePlainFile(path string, mode os.FileMode) error {
 	return nil
 }
 
-func productSSHConfig(
-	authority productadapter.Authority,
-	consumer productadapter.ConsumerManifest,
-	command productadapter.Command,
-) []byte {
-	userName := "git"
-	if parsed, err := url.Parse(authority.Adapter.ProductOrigin); err == nil && parsed.User != nil {
-		if value := parsed.User.Username(); value != "" {
-			userName = value
-		}
+func requireOwnedPlainFile(path string, mode os.FileMode, uid int) error {
+	if err := requirePlainFile(path, mode); err != nil {
+		return err
 	}
-	return []byte(strings.Join([]string{
-		"Host github.com ssh.github.com",
-		"  HostName ssh.github.com",
-		"  Port 443",
-		"  User " + userName,
-		"  IdentitiesOnly yes",
-		"  IdentityFile " + filepath.Join(consumer.HomePath, ".ssh", "id_ed25519"),
-		"  UserKnownHostsFile " + filepath.Join(consumer.HomePath, ".ssh", "known_hosts"),
-		"  StrictHostKeyChecking yes",
-		"  ProxyCommand " + authority.Adapter.ProxyHelperPath +
-			" stdio --count " + strconv.Itoa(command.Count) +
-			" --index " + strconv.Itoa(command.Index),
-		"",
-	}, "\n"))
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != uid {
+		return fmt.Errorf("path is not owned by uid %d", uid)
+	}
+	return nil
 }
 
 func pathInside(root, path string) bool {

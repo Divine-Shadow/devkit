@@ -1,5 +1,13 @@
 # Product Git Authentication Bootstrap
 
+> **Superseded historical plan.** Preserve this file as audit history only.
+> Do not follow its former check-to-Devkit-publication-to-WSL-repin/apply loop.
+> Current Product construction consumes the sole installed
+> `fleet-runtime-authority/v1` manifest through its exact adapter, and only the
+> governed Product-owned twice-fresh promotion app may promote the lifecycle.
+> Current Devkit changes freeze on an immutable candidate branch until that
+> gate accepts them.
+
 ## Purpose
 
 Make canonical `devctl -p dev-all native prepare` able to reconstruct a missing
@@ -159,10 +167,11 @@ Git to receive that exact SSH command explicitly.
       three clean relative worktrees, source-defined app-server preparation,
       clean proxy lifecycle, preservation of owned stale payload, and
       pre-effect rejection of foreign metadata.
-- [ ] Publish the reset lifecycle repair through the declared Devkit checks.
-- [ ] Rebase the WSL patches, repin the declared check, and repeat the clean
-      full check plus direct/source-selected-Colmena equality gate.
-- [ ] Return the exact tuple to the protected apply owner; do not apply here.
+- [x] Superseded: do not publish this reset lifecycle repair through the former
+      one-check loop.
+- [x] Superseded: do not trigger a WSL repin/apply from this plan.
+- [x] Superseded: current candidate and promotion routing is defined by the
+      operative sole-authority plan and Product-owned twice-fresh gate.
 
 ## Surprises and discoveries
 
@@ -311,10 +320,11 @@ go test ./...
 nix flake check --show-trace
 ```
 
-The WSL owner then pins the accepted Devkit commit, rebases the v3 patch, runs
-the WSL full flake check, builds the authoritative system directly and through
-source-selected Colmena, compares exact store path and deriver, and applies
-only through Fleet Control to Colmena.
+Historical procedure only: this plan formerly sent each accepted Devkit commit
+through an immediate WSL repin/check/apply loop. That procedure is superseded.
+Current work freezes an immutable Devkit candidate and leaves derivation,
+deployment, and promotion to the sole-authority and Product-owned twice-fresh
+gate.
 
 ## Acceptance
 
@@ -332,4 +342,5 @@ The prior published bootstrap repair passed the complete declared Devkit gate
 and its named `native-bootstrap-stdio-cleanup` check. The follow-up isolated
 metadata correction keeps that check as the sole regression authority and adds
 the real top-level prepare/exec and two-root metadata topology cases to it.
-Follow-up publication and WSL convergence remain.
+This plan is closed as historical evidence. It authorizes no follow-up
+publication, WSL convergence, deployment, or Product promotion.
