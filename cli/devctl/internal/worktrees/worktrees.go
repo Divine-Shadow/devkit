@@ -838,6 +838,7 @@ type NativeSlotValidationOptions struct {
 	Origin         string
 	Index          int
 	WorktreeRoot   string
+	BoundaryRoot   string
 	HostHome       string
 	StateRoot      string
 	SourceRevision string
@@ -1056,13 +1057,19 @@ func ValidateNativeSlot(opts NativeSlotValidationOptions) error {
 	commonDir := filepath.Join(agentRoot, ".devkit", "git", repo+".git")
 	hostHome := filepath.Clean(strings.TrimSpace(opts.HostHome))
 	stateRoot := filepath.Clean(strings.TrimSpace(opts.StateRoot))
-	for label, path := range map[string]string{
+	paths := map[string]string{
 		"selected agent root":  agentRoot,
 		"selected worktree":    worktree,
 		"selected common repo": commonDir,
 		"selected home":        hostHome,
 		"selected state":       stateRoot,
-	} {
+	}
+	boundaryRoot := strings.TrimSpace(opts.BoundaryRoot)
+	if boundaryRoot != "" {
+		boundaryRoot = filepath.Clean(boundaryRoot)
+		paths["selected disposable boundary"] = boundaryRoot
+	}
+	for label, path := range paths {
 		if path == "." || !filepath.IsAbs(path) {
 			return fmt.Errorf("%s must be an exact absolute path", label)
 		}
@@ -1081,8 +1088,20 @@ func ValidateNativeSlot(opts NativeSlotValidationOptions) error {
 			return fmt.Errorf("%s %s must be a plain directory", label, path)
 		}
 	}
-	if hostHome != agentRoot && !pathWithinRoot(agentRoot, hostHome) {
-		return fmt.Errorf("selected home %s escapes agent root %s", hostHome, agentRoot)
+	if boundaryRoot == "" {
+		if hostHome != agentRoot && !pathWithinRoot(agentRoot, hostHome) {
+			return fmt.Errorf("selected home %s escapes agent root %s", hostHome, agentRoot)
+		}
+	} else {
+		for label, path := range map[string]string{
+			"agent root": agentRoot,
+			"home":       hostHome,
+			"state":      stateRoot,
+		} {
+			if path != boundaryRoot && !pathWithinRoot(boundaryRoot, path) {
+				return fmt.Errorf("selected %s %s escapes disposable boundary %s", label, path, boundaryRoot)
+			}
+		}
 	}
 	gitFile := filepath.Join(worktree, ".git")
 	gitInfo, err := os.Lstat(gitFile)

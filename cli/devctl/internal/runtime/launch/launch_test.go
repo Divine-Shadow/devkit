@@ -132,10 +132,12 @@ func TestDevAllRuntimeExportsSourceFreePublicBundleConstructor(t *testing.T) {
 	}
 	bundleNix := readTestFile(t, filepath.Join(root, "nix", "dev-all-runtime-bundle.nix"))
 	for _, want := range []string{
-		`identitySchema = "devkit-dev-all-runtime-identity/v1";`,
-		`governanceJarVersion = sourceRevisions.governance;`,
-		`artifactColumnShortRevision =`,
-		`metadata_value()`,
+		`schema = "fleet-runtime-authority/v1";`,
+		`exactSourceIds = [`,
+		`sourceShapeIsExact =`,
+		`authorityShapeIsExact =`,
+		`authorityTemplate =`,
+		`identityEnvTemplate =`,
 		`identity.env`,
 		`identity.json`,
 		`identity-fingerprint`,
@@ -143,7 +145,7 @@ func TestDevAllRuntimeExportsSourceFreePublicBundleConstructor(t *testing.T) {
 		`plugin-smoke`,
 		`bundle_root='@bundleRoot@'`,
 		`substitute '${launcherTemplate}' "$out/bin/dev-all-runtime-bundle"`,
-		`ln -s '${artifactColumnPluginRepository}' "$out/runtime/artifact-column-plugin-repository"`,
+		`ln -s '${runtime.artifactColumnPlugin.repositoryPath}' "$out/runtime/artifact-column-plugin-repository"`,
 	} {
 		if !strings.Contains(bundleNix, want) {
 			t.Fatalf("runtime bundle missing %q:\n%s", want, bundleNix)
@@ -151,11 +153,9 @@ func TestDevAllRuntimeExportsSourceFreePublicBundleConstructor(t *testing.T) {
 	}
 	publicConstructorNix := readTestFile(t, filepath.Join(root, "nix", "mk-dev-all-runtime-bundle.nix"))
 	for _, want := range []string{
-		`productSourceRev`,
-		`governance = productSourceRev;`,
-		`submitToCi = productSourceRev;`,
-		`artifactColumn = productSourceRev;`,
-		`sbtControlPlane = productSourceRev;`,
+		`authoritative WSL flake selects`,
+		`derives every input value`,
+		`import ./dev-all-runtime-bundle.nix args`,
 	} {
 		if !strings.Contains(publicConstructorNix, want) {
 			t.Fatalf("public runtime constructor missing %q:\n%s", want, publicConstructorNix)
@@ -180,6 +180,8 @@ func TestDevAllRuntimeExportsSourceFreePublicBundleConstructor(t *testing.T) {
 		`mkPinnedArtifactColumnPlugin`,
 		`mkPinnedSbtControlPlaneRuntimeJar`,
 		`mkDefaultDevAllRuntimeBundle`,
+		`wsl-nix-dev-all-runtime-authority/v1`,
+		`devkit-dev-all-runtime-identity/v1`,
 	} {
 		for label, content := range map[string]string{
 			"flake":              flakeNix,
@@ -246,11 +248,9 @@ func TestDevAllRuntimeExportsSourceFreePublicBundleConstructor(t *testing.T) {
 	lifecycleNix := readTestFile(t, filepath.Join(root, "nix", "product-adapter-lifecycle-check.nix"))
 	for _, want := range []string{
 		`runtimeBundle =`,
-		`mkDevAllRuntimeBundle ({ inherit pkgs; } // runtimeBundleFixture);`,
-		`exec '${runtimeBundle}/bin/dev-all-runtime-bundle' exec "$@"`,
-		`runtimeRoot = runtimeBundle;`,
+		`mkDevAllRuntimeBundle ({ inherit pkgs; } // runtimeBundleFixture.constructorArgs);`,
 		`.devkitProductAdapter.runtimeLauncherPath == $launcher`,
-		`.devkitProductAdapter.runtimeRoot == $root`,
+		`(.devkitProductAdapter | has("runtimeRoot") | not)`,
 		`.devkitProductAdapter.governanceEnvPath == $governance`,
 	} {
 		if !strings.Contains(lifecycleNix, want) {

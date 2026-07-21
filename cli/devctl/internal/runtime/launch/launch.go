@@ -1018,7 +1018,7 @@ type ouroGovernanceRuntimeIdentity struct {
 	JavaHome                        string
 }
 
-const ouroGovernanceRuntimeIdentityMarker = "__DEVKIT_GOVERNANCE_RUNTIME_IDENTITY__"
+const ouroGovernanceRuntimeIdentityMarker = "__FLEET_RUNTIME_AUTHORITY__"
 
 func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
 	return strings.TrimSpace(identity.SchemaVersion) != "" &&
@@ -1081,7 +1081,7 @@ func validOuroGovernanceJavaXmx(value string) bool {
 	return true
 }
 
-const ouroGovernanceRuntimeIdentitySchema = "devkit-dev-all-runtime-identity/v1"
+const ouroGovernanceRuntimeIdentitySchema = "fleet-runtime-authority/v1"
 
 var ouroGovernanceSystemRuntimeLauncherPath = "/run/current-system/sw/bin/dev-all-runtime-bundle"
 

@@ -9,11 +9,23 @@ import (
 )
 
 func holdCurrentGeneration(role Role, adapter AdapterManifest) ([]*os.File, error) {
+	// The manifest has already selected the immutable executable. The
+	// current-system handle is only an activated-generation equality check; it
+	// never selects, derives, or rewrites Product runtime identity.
 	expected := adapter.ExecutablePath
 	name := "product-adapter"
 	if role == RoleProxy {
 		expected = adapter.ProxyHelperPath
 		name = "product-proxy"
+	} else if role == RoleSupervisor {
+		expected = adapter.SupervisorExecutablePath
+		name = "product-adapter-supervisor"
+	} else if role == RoleSSHSession {
+		expected = adapter.SSHSessionExecutablePath
+		name = "product-ssh-session"
+	} else if role == RoleSSHSetup {
+		expected = adapter.SSHSetupExecutablePath
+		name = "product-ssh-setup"
 	}
 	for _, namespace := range []string{"user", "mnt"} {
 		self, err := os.Readlink("/proc/self/ns/" + namespace)

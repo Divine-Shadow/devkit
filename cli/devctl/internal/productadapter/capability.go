@@ -90,7 +90,11 @@ func ValidateSupervisorCapability(capability SupervisorCapability) error {
 			packageReadinessExecutable,
 			"probe",
 			"--codex", packageCodexExecutable,
-			"--first-executable", packageFirstExecutable,
+			"--mcp-requirement", packageMCPRequirement,
+			"--mcp-requirement-digest", capability.RuntimeArgs[len(capability.RuntimeArgs)-1],
+		}
+		if len(capability.RuntimeArgs) != 9 || len(capability.RuntimeArgs[len(capability.RuntimeArgs)-1]) != 64 {
+			return fmt.Errorf("Product prepare capability runtime argv is not package-fixed")
 		}
 		if len(capability.RuntimeArgs) != len(expectedArgs) {
 			return fmt.Errorf("Product prepare capability runtime argv is not package-fixed")

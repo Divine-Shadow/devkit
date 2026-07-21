@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +12,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"devkit/cli/devctl/internal/productadapter"
 )
 
-const readinessSchema = "devkit/product-codex-app-server-thread-readiness/v1"
+const readinessSchema = "devkit/product-codex-app-server-stdio-thread-mcp-readiness/v1"
 
 type request struct {
 	ID     int    `json:"id,omitempty"`
@@ -30,30 +30,57 @@ type response struct {
 	Error  json.RawMessage `json:"error"`
 }
 
+type mcpStatusPage struct {
+	Data       []mcpServerStatus `json:"data"`
+	NextCursor *string           `json:"nextCursor"`
+}
+
+type mcpServerStatus struct {
+	AuthStatus        string                   `json:"authStatus"`
+	Name              string                   `json:"name"`
+	ResourceTemplates []json.RawMessage        `json:"resourceTemplates"`
+	Resources         []json.RawMessage        `json:"resources"`
+	ServerInfo        *mcpServerInfo           `json:"serverInfo"`
+	Tools             map[string]mcpToolStatus `json:"tools"`
+}
+
+type mcpServerInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type mcpToolStatus struct {
+	Name        string          `json:"name"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
 type readinessResult struct {
-	SchemaVersion             string `json:"schema_version"`
-	AppServerAlive            bool   `json:"app_server_alive"`
-	InitializeReady           bool   `json:"initialize_ready"`
-	MCPStatusRead             bool   `json:"mcp_status_read"`
-	EphemeralThreadCreated    bool   `json:"ephemeral_thread_created"`
-	EphemeralThreadReadBack   bool   `json:"ephemeral_thread_read_back"`
-	ApprovalPolicy            string `json:"approval_policy"`
-	SandboxPolicy             string `json:"sandbox_policy"`
-	StandaloneExecutable      string `json:"standalone_executable"`
-	StandaloneExecutableExit  int    `json:"standalone_executable_exit"`
-	StandaloneExecutableProof string `json:"standalone_executable_stdout_sha256"`
+	SchemaVersion           string `json:"schema_version"`
+	AppServerAlive          bool   `json:"app_server_alive"`
+	InitializeReady         bool   `json:"initialize_ready"`
+	MCPStatusRead           bool   `json:"mcp_status_read"`
+	MCPRequirementPath      string `json:"mcp_requirement_path"`
+	MCPRequirementDigest    string `json:"mcp_requirement_digest"`
+	MCPInventoryDigest      string `json:"mcp_inventory_digest"`
+	MCPServerCount          int    `json:"mcp_server_count"`
+	MCPToolCount            int    `json:"mcp_tool_count"`
+	EphemeralThreadCreated  bool   `json:"ephemeral_thread_created"`
+	EphemeralThreadReadBack bool   `json:"ephemeral_thread_read_back"`
+	ApprovalPolicy          string `json:"approval_policy"`
+	SandboxPolicy           string `json:"sandbox_policy"`
 }
 
 func main() {
-	if len(os.Args) != 6 ||
+	if len(os.Args) != 8 ||
 		os.Args[1] != "probe" ||
 		os.Args[2] != "--codex" ||
-		os.Args[4] != "--first-executable" {
-		fail("readiness probe accepts only: probe --codex PATH --first-executable PATH")
+		os.Args[4] != "--mcp-requirement" ||
+		os.Args[6] != "--mcp-requirement-digest" {
+		fail("readiness probe accepts only: probe --codex PATH --mcp-requirement PATH --mcp-requirement-digest SHA256")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	result, err := probe(ctx, os.Args[3], os.Args[5])
+	result, err := probe(ctx, os.Args[3], os.Args[5], os.Args[7])
 	if err != nil {
 		fail("%v", err)
 	}
@@ -62,7 +89,18 @@ func main() {
 	}
 }
 
-func probe(ctx context.Context, codexPath, executablePath string) (result readinessResult, retErr error) {
+func probe(
+	ctx context.Context,
+	codexPath, requirementPath, requirementDigest string,
+) (result readinessResult, retErr error) {
+	requirement, requirementInventoryDigest, err := productadapter.LoadMCPRequirement(
+		requirementPath,
+		requirementDigest,
+	)
+	if err != nil {
+		return result, err
+	}
+	requirementServers, requirementTools := requirement.Counts()
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		return result, err
@@ -215,58 +253,93 @@ func probe(ctx context.Context, codexPath, executablePath string) (result readin
 		threadRead.Thread.Cwd != workingDirectory {
 		return result, fmt.Errorf("thread/read did not return the exact ephemeral thread")
 	}
-	if err := send(request{ID: 4, Method: "mcpServerStatus/list", Params: map[string]any{
-		"threadId": started.Thread.ID, "detail": "toolsAndAuthOnly",
-	}}); err != nil {
-		return result, err
+	observedServers := make(map[string][]string)
+	seenCursors := make(map[string]bool)
+	nextCursor := ""
+	nextRequestID := 4
+	for pageIndex := 0; ; pageIndex++ {
+		if pageIndex >= 16 {
+			return result, fmt.Errorf("app-server MCP status exceeded 16 bounded pages")
+		}
+		params := map[string]any{
+			"threadId": started.Thread.ID,
+			"detail":   "toolsAndAuthOnly",
+			"limit":    128,
+		}
+		if nextCursor != "" {
+			params["cursor"] = nextCursor
+		}
+		requestID := nextRequestID
+		nextRequestID++
+		if err := send(request{ID: requestID, Method: "mcpServerStatus/list", Params: params}); err != nil {
+			return result, err
+		}
+		mcpPayload, err := await(requestID)
+		if err != nil {
+			return result, err
+		}
+		var page mcpStatusPage
+		if err := json.Unmarshal(mcpPayload, &page); err != nil || page.Data == nil {
+			return result, fmt.Errorf("app-server MCP status was not typed")
+		}
+		for _, server := range page.Data {
+			if _, exists := observedServers[server.Name]; exists {
+				return result, fmt.Errorf("app-server MCP status repeated server %q", server.Name)
+			}
+			if server.Name == "" || server.ServerInfo == nil ||
+				server.ServerInfo.Name == "" || server.ServerInfo.Version == "" ||
+				server.ResourceTemplates == nil || server.Resources == nil || server.Tools == nil {
+				return result, fmt.Errorf("app-server MCP server %q is uninitialized", server.Name)
+			}
+			switch server.AuthStatus {
+			case "unsupported", "notLoggedIn", "bearerToken", "oAuth":
+			default:
+				return result, fmt.Errorf("app-server MCP server %q has invalid auth status", server.Name)
+			}
+			tools := make([]string, 0, len(server.Tools))
+			for name, tool := range server.Tools {
+				if name == "" || tool.Name != name || len(tool.InputSchema) == 0 || string(tool.InputSchema) == "null" {
+					return result, fmt.Errorf("app-server MCP server %q has an invalid typed tool", server.Name)
+				}
+				tools = append(tools, name)
+			}
+			observedServers[server.Name] = tools
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		next := *page.NextCursor
+		if next == "" || seenCursors[next] {
+			return result, fmt.Errorf("app-server MCP status returned an invalid pagination cursor")
+		}
+		seenCursors[next] = true
+		nextCursor = next
 	}
-	mcpPayload, err := await(4)
+	observedRequirement, err := productadapter.NewObservedMCPRequirement(observedServers)
+	if err != nil {
+		return result, fmt.Errorf("app-server MCP inventory is invalid: %w", err)
+	}
+	observedInventoryDigest, err := observedRequirement.SemanticDigest()
 	if err != nil {
 		return result, err
 	}
-	var mcpStatus struct {
-		Data []json.RawMessage `json:"data"`
+	if observedInventoryDigest != requirementInventoryDigest {
+		return result, fmt.Errorf("app-server MCP inventory does not exactly match the immutable requirement")
 	}
-	if err := json.Unmarshal(mcpPayload, &mcpStatus); err != nil || mcpStatus.Data == nil {
-		return result, fmt.Errorf("app-server MCP status was not typed")
-	}
-	const marker = "product-app-server-standalone-command-boundary"
-	if err := send(request{ID: 5, Method: "command/exec", Params: map[string]any{
-		"command": []string{executablePath, marker},
-		"cwd":     workingDirectory,
-		"sandboxPolicy": map[string]string{
-			"type": "dangerFullAccess",
-		},
-		"timeoutMs": 5000,
-	}}); err != nil {
-		return result, err
-	}
-	execPayload, err := await(5)
-	if err != nil {
-		return result, err
-	}
-	var executed struct {
-		ExitCode int    `json:"exitCode"`
-		Stdout   string `json:"stdout"`
-		Stderr   string `json:"stderr"`
-	}
-	if err := json.Unmarshal(execPayload, &executed); err != nil ||
-		executed.ExitCode != 0 || executed.Stdout != marker || executed.Stderr != "" {
-		return result, fmt.Errorf("app-server command/exec did not cross the first executable boundary")
-	}
-	sum := sha256.Sum256([]byte(executed.Stdout))
 	return readinessResult{
-		SchemaVersion:             readinessSchema,
-		AppServerAlive:            true,
-		InitializeReady:           true,
-		MCPStatusRead:             true,
-		EphemeralThreadCreated:    true,
-		EphemeralThreadReadBack:   true,
-		ApprovalPolicy:            "never",
-		SandboxPolicy:             "dangerFullAccess",
-		StandaloneExecutable:      executablePath,
-		StandaloneExecutableExit:  0,
-		StandaloneExecutableProof: hex.EncodeToString(sum[:]),
+		SchemaVersion:           readinessSchema,
+		AppServerAlive:          true,
+		InitializeReady:         true,
+		MCPStatusRead:           true,
+		MCPRequirementPath:      requirementPath,
+		MCPRequirementDigest:    requirementDigest,
+		MCPInventoryDigest:      observedInventoryDigest,
+		MCPServerCount:          requirementServers,
+		MCPToolCount:            requirementTools,
+		EphemeralThreadCreated:  true,
+		EphemeralThreadReadBack: true,
+		ApprovalPolicy:          "never",
+		SandboxPolicy:           "dangerFullAccess",
 	}, nil
 }
 

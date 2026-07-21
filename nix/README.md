@@ -33,22 +33,45 @@ Fleet composition uses the revision-neutral public constructor:
 ```nix
 devkit.lib.mkDevAllRuntimeBundle {
   inherit
-    artifactColumnPluginRepository
-    artifactColumnPluginSmoke
-    governanceJar
-    java
+    artifactDigests
+    codexAuthorization
+    controllerFleetPath
+    devctlLauncherPath
+    devkitProductAdapter
+    nativeControllerStation
     pkgs
-    sbtControlPlaneRuntimeJar
-    submitToCiJar
+    productRealConvergencePromotionAppPath
+    runtimeIdentity
+    sourceEvidence
+    sources
     ;
-  productSourceRev = ouroboros-ide.rev;
 }
 ```
 
-The caller derives every artifact from the same authoritative Product input.
-Devkit does not select or evaluate Product source. Its own default bundle and
-shell surfaces use synthetic diagnostic fixtures; they are not Fleet runtime
-promotion evidence.
+The authoritative WSL derivation supplies the exact pinned source map and all
+derived artifacts once. Devkit only serializes that input as the sole
+`fleet-runtime-authority/v1` manifest, its digest and environment projection,
+and the package-owned launcher. Devkit does not select or evaluate Product
+source, deploy a controller, write a runtime selector, or promote a lifecycle.
+Its own default bundle and shell surfaces use synthetic diagnostic fixtures;
+they are not Fleet runtime promotion evidence.
+
+The WSL-derived manifest declares the exact
+`devkit/workspace-egress/v3` mount-policy identity. The compiled Product
+consumer validates that declaration against its immutable package contract;
+it does not infer policy from a launcher, Python adapter, ambient `PATH`, or
+mutable station state. `/run/current-system` comparisons are fail-closed
+same-executable checks against the already selected manifest generation, not
+an identity-selection or derivation mechanism. Only the governed Product
+`product-real-convergence-promotion` lifecycle can promote two fresh consumer
+runs. That Product-owned promotion begins from absent controller and consumer
+state, uses only the manifest-declared Fleet/Devkit executables under an empty
+or hostile `PATH`, and reaches governed Product task creation and first
+admission twice. Devkit's Nix VM lifecycle proves only its compiled mechanical
+boundary (source acquisition, consumer construction, SSH forced command,
+app-server and declared MCP readiness, exact teardown, and repetition). It
+does not deploy a controller, create a Desktop GUI task, perform Scala
+governance, or promote the fleet.
 
 Use explicit experimental feature flags on hosts that do not enable flakes by
 default:

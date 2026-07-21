@@ -70,6 +70,46 @@ let
     EOF
     chmod 0555 "$out/bin/java"
   '';
+  fixtureRuntimeTools = pkgs.runCommand "fixture-fleet-runtime-authority-tools" { } ''
+    mkdir -p "$out/bin" "$out/share/contracts" "$out/system"
+    for executable in \
+      controller-fleet \
+      devctl \
+      product-real-convergence-promotion \
+      native-controller-runner \
+      native-controller-launcher
+    do
+      printf '%s\n' '#!${pkgs.dash}/bin/dash' 'exit 0' > "$out/bin/$executable"
+      chmod 0555 "$out/bin/$executable"
+    done
+    for contract in interface mechanical readiness prerequisite; do
+      printf '%s\n' "diagnostic $contract contract" > "$out/share/contracts/$contract"
+    done
+    printf '%s\n' 'diagnostic native controller guest system' > "$out/system/identity"
+  '';
+  sourceIds = [
+    "dev-workspace"
+    "devkit"
+    "fleet-control"
+    "microvm"
+    "nixos-wsl"
+    "nixpkgs"
+    "ouroboros-ide"
+    "wsl"
+  ];
+  sourceEvidencePath = pkgs.writeText "fixture-source-evidence.json" (
+    builtins.toJSON {
+      schemaVersion = "wsl-nix/source-evidence/v1";
+      inherit sourceIds;
+    }
+  );
+  sourceEvidenceValidationPath = pkgs.writeText "fixture-source-evidence-validation" ''
+    diagnostic source evidence validation passed
+  '';
+  governanceJarSHA256 = builtins.hashString "sha256" "fixture-product-governance-jar\n";
+  submitToCiJarSHA256 = builtins.hashString "sha256" "fixture-product-submit-to-ci-jar\n";
+  sbtControlPlaneJarSHA256 = builtins.hashString "sha256" "fixture-product-sbt-control-plane-runtime-jar\n";
+  artifactColumnJarSHA256 = builtins.hashString "sha256" "fixture Product Artifact Column plugin\n";
 in
 {
   inherit
@@ -81,4 +121,78 @@ in
     sbtControlPlaneRuntimeJar
     submitToCiJar
     ;
+  constructorArgs = {
+    sources = {
+    dev-workspace.rev = "2222222222222222222222222222222222222222";
+    devkit.rev = "3333333333333333333333333333333333333333";
+    fleet-control.rev = "4444444444444444444444444444444444444444";
+    microvm.rev = "5555555555555555555555555555555555555555";
+    nixos-wsl.rev = "6666666666666666666666666666666666666666";
+    nixpkgs.rev = "7777777777777777777777777777777777777777";
+    ouroboros-ide.rev = productSourceRev;
+    wsl.rev = "8888888888888888888888888888888888888888";
+    };
+    sourceEvidence = {
+    schemaVersion = "wsl-nix/source-evidence/v1";
+    path = sourceEvidencePath;
+    validationPath = sourceEvidenceValidationPath;
+    wslLockSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    inherit sourceIds;
+    };
+    controllerFleetPath = "${fixtureRuntimeTools}/bin/controller-fleet";
+    devctlLauncherPath = "${fixtureRuntimeTools}/bin/devctl";
+    productRealConvergencePromotionAppPath =
+      "${fixtureRuntimeTools}/bin/product-real-convergence-promotion";
+    nativeControllerStation = {
+    schemaVersion = "wsl-nix/native-controller-station-runtime/v1";
+    guestSystemPath = "${fixtureRuntimeTools}/system";
+    runnerPath = "${fixtureRuntimeTools}/bin/native-controller-runner";
+    launcherPath = "${fixtureRuntimeTools}/bin/native-controller-launcher";
+    interfaceContractPath = "${fixtureRuntimeTools}/share/contracts/interface";
+    mechanicalContractPath = "${fixtureRuntimeTools}/share/contracts/mechanical";
+    readinessPath = "${fixtureRuntimeTools}/share/contracts/readiness";
+    prerequisiteContractPath = "${fixtureRuntimeTools}/share/contracts/prerequisite";
+    };
+    runtimeIdentity = {
+    governance = {
+      packagePath = governanceJar;
+      jarPath = "${governanceJar}/share/subagent-governance/subagent-governance.jar";
+      jarSha256 = governanceJarSHA256;
+    };
+    submitToCi = {
+      packagePath = submitToCiJar;
+      jarPath = "${submitToCiJar}/share/submit-to-ci/submit-to-ci.jar";
+      jarSha256 = submitToCiJarSHA256;
+    };
+    artifactColumnPlugin = {
+      repositoryPath = artifactColumnPluginRepository;
+      metadataEnv = "${artifactColumnPluginRepository}/share/artifact-column-plugin/metadata.env";
+      version = artifactColumnVersion;
+      ivyPath = artifactColumnIvyPath;
+      jarSha256 = artifactColumnJarSHA256;
+      smokeEvidence = "${artifactColumnPluginSmoke}/adoption-check.txt";
+    };
+    sbtControlPlane = {
+      packagePath = sbtControlPlaneRuntimeJar;
+      jarPath = "${sbtControlPlaneRuntimeJar}/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar";
+      jarSha256 = sbtControlPlaneJarSHA256;
+    };
+    javaHome = java;
+    };
+    devkitProductAdapter = {
+    schemaVersion = "wsl-nix-devkit-product-adapter/v1";
+    diagnostic = true;
+    executablePath = "${fixtureRuntimeTools}/bin/devctl";
+    };
+    artifactDigests = {
+    governance = governanceJarSHA256;
+    submitToCi = submitToCiJarSHA256;
+    artifactColumnPlugin = artifactColumnJarSHA256;
+    sbtControlPlane = sbtControlPlaneJarSHA256;
+    };
+    codexAuthorization = {
+    schemaVersion = "wsl-nix/codex-authorization/v1";
+    diagnostic = true;
+    };
+  };
 }

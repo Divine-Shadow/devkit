@@ -103,7 +103,6 @@ func prepare(
 	}
 	sshCommand := exactGitSSHCommand(authority, consumer)
 	if err := wtx.SetupNativeSlot(wtx.NativeSlotOptions{
-		DevkitRoot:       authority.Adapter.RuntimeRoot,
 		Repo:             productadapter.ProductRepo,
 		Origin:           authority.Adapter.ProductOrigin,
 		Count:            command.Count,
@@ -226,6 +225,7 @@ func validatePreparedConsumer(
 		Origin:         authority.Adapter.ProductOrigin,
 		Index:          command.Index,
 		WorktreeRoot:   filepath.Dir(consumer.AgentRoot),
+		BoundaryRoot:   consumer.CandidateRoot,
 		HostHome:       consumer.HomePath,
 		StateRoot:      consumer.StateRoot,
 		SourceRevision: authority.ProductRev,
@@ -304,7 +304,7 @@ func fillReadyReceipt(
 	receipt.GitMetadataDigest = gitDigest
 	receipt.MountPolicyIdentity = authority.Adapter.MountPolicyIdentity
 	receipt.ReadinessEvidence = evidence
-	receipt.ReadinessRuntime = evidenceReady(evidence, "codex-app-server-thread-and-standalone-executable")
+	receipt.ReadinessRuntime = evidenceReady(evidence, "codex-app-server-stdio-thread-mcp-readiness")
 	receipt.ReadinessRepository = evidenceReady(evidence, "git-exact-revision") &&
 		evidenceReady(evidence, "git-nonmutating-clean")
 	return nil
@@ -352,8 +352,8 @@ func compareReceipt(
 			return fmt.Errorf("Product typed readiness %s is not ready", required)
 		}
 	}
-	if requireRuntime && !evidenceReady(evidence, "codex-app-server-thread-and-standalone-executable") {
-		return fmt.Errorf("Product typed app-server thread/standalone-executable readiness is not ready")
+	if requireRuntime && !evidenceReady(evidence, "codex-app-server-stdio-thread-mcp-readiness") {
+		return fmt.Errorf("Product diagnostic stdio app-server thread/MCP readiness is not ready")
 	}
 	return nil
 }

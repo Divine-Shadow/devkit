@@ -4,6 +4,10 @@ An ExecPlan is a self-contained implementation plan that a future agent or
 human can use without relying on chat history. Keep each plan as a living
 document: update `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` whenever work advances or the design changes.
+Active plans must identify the current source-controlled path. Historical plans
+remain audit evidence only; mark them superseded when their procedure no longer
+governs current work, and never let an older plan override current repository
+guidance.
 
 Every ExecPlan must explain the user-visible purpose, name the concrete files
 and commands involved, and define acceptance with observable evidence. Prefer
@@ -31,8 +35,11 @@ Place supporting material according to its lifecycle:
   ExecPlan only when they affect acceptance, a decision, a blocker, or the next
   action.
 - Put stable specifications and reusable operating guidance in durable docs.
-- Put cross-owner custody, acceptance, and lifecycle state in the applicable
-  transfer or lease record.
+- Put accepted durable effects and audit history in their durable evidence
+  records. Use a transfer or lease record only as an active collision-control
+  lease for one writer. Tasks, runs, trees, stations, homes, worktrees,
+  candidates, and partial computation are replaceable; they do not acquire
+  continuity custody over the business objective.
 
 An active ExecPlan has a hard limit of 32,000 Unicode scalar values, not bytes
 or tokens. The writer must count the complete proposed document before every

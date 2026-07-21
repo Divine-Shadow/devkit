@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -51,24 +53,43 @@ func TestBuildBubblewrapArgsProjectsOnlyTheInheritedSupervisorCapability(t *test
 }
 
 func TestDecodeProductReadinessResultRejectsFabricatedOrIncompleteEvidence(t *testing.T) {
-	t.Parallel()
-	marker := sha256.Sum256([]byte("product-app-server-standalone-command-boundary"))
+	requirementPayload := []byte(`{"schemaVersion":"devkit/product-mcp-requirement/v1","servers":[{"name":"governance","tools":["get_run_status","run"]}]}`)
+	requirementPath := filepath.Join(t.TempDir(), "mcp-requirement.json")
+	if err := os.WriteFile(requirementPath, requirementPayload, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	requirementFileSum := sha256.Sum256(requirementPayload)
+	requirement := productadapter.MCPRequirement{
+		SchemaVersion: productadapter.MCPRequirementSchema,
+		Servers: []productadapter.MCPServerRequirement{{
+			Name: "governance", Tools: []string{"get_run_status", "run"},
+		}},
+	}
+	requirementInventoryDigest, err := requirement.SemanticDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	valid := productadapter.ProductReadinessResult{
-		SchemaVersion:             productadapter.ReadinessSchema,
-		AppServerAlive:            true,
-		InitializeReady:           true,
-		MCPStatusRead:             true,
-		EphemeralThreadCreated:    true,
-		EphemeralThreadReadBack:   true,
-		ApprovalPolicy:            "never",
-		SandboxPolicy:             "dangerFullAccess",
-		StandaloneExecutable:      "/nix/store/fixture-first-executable",
-		StandaloneExecutableExit:  0,
-		StandaloneExecutableProof: hex.EncodeToString(marker[:]),
+		SchemaVersion:           productadapter.ReadinessSchema,
+		AppServerAlive:          true,
+		InitializeReady:         true,
+		MCPStatusRead:           true,
+		MCPRequirementPath:      requirementPath,
+		MCPRequirementDigest:    hex.EncodeToString(requirementFileSum[:]),
+		MCPInventoryDigest:      requirementInventoryDigest,
+		MCPServerCount:          1,
+		MCPToolCount:            2,
+		EphemeralThreadCreated:  true,
+		EphemeralThreadReadBack: true,
+		ApprovalPolicy:          "never",
+		SandboxPolicy:           "dangerFullAccess",
 	}
 	authority := productadapter.Authority{
 		Adapter: productadapter.AdapterManifest{
-			FirstExecutablePath: valid.StandaloneExecutable,
+			MCPRequirementPath: requirementPath,
+			ArtifactDigests: map[string]string{
+				"mcp_requirement": valid.MCPRequirementDigest,
+			},
 		},
 	}
 	encode := func(value any) []byte {
@@ -83,18 +104,20 @@ func TestDecodeProductReadinessResultRejectsFabricatedOrIncompleteEvidence(t *te
 		t.Fatalf("valid result rejected: %v", err)
 	}
 	cases := map[string]func(*productadapter.ProductReadinessResult){
-		"app-server":       func(value *productadapter.ProductReadinessResult) { value.AppServerAlive = false },
-		"initialize":       func(value *productadapter.ProductReadinessResult) { value.InitializeReady = false },
-		"mcp":              func(value *productadapter.ProductReadinessResult) { value.MCPStatusRead = false },
+		"app-server": func(value *productadapter.ProductReadinessResult) { value.AppServerAlive = false },
+		"initialize": func(value *productadapter.ProductReadinessResult) { value.InitializeReady = false },
+		"mcp":        func(value *productadapter.ProductReadinessResult) { value.MCPStatusRead = false },
+		"mcp-path":   func(value *productadapter.ProductReadinessResult) { value.MCPRequirementPath += "-other" },
+		"mcp-requirement": func(value *productadapter.ProductReadinessResult) {
+			value.MCPRequirementDigest = strings.Repeat("0", 64)
+		},
+		"mcp-inventory":    func(value *productadapter.ProductReadinessResult) { value.MCPInventoryDigest = strings.Repeat("0", 64) },
+		"mcp-server-count": func(value *productadapter.ProductReadinessResult) { value.MCPServerCount = 0 },
+		"mcp-tool-count":   func(value *productadapter.ProductReadinessResult) { value.MCPToolCount = 1 },
 		"thread-create":    func(value *productadapter.ProductReadinessResult) { value.EphemeralThreadCreated = false },
 		"thread-read-back": func(value *productadapter.ProductReadinessResult) { value.EphemeralThreadReadBack = false },
 		"approval":         func(value *productadapter.ProductReadinessResult) { value.ApprovalPolicy = "on-request" },
 		"sandbox":          func(value *productadapter.ProductReadinessResult) { value.SandboxPolicy = "workspace-write" },
-		"executable":       func(value *productadapter.ProductReadinessResult) { value.StandaloneExecutable += "-other" },
-		"exit":             func(value *productadapter.ProductReadinessResult) { value.StandaloneExecutableExit = 1 },
-		"proof": func(value *productadapter.ProductReadinessResult) {
-			value.StandaloneExecutableProof = strings.Repeat("0", 64)
-		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

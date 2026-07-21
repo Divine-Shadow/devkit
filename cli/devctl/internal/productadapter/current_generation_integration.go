@@ -11,6 +11,12 @@ func holdCurrentGeneration(role Role, adapter AdapterManifest) ([]*os.File, erro
 	expected := adapter.ExecutablePath
 	if role == RoleProxy {
 		expected = adapter.ProxyHelperPath
+	} else if role == RoleSupervisor {
+		expected = adapter.SupervisorExecutablePath
+	} else if role == RoleSSHSession {
+		expected = adapter.SSHSessionExecutablePath
+	} else if role == RoleSSHSetup {
+		expected = adapter.SSHSetupExecutablePath
 	}
 	running, err := os.Open("/proc/self/exe")
 	if err != nil {

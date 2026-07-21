@@ -9,7 +9,12 @@
   };
 
   outputs =
-    { self, nixpkgs, nixpkgs-playwright, ... }:
+    {
+      self,
+      nixpkgs,
+      nixpkgs-playwright,
+      ...
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -55,6 +60,64 @@
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
+      productMountPolicy = {
+        schemaVersion = "devkit/workspace-egress-policy/v1";
+        identity = "devkit/workspace-egress/v3";
+      };
+      mkProductMountPolicyContract =
+        pkgs: pkgs.writeText "devkit-product-mount-policy.json" (builtins.toJSON productMountPolicy);
+      productSSHSessionContract = {
+        schemaVersion = "devkit/product-ssh-session/v1";
+        prepareToken = "devkit-product-prepare/v1";
+        approvedCodexConfigArgv = [
+          "-c"
+          "features.code_mode_host=true"
+        ];
+        forceCommandArgs = [
+          "force-command"
+          "--count"
+          "$count"
+          "--index"
+          "$index"
+        ];
+        supervisorServiceArgs = [
+          "serve"
+          "--count"
+          "$count"
+          "--index"
+          "$index"
+        ];
+        socketMode = "0600";
+	    accountShellArgv = [ "-c" "{forceCommand}" ];
+	    interactive = false;
+	    tty = false;
+      };
+      mkProductSSHSessionContract =
+        pkgs: pkgs.writeText "devkit-product-ssh-session.json" (builtins.toJSON productSSHSessionContract);
+	  productStoppedVolumeSeedContract = {
+	    schemaVersion = "devkit/product-stopped-volume-seed/v1";
+	    sourceIdentityEnvironment = "DEVKIT_SOURCE_TRANSPORT_IDENTITY";
+	    argv = [
+	      "seed-git"
+	      "--count"
+	      "{count}"
+	      "--index"
+	      "{index}"
+	      "--root-projection"
+	      "{relativeProjection}"
+	    ];
+	    relativeProjection = {
+	      schemaVersion = "devkit/product-relative-root-projection/v1";
+	      kind = "single-safe-path-component-under-private-cwd";
+	      absoluteHostPathsAccepted = false;
+	      rewritesGuestHandles = false;
+	    };
+	    privateKeyMaterialInOutput = false;
+	  };
+	  mkProductStoppedVolumeSeedContract =
+	    pkgs: pkgs.writeText "devkit-product-stopped-volume-seed.json" (
+	      builtins.toJSON productStoppedVolumeSeedContract
+	    );
       codexVersion = "0.144.0";
       codexReleaseTag = "rust-v${codexVersion}";
       mkPinnedCodex =
@@ -84,10 +147,7 @@
         };
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
       mkGitHubSSHKnownHosts =
-        pkgs:
-        pkgs.writeText "devkit-github-ssh-known-hosts" (
-          builtins.readFile githubSSHKnownHosts
-        );
+        pkgs: pkgs.writeText "devkit-github-ssh-known-hosts" (builtins.readFile githubSSHKnownHosts);
       mkDevAllRuntimeBundle = import ./nix/mk-dev-all-runtime-bundle.nix;
       mkDiagnosticRuntimeFixture =
         pkgs:
@@ -99,9 +159,12 @@
       # consumers compose production artifacts through lib.mkDevAllRuntimeBundle.
       mkDiagnosticRuntimeBundle =
         pkgs:
-        mkDevAllRuntimeBundle ({
-          inherit pkgs;
-        } // (mkDiagnosticRuntimeFixture pkgs));
+        mkDevAllRuntimeBundle (
+          {
+            inherit pkgs;
+          }
+          // (mkDiagnosticRuntimeFixture pkgs).constructorArgs
+        );
       mkDevAllRuntimeBundleBridgeSmoke =
         pkgs:
         import ./nix/dev-all-runtime-bundle-bridge-smoke.nix {
@@ -122,9 +185,7 @@
             pkgs
             ;
         };
-      mkPackageEnv =
-        pkgs:
-        "${pkgs.coreutils}/bin/coreutils";
+      mkPackageEnv = pkgs: "${pkgs.coreutils}/bin/coreutils";
       mkDevctl =
         {
           pkgs,
@@ -334,10 +395,8 @@
       mkProductAdapterPackage =
         {
           pkgs,
-          runtimeLauncher,
           bubblewrap,
           broker,
-          runtimeRoot,
           egressAllowlist,
           codexConfig,
           governanceEnv,
@@ -345,8 +404,9 @@
           governanceRules,
           shellHook,
           codexExecutable,
-          firstExecutable,
+          mcpRequirement,
           sshExecutable ? "${pkgs.openssh}/bin/ssh",
+	      sshKeygenExecutable ? "${pkgs.openssh}/bin/ssh-keygen",
           knownHostsFile ? mkGitHubSSHKnownHosts pkgs,
           tags ? [ ],
           fixtureAuthorityLocator ? null,
@@ -355,6 +415,10 @@
         let
           envExecutable = mkPackageEnv pkgs;
           outputPlaceholder = placeholder "out";
+          runtimeLauncher = "${outputPlaceholder}/bin/product-runtime-exec";
+          mountPolicyContract = mkProductMountPolicyContract pkgs;
+	      sshSessionContract = mkProductSSHSessionContract pkgs;
+	      stoppedVolumeSeedContract = mkProductStoppedVolumeSeedContract pkgs;
         in
         pkgs.buildGoModule {
           pname = "devkit-product-adapter";
@@ -364,8 +428,12 @@
           vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
           subPackages = [
             "cmd/product-adapter"
+            "cmd/product-adapter-supervisor"
             "cmd/product-proxy"
             "cmd/product-readiness"
+            "cmd/product-runtime-exec"
+            "cmd/product-ssh-session"
+	        "cmd/product-ssh-setup"
           ];
           inherit tags;
           env.CGO_ENABLED = "0";
@@ -378,12 +446,12 @@
             "-X=devkit/cli/devctl/internal/productadapter.packageAdapterExecutable=${outputPlaceholder}/bin/product-adapter"
             "-X=devkit/cli/devctl/internal/productadapter.packageGitExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/productadapter.packageEnvExecutable=${envExecutable}"
-            "-X=devkit/cli/devctl/internal/productadapter.packageSSHExecutable=${sshExecutable}"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageSSHExecutable=${sshExecutable}"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageSSHKeygenExecutable=${sshKeygenExecutable}"
             "-X=devkit/cli/devctl/internal/productadapter.packageKnownHosts=${knownHostsFile}"
             "-X=devkit/cli/devctl/internal/productadapter.packageRuntimeLauncher=${runtimeLauncher}"
             "-X=devkit/cli/devctl/internal/productadapter.packageBubblewrapExecutable=${bubblewrap}"
             "-X=devkit/cli/devctl/internal/productadapter.packageBrokerExecutable=${broker}"
-            "-X=devkit/cli/devctl/internal/productadapter.packageRuntimeRoot=${runtimeRoot}"
             "-X=devkit/cli/devctl/internal/productadapter.packageEgressAllowlist=${egressAllowlist}"
             "-X=devkit/cli/devctl/internal/productadapter.packageCodexConfig=${codexConfig}"
             "-X=devkit/cli/devctl/internal/productadapter.packageGovernanceEnv=${governanceEnv}"
@@ -392,12 +460,20 @@
             "-X=devkit/cli/devctl/internal/productadapter.packageShellHook=${shellHook}"
             "-X=devkit/cli/devctl/internal/productadapter.packageCodexExecutable=${codexExecutable}"
             "-X=devkit/cli/devctl/internal/productadapter.packageReadinessExecutable=${outputPlaceholder}/bin/product-readiness"
-            "-X=devkit/cli/devctl/internal/productadapter.packageFirstExecutable=${firstExecutable}"
-            "-X=devkit/cli/devctl/internal/productadapter.packageProductProxyExecutable=${outputPlaceholder}/bin/product-proxy"
-          ] ++ (
-            if fixtureAuthorityLocator == null
-            then [ ]
-            else [ "-X=devkit/cli/devctl/internal/productadapter.testAuthorityLocator=${fixtureAuthorityLocator}" ]
+	            "-X=devkit/cli/devctl/internal/productadapter.packageMCPRequirement=${mcpRequirement}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageMountPolicyContract=${mountPolicyContract}"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageProductProxyExecutable=${outputPlaceholder}/bin/product-proxy"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSupervisor=${outputPlaceholder}/bin/product-adapter-supervisor"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSession=${outputPlaceholder}/bin/product-ssh-session"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSetup=${outputPlaceholder}/bin/product-ssh-setup"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSetupContract=${stoppedVolumeSeedContract}"
+	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSessionContract=${sshSessionContract}"
+          ]
+          ++ (
+            if fixtureAuthorityLocator == null then
+              [ ]
+            else
+              [ "-X=devkit/cli/devctl/internal/productadapter.testAuthorityLocator=${fixtureAuthorityLocator}" ]
           );
           postFixup = fixturePostFixup;
           passthru.productAdapterResources = {
@@ -409,17 +485,63 @@
               codexConfig
               codexExecutable
               egressAllowlist
-              firstExecutable
+              mcpRequirement
               governanceEnv
               governanceRepoConfig
               governanceRules
               knownHostsFile
               runtimeLauncher
-              runtimeRoot
               shellHook
               sshExecutable
+	          sshKeygenExecutable
               ;
+            mountPolicy = productMountPolicy // {
+              contractPath = mountPolicyContract;
+            };
+	        sshSession = productSSHSessionContract // {
+              executablePath = "${outputPlaceholder}/bin/product-ssh-session";
+              supervisorExecutablePath = "${outputPlaceholder}/bin/product-adapter-supervisor";
+              contractPath = sshSessionContract;
+            };
+	        stoppedVolumeSeed = productStoppedVolumeSeedContract // {
+	          executablePath = "${outputPlaceholder}/bin/product-ssh-setup";
+	          contractPath = stoppedVolumeSeedContract;
+	        };
           };
+        };
+      mkProductMCPFixture =
+        pkgs:
+        pkgs.buildGoModule {
+          pname = "devkit-product-mcp-fixture";
+          version = "dev";
+          src = ./cli/devctl;
+          modRoot = ".";
+          vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+          subPackages = [ "cmd/product-mcp-fixture" ];
+          env.CGO_ENABLED = "0";
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test ./cmd/product-mcp-fixture -count=1
+            runHook postCheck
+          '';
+        };
+      mkProductConnectFixture =
+        pkgs:
+        pkgs.buildGoModule {
+          pname = "devkit-product-connect-fixture";
+          version = "dev";
+          src = ./cli/devctl;
+          modRoot = ".";
+          vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+          subPackages = [ "cmd/product-connect-fixture" ];
+          env.CGO_ENABLED = "0";
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test ./cmd/product-connect-fixture -count=1
+            runHook postCheck
+          '';
         };
       mkNativeBootstrapStdioCleanupCheck =
         pkgs:
@@ -461,14 +583,10 @@
           packageEnv = mkPackageEnv pkgs;
           fixtureText = name: text: pkgs.writeText "devkit-product-${name}" text;
           fixtureExecutable = name: text: pkgs.writeShellScript "devkit-product-${name}" text;
-          runtimeRoot = pkgs.runCommand "devkit-product-runtime-root" { } ''
-            mkdir -p "$out"
-          '';
           productionAdapter = mkProductAdapterPackage {
-            inherit pkgs runtimeRoot;
-            runtimeLauncher = fixtureExecutable "runtime-launcher" ''exec "$@"'';
+            inherit pkgs;
             bubblewrap = "${pkgs.bubblewrap}/bin/bwrap";
-            broker = fixtureExecutable "broker" ''exit 0'';
+            broker = fixtureExecutable "broker" "exit 0";
             egressAllowlist = fixtureText "egress-allowlist" "ssh.github.com\n";
             codexConfig = fixtureText "codex-config" "";
             governanceEnv = fixtureText "governance-env" "";
@@ -476,10 +594,20 @@
             governanceRules = fixtureText "governance-rules" "";
             shellHook = fixtureText "shell-hook" "";
             codexExecutable = "${mkPinnedCodex pkgs}/bin/codex";
-            firstExecutable = fixtureExecutable "first-executable" ''
-              test "$#" -eq 1
-              printf %s "$1"
-            '';
+            mcpRequirement = fixtureText "mcp-requirement" (
+              builtins.toJSON {
+                schemaVersion = "devkit/product-mcp-requirement/v1";
+                servers = [
+                  {
+                    name = "governance";
+                    tools = [
+                      "get_run_status"
+                      "run"
+                    ];
+                  }
+                ];
+              }
+            );
           };
         in
         pkgs.buildGoModule {
@@ -500,9 +628,9 @@
           DEVKIT_TEST_REAL_SLOT_SHELL = "${pkgs.bash}/bin/bash";
           DEVKIT_TEST_IMMUTABLE_RUNTIME_AUTHORITY = pkgs.writeText "devkit-dispatch-runtime-authority.json" ''
             {
-              "schemaVersion": "wsl-nix-dev-all-runtime-authority/v1",
+              "schemaVersion": "fleet-runtime-authority/v1",
               "sources": {
-                "product": {
+                "ouroboros-ide": {
                   "rev": "87f5631f87f0be3a731e3d41aa98f9ac6d7d90d3"
                 }
               }
@@ -530,7 +658,7 @@
             printf '%s\n' "$test_output"
             grep -q -- '--- PASS: TestDevAllProductMutationDispatchIsDeniedBeforeEffects' \
               <<<"$test_output"
-            grep -aqF '/etc/fleet/dev-all-runtime-bundle/authority.json' \
+	        grep -aqF '/var/lib/product-runtime/authority-selector.json' \
               ${productionAdapter}/bin/product-adapter
             if grep -aqF 'DEVKIT_TEST_PRODUCT_AUTHORITY_LOCATOR' \
               ${productionAdapter}/bin/product-adapter; then
@@ -561,13 +689,18 @@
               > "$out/contract"
           '';
         };
-      mkProductAdapterLifecycleCheck =
+      mkProductConsumerBoundaryDiagnostic =
         pkgs:
         import ./nix/product-adapter-lifecycle-check.nix {
           inherit
             mkDevAllRuntimeBundle
             mkPinnedCodex
             mkProductAdapterPackage
+            mkProductConnectFixture
+            mkProductMCPFixture
+            mkProductMountPolicyContract
+            mkProductSSHSessionContract
+	        mkProductStoppedVolumeSeedContract
             pkgs
             ;
         };
@@ -578,24 +711,19 @@
         }:
         let
           shell = self.devShells.${pkgs.system}.dev-all;
-          runtimeInputs =
-            [
-              pkgs.bashInteractive
-              pkgs.curl
-              pkgs.nodejs_22
-            ]
-            ++ (shell.nativeBuildInputs or [ ])
-            ++ (shell.buildInputs or [ ]);
+          runtimeInputs = [
+            pkgs.bashInteractive
+            pkgs.curl
+            pkgs.nodejs_22
+          ]
+          ++ (shell.nativeBuildInputs or [ ])
+          ++ (shell.buildInputs or [ ]);
           packageNamed =
             name:
             let
-              matches = builtins.filter
-                (package: (package.pname or "") == name)
-                runtimeInputs;
+              matches = builtins.filter (package: (package.pname or "") == name) runtimeInputs;
             in
-            if matches == [ ]
-            then throw "dev-all runtime shell is missing ${name}"
-            else builtins.head matches;
+            if matches == [ ] then throw "dev-all runtime shell is missing ${name}" else builtins.head matches;
           pinnedGo = packageNamed "go";
           pinnedNpmTools = packageNamed "devkit-npm-tools";
         in
@@ -675,13 +803,19 @@
       lib = {
         inherit
           mkDevAllRuntimeBundle
+          mkPinnedCodex
           mkProductAdapterPackage
           mkSourceTransportPackage
           ;
       };
 
       devShells = forEachSystem (
-        { system, pkgs, pkgsPlaywright, ... }:
+        {
+          system,
+          pkgs,
+          pkgsPlaywright,
+          ...
+        }:
         let
           details = systemDetails.${system};
           pinnedCodex = mkPinnedCodex pkgs;
@@ -872,34 +1006,37 @@
             pinnedDockerCli
           ];
 
-          ouroborosAgentTools = commonAgentTools ++ (with pkgs; [
-            awscli2
-            cmake
-            gcc
-            gnumake
-            jdk21
-            libedit
-            libpng
-            libzip
-            lua5_2
-            minizip
-            nodejs_22
-            pkg-config
-            purescript
-            sbt
-            sqlite
-            tini
-            unzip
-            zip
-            zlib
-            pinnedCodex
-            pinnedGo
-            pinnedMgbaHeadless
-            pinnedNpmTools
-          ]) ++ [
-            pkgsPlaywright.deno
-            pkgsPlaywright.playwright-test
-          ];
+          ouroborosAgentTools =
+            commonAgentTools
+            ++ (with pkgs; [
+              awscli2
+              cmake
+              gcc
+              gnumake
+              jdk21
+              libedit
+              libpng
+              libzip
+              lua5_2
+              minizip
+              nodejs_22
+              pkg-config
+              purescript
+              sbt
+              sqlite
+              tini
+              unzip
+              zip
+              zlib
+              pinnedCodex
+              pinnedGo
+              pinnedMgbaHeadless
+              pinnedNpmTools
+            ])
+            ++ [
+              pkgsPlaywright.deno
+              pkgsPlaywright.playwright-test
+            ];
 
           mkShell =
             name: packages: extraHook:
@@ -923,7 +1060,8 @@
                   export HTTPS_PROXY="$HTTP_PROXY"
                 fi
                 export NO_PROXY=''${NO_PROXY:-localhost,127.0.0.1}
-              '' + extraHook;
+              ''
+              + extraHook;
             };
 
           runtimeArgs = {
@@ -1015,7 +1153,10 @@
             src = ./brokers/postgres-broker;
             vendorHash = "sha256-0HDZ3llIgLMxRLNei93XrcYliBzjajU6ZPllo3/IZVY=";
             env.CGO_ENABLED = "0";
-            ldflags = [ "-s" "-w" ];
+            ldflags = [
+              "-s"
+              "-w"
+            ];
           };
 
           default = self.packages.${pkgs.system}.postgres-broker;
@@ -1053,15 +1194,14 @@
           };
           dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
           dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
-          dev-all-runtime-bundle-public-constructor =
-            mkDevAllRuntimeBundleConstructorContract pkgs;
+          dev-all-runtime-bundle-public-constructor = mkDevAllRuntimeBundleConstructorContract pkgs;
           management-inspection-cli = mkProductionDevctl pkgs;
           native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
           native-absent-index-construction = mkNativeAbsentIndexConstructionCheck pkgs;
           # The prior fixture-only fresh-consumer check silently succeeded when
           # its selected test no longer existed. Keep one source-selected
-          # diagnostic authority: the exact public composed adapter lifecycle.
-          product-fresh-consumer-ssh-authority = mkProductAdapterLifecycleCheck pkgs;
+          # diagnostic fixture: the exact public composed adapter lifecycle.
+          product-consumer-boundary-diagnostic = mkProductConsumerBoundaryDiagnostic pkgs;
 
           devctl-openssh-executable-authority =
             let
@@ -1071,126 +1211,145 @@
                 rootPaths = [ devctl ];
               };
             in
-            pkgs.runCommand "devkit-devctl-openssh-executable-authority" {
-              src = ./.;
-              nativeBuildInputs = [
-                pkgs.gnugrep
-                pkgs.ripgrep
-              ];
-            } ''
-              grep -aqF '${pkgs.openssh}/bin/ssh' ${devctl}/kit/bin/devctl
-              grep -aqF '${knownHostsAuthority}' ${devctl}/kit/bin/devctl
-              grep -qFx '${pkgs.openssh}' ${closure}/store-paths
-              grep -qFx '${knownHostsAuthority}' ${closure}/store-paths
-              grep -qF '[ssh.github.com]:443 ' '${knownHostsAuthority}'
-              ! rg -n 'StrictHostKeyChecking[[:space:]]+accept-new' "$src/cli/devctl"
-              ! rg -n 'copyNativeSSHFile\([^,]*known|BuildWriteSteps' "$src/cli/devctl"
-              mkdir -p "$out"
-              printf '%s\n' '${pkgs.openssh}/bin/ssh' > "$out/ssh-executable"
-              cp '${knownHostsAuthority}' "$out/github-ssh-known-hosts"
-              cp ${closure}/store-paths "$out/store-paths"
-            '';
+            pkgs.runCommand "devkit-devctl-openssh-executable-authority"
+              {
+                src = ./.;
+                nativeBuildInputs = [
+                  pkgs.gnugrep
+                  pkgs.ripgrep
+                ];
+              }
+              ''
+                grep -aqF '${pkgs.openssh}/bin/ssh' ${devctl}/kit/bin/devctl
+                grep -aqF '${knownHostsAuthority}' ${devctl}/kit/bin/devctl
+                grep -qFx '${pkgs.openssh}' ${closure}/store-paths
+                grep -qFx '${knownHostsAuthority}' ${closure}/store-paths
+                grep -qF '[ssh.github.com]:443 ' '${knownHostsAuthority}'
+                ! rg -n 'StrictHostKeyChecking[[:space:]]+accept-new' "$src/cli/devctl"
+                ! rg -n 'copyNativeSSHFile\([^,]*known|BuildWriteSteps' "$src/cli/devctl"
+                mkdir -p "$out"
+                printf '%s\n' '${pkgs.openssh}/bin/ssh' > "$out/ssh-executable"
+                cp '${knownHostsAuthority}' "$out/github-ssh-known-hosts"
+                cp ${closure}/store-paths "$out/store-paths"
+              '';
 
           devctl-overlay-runtime-authority-layout =
             let
               devctl = mkProductionDevctl pkgs;
             in
-            pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
-              nativeBuildInputs = [ pkgs.gnugrep ];
-            } ''
-              test -x ${devctl}/kit/bin/devctl
-              test -f ${devctl}/flake.nix
-              test -f ${devctl}/flake.lock
-              test -f ${devctl}/nix/dev-all-runtime-bundle.nix
-              test -f ${devctl}/overlays/dev-all/flake.nix
-              test -f ${devctl}/overlays/dev-all/runtime.nix
-              grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
-              mkdir -p "$out"
-              printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
-            '';
+            pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout"
+              {
+                nativeBuildInputs = [ pkgs.gnugrep ];
+              }
+              ''
+                test -x ${devctl}/kit/bin/devctl
+                test -f ${devctl}/flake.nix
+                test -f ${devctl}/flake.lock
+                test -f ${devctl}/nix/dev-all-runtime-bundle.nix
+                test -f ${devctl}/overlays/dev-all/flake.nix
+                test -f ${devctl}/overlays/dev-all/runtime.nix
+                grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
+                mkdir -p "$out"
+                printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
+              '';
 
-          runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" {
-            nativeBuildInputs = [ runtimeTools ];
-          } ''
-            env -i PATH=/nonexistent \
-              ${runtimeTools}/bin/dev-all-runtime-tools \
-              ${pkgs.bash}/bin/bash -c '
-                set -eu
-                for tool in \
-                  bash git ssh curl docker go java sbt node npm purs spago \
-                  vite netlify playwright deno aws make gcc mgba-headless \
-                  timeout base64
-                do
-                  command -v "$tool" >/dev/null || {
-                    echo "immutable runtime is missing declared tool: $tool" >&2
-                    exit 127
-                  }
-                done
-                node_path="$(command -v node)"
-                case "$node_path" in
-                  /nix/store/*-nodejs-22.*/bin/node) ;;
-                  *)
-                    echo "runtime tools selected non-pinned Node: $node_path" >&2
-                    exit 1
-                    ;;
-                esac
-                node --version >/dev/null
-                test -x "$(command -v playwright)"
-                test -n "$NODE_PATH"
-              '
-            mkdir -p "$out"
-            printf '%s\n' \
-              'immutable dev-all runtime selects pinned Node and Playwright' \
-              > "$out/README"
-          '';
+          runtime-shell-inventory =
+            pkgs.runCommand "devkit-runtime-shell-inventory"
+              {
+                nativeBuildInputs = [ runtimeTools ];
+              }
+              ''
+                env -i PATH=/nonexistent \
+                  ${runtimeTools}/bin/dev-all-runtime-tools \
+                  ${pkgs.bash}/bin/bash -c '
+                    set -eu
+                    for tool in \
+                      bash git ssh curl docker go java sbt node npm purs spago \
+                      vite netlify playwright deno aws make gcc mgba-headless \
+                      timeout base64
+                    do
+                      command -v "$tool" >/dev/null || {
+                        echo "immutable runtime is missing declared tool: $tool" >&2
+                        exit 127
+                      }
+                    done
+                    node_path="$(command -v node)"
+                    case "$node_path" in
+                      /nix/store/*-nodejs-22.*/bin/node) ;;
+                      *)
+                        echo "runtime tools selected non-pinned Node: $node_path" >&2
+                        exit 1
+                        ;;
+                    esac
+                    node --version >/dev/null
+                    test -x "$(command -v playwright)"
+                    test -n "$NODE_PATH"
+                  '
+                mkdir -p "$out"
+                printf '%s\n' \
+                  'immutable dev-all runtime selects pinned Node and Playwright' \
+                  > "$out/README"
+              '';
 
-          overlay-runtime-metadata = pkgs.runCommand "devkit-overlay-runtime-metadata" {
-            nativeBuildInputs = [ pkgs.gnugrep pkgs.python3 ];
-          } ''
-            mkdir -p "$out"
-            python3 ${./nix/validate-overlay-runtimes.py} ${./overlays} > "$out/overlay-runtimes.json"
+          overlay-runtime-metadata =
+            pkgs.runCommand "devkit-overlay-runtime-metadata"
+              {
+                nativeBuildInputs = [
+                  pkgs.gnugrep
+                  pkgs.python3
+                ];
+              }
+              ''
+                mkdir -p "$out"
+                python3 ${./nix/validate-overlay-runtimes.py} ${./overlays} > "$out/overlay-runtimes.json"
 
-            empty="$TMPDIR/empty-delegation/example"
-            mkdir -p "$empty"
-            cat > "$empty/devkit.yaml" <<'EOF'
-            runtime:
-              flake: ./overlays/example#default
-              flake_input_overrides:
-              codex_version: 0.144.0
-              core_check: true
-            EOF
-            cat > "$empty/flake.nix" <<'EOF'
-            { outputs = _: { }; }
-            EOF
-            if python3 ${./nix/validate-overlay-runtimes.py} "$TMPDIR/empty-delegation" > /dev/null 2> "$TMPDIR/empty.err"; then
-              echo "empty flake_input_overrides unexpectedly bypassed runtime.nix requirement" >&2
-              exit 1
-            fi
-            grep -Fx 'example: missing per-overlay runtime.nix' "$TMPDIR/empty.err" >/dev/null
-            cp "$TMPDIR/empty.err" "$out/empty-delegation-sabotage.err"
-          '';
+                empty="$TMPDIR/empty-delegation/example"
+                mkdir -p "$empty"
+                cat > "$empty/devkit.yaml" <<'EOF'
+                runtime:
+                  flake: ./overlays/example#default
+                  flake_input_overrides:
+                  codex_version: 0.144.0
+                  core_check: true
+                EOF
+                cat > "$empty/flake.nix" <<'EOF'
+                { outputs = _: { }; }
+                EOF
+                if python3 ${./nix/validate-overlay-runtimes.py} "$TMPDIR/empty-delegation" > /dev/null 2> "$TMPDIR/empty.err"; then
+                  echo "empty flake_input_overrides unexpectedly bypassed runtime.nix requirement" >&2
+                  exit 1
+                fi
+                grep -Fx 'example: missing per-overlay runtime.nix' "$TMPDIR/empty.err" >/dev/null
+                cp "$TMPDIR/empty.err" "$out/empty-delegation-sabotage.err"
+              '';
 
-          retired-runtime-static = pkgs.runCommand "devkit-retired-runtime-static" {
-            nativeBuildInputs = [
-              pkgs.bash
-              pkgs.ripgrep
-            ];
-          } ''
-            mkdir -p "$out"
-            bash ${./kit/scripts/retired-runtime-guard} ${./.} > "$out/guard.log"
-          '';
+          retired-runtime-static =
+            pkgs.runCommand "devkit-retired-runtime-static"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.ripgrep
+                ];
+              }
+              ''
+                mkdir -p "$out"
+                bash ${./kit/scripts/retired-runtime-guard} ${./.} > "$out/guard.log"
+              '';
 
-          overlay-nix-runtime-static = pkgs.runCommand "devkit-overlay-nix-runtime-static" {
-            nativeBuildInputs = [
-              pkgs.bash
-              pkgs.findutils
-              pkgs.gnugrep
-              pkgs.ripgrep
-            ];
-          } ''
-            mkdir -p "$out"
-            bash ${./kit/scripts/nix-overlay-runtime-guard} ${./.} > "$out/guard.log"
-          '';
+          overlay-nix-runtime-static =
+            pkgs.runCommand "devkit-overlay-nix-runtime-static"
+              {
+                nativeBuildInputs = [
+                  pkgs.bash
+                  pkgs.findutils
+                  pkgs.gnugrep
+                  pkgs.ripgrep
+                ];
+              }
+              ''
+                mkdir -p "$out"
+                bash ${./kit/scripts/nix-overlay-runtime-guard} ${./.} > "$out/guard.log"
+              '';
         }
       );
     };

@@ -39,17 +39,19 @@ type ReadinessEvidence struct {
 }
 
 type ProductReadinessResult struct {
-	SchemaVersion             string `json:"schema_version"`
-	AppServerAlive            bool   `json:"app_server_alive"`
-	InitializeReady           bool   `json:"initialize_ready"`
-	MCPStatusRead             bool   `json:"mcp_status_read"`
-	EphemeralThreadCreated    bool   `json:"ephemeral_thread_created"`
-	EphemeralThreadReadBack   bool   `json:"ephemeral_thread_read_back"`
-	ApprovalPolicy            string `json:"approval_policy"`
-	SandboxPolicy             string `json:"sandbox_policy"`
-	StandaloneExecutable      string `json:"standalone_executable"`
-	StandaloneExecutableExit  int    `json:"standalone_executable_exit"`
-	StandaloneExecutableProof string `json:"standalone_executable_stdout_sha256"`
+	SchemaVersion           string `json:"schema_version"`
+	AppServerAlive          bool   `json:"app_server_alive"`
+	InitializeReady         bool   `json:"initialize_ready"`
+	MCPStatusRead           bool   `json:"mcp_status_read"`
+	MCPRequirementPath      string `json:"mcp_requirement_path"`
+	MCPRequirementDigest    string `json:"mcp_requirement_digest"`
+	MCPInventoryDigest      string `json:"mcp_inventory_digest"`
+	MCPServerCount          int    `json:"mcp_server_count"`
+	MCPToolCount            int    `json:"mcp_tool_count"`
+	EphemeralThreadCreated  bool   `json:"ephemeral_thread_created"`
+	EphemeralThreadReadBack bool   `json:"ephemeral_thread_read_back"`
+	ApprovalPolicy          string `json:"approval_policy"`
+	SandboxPolicy           string `json:"sandbox_policy"`
 }
 
 type Geometry struct {
@@ -110,26 +112,26 @@ func NewReceipt(
 		Index:             index,
 		Geometry:          geometry,
 		Artifacts: map[string]string{
-			"git":              adapter.GitPath,
-			"env":              adapter.EnvPath,
-			"ssh":              adapter.SSHPath,
-			"known_hosts":      adapter.KnownHostsPath,
-			"runtime_launcher": adapter.RuntimeLauncherPath,
-			"bubblewrap":       adapter.BubblewrapPath,
-			"broker":           adapter.BrokerPath,
-			"runtime_root":     adapter.RuntimeRoot,
-			"egress_allowlist": adapter.EgressAllowlistPath,
-			"codex_config":     adapter.CodexConfigPath,
-			"governance_env":   adapter.GovernanceEnvPath,
-			"governance_repo":  adapter.GovernanceRepoConfigPath,
-			"governance_rules": adapter.GovernanceRulesPath,
-			"shell_hook":       adapter.ShellHookPath,
-			"codex_executable": adapter.CodexExecutablePath,
-			"readiness_probe":  adapter.ReadinessExecutablePath,
-			"first_executable": adapter.FirstExecutablePath,
-			"ssh_identity":     consumer.SSHIdentityPath,
-			"ssh_public_key":   consumer.SSHPublicKeyPath,
-			"codex_auth":       consumer.CodexAuthPath,
+			"git":                   adapter.GitPath,
+			"env":                   adapter.EnvPath,
+			"ssh":                   adapter.SSHPath,
+			"known_hosts":           adapter.KnownHostsPath,
+			"runtime_launcher":      adapter.RuntimeLauncherPath,
+			"bubblewrap":            adapter.BubblewrapPath,
+			"broker":                adapter.BrokerPath,
+			"egress_allowlist":      adapter.EgressAllowlistPath,
+			"codex_config":          adapter.CodexConfigPath,
+			"governance_env":        adapter.GovernanceEnvPath,
+			"governance_repo":       adapter.GovernanceRepoConfigPath,
+			"governance_rules":      adapter.GovernanceRulesPath,
+			"shell_hook":            adapter.ShellHookPath,
+			"codex_executable":      adapter.CodexExecutablePath,
+			"readiness_probe":       adapter.ReadinessExecutablePath,
+			"mcp_requirement":       adapter.MCPRequirementPath,
+			"mount_policy_contract": adapter.MountPolicyContractPath,
+			"ssh_identity":          consumer.SSHIdentityPath,
+			"ssh_public_key":        consumer.SSHPublicKeyPath,
+			"codex_auth":            consumer.CodexAuthPath,
 		},
 		MountPolicyIdentity: adapter.MountPolicyIdentity,
 		Proxy: ProxyIdentity{

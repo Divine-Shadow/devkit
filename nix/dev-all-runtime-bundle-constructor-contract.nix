@@ -10,7 +10,7 @@ let
   };
   bundle = mkDevAllRuntimeBundle ({
     inherit pkgs;
-  } // fixture);
+  } // fixture.constructorArgs);
   closure = pkgs.closureInfo {
     rootPaths = [ bundle ];
   };
@@ -30,13 +30,22 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   revision='${fixture.productSourceRev}'
 
   env -i PATH=/nonexistent "$launcher" validate
+  env -i PATH=/nonexistent "$launcher" identity-nul > "$TMPDIR/identity.nul"
+  test "$(tr -cd '\000' < "$TMPDIR/identity.nul" | wc -c)" = 33
   env -i PATH=/nonexistent "$launcher" plugin-smoke > "$TMPDIR/plugin-smoke"
   grep -Fx 'sourceRev=${fixture.productSourceRev}' "$TMPDIR/plugin-smoke" >/dev/null
   jq -e --arg revision "$revision" '
-    .governance.sourceRev == $revision and
-    .submitToCi.sourceRev == $revision and
-    .artifactColumnPlugin.sourceRev == $revision and
-    .sbtControlPlane.sourceRev == $revision
+    .schemaVersion == "fleet-runtime-authority/v1" and
+    .sources["ouroboros-ide"].rev == $revision and
+    (.sources | keys) == [
+      "dev-workspace", "devkit", "fleet-control", "microvm",
+      "nixos-wsl", "nixpkgs", "ouroboros-ide", "wsl"
+    ] and
+    (.sources | all(.[]; (keys == ["rev"]))) and
+    (.runtimeIdentity.governance.jarPath | startswith("/nix/store/")) and
+    (.runtimeIdentity.submitToCi.jarPath | startswith("/nix/store/")) and
+    (.runtimeIdentity.artifactColumnPlugin.repositoryPath | startswith("/nix/store/")) and
+    (.runtimeIdentity.sbtControlPlane.jarPath | startswith("/nix/store/"))
   ' "$identity" >/dev/null
 
   scan_forbidden() {
@@ -77,6 +86,10 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
       'builtins.getFlake' \
       'builtins.fetchGit' \
       'builtins.fetchTree' \
+      '/var/lib/product-runtime/authority-selector.json' \
+      'product-adapter-connect-proxy.py' \
+      'python' \
+      'colmena' \
       'PATH:-' \
       'mkDefaultDevAllRuntimeBundle'
     do
@@ -136,9 +149,9 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   cp '${closure}/store-paths' "$out/store-paths"
   printf '%s\n' \
     'blocking public constructor contract passed' \
-    'all artifacts and revision metadata were caller supplied' \
-    'one authoritative Product revision reached every runtime identity' \
+    'all artifacts and source revisions were caller supplied by the authoritative derivation' \
+    'one fleet-runtime-authority/v1 manifest carries the exact Product revision' \
     'no historical Product or Artifact Column source authority entered the closure' \
-    'no source evaluator, local checkout, ambient PATH, or fallback entered the public implementation' \
+    'no source evaluator, selector writer, deployment route, local checkout, Python adapter, ambient PATH, or fallback entered the public implementation' \
     > "$out/contract"
 ''

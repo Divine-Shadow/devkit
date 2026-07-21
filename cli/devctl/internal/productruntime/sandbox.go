@@ -2,8 +2,6 @@ package productruntime
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +31,8 @@ func runSandboxDiagnostic(
 			authority.Adapter.ReadinessExecutablePath,
 			"probe",
 			"--codex", authority.Adapter.CodexExecutablePath,
-			"--first-executable", authority.Adapter.FirstExecutablePath,
+			"--mcp-requirement", authority.Adapter.MCPRequirementPath,
+			"--mcp-requirement-digest", authority.Adapter.ArtifactDigests["mcp_requirement"],
 		},
 		&stdout,
 		&stderr,
@@ -41,7 +40,7 @@ func runSandboxDiagnostic(
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		return []productadapter.ReadinessEvidence{{
-			Name: "codex-app-server-thread-and-standalone-executable", Status: "blocked",
+			Name: "codex-app-server-stdio-thread-mcp-readiness", Status: "blocked",
 			Detail: detail,
 		}}, fmt.Errorf("Product typed readiness probe: %w: %s", err, detail)
 	}
@@ -50,7 +49,7 @@ func runSandboxDiagnostic(
 		return nil, err
 	}
 	return []productadapter.ReadinessEvidence{{
-		Name:   "codex-app-server-thread-and-standalone-executable",
+		Name:   "codex-app-server-stdio-thread-mcp-readiness",
 		Status: "ready",
 		Result: &result,
 	}}, nil
@@ -80,18 +79,27 @@ func validateProductReadinessResult(
 	authority productadapter.Authority,
 	result productadapter.ProductReadinessResult,
 ) error {
-	marker := sha256.Sum256([]byte("product-app-server-standalone-command-boundary"))
+	requirement, requirementInventoryDigest, err := productadapter.LoadMCPRequirement(
+		authority.Adapter.MCPRequirementPath,
+		authority.Adapter.ArtifactDigests["mcp_requirement"],
+	)
+	if err != nil {
+		return err
+	}
+	requirementServers, requirementTools := requirement.Counts()
 	if result.SchemaVersion != productadapter.ReadinessSchema ||
 		!result.AppServerAlive ||
 		!result.InitializeReady ||
 		!result.MCPStatusRead ||
+		result.MCPRequirementPath != authority.Adapter.MCPRequirementPath ||
+		result.MCPRequirementDigest != authority.Adapter.ArtifactDigests["mcp_requirement"] ||
+		result.MCPInventoryDigest != requirementInventoryDigest ||
+		result.MCPServerCount != requirementServers ||
+		result.MCPToolCount != requirementTools ||
 		!result.EphemeralThreadCreated ||
 		!result.EphemeralThreadReadBack ||
 		result.ApprovalPolicy != "never" ||
-		result.SandboxPolicy != "dangerFullAccess" ||
-		result.StandaloneExecutable != authority.Adapter.FirstExecutablePath ||
-		result.StandaloneExecutableExit != 0 ||
-		result.StandaloneExecutableProof != hex.EncodeToString(marker[:]) {
+		result.SandboxPolicy != "dangerFullAccess" {
 		return fmt.Errorf("Product typed readiness result is incomplete or mismatched")
 	}
 	return nil

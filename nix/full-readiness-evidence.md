@@ -1,5 +1,13 @@
 # Full Native Readiness Evidence
 
+> **Historical evidence only.** These May 2026 raw
+> `kit/scripts/devkit`/`dev-all` commands, including the ambient SSH example,
+> are not current Product instructions and cannot establish Product authority
+> or promotion. Current Product consumers use only the installed
+> `fleet-runtime-authority/v1` adapter/launcher, and promotion belongs solely to
+> the governed Product-owned twice-fresh lifecycle. Do not rerun these command
+> blocks as a Product construction or repair procedure.
+
 Date: 2026-05-12
 
 Command shape:

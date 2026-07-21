@@ -1,13 +1,22 @@
 # Product Git OpenSSH Executable Authority
 
+> **Current status: prerequisite-only implementation record.** This plan does
+> not define Product publication, deployment, or promotion. Its focused/full
+> checks and consumer fixture establish Devkit package prerequisites only.
+> Current Product promotion belongs exclusively to the governed Product-owned
+> twice-fresh promotion app consuming the sole installed
+> `fleet-runtime-authority/v1` manifest. Devkit work freezes on an immutable
+> candidate branch until that promotion accepts it.
+
 ## Purpose
 
-Make every promoted Devkit Product reset/bootstrap and every persisted or
-explicit Git SSH command use one absolute OpenSSH executable and one pinned
-host-key set selected by the immutable Devkit package. This closes both the
-fresh-consumer failure where Git evaluated a bare `ssh` under a protected
-empty `PATH` and the Derpinator failure where bootstrap inherited caller
-`known_hosts` state and rejected the Product endpoint.
+Make the Devkit-owned Product source-acquisition prerequisite and every
+persisted or explicit Git SSH command use one absolute OpenSSH executable and
+one pinned host-key set selected by the immutable Devkit package. This closes
+both the fresh-consumer failure where Git evaluated a bare `ssh` under a
+protected empty `PATH` and the Derpinator failure where bootstrap inherited
+caller `known_hosts` state and rejected the Product endpoint. It does not by
+itself promote a Product runtime.
 
 The accepted decision is Management
 `9bb328ef7c72d944e5a23dc52c8d2034a63137a0`,
@@ -75,8 +84,8 @@ gate.
 - [x] Implement the compile-time package authority and migrate emitters.
 - [x] Add focused unit, integration, persistence, and pre-effect rejection
       tests.
-- [x] Export and pass the replacement composed-adapter, twice-absent lifecycle
-      flake check; the historical fixture result below is diagnostic only.
+- [x] Export and pass the replacement composed-adapter, twice-absent
+      consumer-boundary diagnostic; this remains prerequisite evidence only.
 - [x] Prove the built package embeds the exact OpenSSH store executable and its
       closure contains OpenSSH.
 - [x] Pin official GitHub raw host keys from `https://api.github.com/meta`
@@ -88,8 +97,9 @@ gate.
 - [x] Run focused Go tests, full `go test ./...`, the replacement named check,
       and full `nix flake check --show-trace` on one frozen tree.
 - [x] Review and complete the clean full source gate.
-- [ ] Commit, push to Devkit `master`, and read back a clean matching
-      local/remote commit and tree.
+- [ ] Commit and push an immutable Devkit candidate branch, then read back a
+      clean matching local/remote commit and tree. Do not update `master`
+      before Product-owned twice-fresh promotion accepts the candidate.
 
 ## Surprises and discoveries
 
@@ -191,7 +201,7 @@ Full Go and Nix gates:
 ```bash
 go test ./...
 nix build .#packages.x86_64-linux.devctl --print-out-paths
-nix build .#checks.x86_64-linux.product-fresh-consumer-ssh-authority \
+nix build .#checks.x86_64-linux.product-consumer-boundary-diagnostic \
   --print-out-paths --show-trace
 nix flake check --show-trace
 ```
@@ -205,13 +215,16 @@ nix-store -q --references '<devctl-package>'
 nix-store -qR '<devctl-package>'
 ```
 
-## Acceptance
+## Devkit candidate freeze
 
-Publication is allowed only when the fresh checkout is clean except for the
-intended committed change, every focused/full gate is green, the named packaged
-fresh-consumer check is present in the full flake check, the package and
-closure receipts select exactly one OpenSSH store authority, and pushed
-`origin/master` matches the accepted local commit and tree.
+The Devkit candidate may be frozen only when the checkout contains exactly the
+intended change, every focused/full prerequisite gate is green, the named
+packaged consumer-boundary diagnostic is present in the full flake check, and
+the package/closure receipts select exactly one OpenSSH store authority. Freeze
+means commit and push an immutable candidate branch with matching local/remote
+commit and tree. It is not Product acceptance, publication, deployment, or
+promotion, and it must not update `origin/master` before the Product-owned
+twice-fresh promotion app accepts the complete lifecycle.
 
 ## Outcomes and retrospective
 
@@ -225,8 +238,8 @@ child. It did not prove the proposition its old text claimed.
 production package. It finds the exact `${pkgs.openssh}/bin/ssh` string in the
 packaged binary and the exact OpenSSH output in closure metadata.
 
-The replacement
-`checks.x86_64-linux.product-fresh-consumer-ssh-authority` is terminal green at
+The historical replacement
+`checks.x86_64-linux.product-fresh-consumer-ssh-authority` was terminal green at
 `/nix/store/dc7nhskh8261m7m35kzzb97mb25q7rnl-vm-test-run-product-fresh-consumer-ssh-authority`.
 It ran both consumers under distinct UIDs from absent boundaries through
 package Git, real OpenSSH, strict fixture known-hosts, the managed proxy, real
@@ -247,8 +260,9 @@ authority branch, local Product flake fallback, global shared secret handles,
 or unsupported inherited-FD flag; its exact closure contains package OpenSSH
 10.0p2, bubblewrap 0.11.0, and Codex 0.144.0.
 
-Independent source audit remains outstanding. The later
-Management/WSL/Product twice-fresh gate remains responsible for governed
-turn/task admission, external GUI effects, distinct-UID production
-composition, and production NixOS `/etc`/current-generation binding.
-Publication remains blocked.
+Independent source audit remained outstanding at that historical boundary.
+The current governed Product-owned twice-fresh promotion app remains solely
+responsible for governed turn/task admission, external GUI effects,
+distinct-UID production composition, production NixOS
+`/etc`/current-generation binding, and promotion. Passing Devkit diagnostics
+or freezing a candidate branch cannot substitute for that gate.

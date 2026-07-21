@@ -218,7 +218,7 @@ func writeRuntimeAuthorityFixture(t *testing.T, root, productRevision string) st
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	payload := fmt.Sprintf(`{"schemaVersion":"wsl-nix-dev-all-runtime-authority/v1","sources":{"product":{"rev":%q}}}`, productRevision)
+	payload := fmt.Sprintf(`{"schemaVersion":"fleet-runtime-authority/v1","sources":{"ouroboros-ide":{"rev":%q}}}`, productRevision)
 	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
