@@ -411,9 +411,13 @@ func (service *supervisor) ensureTarget(ctx context.Context) error {
 						service.consumer.AppServerSocketPath,
 						service.consumer.SandboxAppServerSocketPath,
 					)
-					if verifyErr != nil || verified != socket {
+					if verifyErr != nil {
 						_ = service.stopTargetLocked()
-						return fmt.Errorf("managed Product app-server socket ownership changed during acceptance: %w", verifyErr)
+						return fmt.Errorf("revalidate managed Product app-server socket ownership during acceptance: %w", verifyErr)
+					}
+					if verified != socket {
+						_ = service.stopTargetLocked()
+						return socketOwnershipChangedDuringAcceptanceError(socket, verified)
 					}
 					service.appServerPID = processes[0].PID
 					service.appServerStartTime = startTime
@@ -845,6 +849,20 @@ type socketIdentity struct {
 type socketOwnership struct {
 	Filesystem  socketIdentity
 	KernelInode uint64
+}
+
+func socketOwnershipChangedDuringAcceptanceError(expected, observed socketOwnership) error {
+	return fmt.Errorf(
+		"managed Product app-server socket ownership changed during acceptance: expected filesystem device=%d inode=%d owner=%d kernel_inode=%d, observed filesystem device=%d inode=%d owner=%d kernel_inode=%d",
+		expected.Filesystem.Device,
+		expected.Filesystem.Inode,
+		expected.Filesystem.Owner,
+		expected.KernelInode,
+		observed.Filesystem.Device,
+		observed.Filesystem.Inode,
+		observed.Filesystem.Owner,
+		observed.KernelInode,
+	)
 }
 
 func proveProcessOwnsListeningUnixSocket(

@@ -110,6 +110,12 @@ let
   submitToCiJarSHA256 = builtins.hashString "sha256" "fixture-product-submit-to-ci-jar\n";
   sbtControlPlaneJarSHA256 = builtins.hashString "sha256" "fixture-product-sbt-control-plane-runtime-jar\n";
   artifactColumnJarSHA256 = builtins.hashString "sha256" "fixture Product Artifact Column plugin\n";
+  codexConfigContents = ''
+    approval_policy = "never"
+    sandbox_mode = "danger-full-access"
+  '';
+  codexConfig = pkgs.writeText "fixture-codex-authorization.toml" codexConfigContents;
+  codexConfigSHA256 = builtins.hashString "sha256" codexConfigContents;
 in
 {
   inherit
@@ -191,8 +197,9 @@ in
     sbtControlPlane = sbtControlPlaneJarSHA256;
     };
     codexAuthorization = {
-    schemaVersion = "wsl-nix/codex-authorization/v1";
-    diagnostic = true;
+    configPath = codexConfig;
+    configSha256 = codexConfigSHA256;
+    systemPath = "/etc/codex/config.toml";
     };
   };
 }

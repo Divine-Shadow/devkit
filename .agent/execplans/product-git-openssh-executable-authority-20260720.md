@@ -14,6 +14,11 @@
 > exact Codex PID/listener ownership, recursively closed manifest objects,
 > cross-consumer geometry separation, and operative skill/plan routing before
 > another candidate freeze.
+>
+> The commit containing this plan is the additive successor candidate. Its
+> immutable commit hash, tree hash, remote-branch readback, and gate receipts
+> are external freeze evidence; embedding them here would make the source
+> record self-referential.
 
 ## Purpose
 
@@ -105,11 +110,13 @@ gate.
       and full `nix flake check --show-trace` on one frozen tree.
 - [x] Review and complete the clean full source gate.
 - [x] Freeze and preserve candidate `9a5381d` as rejected audit history.
-- [x] Close every independent-review finding and rerun the expanded sabotage,
-      full Go, all 19 flake, and twice-absent diagnostic gates.
-- [ ] Add (never amend) and push the exact verified tree as a new immutable
-      candidate commit. Do not update `master` before Product-owned
-      twice-fresh promotion accepts a candidate.
+- [x] Close every independent-review finding in the additive successor and
+      rerun the expanded sabotage, full Go, all 19 flake, and twice-absent
+      diagnostic gates.
+- [x] Keep the successor candidate identity external to this plan. The freeze
+      receipt records the immutable commit/tree and matching remote branch;
+      `master` remains unchanged until Product-owned twice-fresh promotion
+      accepts a candidate.
 
 ## Surprises and discoveries
 
@@ -232,9 +239,10 @@ Successor-tree verification before freeze:
 - Focused adapter, stopped-volume seed, session, supervisor, and packaged
   real-pinned-Codex/same-UID-decoy sabotage tests passed.
 - `go test -count=1 ./...` passed.
-- `checks.x86_64-linux.product-consumer-boundary-diagnostic` passed at
-  `/nix/store/raw5zi8z8pdiy4w9ri6a39ybazwkbipx-vm-test-run-product-consumer-boundary-diagnostic`.
-  It constructed and destroyed both consumers from absent state.
+- `checks.x86_64-linux.product-consumer-boundary-diagnostic` passed and
+  constructed and destroyed both consumers from absent state. Its exact output
+  path is recorded in the external freeze receipt so this source plan does not
+  recursively alter the artifact it names.
 - `nix flake check --show-trace` passed all 19 declared checks.
 - The candidate `devctl` package's direct references include package Git
   2.50.1 and exactly package OpenSSH 10.0p2. Its final output path is recorded

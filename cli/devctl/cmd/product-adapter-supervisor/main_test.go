@@ -206,3 +206,26 @@ func TestPinnedProcessMustOwnDeclaredListeningSocket(t *testing.T) {
 		t.Fatalf("incomplete socket ownership proof: %+v", ownership)
 	}
 }
+
+func TestSocketOwnershipChangeDiagnosticDoesNotWrapNil(t *testing.T) {
+	expected := socketOwnership{
+		Filesystem:  socketIdentity{Device: 1, Inode: 2, Owner: 3},
+		KernelInode: 4,
+	}
+	observed := socketOwnership{
+		Filesystem:  socketIdentity{Device: 5, Inode: 6, Owner: 7},
+		KernelInode: 8,
+	}
+	message := socketOwnershipChangedDuringAcceptanceError(expected, observed).Error()
+	for _, required := range []string{
+		"expected filesystem device=1 inode=2 owner=3 kernel_inode=4",
+		"observed filesystem device=5 inode=6 owner=7 kernel_inode=8",
+	} {
+		if !strings.Contains(message, required) {
+			t.Fatalf("socket ownership diagnostic %q is missing %q", message, required)
+		}
+	}
+	if strings.Contains(message, "%!w(<nil>)") {
+		t.Fatalf("socket ownership diagnostic formatted a nil wrapped error: %q", message)
+	}
+}

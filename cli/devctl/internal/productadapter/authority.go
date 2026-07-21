@@ -36,6 +36,12 @@ var (
 	manifestSourceEvidenceKeys = []string{
 		"path", "schemaVersion", "sourceIds", "validationPath", "wslLockSha256",
 	}
+	manifestArtifactDigestKeys = []string{
+		"artifactColumnPlugin", "governance", "sbtControlPlane", "submitToCi",
+	}
+	manifestCodexAuthorizationKeys = []string{
+		"configPath", "configSha256", "systemPath",
+	}
 	manifestNativeControllerKeys = []string{
 		"guestSystemPath", "interfaceContractPath", "launcherPath", "mechanicalContractPath",
 		"prerequisiteContractPath", "readinessPath", "runnerPath", "schemaVersion",
@@ -323,6 +329,47 @@ func validateManifestEnvelope(data []byte) error {
 		if err := json.Unmarshal(source["rev"], &revision); err != nil || !isExactRevision(revision) {
 			return fmt.Errorf("Product authority source %s has invalid revision", sourceID)
 		}
+	}
+	var artifactDigests map[string]json.RawMessage
+	if err := json.Unmarshal(top["artifactDigests"], &artifactDigests); err != nil {
+		return fmt.Errorf("parse Product authority artifact digests: %w", err)
+	}
+	if err := requireExactJSONKeys(
+		"Product authority artifact digests",
+		artifactDigests,
+		manifestArtifactDigestKeys,
+	); err != nil {
+		return err
+	}
+	for _, artifact := range manifestArtifactDigestKeys {
+		var digest string
+		if err := json.Unmarshal(artifactDigests[artifact], &digest); err != nil || !isExactSHA256(digest) {
+			return fmt.Errorf("Product authority artifact digest %s is invalid", artifact)
+		}
+	}
+	var codexAuthorization map[string]json.RawMessage
+	if err := json.Unmarshal(top["codexAuthorization"], &codexAuthorization); err != nil {
+		return fmt.Errorf("parse Product authority Codex authorization: %w", err)
+	}
+	if err := requireExactJSONKeys(
+		"Product authority Codex authorization",
+		codexAuthorization,
+		manifestCodexAuthorizationKeys,
+	); err != nil {
+		return err
+	}
+	var configPath, configSHA256, systemPath string
+	if err := json.Unmarshal(codexAuthorization["configPath"], &configPath); err != nil ||
+		filepath.Clean(configPath) != configPath || !strings.HasPrefix(configPath, "/nix/store/") {
+		return fmt.Errorf("Product authority Codex authorization configPath is invalid")
+	}
+	if err := json.Unmarshal(codexAuthorization["configSha256"], &configSHA256); err != nil ||
+		!isExactSHA256(configSHA256) {
+		return fmt.Errorf("Product authority Codex authorization configSha256 is invalid")
+	}
+	if err := json.Unmarshal(codexAuthorization["systemPath"], &systemPath); err != nil ||
+		!filepath.IsAbs(systemPath) || filepath.Clean(systemPath) != systemPath {
+		return fmt.Errorf("Product authority Codex authorization systemPath is invalid")
 	}
 	for key, expected := range map[string][]string{
 		"sourceEvidence":          manifestSourceEvidenceKeys,
@@ -865,6 +912,14 @@ func isExactRevision(value string) bool {
 		}
 	}
 	return true
+}
+
+func isExactSHA256(value string) bool {
+	if strings.TrimSpace(value) != value || len(value) != 64 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func isProductSSHOrigin(origin string) bool {

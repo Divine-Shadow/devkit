@@ -67,9 +67,18 @@ func exactManifestEnvelopeFixture(t *testing.T) map[string]any {
 		sources[sourceID] = map[string]any{"rev": strings.Repeat(string(rune('0'+index)), 40)}
 	}
 	return map[string]any{
-		"artifactDigests":                        map[string]any{},
-		"bundlePath":                             "/nix/store/fixture",
-		"codexAuthorization":                     map[string]any{},
+		"artifactDigests": map[string]any{
+			"artifactColumnPlugin": strings.Repeat("a", 64),
+			"governance":           strings.Repeat("b", 64),
+			"sbtControlPlane":      strings.Repeat("c", 64),
+			"submitToCi":           strings.Repeat("d", 64),
+		},
+		"bundlePath": "/nix/store/fixture",
+		"codexAuthorization": map[string]any{
+			"configPath":   "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-codex-config.toml",
+			"configSha256": strings.Repeat("e", 64),
+			"systemPath":   "/etc/codex/config.toml",
+		},
 		"controllerFleetPath":                    "/nix/store/fixture/bin/fleet",
 		"devctlLauncherPath":                     "/nix/store/fixture/bin/devctl",
 		"devkitProductAdapter":                   exactAdapterEnvelopeFixture(),
@@ -117,6 +126,62 @@ func TestValidateManifestEnvelopeRequiresSingleExactAuthorityShape(t *testing.T)
 		},
 		"invalid-source-revision": func(value map[string]any) {
 			value["sources"].(map[string]any)["devkit"].(map[string]any)["rev"] = "main"
+		},
+		"missing-artifact-digest": func(value map[string]any) {
+			delete(value["artifactDigests"].(map[string]any), "governance")
+		},
+		"extra-artifact-digest-unknown-field": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["alternateAuthority"] = strings.Repeat("1", 64)
+		},
+		"extra-artifact-digest-compiled-revision": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["compiledRevision"] = strings.Repeat("1", 40)
+		},
+		"artifact-digest-object-type": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["governance"] = map[string]any{
+				"compiledRevision": strings.Repeat("1", 40),
+			}
+		},
+		"artifact-digest-array-type": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["governance"] = []any{
+				map[string]any{"unknownAuthority": true},
+			}
+		},
+		"artifact-digest-invalid-hex": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["governance"] = strings.Repeat("g", 64)
+		},
+		"artifact-digest-invalid-length": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["governance"] = strings.Repeat("a", 63)
+		},
+		"artifact-digest-surrounding-whitespace": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["governance"] = " " + strings.Repeat("a", 64)
+		},
+		"missing-codex-authorization-field": func(value map[string]any) {
+			delete(value["codexAuthorization"].(map[string]any), "systemPath")
+		},
+		"extra-codex-authorization-unknown-field": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["alternateAuthority"] = true
+		},
+		"extra-codex-authorization-compiled-revision": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["compiledRevision"] = strings.Repeat("1", 40)
+		},
+		"codex-authorization-config-object-type": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["configPath"] = map[string]any{
+				"compiledRevision": strings.Repeat("1", 40),
+			}
+		},
+		"codex-authorization-config-array-type": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["configPath"] = []any{
+				map[string]any{"unknownAuthority": true},
+			}
+		},
+		"codex-authorization-config-non-store-path": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["configPath"] = "/tmp/config.toml"
+		},
+		"codex-authorization-invalid-digest": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["configSha256"] = strings.Repeat("z", 64)
+		},
+		"codex-authorization-relative-system-path": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["systemPath"] = "etc/codex/config.toml"
 		},
 		"extra-native-authority": func(value map[string]any) {
 			value["nativeControllerStation"].(map[string]any)["compiledRevision"] = "forbidden"
