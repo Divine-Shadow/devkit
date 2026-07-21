@@ -247,10 +247,12 @@
             ssh.github.com
           '';
           networkContractFields = {
-            schemaVersion = "devkit/source-transport-network/v1";
-            mode = "direct-allowlisted-connect";
+            schemaVersion = "devkit/source-transport-network/v2";
+            mode = "managed-loopback-connect";
             allowlistPath = sourceAllowlist;
             connectTarget = "ssh.github.com:443";
+            managedConnectProxy = "http://127.0.0.1:18888";
+            directFallback = false;
           };
           networkContract = pkgs.writeText "devkit-source-transport-network.json" (
             builtins.toJSON networkContractFields
@@ -304,7 +306,7 @@
                   "$out/share/devkit-source-transport/github-ssh-known-hosts"
             '';
             passthru.sourceTransport = {
-              schemaVersion = "devkit/source-transport/v3";
+              schemaVersion = "devkit/source-transport/v4";
               executablePath = "${sourceTransport}/bin/devkit-source-transport";
               openSSHExecutablePath = "${sourceTransport}/libexec/devkit-source-transport/ssh";
               knownHostsPath = "${sourceTransport}/share/devkit-source-transport/github-ssh-known-hosts";
@@ -329,9 +331,10 @@
           sourceTransport = mkSourceTransportPackage { inherit pkgs; };
           interface = sourceTransport.sourceTransport;
         in
-        assert interface.schemaVersion == "devkit/source-transport/v3";
+        assert interface.schemaVersion == "devkit/source-transport/v4";
         assert interface.gitSSH.schemaVersion == "devkit/source-transport-git-ssh/v2";
-        assert interface.network.schemaVersion == "devkit/source-transport-network/v1";
+        assert interface.network.schemaVersion == "devkit/source-transport-network/v2";
+        assert interface.network.directFallback == false;
         pkgs.runCommand "devkit-source-transport-interface"
           {
             nativeBuildInputs = [
@@ -348,8 +351,10 @@
             test -f '${interface.gitSSH.configPath}'
             test -x '${interface.gitSSH.proxyShellExecutablePath}'
             test -f '${interface.network.contractPath}'
-            test '${interface.network.mode}' = 'direct-allowlisted-connect'
+            test '${interface.network.mode}' = 'managed-loopback-connect'
             test '${interface.network.connectTarget}' = 'ssh.github.com:443'
+            test '${interface.network.managedConnectProxy}' = \
+              'http://127.0.0.1:18888'
             test "$(grep -Ev '^[[:space:]]*(#|$)' '${interface.network.allowlistPath}')" = \
               'ssh.github.com'
             test "$(readlink '${interface.openSSHExecutablePath}')" = \
@@ -391,7 +396,9 @@
                 'gitSSHSocketEnvironment=${interface.gitSSH.socketEnvironment}' \
                 'networkContractPath=${interface.network.contractPath}' \
                 'networkMode=${interface.network.mode}' \
-                'networkAllowlistPath=${interface.network.allowlistPath}'
+                'networkAllowlistPath=${interface.network.allowlistPath}' \
+                'networkManagedConnectProxy=${interface.network.managedConnectProxy}' \
+                'networkDirectFallback=false'
               printf '%s\n' \
                 'diagnostic=hostile PATH refusal and transport-only binary passed'
             } > "$out/evidence.txt"

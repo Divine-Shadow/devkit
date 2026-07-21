@@ -14,6 +14,21 @@ func TestRunRefusesUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestSourceTransportServerPinsManagedBridgeAndIgnoresAmbientProxy(t *testing.T) {
+	want := sourceTransportServerConfig("/run/source.sock", "/nix/store/allowlist")
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+	t.Setenv("ALL_PROXY", "socks5://127.0.0.1:9")
+	t.Setenv("NO_PROXY", "*")
+	config := sourceTransportServerConfig("/run/source.sock", "/nix/store/allowlist")
+	if config.SocketPath != "/run/source.sock" ||
+		config.AllowlistPath != "/nix/store/allowlist" ||
+		config.UpstreamProxyURL != managedConnectBridgeURL ||
+		config != want {
+		t.Fatalf("source transport server config = %+v", config)
+	}
+}
+
 func TestRunServeRequiresExplicitAbsoluteTransportInputs(t *testing.T) {
 	tests := []struct {
 		name string

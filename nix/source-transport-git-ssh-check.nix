@@ -50,6 +50,24 @@ let
       /run/devkit-source-transport/hostile-login-shell-invoked
     exit 93
   '';
+  managedBridgeConfig = pkgs.writeText "devkit-source-transport-managed-bridge.conf" ''
+    User root
+    Group root
+    Port 18888
+    Listen 127.0.0.1
+    Timeout 600
+    LogFile "/run/devkit-source-transport/bridge.log"
+    LogLevel Info
+    PidFile "/run/devkit-source-transport/bridge.pid"
+    MaxClients 16
+    MinSpareServers 1
+    MaxSpareServers 4
+    StartServers 1
+    MaxRequestsPerChild 0
+    Allow 127.0.0.1
+    ConnectPort 443
+    DisableViaHeader Yes
+  '';
   lifecycle = pkgs.writeShellScript "devkit-source-transport-git-ssh-lifecycle" ''
     set -Eeuo pipefail
     umask 077
@@ -57,6 +75,7 @@ let
     chroot_root="$root/chroot"
     socket_path="$chroot_root/run/devkit-source-transport/consumer.sock"
     sshd_pid=
+    bridge_pid=
     inner_pid=
     store_mounted=0
     dev_null_mounted=0
@@ -75,7 +94,7 @@ let
       if test "$status" -eq 0; then
         exit 0
       fi
-      for pid in "$inner_pid" "$sshd_pid"; do
+      for pid in "$inner_pid" "$bridge_pid" "$sshd_pid"; do
         test -z "$pid" && continue
         kill "$pid" >/dev/null 2>&1 || true
         wait "$pid" >/dev/null 2>&1 || true
@@ -137,6 +156,7 @@ let
       test -n "$host_public_material"
       for evidence in \
         "$root/sshd.log" \
+        "$root/bridge.log" \
         "$root/inner.log" \
         "$root/teardown.receipt"
       do
@@ -207,6 +227,19 @@ let
       head -c 16384 "$root/sshd.log" >&2 || true
       exit 1
     fi
+    '${pkgs.tinyproxy}/bin/tinyproxy' -d -c '${managedBridgeConfig}' \
+      >"$root/bridge.stdout" 2>&1 &
+    bridge_pid=$!
+    for attempt in $(seq 1 100); do
+      if '${pkgs.netcat-openbsd}/bin/nc' -z 127.0.0.1 18888; then
+        break
+      fi
+      sleep 0.05
+    done
+    if ! '${pkgs.netcat-openbsd}/bin/nc' -z 127.0.0.1 18888; then
+      head -c 16384 "$root/bridge.stdout" >&2 || true
+      exit 1
+    fi
     '${interface.executablePath}' serve \
       --socket "$socket_path" \
       --allowlist '${interface.network.allowlistPath}' \
@@ -247,6 +280,8 @@ let
     : > "$root/teardown.receipt"
     strict_stop inner_proxy "$inner_pid" '0,2,143'
     inner_pid=
+    strict_stop managed_bridge "$bridge_pid" '0,143'
+    bridge_pid=
     strict_stop sshd "$sshd_pid" '0,143'
     sshd_pid=
     test ! -e "$socket_path"
@@ -270,13 +305,14 @@ let
     test ! -e "$root/hostile-login-shell-invoked"
     test ! -e "$chroot_root/run/devkit-source-transport/hostile-login-shell-invoked"
     grep -qF 'inner_proxy_wait_status=' "$root/teardown.receipt"
+    grep -qF 'managed_bridge_wait_status=' "$root/teardown.receipt"
     grep -qF 'sshd_wait_status=' "$root/teardown.receipt"
     grep -qF 'dev_null_unmounted=true' "$root/teardown.receipt"
     grep -qF 'nix_store_unmounted=true' "$root/teardown.receipt"
     rm -rf "$root"
     test ! -e "$root"
     printf '%s\n' \
-      'source-transport-v3/git-ssh-v2 hostile two-clone lifecycle accepted after strict teardown'
+      'source-transport-v4/network-v2/git-ssh-v2 hostile managed-CONNECT two-clone lifecycle accepted after strict teardown'
   '';
 in
 pkgs.testers.runNixOSTest {

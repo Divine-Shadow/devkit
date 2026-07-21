@@ -18,6 +18,11 @@ import (
 const usage = "usage: devkit-source-transport serve --socket ABSOLUTE_PATH --allowlist ABSOLUTE_PATH\n" +
 	"       devkit-source-transport connect --socket ABSOLUTE_PATH --target HOST:PORT"
 
+// managedConnectBridgeURL is the only network effect available to the source
+// transport server. It is projected by the workspace-egress sandbox and is
+// deliberately not configurable through argv or environment.
+const managedConnectBridgeURL = "http://127.0.0.1:18888"
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -57,10 +62,15 @@ func runServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
-	return egressproxy.Serve(ctx, egressproxy.Config{
-		SocketPath:    socketPath,
-		AllowlistPath: allowlistPath,
-	})
+	return egressproxy.Serve(ctx, sourceTransportServerConfig(socketPath, allowlistPath))
+}
+
+func sourceTransportServerConfig(socketPath, allowlistPath string) egressproxy.Config {
+	return egressproxy.Config{
+		SocketPath:       socketPath,
+		AllowlistPath:    allowlistPath,
+		UpstreamProxyURL: managedConnectBridgeURL,
+	}
 }
 
 func runConnect(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
