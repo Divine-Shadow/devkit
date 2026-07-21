@@ -10,13 +10,13 @@ import (
 )
 
 const (
-	GitSSHSchema        = "devkit/source-transport-git-ssh/v1"
 	IdentityEnvironment = "DEVKIT_SOURCE_TRANSPORT_IDENTITY"
 	SocketEnvironment   = "DEVKIT_SOURCE_TRANSPORT_SOCKET"
 )
 
 var (
 	packageOpenSSHExecutable string
+	packageShellExecutable   string
 	packageSSHConfig         string
 	packageTransport         string
 )
@@ -35,6 +35,7 @@ func RunGitSSH(args []string) error {
 	}
 	for label, path := range map[string]string{
 		"package OpenSSH":    packageOpenSSHExecutable,
+		"package shell":      packageShellExecutable,
 		"package SSH config": packageSSHConfig,
 		"package transport":  packageTransport,
 	} {
@@ -53,17 +54,27 @@ func RunGitSSH(args []string) error {
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
-	command.Env = []string{}
-	if protocol := os.Getenv("GIT_PROTOCOL"); protocol != "" {
-		if protocol != "version=2" {
-			return fmt.Errorf("unsupported GIT_PROTOCOL value")
-		}
-		command.Env = []string{"GIT_PROTOCOL=version=2"}
+	command.Env, err = openSSHEnvironment(packageShellExecutable, os.Getenv("GIT_PROTOCOL"))
+	if err != nil {
+		return err
 	}
 	if err := command.Run(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func openSSHEnvironment(shell, protocol string) ([]string, error) {
+	// OpenSSH executes ProxyCommand as $SHELL -c and otherwise falls back to
+	// ambient /bin/sh. Bind that interpreter to the immutable package contract.
+	environment := []string{"SHELL=" + shell}
+	if protocol == "" {
+		return environment, nil
+	}
+	if protocol != "version=2" {
+		return nil, fmt.Errorf("unsupported GIT_PROTOCOL value")
+	}
+	return append(environment, "GIT_PROTOCOL=version=2"), nil
 }
 
 func ValidateGitSSHArgs(args []string) error {

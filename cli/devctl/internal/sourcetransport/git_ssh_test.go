@@ -32,3 +32,27 @@ func TestValidateGitSSHArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenSSHEnvironmentBindsOnlyPackageShellAndGitProtocol(t *testing.T) {
+	const shell = "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bash/bin/bash"
+
+	environment, err := openSSHEnvironment(shell, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(environment) != 1 || environment[0] != "SHELL="+shell {
+		t.Fatalf("unexpected OpenSSH environment without protocol: %#v", environment)
+	}
+
+	environment, err = openSSHEnvironment(shell, "version=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(environment) != 2 || environment[0] != "SHELL="+shell || environment[1] != "GIT_PROTOCOL=version=2" {
+		t.Fatalf("unexpected OpenSSH environment with protocol: %#v", environment)
+	}
+
+	if _, err := openSSHEnvironment(shell, "version=1"); err == nil {
+		t.Fatal("unsupported Git protocol was accepted")
+	}
+}

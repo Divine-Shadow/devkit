@@ -177,6 +177,7 @@
         {
           pkgs,
           sshExecutable ? "${pkgs.openssh}/bin/ssh",
+          shellExecutable ? "${pkgs.bash}/bin/bash",
           knownHostsFile ? mkGitHubSSHKnownHosts pkgs,
         }:
         let
@@ -208,6 +209,7 @@
               "-s"
               "-w"
               "-X=devkit/cli/devctl/internal/sourcetransport.packageOpenSSHExecutable=${outputPlaceholder}/libexec/devkit-source-transport/ssh"
+              "-X=devkit/cli/devctl/internal/sourcetransport.packageShellExecutable=${outputPlaceholder}/libexec/devkit-source-transport/bash"
               "-X=devkit/cli/devctl/internal/sourcetransport.packageSSHConfig=${outputPlaceholder}/share/devkit-source-transport/ssh-config"
               "-X=devkit/cli/devctl/internal/sourcetransport.packageTransport=${outputPlaceholder}/bin/devkit-source-transport"
             ];
@@ -218,7 +220,7 @@
               go test ./cmd/source-transport ./internal/runtime/egressproxy \
                 -run 'Test(Run|ConnectTarget|ConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes|ConnectNeverTouchesHostileFixedLoopbackBridge|ConnectFailsClosedOnProxyRejection|ConnectFailsClosedWhenExactUnixSocketIsMissing|ConnectCancellationClosesTunnelWithoutWaitingForOpenInput|ServeRefusesExistingSocketAuthority|RemoveOwnedSocketNeverRemovesReplacement|ServeDrainsFullPackAfterClientHalfClose|ServeAndConnectCarryCompleteGitSmartProtocolFetch)' \
                 -count=1
-              go test ./internal/sourcetransport -run '^TestValidateGitSSHArgs$' -count=1
+              go test ./internal/sourcetransport -run '^Test(ValidateGitSSHArgs|OpenSSHEnvironmentBindsOnlyPackageShellAndGitProtocol)$' -count=1
               runHook postCheck
             '';
             postInstall = ''
@@ -231,6 +233,8 @@
                 "$out/share/devkit-source-transport"
               ln -s '${sshExecutable}' \
                 "$out/libexec/devkit-source-transport/ssh"
+              ln -s '${shellExecutable}' \
+                "$out/libexec/devkit-source-transport/bash"
               cp '${knownHostsFile}' \
                 "$out/share/devkit-source-transport/github-ssh-known-hosts"
               substitute '${./nix/source-transport-ssh-config}' \
@@ -239,14 +243,15 @@
                   "$out/share/devkit-source-transport/github-ssh-known-hosts"
             '';
             passthru.sourceTransport = {
-              schemaVersion = "devkit/source-transport/v2";
+              schemaVersion = "devkit/source-transport/v3";
               executablePath = "${sourceTransport}/bin/devkit-source-transport";
               openSSHExecutablePath = "${sourceTransport}/libexec/devkit-source-transport/ssh";
               knownHostsPath = "${sourceTransport}/share/devkit-source-transport/github-ssh-known-hosts";
               gitSSH = {
-                schemaVersion = "devkit/source-transport-git-ssh/v1";
+                schemaVersion = "devkit/source-transport-git-ssh/v2";
                 executablePath = "${sourceTransport}/bin/devkit-source-git-ssh";
                 configPath = "${sourceTransport}/share/devkit-source-transport/ssh-config";
+                proxyShellExecutablePath = "${sourceTransport}/libexec/devkit-source-transport/bash";
                 identityEnvironment = "DEVKIT_SOURCE_TRANSPORT_IDENTITY";
                 socketEnvironment = "DEVKIT_SOURCE_TRANSPORT_SOCKET";
               };
@@ -263,8 +268,8 @@
           sourceTransport = mkSourceTransportPackage { inherit pkgs; };
           interface = sourceTransport.sourceTransport;
         in
-        assert interface.schemaVersion == "devkit/source-transport/v2";
-        assert interface.gitSSH.schemaVersion == "devkit/source-transport-git-ssh/v1";
+        assert interface.schemaVersion == "devkit/source-transport/v3";
+        assert interface.gitSSH.schemaVersion == "devkit/source-transport-git-ssh/v2";
         assert interface.network.schemaVersion == "devkit/source-transport-network/v1";
         pkgs.runCommand "devkit-source-transport-interface"
           {
@@ -280,6 +285,7 @@
             test -f '${interface.knownHostsPath}'
             test -x '${interface.gitSSH.executablePath}'
             test -f '${interface.gitSSH.configPath}'
+            test -x '${interface.gitSSH.proxyShellExecutablePath}'
             test -f '${interface.network.contractPath}'
             test '${interface.network.mode}' = 'direct-allowlisted-connect'
             test '${interface.network.connectTarget}' = 'ssh.github.com:443'
@@ -287,6 +293,8 @@
               'ssh.github.com'
             test "$(readlink '${interface.openSSHExecutablePath}')" = \
               '${pkgs.openssh}/bin/ssh'
+            test "$(readlink '${interface.gitSSH.proxyShellExecutablePath}')" = \
+              '${pkgs.bash}/bin/bash'
             grep -qF '[ssh.github.com]:443 ' \
               '${interface.knownHostsPath}'
 
@@ -317,6 +325,7 @@
                 'knownHostsPath=${interface.knownHostsPath}' \
                 'gitSSHExecutablePath=${interface.gitSSH.executablePath}' \
                 'gitSSHConfigPath=${interface.gitSSH.configPath}' \
+                'gitSSHProxyShellExecutablePath=${interface.gitSSH.proxyShellExecutablePath}' \
                 'gitSSHIdentityEnvironment=${interface.gitSSH.identityEnvironment}' \
                 'gitSSHSocketEnvironment=${interface.gitSSH.socketEnvironment}' \
                 'networkContractPath=${interface.network.contractPath}' \
