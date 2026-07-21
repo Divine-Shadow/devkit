@@ -15,6 +15,10 @@
 > cross-consumer geometry separation, and operative skill/plan routing before
 > another candidate freeze.
 >
+> Candidate `cb7ce7279a190efe175f2e66ebcae2a1e0fdf6bd` is also rejected
+> audit history. It closed the broader consumer acceptance findings but did
+> not recursively close the runtime authority envelope.
+>
 > Candidate `7e91f99bd1edd5cbd28eb358927db055845c9f12` is also rejected
 > audit history. It closed the individual object shapes but did not prove that
 > top-level artifact and Codex authorization values were projections of the
@@ -24,6 +28,11 @@
 > audit history. It equated the Codex path and digest projections but left the
 > Nix constructor able to accept coordinated projections that did not match
 > the selected immutable config bytes.
+>
+> Candidate `4cb5b0699d4a3abf6af5f0d7a7d9f82503c76f97` is also rejected
+> audit history. It proved those bytes by reading a derivation path during Nix
+> evaluation and tested rejection through `builtins.tryEval`/`deepSeq`, making
+> the public constructor gate depend on import-from-derivation semantics.
 >
 > The commit containing this plan is the additive successor candidate. Its
 > immutable commit hash, tree hash, remote-branch readback, and gate receipts
@@ -97,10 +106,14 @@ gate.
 - Top-level artifact digests exactly equal their corresponding runtime-identity
   JAR digests. Codex authorization selects the adapter's exact config path and
   `codex_config` digest, and the only declared installation target is
-  `/etc/codex/config.toml`. The Nix constructor hashes the selected immutable
-  file during evaluation, and its package launcher repeats that byte proof at
-  build and runtime validation. The Go consumer independently preserves the
-  same adapter-digest-to-byte proof without creating another expected digest.
+  `/etc/codex/config.toml`. A package-owned build-time verifier hashes the
+  selected immutable file with the exact coreutils `sha256sum`; its successful
+  receipt is an explicit bundle dependency. The package launcher repeats that
+  byte proof at build and runtime validation. The Go consumer independently
+  preserves the same adapter-digest-to-byte proof without creating another
+  expected digest. The authoritative WSL caller remains responsible for
+  selecting the config path and digest; this Devkit constructor does not and
+  cannot reject a wholly new self-consistent authoritative input.
 
 ## Progress
 
@@ -127,10 +140,15 @@ gate.
       and full `nix flake check --show-trace` on one frozen tree.
 - [x] Review and complete the clean full source gate.
 - [x] Freeze and preserve candidate `9a5381d` as rejected audit history.
+- [x] Freeze and preserve candidate `cb7ce72` as rejected audit history after
+      independent review found the recursively open runtime envelope.
 - [x] Freeze and preserve candidate `7e91f99` as rejected audit history after
       independent review found the cross-value authority gap.
 - [x] Freeze and preserve candidate `09f48351` as rejected audit history after
       independent review found the missing Nix-side byte proof.
+- [x] Freeze and preserve candidate `4cb5b06` as rejected audit history after
+      independent review found evaluation-time derivation reads and
+      `tryEval`/`deepSeq` realization gates.
 - [x] Close every independent-review finding in the additive successor and
       rerun the expanded sabotage, full Go, all 19 flake, and twice-absent
       diagnostic gates.

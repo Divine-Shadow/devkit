@@ -96,11 +96,50 @@ let
     && builtins.toString codexAuthorization.configPath
       == builtins.toString devkitProductAdapter.codexConfigPath
     && codexAuthorization.configSha256 == devkitProductAdapter.artifactDigests.codex_config;
-  codexAuthorizationBytesAreExact =
-    builtins.hashFile "sha256" (builtins.toString codexAuthorization.configPath)
-      == codexAuthorization.configSha256;
   artifactShortRevision = builtins.substring 0 7 sources.ouroboros-ide.rev;
   quote = pkgs.lib.escapeShellArg;
+  codexAuthorizationVerifier = pkgs.writeShellScriptBin "verify-codex-authorization" ''
+    set -eu
+    fail() {
+      echo "verify-codex-authorization: $*" >&2
+      exit 1
+    }
+    [ "$#" -eq 5 ] || fail "requires CONFIG_PATH CONFIG_SHA256 ADAPTER_CONFIG_PATH ADAPTER_CONFIG_SHA256 SYSTEM_PATH"
+    config_path="$1"
+    config_sha256="$2"
+    adapter_config_path="$3"
+    adapter_config_sha256="$4"
+    system_path="$5"
+    case "$config_path" in
+      /nix/store/*) ;;
+      *) fail "config path is not an immutable store path" ;;
+    esac
+    [ "$config_path" = "$adapter_config_path" ] || fail "config path projections differ"
+    [ "$config_sha256" = "$adapter_config_sha256" ] || fail "config digest projections differ"
+    [ "$system_path" = "/etc/codex/config.toml" ] || fail "system path is not canonical"
+    [ "''${#config_sha256}" -eq 64 ] || fail "config digest length is invalid"
+    case "$config_sha256" in
+      *[!0-9a-f]*) fail "config digest is not lowercase hexadecimal" ;;
+    esac
+    [ -f "$config_path" ] || fail "config path is not a regular file"
+    actual="$(${pkgs.coreutils}/bin/sha256sum "$config_path")"
+    actual="''${actual%% *}"
+    [ "$actual" = "$config_sha256" ] || fail "config bytes do not match the declared digest"
+  '';
+  codexAuthorizationByteProof = pkgs.runCommand
+    "dev-all-runtime-codex-authorization-byte-proof"
+    { }
+    ''
+      set -euo pipefail
+      ${codexAuthorizationVerifier}/bin/verify-codex-authorization \
+        ${quote (builtins.toString codexAuthorization.configPath)} \
+        ${quote codexAuthorization.configSha256} \
+        ${quote (builtins.toString devkitProductAdapter.codexConfigPath)} \
+        ${quote devkitProductAdapter.artifactDigests.codex_config} \
+        ${quote codexAuthorization.systemPath}
+      mkdir -p "$out"
+      printf '%s\n' 'Codex authorization projections and immutable bytes verified' > "$out/verified"
+    '';
   envLines = [
     "export DEVKIT_RUNTIME_IDENTITY_SCHEMA_VERSION=${quote schema}"
     "export DEVKIT_RUNTIME_BUNDLE_PATH=${quote "@bundleRoot@"}"
@@ -322,6 +361,8 @@ let
     ln -s '${runtime.artifactColumnPlugin.repositoryPath}' "$out/runtime/artifact-column-plugin-repository"
     ln -s '${runtime.sbtControlPlane.packagePath}' "$out/runtime/sbt-control-plane"
     ln -s '${runtime.javaHome}' "$out/runtime/java"
+    test -r '${codexAuthorizationByteProof}/verified'
+    ln -s '${codexAuthorizationByteProof}' "$out/runtime/codex-authorization-byte-proof"
     "$out/bin/dev-all-runtime-bundle" validate
   '';
   bundle = bundleBase // {
@@ -329,6 +370,9 @@ let
     identityJsonSha256Path = "${bundleBase}/share/dev-all-runtime-bundle/identity.json.sha256";
     identityEnvPath = "${bundleBase}/share/dev-all-runtime-bundle/identity.env";
     launcherPath = "${bundleBase}/bin/dev-all-runtime-bundle";
+    codexAuthorizationVerifierPath =
+      "${codexAuthorizationVerifier}/bin/verify-codex-authorization";
+    codexAuthorizationByteProofPath = codexAuthorizationByteProof;
   };
 in
 assert sourceShapeIsExact;
@@ -337,6 +381,5 @@ assert nativeShapeIsExact;
 assert requiredRuntimeShape;
 assert artifactDigestShapeIsExact;
 assert codexAuthorizationShapeIsExact;
-assert codexAuthorizationBytesAreExact;
 assert authorityShapeIsExact;
 bundle

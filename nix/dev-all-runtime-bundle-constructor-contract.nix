@@ -16,55 +16,10 @@ let
     sandbox_mode = "workspace-write"
   '';
   bundle = mkDevAllRuntimeBundle constructorArgs;
-  rejectsConstructorArgs = args:
-    !(builtins.tryEval (builtins.deepSeq (mkDevAllRuntimeBundle args) true)).success;
-  crossValueSabotageIsRejected = builtins.all rejectsConstructorArgs [
-    (constructorArgs // {
-      artifactDigests = constructorArgs.artifactDigests // {
-        governance = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-      };
-    })
-    (constructorArgs // {
-      codexAuthorization = constructorArgs.codexAuthorization // {
-        configPath = alternateCodexConfig;
-      };
-      devkitProductAdapter = constructorArgs.devkitProductAdapter // {
-        codexConfigPath = alternateCodexConfig;
-      };
-    })
-    (constructorArgs // {
-      codexAuthorization = constructorArgs.codexAuthorization // {
-        configSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-      };
-      devkitProductAdapter = constructorArgs.devkitProductAdapter // {
-        artifactDigests = constructorArgs.devkitProductAdapter.artifactDigests // {
-          codex_config = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        };
-      };
-    })
-    (constructorArgs // {
-      codexAuthorization = constructorArgs.codexAuthorization // {
-        configPath = alternateCodexConfig;
-        configSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-      };
-      devkitProductAdapter = constructorArgs.devkitProductAdapter // {
-        codexConfigPath = alternateCodexConfig;
-        artifactDigests = constructorArgs.devkitProductAdapter.artifactDigests // {
-          codex_config = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        };
-      };
-    })
-    (constructorArgs // {
-      codexAuthorization = constructorArgs.codexAuthorization // {
-        systemPath = "/etc/codex/other.toml";
-      };
-    })
-  ];
   closure = pkgs.closureInfo {
     rootPaths = [ bundle ];
   };
 in
-assert crossValueSabotageIsRejected;
 pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   nativeBuildInputs = [
     pkgs.coreutils
@@ -78,6 +33,36 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   launcher='${bundle}/bin/dev-all-runtime-bundle'
   identity='${bundle}/share/dev-all-runtime-bundle/identity.json'
   revision='${fixture.productSourceRev}'
+  verifier='${bundle.codexAuthorizationVerifierPath}'
+  config_path='${constructorArgs.codexAuthorization.configPath}'
+  config_sha256='${constructorArgs.codexAuthorization.configSha256}'
+  system_path='${constructorArgs.codexAuthorization.systemPath}'
+  alternate_config='${alternateCodexConfig}'
+  wrong_sha256='ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+
+  expect_rejection() {
+    label="$1"
+    shift
+    if "$verifier" "$@"; then
+      echo "Codex authorization verifier accepted $label sabotage" >&2
+      exit 1
+    fi
+  }
+
+  test -r '${bundle.codexAuthorizationByteProofPath}/verified'
+  "$verifier" "$config_path" "$config_sha256" "$config_path" "$config_sha256" "$system_path"
+  expect_rejection coordinated-digest \
+    "$config_path" "$wrong_sha256" "$config_path" "$wrong_sha256" "$system_path"
+  expect_rejection coordinated-path \
+    "$alternate_config" "$config_sha256" "$alternate_config" "$config_sha256" "$system_path"
+  expect_rejection coordinated-path-and-digest \
+    "$alternate_config" "$wrong_sha256" "$alternate_config" "$wrong_sha256" "$system_path"
+  expect_rejection one-sided-path \
+    "$alternate_config" "$config_sha256" "$config_path" "$config_sha256" "$system_path"
+  expect_rejection one-sided-digest \
+    "$config_path" "$wrong_sha256" "$config_path" "$config_sha256" "$system_path"
+  expect_rejection noncanonical-system-path \
+    "$config_path" "$config_sha256" "$config_path" "$config_sha256" /etc/codex/other.toml
 
   env -i PATH=/nonexistent "$launcher" validate
   env -i PATH=/nonexistent "$launcher" identity-nul > "$TMPDIR/identity.nul"
@@ -104,6 +89,15 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
     .codexAuthorization.configSha256 == .devkitProductAdapter.artifactDigests.codex_config and
     .codexAuthorization.systemPath == "/etc/codex/config.toml"
   ' "$identity" >/dev/null
+
+  forbidden_hash="builtins.hash""File"
+  forbidden_read="builtins.read""File"
+  forbidden_try="builtins.try""Eval"
+  forbidden_deep="builtins.deep""Seq"
+  ! grep -F "$forbidden_hash" '${./dev-all-runtime-bundle.nix}'
+  ! grep -F "$forbidden_read" '${./dev-all-runtime-bundle.nix}'
+  ! grep -F -e "$forbidden_try" -e "$forbidden_deep" \
+    '${./dev-all-runtime-bundle-constructor-contract.nix}'
 
   scan_forbidden() {
     label="$1"
