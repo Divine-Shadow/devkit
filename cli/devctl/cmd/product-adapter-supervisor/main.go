@@ -34,11 +34,13 @@ type supervisor struct {
 	commandStartTime    uint64
 	appServerPID        int
 	appServerStartTime  uint64
-	appServerSocket     socketIdentity
+	appServerSocket     socketOwnership
 	startCount          int
 	supervisorStartTime uint64
 	consumerCgroup      string
 }
+
+var errSocketNotReady = errors.New("Product app-server socket is not listening yet")
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -388,28 +390,43 @@ func (service *supervisor) ensureTarget(ctx context.Context) error {
 					groupErr,
 				)
 			}
-			connection, dialErr := net.DialTimeout("unix", service.consumer.AppServerSocketPath, 100*time.Millisecond)
-			if dialErr == nil {
-				connection.Close()
-				startTime, startErr := processStartTime(processes[0].PID)
-				if startErr != nil {
-					_ = service.stopTargetLocked()
-					return startErr
+			startTime, startErr := processStartTime(processes[0].PID)
+			if startErr != nil {
+				_ = service.stopTargetLocked()
+				return startErr
+			}
+			socket, socketErr := proveProcessOwnsListeningUnixSocket(
+				processes[0].PID,
+				startTime,
+				service.consumer.AppServerSocketPath,
+				service.consumer.SandboxAppServerSocketPath,
+			)
+			if socketErr == nil && int(socket.Filesystem.Owner) == service.consumer.UID {
+				connection, dialErr := net.DialTimeout("unix", service.consumer.AppServerSocketPath, 100*time.Millisecond)
+				if dialErr == nil {
+					connection.Close()
+					verified, verifyErr := proveProcessOwnsListeningUnixSocket(
+						processes[0].PID,
+						startTime,
+						service.consumer.AppServerSocketPath,
+						service.consumer.SandboxAppServerSocketPath,
+					)
+					if verifyErr != nil || verified != socket {
+						_ = service.stopTargetLocked()
+						return fmt.Errorf("managed Product app-server socket ownership changed during acceptance: %w", verifyErr)
+					}
+					service.appServerPID = processes[0].PID
+					service.appServerStartTime = startTime
+					service.appServerSocket = socket
+					service.startCount++
+					return nil
 				}
-				socket, socketErr := pathSocketIdentity(service.consumer.AppServerSocketPath)
-				if socketErr != nil {
-					_ = service.stopTargetLocked()
-					return fmt.Errorf("managed Product app-server socket identity is invalid: %w", socketErr)
-				}
-				if int(socket.Owner) != service.consumer.UID {
-					_ = service.stopTargetLocked()
-					return fmt.Errorf("managed Product app-server socket owner is not the consumer uid")
-				}
-				service.appServerPID = processes[0].PID
-				service.appServerStartTime = startTime
-				service.appServerSocket = socket
-				service.startCount++
-				return nil
+			} else if socketErr == nil {
+				_ = service.stopTargetLocked()
+				return fmt.Errorf("managed Product app-server socket owner is not the consumer uid")
+			} else if !errors.Is(socketErr, os.ErrNotExist) && !errors.Is(socketErr, errSocketNotReady) {
+				_ = service.stopTargetLocked()
+				return fmt.Errorf("managed Product app-server does not own its declared listener: %w", socketErr)
 			}
 		}
 		select {
@@ -440,7 +457,13 @@ func (service *supervisor) targetHealthyLocked() bool {
 	if err != nil || len(processes) != 1 || processes[0].PID != service.appServerPID || !processes[0].ExactTarget {
 		return false
 	}
-	if socket, socketErr := pathSocketIdentity(service.consumer.AppServerSocketPath); socketErr != nil || socket != service.appServerSocket {
+	socket, socketErr := proveProcessOwnsListeningUnixSocket(
+		service.appServerPID,
+		service.appServerStartTime,
+		service.consumer.AppServerSocketPath,
+		service.consumer.SandboxAppServerSocketPath,
+	)
+	if socketErr != nil || socket != service.appServerSocket {
 		return false
 	}
 	connection, err := net.DialTimeout("unix", service.consumer.AppServerSocketPath, 100*time.Millisecond)
@@ -494,13 +517,13 @@ func (service *supervisor) stopTargetLocked() error {
 	service.commandStartTime = 0
 	service.appServerPID = 0
 	service.appServerStartTime = 0
-	if service.appServerSocket != (socketIdentity{}) {
-		if err := removeExactSocket(service.consumer.AppServerSocketPath, service.appServerSocket); err != nil {
-			service.appServerSocket = socketIdentity{}
+	if service.appServerSocket != (socketOwnership{}) {
+		if err := removeExactSocket(service.consumer.AppServerSocketPath, service.appServerSocket.Filesystem); err != nil {
+			service.appServerSocket = socketOwnership{}
 			return errors.Join(proxyErr, err)
 		}
 	}
-	service.appServerSocket = socketIdentity{}
+	service.appServerSocket = socketOwnership{}
 	return proxyErr
 }
 
@@ -540,9 +563,10 @@ func (service *supervisor) status() productsession.Status {
 		status.AppServerPID = service.appServerPID
 		status.AppServerStartTime = service.appServerStartTime
 		status.AppServerProcessGroup = service.processGroup
-		status.AppServerSocketDevice = service.appServerSocket.Device
-		status.AppServerSocketInode = service.appServerSocket.Inode
-		status.AppServerSocketOwner = service.appServerSocket.Owner
+		status.AppServerSocketDevice = service.appServerSocket.Filesystem.Device
+		status.AppServerSocketInode = service.appServerSocket.Filesystem.Inode
+		status.AppServerSocketOwner = service.appServerSocket.Filesystem.Owner
+		status.AppServerKernelSocketInode = service.appServerSocket.KernelInode
 		status.MountNamespaceDistinct = namespacesDistinct(service.appServerPID, "mnt")
 		status.NetworkNamespaceDistinct = namespacesDistinct(service.appServerPID, "net")
 		status.WindowsMountsAbsent = windowsMountsAbsent(service.appServerPID)
@@ -816,6 +840,115 @@ type socketIdentity struct {
 	Device uint64
 	Inode  uint64
 	Owner  uint32
+}
+
+type socketOwnership struct {
+	Filesystem  socketIdentity
+	KernelInode uint64
+}
+
+func proveProcessOwnsListeningUnixSocket(
+	pid int,
+	expectedStartTime uint64,
+	hostPath string,
+	processPath string,
+) (socketOwnership, error) {
+	first, err := readProcessSocketOwnership(pid, expectedStartTime, hostPath, processPath)
+	if err != nil {
+		return socketOwnership{}, err
+	}
+	second, err := readProcessSocketOwnership(pid, expectedStartTime, hostPath, processPath)
+	if err != nil {
+		return socketOwnership{}, err
+	}
+	if first != second {
+		return socketOwnership{}, fmt.Errorf("Product app-server socket ownership changed during proof")
+	}
+	return first, nil
+}
+
+func readProcessSocketOwnership(
+	pid int,
+	expectedStartTime uint64,
+	hostPath string,
+	processPath string,
+) (socketOwnership, error) {
+	startTime, err := processStartTime(pid)
+	if err != nil {
+		return socketOwnership{}, err
+	}
+	if startTime != expectedStartTime {
+		return socketOwnership{}, fmt.Errorf("Product app-server process generation changed")
+	}
+	filesystem, err := pathSocketIdentity(hostPath)
+	if err != nil {
+		return socketOwnership{}, err
+	}
+	fdInodes, err := processSocketFDInodes(pid)
+	if err != nil {
+		return socketOwnership{}, err
+	}
+	listeners, err := processUnixListeners(pid, processPath)
+	if err != nil {
+		return socketOwnership{}, err
+	}
+	if len(listeners) == 0 {
+		return socketOwnership{}, errSocketNotReady
+	}
+	if len(listeners) != 1 || !fdInodes[listeners[0]] {
+		return socketOwnership{}, fmt.Errorf("pinned Product Codex PID does not own the sole declared listening Unix socket")
+	}
+	afterStartTime, err := processStartTime(pid)
+	if err != nil || afterStartTime != expectedStartTime {
+		return socketOwnership{}, fmt.Errorf("Product app-server process generation changed during socket proof: %w", err)
+	}
+	afterFilesystem, err := pathSocketIdentity(hostPath)
+	if err != nil || afterFilesystem != filesystem {
+		return socketOwnership{}, fmt.Errorf("Product app-server filesystem socket changed during ownership proof: %w", err)
+	}
+	return socketOwnership{Filesystem: filesystem, KernelInode: listeners[0]}, nil
+}
+
+func processSocketFDInodes(pid int) (map[uint64]bool, error) {
+	entries, err := os.ReadDir(filepath.Join("/proc", strconv.Itoa(pid), "fd"))
+	if err != nil {
+		return nil, fmt.Errorf("read Product app-server descriptors: %w", err)
+	}
+	result := make(map[uint64]bool)
+	for _, entry := range entries {
+		link, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "fd", entry.Name()))
+		if err != nil || !strings.HasPrefix(link, "socket:[") || !strings.HasSuffix(link, "]") {
+			continue
+		}
+		inode, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]"), 10, 64)
+		if err == nil && inode != 0 {
+			result[inode] = true
+		}
+	}
+	return result, nil
+}
+
+func processUnixListeners(pid int, exactPath string) ([]uint64, error) {
+	payload, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "net", "unix"))
+	if err != nil {
+		return nil, fmt.Errorf("read Product app-server Unix socket table: %w", err)
+	}
+	var listeners []uint64
+	for _, line := range strings.Split(string(payload), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 8 || fields[7] != exactPath {
+			continue
+		}
+		if fields[3] != "00010000" || fields[4] != "0001" || fields[5] != "01" {
+			return nil, fmt.Errorf("declared Product app-server socket is not one listening stream")
+		}
+		inode, err := strconv.ParseUint(fields[6], 10, 64)
+		if err != nil || inode == 0 {
+			return nil, fmt.Errorf("declared Product app-server socket has invalid kernel inode")
+		}
+		listeners = append(listeners, inode)
+	}
+	return listeners, nil
 }
 
 func pathSocketIdentity(path string) (socketIdentity, error) {

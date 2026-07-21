@@ -40,6 +40,33 @@ var (
 		"guestSystemPath", "interfaceContractPath", "launcherPath", "mechanicalContractPath",
 		"prerequisiteContractPath", "readinessPath", "runnerPath", "schemaVersion",
 	}
+	manifestAdapterKeys = []string{
+		"artifactDigests", "baseBranch", "branchPrefix", "brokerPath", "bubblewrapPath",
+		"codexConfigPath", "codexExecutablePath", "consumers", "controllerCredentialOwnerUid", "count",
+		"egressAllowlistPath", "envPath", "executablePath", "gitPath", "governanceEnvPath",
+		"governanceRepoConfigPath", "governanceRulesPath", "knownHostsPath", "mcpRequirementPath",
+		"mountPolicyContractPath", "mountPolicyIdentity", "nscdSocketPath", "productOrigin",
+		"proxyHelperPath", "readinessExecutablePath", "resolvConfPath", "runtimeEnvironment",
+		"runtimeLauncherPath", "schemaVersion", "shellHookPath", "sshKeygenPath", "sshPath",
+		"sshSessionContractPath", "sshSessionExecutablePath", "sshSetupContractPath",
+		"sshSetupExecutablePath", "supervisorExecutablePath", "upstreamProxyUrl",
+	}
+	manifestConsumerKeys = []string{
+		"agentRoot", "appServerSocketPath", "authorizedKeysPath", "binds", "brokerSocketPath",
+		"candidateRoot", "codexAuthPath", "commonDirPath", "gid", "governanceEnvTarget",
+		"governanceRepoConfigTarget", "governanceStateRoot", "homePath", "index", "proxySocketPath",
+		"receiptPath", "sandboxAppServerSocketPath", "sandboxBrokerSocketPath", "sandboxHomePath",
+		"sandboxProxySocketPath", "sandboxStateRoot", "sandboxWorktreePath", "sshIdentityPath",
+		"sshPublicKeyPath", "stateRoot", "supervisorSocketPath", "uid", "worktreePath",
+	}
+	manifestBindKeys            = []string{"mode", "required", "source", "target"}
+	manifestRuntimeIdentityKeys = []string{
+		"artifactColumnPlugin", "governance", "javaHome", "sbtControlPlane", "submitToCi",
+	}
+	manifestJarIdentityKeys            = []string{"jarPath", "jarSha256", "packagePath"}
+	manifestArtifactColumnIdentityKeys = []string{
+		"ivyPath", "jarSha256", "metadataEnv", "repositoryPath", "smokeEvidence", "version",
+	}
 )
 
 // These values are package-linker inputs. Product mode is disabled in the
@@ -309,6 +336,78 @@ func validateManifestEnvelope(data []byte) error {
 			return err
 		}
 	}
+	var adapter map[string]json.RawMessage
+	if err := json.Unmarshal(top["devkitProductAdapter"], &adapter); err != nil {
+		return fmt.Errorf("parse Product adapter authority: %w", err)
+	}
+	if err := requireExactJSONKeys("Product adapter authority", adapter, manifestAdapterKeys); err != nil {
+		return err
+	}
+	var consumers []json.RawMessage
+	if err := json.Unmarshal(adapter["consumers"], &consumers); err != nil {
+		return fmt.Errorf("parse Product adapter consumers: %w", err)
+	}
+	for index, rawConsumer := range consumers {
+		var consumer map[string]json.RawMessage
+		if err := json.Unmarshal(rawConsumer, &consumer); err != nil {
+			return fmt.Errorf("parse Product adapter consumer %d: %w", index+1, err)
+		}
+		if err := requireExactJSONKeys(
+			fmt.Sprintf("Product adapter consumer %d", index+1),
+			consumer,
+			manifestConsumerKeys,
+		); err != nil {
+			return err
+		}
+		var binds []json.RawMessage
+		if err := json.Unmarshal(consumer["binds"], &binds); err != nil {
+			return fmt.Errorf("parse Product adapter consumer %d binds: %w", index+1, err)
+		}
+		for bindIndex, rawBind := range binds {
+			var bind map[string]json.RawMessage
+			if err := json.Unmarshal(rawBind, &bind); err != nil {
+				return fmt.Errorf("parse Product adapter consumer %d bind %d: %w", index+1, bindIndex+1, err)
+			}
+			if err := requireExactJSONKeys(
+				fmt.Sprintf("Product adapter consumer %d bind %d", index+1, bindIndex+1),
+				bind,
+				manifestBindKeys,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	var runtimeIdentity map[string]json.RawMessage
+	if err := json.Unmarshal(top["runtimeIdentity"], &runtimeIdentity); err != nil {
+		return fmt.Errorf("parse Product runtime identity: %w", err)
+	}
+	if err := requireExactJSONKeys(
+		"Product runtime identity",
+		runtimeIdentity,
+		manifestRuntimeIdentityKeys,
+	); err != nil {
+		return err
+	}
+	for _, key := range []string{"governance", "sbtControlPlane", "submitToCi"} {
+		var identity map[string]json.RawMessage
+		if err := json.Unmarshal(runtimeIdentity[key], &identity); err != nil {
+			return fmt.Errorf("parse Product runtime identity %s: %w", key, err)
+		}
+		if err := requireExactJSONKeys("Product runtime identity "+key, identity, manifestJarIdentityKeys); err != nil {
+			return err
+		}
+	}
+	var artifactColumn map[string]json.RawMessage
+	if err := json.Unmarshal(runtimeIdentity["artifactColumnPlugin"], &artifactColumn); err != nil {
+		return fmt.Errorf("parse Product runtime identity artifactColumnPlugin: %w", err)
+	}
+	if err := requireExactJSONKeys(
+		"Product runtime identity artifactColumnPlugin",
+		artifactColumn,
+		manifestArtifactColumnIdentityKeys,
+	); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -504,6 +603,9 @@ func (authority Authority) validate(role Role) error {
 			seenCredentialHandles[clean] = true
 		}
 	}
+	if err := validateCrossConsumerGeometry(adapter.Consumers); err != nil {
+		return err
+	}
 	if raw := strings.TrimSpace(adapter.UpstreamProxyURL); raw != "" {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.User != nil {
@@ -511,6 +613,67 @@ func (authority Authority) validate(role Role) error {
 		}
 	}
 	return nil
+}
+
+type mutableConsumerPath struct {
+	consumer int
+	label    string
+	path     string
+}
+
+func validateCrossConsumerGeometry(consumers []ConsumerManifest) error {
+	var prior []mutableConsumerPath
+	for _, consumer := range consumers {
+		var current []mutableConsumerPath
+		for label, path := range mutableConsumerGeometry(consumer) {
+			clean := filepath.Clean(path)
+			for _, other := range prior {
+				if pathsOverlap(clean, other.path) {
+					return fmt.Errorf(
+						"Product consumer %d %s overlaps consumer %d %s",
+						consumer.Index,
+						label,
+						other.consumer,
+						other.label,
+					)
+				}
+			}
+			current = append(current, mutableConsumerPath{
+				consumer: consumer.Index,
+				label:    label,
+				path:     clean,
+			})
+		}
+		prior = append(prior, current...)
+	}
+	return nil
+}
+
+func mutableConsumerGeometry(consumer ConsumerManifest) map[string]string {
+	return map[string]string{
+		"candidate root":       consumer.CandidateRoot,
+		"agent root":           consumer.AgentRoot,
+		"worktree":             consumer.WorktreePath,
+		"common directory":     consumer.CommonDirPath,
+		"home":                 consumer.HomePath,
+		"state root":           consumer.StateRoot,
+		"receipt":              consumer.ReceiptPath,
+		"proxy socket":         consumer.ProxySocketPath,
+		"broker socket":        consumer.BrokerSocketPath,
+		"supervisor socket":    consumer.SupervisorSocketPath,
+		"app-server socket":    consumer.AppServerSocketPath,
+		"governance env":       consumer.GovernanceEnvTarget,
+		"governance config":    consumer.GovernanceRepoConfigTarget,
+		"governance state":     consumer.GovernanceStateRoot,
+		"SSH private identity": consumer.SSHIdentityPath,
+		"SSH public identity":  consumer.SSHPublicKeyPath,
+		"Codex auth":           consumer.CodexAuthPath,
+		"SSH authorized keys":  consumer.AuthorizedKeysPath,
+	}
+}
+
+func pathsOverlap(left, right string) bool {
+	return left == right || pathWithin(left, right) || pathWithin(right, left)
 }
 
 func validateMountPolicyContract(path, expectedIdentity string) error {

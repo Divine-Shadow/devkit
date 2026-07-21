@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseProcessStatHandlesParenthesesInCommand(t *testing.T) {
@@ -124,5 +129,80 @@ func TestRemoveExactSocketRefusesReplacement(t *testing.T) {
 	defer second.Close()
 	if err := removeExactSocket(path, identity); err == nil {
 		t.Fatal("replacement socket was removed")
+	}
+}
+
+func TestUnixSocketOwnerHelper(t *testing.T) {
+	if os.Getenv("DEVKIT_TEST_SOCKET_OWNER_HELPER") != "1" {
+		return
+	}
+	path := os.Getenv("DEVKIT_TEST_SOCKET_OWNER_PATH")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_, _ = fmt.Fprintln(os.Stdout, "ready")
+	_, _ = io.Copy(io.Discard, os.Stdin)
+}
+
+func TestPinnedProcessMustOwnDeclaredListeningSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decoy.sock")
+	command := exec.Command(os.Args[0], "-test.run=^TestUnixSocketOwnerHelper$")
+	command.Env = append(
+		os.Environ(),
+		"DEVKIT_TEST_SOCKET_OWNER_HELPER=1",
+		"DEVKIT_TEST_SOCKET_OWNER_PATH="+path,
+	)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = stdin.Close()
+		done := make(chan error, 1)
+		go func() { done <- command.Wait() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("socket-owner helper failed: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			_ = command.Process.Kill()
+			<-done
+			t.Error("socket-owner helper did not stop")
+		}
+	}()
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() || scanner.Text() != "ready" {
+		t.Fatalf("socket-owner helper was not ready: %q %v", scanner.Text(), scanner.Err())
+	}
+
+	parentStart, err := processStartTime(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proveProcessOwnsListeningUnixSocket(os.Getpid(), parentStart, path, path); err == nil {
+		t.Fatal("same-uid process that did not own the listener was accepted")
+	}
+
+	helperStart, err := processStartTime(command.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownership, err := proveProcessOwnsListeningUnixSocket(command.Process.Pid, helperStart, path, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownership.KernelInode == 0 || ownership.Filesystem.Inode == 0 || ownership.Filesystem.Owner != uint32(os.Geteuid()) {
+		t.Fatalf("incomplete socket ownership proof: %+v", ownership)
 	}
 }

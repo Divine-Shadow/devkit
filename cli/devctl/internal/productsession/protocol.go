@@ -45,6 +45,7 @@ type Status struct {
 	AppServerSocketDevice      uint64 `json:"app_server_socket_device,omitempty"`
 	AppServerSocketInode       uint64 `json:"app_server_socket_inode,omitempty"`
 	AppServerSocketOwner       uint32 `json:"app_server_socket_owner,omitempty"`
+	AppServerKernelSocketInode uint64 `json:"app_server_kernel_socket_inode,omitempty"`
 	AppServerProcessCount      int    `json:"app_server_process_count"`
 	MountNamespaceDistinct     bool   `json:"mount_namespace_distinct"`
 	NetworkNamespaceDistinct   bool   `json:"network_namespace_distinct"`

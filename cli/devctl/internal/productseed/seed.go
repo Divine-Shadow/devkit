@@ -3,6 +3,7 @@ package productseed
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -34,14 +35,11 @@ func Seed(authority productadapter.Authority, consumer productadapter.ConsumerMa
 	if !safeRelativeProjection(projection) {
 		return Result{}, fmt.Errorf("offline Product seed requires one safe relative projection component")
 	}
-	cwd, err := os.Getwd()
+	projectionRoot, err := openProjectionRoot(projection)
 	if err != nil {
 		return Result{}, err
 	}
-	projectionRoot := filepath.Join(cwd, projection)
-	if err := requireProjectionRoot(projectionRoot); err != nil {
-		return Result{}, err
-	}
+	defer projectionRoot.Close()
 	identityPath := os.Getenv(productadapter.SourceIdentityEnvironment)
 	identityFile, identity, err := readProtectedIdentity(identityPath, authority.Adapter.ControllerCredentialOwnerUID)
 	if err != nil {
@@ -72,11 +70,11 @@ func Seed(authority productadapter.Authority, consumer productadapter.ConsumerMa
 		{consumer.AuthorizedKeysPath, 0o600, append([]byte("restrict "), public...)},
 	}
 	for _, target := range targets {
-		projected, err := projectGuestPath(consumer.CandidateRoot, projectionRoot, target.guest)
+		projected, err := projectGuestRelativePath(consumer.CandidateRoot, target.guest)
 		if err != nil {
 			return Result{}, err
 		}
-		if err := writeOwned(projected, target.data, target.mode, consumer.UID, consumer.GID); err != nil {
+		if err := writeOwnedAt(projectionRoot, projected, target.data, target.mode, consumer.UID, consumer.GID); err != nil {
 			return Result{}, err
 		}
 	}
@@ -89,21 +87,20 @@ func Seed(authority productadapter.Authority, consumer productadapter.ConsumerMa
 		return Result{}, err
 	}
 	markerPayload = append(markerPayload, '\n')
-	markerPath, err := projectGuestPath(
+	markerPath, err := projectGuestRelativePath(
 		consumer.CandidateRoot,
-		projectionRoot,
 		productadapter.OfflineSeedMarkerPath(consumer),
 	)
 	if err != nil {
 		return Result{}, err
 	}
-	if err := writeOwned(markerPath, markerPayload, 0o600, consumer.UID, consumer.GID); err != nil {
+	if err := writeOwnedAt(projectionRoot, markerPath, markerPayload, 0o600, consumer.UID, consumer.GID); err != nil {
 		return Result{}, err
 	}
-	if err := os.Chown(projectionRoot, consumer.UID, consumer.GID); err != nil {
+	if err := syscall.Fchown(int(projectionRoot.Fd()), consumer.UID, consumer.GID); err != nil {
 		return Result{}, fmt.Errorf("assign offline Product projection root: %w", err)
 	}
-	if err := os.Chmod(projectionRoot, 0o700); err != nil {
+	if err := syscall.Fchmod(int(projectionRoot.Fd()), 0o700); err != nil {
 		return Result{}, err
 	}
 	return Result{
@@ -128,23 +125,42 @@ func safeRelativeProjection(value string) bool {
 	return true
 }
 
-func requireProjectionRoot(path string) error {
-	info, err := os.Lstat(path)
+func openProjectionRoot(component string) (*os.File, error) {
+	cwdFD, err := syscall.Open(".", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("inspect offline Product projection: %w", err)
+		return nil, fmt.Errorf("open offline Product projection parent: %w", err)
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("offline Product projection is not a plain directory")
+	defer syscall.Close(cwdFD)
+	fd, err := syscall.Openat(
+		cwdFD,
+		component,
+		syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open offline Product projection: %w", err)
 	}
-	return nil
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("inspect held offline Product projection: %w", err)
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFDIR {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("offline Product projection is not a plain directory")
+	}
+	return os.NewFile(uintptr(fd), component), nil
 }
 
-func projectGuestPath(candidateRoot, projectionRoot, guestPath string) (string, error) {
+func projectGuestRelativePath(candidateRoot, guestPath string) (string, error) {
 	relative, err := filepath.Rel(candidateRoot, guestPath)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("offline Product target escapes the consumer root")
 	}
-	return filepath.Join(projectionRoot, relative), nil
+	if filepath.IsAbs(relative) || filepath.Clean(relative) != relative {
+		return "", fmt.Errorf("offline Product target is not one exact relative path")
+	}
+	return relative, nil
 }
 
 func readProtectedIdentity(path string, expectedOwnerUID int) (*os.File, []byte, error) {
@@ -212,48 +228,97 @@ func derivePublicKey(executable string, identity *os.File) ([]byte, error) {
 	return append(output, '\n'), nil
 }
 
-func writeOwned(path string, data []byte, mode os.FileMode, uid, gid int) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+func writeOwnedAt(root *os.File, relative string, data []byte, mode os.FileMode, uid, gid int) error {
+	if root == nil || filepath.IsAbs(relative) || filepath.Clean(relative) != relative {
+		return fmt.Errorf("offline Product seed target is not exact and relative")
 	}
-	if err := chownAncestors(path, uid, gid); err != nil {
-		return err
+	components := strings.Split(relative, string(filepath.Separator))
+	if len(components) < 1 {
+		return fmt.Errorf("offline Product seed target is empty")
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	for _, component := range components {
+		if component == "" || component == "." || component == ".." {
+			return fmt.Errorf("offline Product seed target contains an unsafe component")
+		}
+	}
+	currentFD, err := syscall.Dup(int(root.Fd()))
+	if err != nil {
+		return fmt.Errorf("hold offline Product projection generation: %w", err)
+	}
+	syscall.CloseOnExec(currentFD)
+	defer func() { _ = syscall.Close(currentFD) }()
+	for _, component := range components[:len(components)-1] {
+		nextFD, err := openOrCreateDirectoryAt(currentFD, component, uid, gid)
+		if err != nil {
+			return err
+		}
+		_ = syscall.Close(currentFD)
+		currentFD = nextFD
+	}
+	leaf := components[len(components)-1]
+	fd, err := syscall.Openat(
+		currentFD,
+		leaf,
+		syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+		uint32(mode.Perm()),
+	)
 	if err != nil {
 		return fmt.Errorf("create offline Product seed target: %w", err)
 	}
-	_, writeErr := file.Write(data)
+	file := os.NewFile(uintptr(fd), leaf)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("hold offline Product seed target")
+	}
+	var stat syscall.Stat_t
+	statErr := syscall.Fstat(fd, &stat)
+	writeErr := error(nil)
+	if statErr == nil && stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		statErr = fmt.Errorf("offline Product seed target is not a regular file")
+	}
+	if statErr == nil {
+		_, writeErr = file.Write(data)
+	}
 	syncErr := file.Sync()
-	chownErr := file.Chown(uid, gid)
+	chownErr := syscall.Fchown(fd, uid, gid)
+	chmodErr := syscall.Fchmod(fd, uint32(mode.Perm()))
 	closeErr := file.Close()
-	if err := errorsJoin(writeErr, syncErr, chownErr, closeErr); err != nil {
+	if err := errorsJoin(statErr, writeErr, syncErr, chownErr, chmodErr, closeErr); err != nil {
 		return err
 	}
 	return nil
 }
 
-func chownAncestors(path string, uid, gid int) error {
-	current := filepath.Dir(path)
-	for {
-		if err := os.Chown(current, uid, gid); err != nil {
-			return err
+func openOrCreateDirectoryAt(parentFD int, component string, uid, gid int) (int, error) {
+	flags := syscall.O_RDONLY | syscall.O_DIRECTORY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	fd, err := syscall.Openat(parentFD, component, flags, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		if err := syscall.Mkdirat(parentFD, component, 0o700); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return -1, fmt.Errorf("create offline Product seed directory: %w", err)
 		}
-		if err := os.Chmod(current, 0o700); err != nil {
-			return err
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return nil
-		}
-		// Stop at the caller-owned projection directory; its parent is not part
-		// of the guest consumer geometry.
-		if filepath.Base(current) == ".ssh" || filepath.Base(current) == ".codex" {
-			current = parent
-			continue
-		}
-		return nil
+		fd, err = syscall.Openat(parentFD, component, flags, 0)
 	}
+	if err != nil {
+		return -1, fmt.Errorf("open offline Product seed directory without following links: %w", err)
+	}
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		_ = syscall.Close(fd)
+		return -1, err
+	}
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFDIR {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("offline Product seed ancestor is not a directory")
+	}
+	if err := syscall.Fchown(fd, uid, gid); err != nil {
+		_ = syscall.Close(fd)
+		return -1, err
+	}
+	if err := syscall.Fchmod(fd, 0o700); err != nil {
+		_ = syscall.Close(fd)
+		return -1, err
+	}
+	return fd, nil
 }
 
 func errorsJoin(values ...error) error {

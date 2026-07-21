@@ -642,6 +642,7 @@ EOF
          .status.app_server_socket_device > 0 and
          .status.app_server_socket_inode > 0 and
          .status.app_server_socket_owner == $uid and
+		 .status.app_server_kernel_socket_inode > 0 and
          .status.mount_namespace_distinct == true and
          .status.network_namespace_distinct == true and
          .status.windows_mounts_absent == true' \

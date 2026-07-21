@@ -437,6 +437,11 @@
           ];
           inherit tags;
           env.CGO_ENABLED = "0";
+          # The devkitintegration build is the packaged sabotage gate proving
+          # that this exact pinned Codex process cannot inherit a same-uid
+          # decoy listener. The variable is build/check input only; runtime
+          # authority remains the immutable manifest.
+          env.DEVKIT_TEST_PINNED_CODEX = codexExecutable;
           ldflags = [
             "-s"
             "-w"
