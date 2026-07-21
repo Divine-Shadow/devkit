@@ -20,6 +20,11 @@
 > top-level artifact and Codex authorization values were projections of the
 > runtime identity and byte-verified adapter inputs.
 >
+> Candidate `09f48351d1f4974873ba001cb0616bebddbdc959` is also rejected
+> audit history. It equated the Codex path and digest projections but left the
+> Nix constructor able to accept coordinated projections that did not match
+> the selected immutable config bytes.
+>
 > The commit containing this plan is the additive successor candidate. Its
 > immutable commit hash, tree hash, remote-branch readback, and gate receipts
 > are external freeze evidence; embedding them here would make the source
@@ -91,10 +96,11 @@ gate.
   `/run/current-system` is same-file verification only.
 - Top-level artifact digests exactly equal their corresponding runtime-identity
   JAR digests. Codex authorization selects the adapter's exact config path and
-  `codex_config` digest, that adapter digest is checked against the immutable
-  config bytes, and the only declared installation target is
-  `/etc/codex/config.toml`. The Nix constructor and Go consumer both enforce
-  these relationships.
+  `codex_config` digest, and the only declared installation target is
+  `/etc/codex/config.toml`. The Nix constructor hashes the selected immutable
+  file during evaluation, and its package launcher repeats that byte proof at
+  build and runtime validation. The Go consumer independently preserves the
+  same adapter-digest-to-byte proof without creating another expected digest.
 
 ## Progress
 
@@ -123,6 +129,8 @@ gate.
 - [x] Freeze and preserve candidate `9a5381d` as rejected audit history.
 - [x] Freeze and preserve candidate `7e91f99` as rejected audit history after
       independent review found the cross-value authority gap.
+- [x] Freeze and preserve candidate `09f48351` as rejected audit history after
+      independent review found the missing Nix-side byte proof.
 - [x] Close every independent-review finding in the additive successor and
       rerun the expanded sabotage, full Go, all 19 flake, and twice-absent
       diagnostic gates.

@@ -96,6 +96,9 @@ let
     && builtins.toString codexAuthorization.configPath
       == builtins.toString devkitProductAdapter.codexConfigPath
     && codexAuthorization.configSha256 == devkitProductAdapter.artifactDigests.codex_config;
+  codexAuthorizationBytesAreExact =
+    builtins.hashFile "sha256" (builtins.toString codexAuthorization.configPath)
+      == codexAuthorization.configSha256;
   artifactShortRevision = builtins.substring 0 7 sources.ouroboros-ide.rev;
   quote = pkgs.lib.escapeShellArg;
   envLines = [
@@ -225,6 +228,7 @@ let
         || fail "runtime env bundle mismatch"
       [ "$DEVKIT_RUNTIME_IDENTITY_JSON_PATH" = "$identity_json" ] \
         || fail "runtime env identity path mismatch"
+      require_sha256 '${codexAuthorization.configPath}' '${codexAuthorization.configSha256}'
       require_sha256 "$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH" "$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256"
       require_sha256 "$SUBMIT_TO_CI_JAR" "$DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256"
       require_readable "$SUBMIT_TO_CI_HASH_PATH"
@@ -333,5 +337,6 @@ assert nativeShapeIsExact;
 assert requiredRuntimeShape;
 assert artifactDigestShapeIsExact;
 assert codexAuthorizationShapeIsExact;
+assert codexAuthorizationBytesAreExact;
 assert authorityShapeIsExact;
 bundle

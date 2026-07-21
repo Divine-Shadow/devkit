@@ -11,6 +11,10 @@ let
   constructorArgs = {
     inherit pkgs;
   } // fixture.constructorArgs;
+  alternateCodexConfig = pkgs.writeText "alternate-codex-authorization.toml" ''
+    approval_policy = "on-request"
+    sandbox_mode = "workspace-write"
+  '';
   bundle = mkDevAllRuntimeBundle constructorArgs;
   rejectsConstructorArgs = args:
     !(builtins.tryEval (builtins.deepSeq (mkDevAllRuntimeBundle args) true)).success;
@@ -22,12 +26,32 @@ let
     })
     (constructorArgs // {
       codexAuthorization = constructorArgs.codexAuthorization // {
-        configPath = pkgs.emptyFile;
+        configPath = alternateCodexConfig;
+      };
+      devkitProductAdapter = constructorArgs.devkitProductAdapter // {
+        codexConfigPath = alternateCodexConfig;
       };
     })
     (constructorArgs // {
       codexAuthorization = constructorArgs.codexAuthorization // {
         configSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+      };
+      devkitProductAdapter = constructorArgs.devkitProductAdapter // {
+        artifactDigests = constructorArgs.devkitProductAdapter.artifactDigests // {
+          codex_config = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        };
+      };
+    })
+    (constructorArgs // {
+      codexAuthorization = constructorArgs.codexAuthorization // {
+        configPath = alternateCodexConfig;
+        configSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+      };
+      devkitProductAdapter = constructorArgs.devkitProductAdapter // {
+        codexConfigPath = alternateCodexConfig;
+        artifactDigests = constructorArgs.devkitProductAdapter.artifactDigests // {
+          codex_config = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        };
       };
     })
     (constructorArgs // {
