@@ -242,6 +242,11 @@ let
           ]
         };
 	      $base[0] |
+	      .codexAuthorization = {
+	        configPath:$codex_config,
+	        configSha256:$d_codex_config,
+	        systemPath:"/etc/codex/config.toml"
+	      } |
 	      .devkitProductAdapter = {
           schemaVersion:"wsl-nix-devkit-product-adapter/v1",
           executablePath:$adapter,

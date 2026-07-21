@@ -8,13 +8,39 @@ let
     inherit pkgs;
     productSourceRev = "1111111111111111111111111111111111111111";
   };
-  bundle = mkDevAllRuntimeBundle ({
+  constructorArgs = {
     inherit pkgs;
-  } // fixture.constructorArgs);
+  } // fixture.constructorArgs;
+  bundle = mkDevAllRuntimeBundle constructorArgs;
+  rejectsConstructorArgs = args:
+    !(builtins.tryEval (builtins.deepSeq (mkDevAllRuntimeBundle args) true)).success;
+  crossValueSabotageIsRejected = builtins.all rejectsConstructorArgs [
+    (constructorArgs // {
+      artifactDigests = constructorArgs.artifactDigests // {
+        governance = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+      };
+    })
+    (constructorArgs // {
+      codexAuthorization = constructorArgs.codexAuthorization // {
+        configPath = pkgs.emptyFile;
+      };
+    })
+    (constructorArgs // {
+      codexAuthorization = constructorArgs.codexAuthorization // {
+        configSha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+      };
+    })
+    (constructorArgs // {
+      codexAuthorization = constructorArgs.codexAuthorization // {
+        systemPath = "/etc/codex/other.toml";
+      };
+    })
+  ];
   closure = pkgs.closureInfo {
     rootPaths = [ bundle ];
   };
 in
+assert crossValueSabotageIsRejected;
 pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
   nativeBuildInputs = [
     pkgs.coreutils
@@ -45,7 +71,14 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
     (.runtimeIdentity.governance.jarPath | startswith("/nix/store/")) and
     (.runtimeIdentity.submitToCi.jarPath | startswith("/nix/store/")) and
     (.runtimeIdentity.artifactColumnPlugin.repositoryPath | startswith("/nix/store/")) and
-    (.runtimeIdentity.sbtControlPlane.jarPath | startswith("/nix/store/"))
+    (.runtimeIdentity.sbtControlPlane.jarPath | startswith("/nix/store/")) and
+    .artifactDigests.governance == .runtimeIdentity.governance.jarSha256 and
+    .artifactDigests.submitToCi == .runtimeIdentity.submitToCi.jarSha256 and
+    .artifactDigests.artifactColumnPlugin == .runtimeIdentity.artifactColumnPlugin.jarSha256 and
+    .artifactDigests.sbtControlPlane == .runtimeIdentity.sbtControlPlane.jarSha256 and
+    .codexAuthorization.configPath == .devkitProductAdapter.codexConfigPath and
+    .codexAuthorization.configSha256 == .devkitProductAdapter.artifactDigests.codex_config and
+    .codexAuthorization.systemPath == "/etc/codex/config.toml"
   ' "$identity" >/dev/null
 
   scan_forbidden() {

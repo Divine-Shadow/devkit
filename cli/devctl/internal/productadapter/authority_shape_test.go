@@ -2,6 +2,7 @@ package productadapter
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,7 +33,8 @@ func exactAdapterEnvelopeFixture() map[string]any {
 		"schemaVersion": AdapterSchema, "executablePath": "/adapter", "proxyHelperPath": "/proxy",
 		"gitPath": "/git", "envPath": "/env", "sshPath": "/ssh", "sshKeygenPath": "/ssh-keygen",
 		"knownHostsPath": "/known-hosts", "runtimeLauncherPath": "/runtime", "bubblewrapPath": "/bwrap",
-		"brokerPath": "/broker", "egressAllowlistPath": "/allowlist", "codexConfigPath": "/config",
+		"brokerPath": "/broker", "egressAllowlistPath": "/allowlist",
+		"codexConfigPath":   "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-codex-config.toml",
 		"governanceEnvPath": "/governance-env", "governanceRepoConfigPath": "/governance-repo",
 		"governanceRulesPath": "/rules", "shellHookPath": "/shell", "codexExecutablePath": "/codex",
 		"readinessExecutablePath": "/readiness", "mcpRequirementPath": "/mcp",
@@ -43,19 +45,22 @@ func exactAdapterEnvelopeFixture() map[string]any {
 		"count": 1, "baseBranch": "main", "branchPrefix": "agent", "upstreamProxyUrl": "",
 		"resolvConfPath": "/resolv.conf", "nscdSocketPath": "", "mountPolicyIdentity": "devkit/workspace-egress/v3",
 		"runtimeEnvironment": map[string]any{}, "consumers": []any{exactConsumerEnvelopeFixture(1)},
-		"artifactDigests": map[string]any{},
+		"artifactDigests": map[string]any{"codex_config": strings.Repeat("e", 64)},
 	}
 }
 
 func exactRuntimeIdentityEnvelopeFixture() map[string]any {
-	jar := func() map[string]any {
-		return map[string]any{"packagePath": "/package", "jarPath": "/package.jar", "jarSha256": strings.Repeat("a", 64)}
+	jar := func(digest string) map[string]any {
+		return map[string]any{"packagePath": "/package", "jarPath": "/package.jar", "jarSha256": digest}
 	}
 	return map[string]any{
-		"governance": jar(), "submitToCi": jar(), "sbtControlPlane": jar(), "javaHome": "/java",
+		"governance":      jar(strings.Repeat("b", 64)),
+		"submitToCi":      jar(strings.Repeat("d", 64)),
+		"sbtControlPlane": jar(strings.Repeat("c", 64)),
+		"javaHome":        "/java",
 		"artifactColumnPlugin": map[string]any{
 			"repositoryPath": "/repository", "metadataEnv": "/metadata", "version": "1",
-			"ivyPath": "ivy", "jarSha256": strings.Repeat("b", 64), "smokeEvidence": "/smoke",
+			"ivyPath": "ivy", "jarSha256": strings.Repeat("a", 64), "smokeEvidence": "/smoke",
 		},
 	}
 }
@@ -155,6 +160,9 @@ func TestValidateManifestEnvelopeRequiresSingleExactAuthorityShape(t *testing.T)
 		"artifact-digest-surrounding-whitespace": func(value map[string]any) {
 			value["artifactDigests"].(map[string]any)["governance"] = " " + strings.Repeat("a", 64)
 		},
+		"artifact-digest-valid-but-wrong-runtime-value": func(value map[string]any) {
+			value["artifactDigests"].(map[string]any)["governance"] = strings.Repeat("f", 64)
+		},
 		"missing-codex-authorization-field": func(value map[string]any) {
 			delete(value["codexAuthorization"].(map[string]any), "systemPath")
 		},
@@ -177,11 +185,21 @@ func TestValidateManifestEnvelopeRequiresSingleExactAuthorityShape(t *testing.T)
 		"codex-authorization-config-non-store-path": func(value map[string]any) {
 			value["codexAuthorization"].(map[string]any)["configPath"] = "/tmp/config.toml"
 		},
+		"codex-authorization-valid-but-wrong-config-path": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["configPath"] =
+				"/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-other-codex-config.toml"
+		},
 		"codex-authorization-invalid-digest": func(value map[string]any) {
 			value["codexAuthorization"].(map[string]any)["configSha256"] = strings.Repeat("z", 64)
 		},
+		"codex-authorization-valid-but-wrong-config-digest": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["configSha256"] = strings.Repeat("f", 64)
+		},
 		"codex-authorization-relative-system-path": func(value map[string]any) {
 			value["codexAuthorization"].(map[string]any)["systemPath"] = "etc/codex/config.toml"
+		},
+		"codex-authorization-valid-absolute-but-wrong-system-path": func(value map[string]any) {
+			value["codexAuthorization"].(map[string]any)["systemPath"] = "/etc/codex/other.toml"
 		},
 		"extra-native-authority": func(value map[string]any) {
 			value["nativeControllerStation"].(map[string]any)["compiledRevision"] = "forbidden"
@@ -212,6 +230,20 @@ func TestValidateManifestEnvelopeRequiresSingleExactAuthorityShape(t *testing.T)
 				t.Fatal("expected noncanonical authority envelope rejection")
 			}
 		})
+	}
+}
+
+func TestCodexAuthorizationDigestRemainsTransitivelyBoundToImmutableBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	payload := []byte("approval_policy = \"never\"\n")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateArtifactDigest("codex_config", path, sha256Hex(payload)); err != nil {
+		t.Fatalf("matching Codex authorization bytes were rejected: %v", err)
+	}
+	if err := validateArtifactDigest("codex_config", path, strings.Repeat("f", 64)); err == nil {
+		t.Fatal("valid but wrong Codex authorization digest was not checked against immutable bytes")
 	}
 }
 

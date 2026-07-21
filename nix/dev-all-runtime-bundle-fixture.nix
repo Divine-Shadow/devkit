@@ -189,6 +189,8 @@ in
     schemaVersion = "wsl-nix-devkit-product-adapter/v1";
     diagnostic = true;
     executablePath = "${fixtureRuntimeTools}/bin/devctl";
+    codexConfigPath = codexConfig;
+    artifactDigests.codex_config = codexConfigSHA256;
     };
     artifactDigests = {
     governance = governanceJarSHA256;

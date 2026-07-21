@@ -26,6 +26,8 @@ let
   ];
   isRevision = value:
     builtins.isString value && builtins.match "[0-9a-f]{40}" value != null;
+  isSha256 = value:
+    builtins.isString value && builtins.match "[0-9a-f]{64}" value != null;
   sourceShapeIsExact =
     builtins.attrNames sources == exactSourceIds
     && builtins.all
@@ -63,6 +65,37 @@ let
     && runtime ? artifactColumnPlugin
     && runtime ? sbtControlPlane
     && runtime ? javaHome;
+  artifactDigestShapeIsExact =
+    builtins.isAttrs artifactDigests
+    && builtins.attrNames artifactDigests == [
+      "artifactColumnPlugin"
+      "governance"
+      "sbtControlPlane"
+      "submitToCi"
+    ]
+    && builtins.all (name: isSha256 artifactDigests.${name}) (builtins.attrNames artifactDigests)
+    && artifactDigests.governance == runtime.governance.jarSha256
+    && artifactDigests.submitToCi == runtime.submitToCi.jarSha256
+    && artifactDigests.artifactColumnPlugin == runtime.artifactColumnPlugin.jarSha256
+    && artifactDigests.sbtControlPlane == runtime.sbtControlPlane.jarSha256;
+  codexAuthorizationShapeIsExact =
+    builtins.isAttrs codexAuthorization
+    && builtins.attrNames codexAuthorization == [
+      "configPath"
+      "configSha256"
+      "systemPath"
+    ]
+    && builtins.substring 0 11 (builtins.toString codexAuthorization.configPath) == "/nix/store/"
+    && isSha256 codexAuthorization.configSha256
+    && codexAuthorization.systemPath == "/etc/codex/config.toml"
+    && builtins.isAttrs devkitProductAdapter
+    && devkitProductAdapter ? codexConfigPath
+    && devkitProductAdapter ? artifactDigests
+    && builtins.isAttrs devkitProductAdapter.artifactDigests
+    && devkitProductAdapter.artifactDigests ? codex_config
+    && builtins.toString codexAuthorization.configPath
+      == builtins.toString devkitProductAdapter.codexConfigPath
+    && codexAuthorization.configSha256 == devkitProductAdapter.artifactDigests.codex_config;
   artifactShortRevision = builtins.substring 0 7 sources.ouroboros-ide.rev;
   quote = pkgs.lib.escapeShellArg;
   envLines = [
@@ -298,5 +331,7 @@ assert sourceShapeIsExact;
 assert sourceEvidenceShapeIsExact;
 assert nativeShapeIsExact;
 assert requiredRuntimeShape;
+assert artifactDigestShapeIsExact;
+assert codexAuthorizationShapeIsExact;
 assert authorityShapeIsExact;
 bundle

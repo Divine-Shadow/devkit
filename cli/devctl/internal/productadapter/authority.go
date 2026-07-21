@@ -341,11 +341,13 @@ func validateManifestEnvelope(data []byte) error {
 	); err != nil {
 		return err
 	}
+	artifactDigestValues := make(map[string]string, len(manifestArtifactDigestKeys))
 	for _, artifact := range manifestArtifactDigestKeys {
 		var digest string
 		if err := json.Unmarshal(artifactDigests[artifact], &digest); err != nil || !isExactSHA256(digest) {
 			return fmt.Errorf("Product authority artifact digest %s is invalid", artifact)
 		}
+		artifactDigestValues[artifact] = digest
 	}
 	var codexAuthorization map[string]json.RawMessage
 	if err := json.Unmarshal(top["codexAuthorization"], &codexAuthorization); err != nil {
@@ -368,7 +370,7 @@ func validateManifestEnvelope(data []byte) error {
 		return fmt.Errorf("Product authority Codex authorization configSha256 is invalid")
 	}
 	if err := json.Unmarshal(codexAuthorization["systemPath"], &systemPath); err != nil ||
-		!filepath.IsAbs(systemPath) || filepath.Clean(systemPath) != systemPath {
+		systemPath != "/etc/codex/config.toml" {
 		return fmt.Errorf("Product authority Codex authorization systemPath is invalid")
 	}
 	for key, expected := range map[string][]string{
@@ -389,6 +391,20 @@ func validateManifestEnvelope(data []byte) error {
 	}
 	if err := requireExactJSONKeys("Product adapter authority", adapter, manifestAdapterKeys); err != nil {
 		return err
+	}
+	var adapterCodexConfigPath string
+	if err := json.Unmarshal(adapter["codexConfigPath"], &adapterCodexConfigPath); err != nil ||
+		adapterCodexConfigPath != configPath {
+		return fmt.Errorf("Product authority Codex authorization configPath does not match the Product adapter")
+	}
+	var adapterArtifactDigests map[string]json.RawMessage
+	if err := json.Unmarshal(adapter["artifactDigests"], &adapterArtifactDigests); err != nil {
+		return fmt.Errorf("parse Product adapter artifact digests: %w", err)
+	}
+	var adapterCodexConfigSHA256 string
+	if err := json.Unmarshal(adapterArtifactDigests["codex_config"], &adapterCodexConfigSHA256); err != nil ||
+		!isExactSHA256(adapterCodexConfigSHA256) || adapterCodexConfigSHA256 != configSHA256 {
+		return fmt.Errorf("Product authority Codex authorization configSha256 does not match the Product adapter")
 	}
 	var consumers []json.RawMessage
 	if err := json.Unmarshal(adapter["consumers"], &consumers); err != nil {
@@ -443,6 +459,11 @@ func validateManifestEnvelope(data []byte) error {
 		if err := requireExactJSONKeys("Product runtime identity "+key, identity, manifestJarIdentityKeys); err != nil {
 			return err
 		}
+		var digest string
+		if err := json.Unmarshal(identity["jarSha256"], &digest); err != nil ||
+			!isExactSHA256(digest) || artifactDigestValues[key] != digest {
+			return fmt.Errorf("Product authority artifact digest %s does not match runtime identity", key)
+		}
 	}
 	var artifactColumn map[string]json.RawMessage
 	if err := json.Unmarshal(runtimeIdentity["artifactColumnPlugin"], &artifactColumn); err != nil {
@@ -454,6 +475,11 @@ func validateManifestEnvelope(data []byte) error {
 		manifestArtifactColumnIdentityKeys,
 	); err != nil {
 		return err
+	}
+	var artifactColumnDigest string
+	if err := json.Unmarshal(artifactColumn["jarSha256"], &artifactColumnDigest); err != nil ||
+		!isExactSHA256(artifactColumnDigest) || artifactDigestValues["artifactColumnPlugin"] != artifactColumnDigest {
+		return fmt.Errorf("Product authority artifact digest artifactColumnPlugin does not match runtime identity")
 	}
 	return nil
 }
@@ -555,16 +581,8 @@ func (authority Authority) validate(role Role) error {
 		return fmt.Errorf("Product authority manifest artifact digest set is incomplete")
 	}
 	for name, artifact := range artifacts {
-		expectedDigest := strings.TrimSpace(adapter.ArtifactDigests[name])
-		if len(expectedDigest) != 64 {
-			return fmt.Errorf("Product authority manifest artifact digest %s is invalid", name)
-		}
-		data, err := os.ReadFile(artifact.path)
-		if err != nil {
-			return fmt.Errorf("read Product authority artifact %s: %w", name, err)
-		}
-		if digest := sha256Hex(data); digest != expectedDigest {
-			return fmt.Errorf("Product authority artifact digest %s does not match %s", name, artifact.path)
+		if err := validateArtifactDigest(name, artifact.path, adapter.ArtifactDigests[name]); err != nil {
+			return err
 		}
 	}
 	executable, err := os.Executable()
@@ -899,6 +917,20 @@ func (authority Authority) AgentRoot(index int) string {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func validateArtifactDigest(name, path, expectedDigest string) error {
+	if !isExactSHA256(expectedDigest) {
+		return fmt.Errorf("Product authority manifest artifact digest %s is invalid", name)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read Product authority artifact %s: %w", name, err)
+	}
+	if digest := sha256Hex(data); digest != expectedDigest {
+		return fmt.Errorf("Product authority artifact digest %s does not match %s", name, path)
+	}
+	return nil
 }
 
 func isExactRevision(value string) bool {

@@ -15,6 +15,11 @@
 > cross-consumer geometry separation, and operative skill/plan routing before
 > another candidate freeze.
 >
+> Candidate `7e91f99bd1edd5cbd28eb358927db055845c9f12` is also rejected
+> audit history. It closed the individual object shapes but did not prove that
+> top-level artifact and Codex authorization values were projections of the
+> runtime identity and byte-verified adapter inputs.
+>
 > The commit containing this plan is the additive successor candidate. Its
 > immutable commit hash, tree hash, remote-branch readback, and gate receipts
 > are external freeze evidence; embedding them here would make the source
@@ -84,6 +89,12 @@ gate.
   locator, caller authority, independent Product revision, or local bundle
   build fallback. The authoritative WSL derivation owns selector publication;
   `/run/current-system` is same-file verification only.
+- Top-level artifact digests exactly equal their corresponding runtime-identity
+  JAR digests. Codex authorization selects the adapter's exact config path and
+  `codex_config` digest, that adapter digest is checked against the immutable
+  config bytes, and the only declared installation target is
+  `/etc/codex/config.toml`. The Nix constructor and Go consumer both enforce
+  these relationships.
 
 ## Progress
 
@@ -110,6 +121,8 @@ gate.
       and full `nix flake check --show-trace` on one frozen tree.
 - [x] Review and complete the clean full source gate.
 - [x] Freeze and preserve candidate `9a5381d` as rejected audit history.
+- [x] Freeze and preserve candidate `7e91f99` as rejected audit history after
+      independent review found the cross-value authority gap.
 - [x] Close every independent-review finding in the additive successor and
       rerun the expanded sabotage, full Go, all 19 flake, and twice-absent
       diagnostic gates.
