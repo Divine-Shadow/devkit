@@ -69,7 +69,7 @@ let
 	tool_timeout_sec = 30
   '';
   governanceEnv =
-    "${runtimeBundle}/share/dev-all-runtime-bundle/identity.env";
+    runtimeBundleFixture.productRuntimeProjection.envPath;
   governanceRepoConfig = pkgs.writeText "devkit-product-governance-repo-config" ''
     {}
   '';
@@ -510,7 +510,7 @@ EOF
     test -f ${fixtureAdapter}/${fixtureManifestRelative}
     ${pkgs.jq}/bin/jq -e \
       --arg launcher '${fixtureAdapter}/bin/product-runtime-exec' \
-      --arg governance '${runtimeBundle}/share/dev-all-runtime-bundle/identity.env' \
+      --arg governance '${governanceEnv}' \
       '.devkitProductAdapter.runtimeLauncherPath == $launcher and
        .devkitProductAdapter.controllerCredentialOwnerUid == 1000 and
        .devkitProductAdapter.governanceEnvPath == $governance and

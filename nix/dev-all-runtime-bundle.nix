@@ -7,6 +7,7 @@
   nativeControllerStation,
   pkgs,
   productRealConvergencePromotionAppPath,
+  productRuntimeProjection,
   runtimeIdentity,
   sourceEvidence,
   sources,
@@ -58,6 +59,16 @@ let
     ]
     && nativeControllerStation.schemaVersion == "wsl-nix/native-controller-station-runtime/v1";
   runtime = runtimeIdentity;
+  productRuntimeProjectionShapeIsExact =
+    builtins.isAttrs productRuntimeProjection
+    && builtins.attrNames productRuntimeProjection == [
+      "envPath"
+      "productSourceRev"
+      "schemaVersion"
+    ]
+    && productRuntimeProjection.schemaVersion == "devkit/product-runtime-projection/v1"
+    && productRuntimeProjection.productSourceRev == sources.ouroboros-ide.rev
+    && builtins.substring 0 11 (builtins.toString productRuntimeProjection.envPath) == "/nix/store/";
   requiredRuntimeShape =
     builtins.isAttrs runtime
     && runtime ? governance
@@ -144,43 +155,7 @@ let
     "export DEVKIT_RUNTIME_IDENTITY_SCHEMA_VERSION=${quote schema}"
     "export DEVKIT_RUNTIME_BUNDLE_PATH=${quote "@bundleRoot@"}"
     "export DEVKIT_RUNTIME_IDENTITY_JSON_PATH=${quote "@bundleRoot@/share/dev-all-runtime-bundle/identity.json"}"
-    "export DEVKIT_GOVERNANCE_SOURCE_REV=${quote sources.ouroboros-ide.rev}"
-    "export DEVKIT_SUBMIT_TO_CI_SOURCE_REV=${quote sources.ouroboros-ide.rev}"
-    "export DEVKIT_ARTIFACT_COLUMN_SOURCE_REV=${quote sources.ouroboros-ide.rev}"
-    "export DEVKIT_SBT_CONTROL_PLANE_SOURCE_REV=${quote sources.ouroboros-ide.rev}"
-    "export SUBAGENT_GOVERNANCE_LATEST_JAR_PATH=${quote runtime.governance.jarPath}"
-    "export SUBAGENT_GOVERNANCE_CONTROL_PLANE_JAR=${quote runtime.governance.jarPath}"
-    "export DEVKIT_GOVERNANCE_EXPECTED_JAR_PATH=${quote runtime.governance.jarPath}"
-    "export DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256=${quote runtime.governance.jarSha256}"
-    "export SUBAGENT_GOVERNANCE_EXPECTED_JAR_SHA256=${quote runtime.governance.jarSha256}"
-    "export SUBMIT_TO_CI_JAR=${quote runtime.submitToCi.jarPath}"
-    "export SUBMIT_TO_CI_HASH_PATH=${quote (runtime.submitToCi.jarPath + ".sha256")}"
-    "export SUBMIT_TO_CI_BUILD_POLICY='reuse'"
-    "export SUBMIT_TO_CI_EXTERNAL_JAR='1'"
-    "export SUBMIT_TO_CI_FLAKE_ARTIFACT='0'"
-    "export SUBMIT_TO_CI_PINNED_ARTIFACT='0'"
-    "export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_PATH=${quote runtime.submitToCi.jarPath}"
-    "export DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256=${quote runtime.submitToCi.jarSha256}"
-    "export SBT2_CLIENT_MODE='force'"
-    "export SBT2_JAVA_XMX='6g'"
-    "export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE='off'"
-    "export ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH=${quote runtime.artifactColumnPlugin.repositoryPath}"
-    "export ARTIFACT_COLUMN_PLUGIN_METADATA_ENV=${quote runtime.artifactColumnPlugin.metadataEnv}"
-    "export ARTIFACT_COLUMN_PLUGIN_VERSION=${quote runtime.artifactColumnPlugin.version}"
-    "export ARTIFACT_COLUMN_PLUGIN_SOURCE_REV=${quote sources.ouroboros-ide.rev}"
-    "export ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV=${quote artifactShortRevision}"
-    "export ARTIFACT_COLUMN_PLUGIN_IVY_PATH=${quote runtime.artifactColumnPlugin.ivyPath}"
-    "export ARTIFACT_COLUMN_PLUGIN_JAR_SHA256=${quote runtime.artifactColumnPlugin.jarSha256}"
-    "export ARTIFACT_COLUMN_PLUGIN_PINNED_ARTIFACT='1'"
-    "export ARTIFACT_COLUMN_PLUGIN_FLAKE_ARTIFACT='0'"
-    "export SBT_CONTROL_PLANE_RUNTIME_JAR=${quote runtime.sbtControlPlane.jarPath}"
-    "export SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256=${quote runtime.sbtControlPlane.jarSha256}"
-    "export SBT_CONTROL_PLANE_PINNED_ARTIFACT='1'"
-    "export SBT_CONTROL_PLANE_FLAKE_ARTIFACT='0'"
-    "export SUBAGENT_GOVERNANCE_PINNED_ARTIFACT='1'"
-    "export SUBAGENT_GOVERNANCE_FLAKE_ARTIFACT='0'"
-    "export DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV='1'"
-    "export JAVA_HOME=${quote runtime.javaHome}"
+    ". ${quote (builtins.toString productRuntimeProjection.envPath)}"
   ];
   identityEnvTemplate = pkgs.writeText "fleet-runtime-authority-env-template" (
     builtins.concatStringsSep "\n" envLines + "\n"
@@ -267,6 +242,8 @@ let
         || fail "runtime env bundle mismatch"
       [ "$DEVKIT_RUNTIME_IDENTITY_JSON_PATH" = "$identity_json" ] \
         || fail "runtime env identity path mismatch"
+      [ '${devkitProductAdapter.governanceEnvPath}' = '${productRuntimeProjection.envPath}' ] \
+        || fail "Product adapter does not consume the sole runtime projection"
       require_sha256 '${codexAuthorization.configPath}' '${codexAuthorization.configSha256}'
       require_sha256 "$SUBAGENT_GOVERNANCE_LATEST_JAR_PATH" "$DEVKIT_GOVERNANCE_EXPECTED_JAR_SHA256"
       require_sha256 "$SUBMIT_TO_CI_JAR" "$DEVKIT_GOVERNANCE_EXPECTED_SUBMIT_TO_CI_JAR_SHA256"
@@ -338,7 +315,19 @@ let
         unset BASH_ENV ENV
         exec '${pkgs.bash}/bin/bash' "$1"
         ;;
-      *) fail "usage: $0 {validate|identity-env|identity-json|identity-fingerprint|identity-nul|plugin-smoke|exec COMMAND...|governance-forward FORWARDER}" ;;
+      fleet)
+        validate
+        shift
+        [ "$#" -gt 0 ] || fail "fleet requires a Fleet subcommand"
+        export FLEET_RUNTIME_AUTHORITY_MARKER='__FLEET_RUNTIME_AUTHORITY__'
+        export FLEET_RUNTIME_AUTHORITY_SCHEMA='${schema}'
+        export FLEET_RUNTIME_AUTHORITY_LAUNCHER="$bundle_root/bin/dev-all-runtime-bundle"
+        export FLEET_RUNTIME_AUTHORITY_MANIFEST="$identity_json"
+        export FLEET_RUNTIME_AUTHORITY_SHA256="$(${pkgs.coreutils}/bin/cat "$identity_sha")"
+        unset BASH_ENV ENV
+        exec '${controllerFleetPath}' "$@"
+        ;;
+      *) fail "usage: $0 {validate|identity-env|identity-json|identity-fingerprint|identity-nul|plugin-smoke|exec COMMAND...|governance-forward FORWARDER|fleet FLEET_ARGS...}" ;;
     esac
   '';
   bundleBase = pkgs.runCommand "dev-all-runtime-bundle" {
@@ -379,6 +368,7 @@ assert sourceShapeIsExact;
 assert sourceEvidenceShapeIsExact;
 assert nativeShapeIsExact;
 assert requiredRuntimeShape;
+assert productRuntimeProjectionShapeIsExact;
 assert artifactDigestShapeIsExact;
 assert codexAuthorizationShapeIsExact;
 assert authorityShapeIsExact;

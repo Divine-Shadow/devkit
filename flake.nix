@@ -149,6 +149,7 @@
       mkGitHubSSHKnownHosts =
         pkgs: pkgs.writeText "devkit-github-ssh-known-hosts" (builtins.readFile githubSSHKnownHosts);
       mkDevAllRuntimeBundle = import ./nix/mk-dev-all-runtime-bundle.nix;
+      mkProductRuntimeProjection = import ./nix/product-runtime-projection.nix;
       mkDiagnosticRuntimeFixture =
         pkgs:
         import ./nix/dev-all-runtime-bundle-fixture.nix {
@@ -205,6 +206,9 @@
           subPackages = [ "." ];
           inherit tags;
           env.CGO_ENABLED = "0";
+          preCheck = ''
+            go test ${pkgs.lib.optionalString (tags != [ ]) "-tags=${builtins.concatStringsSep "," tags}"} ./internal/productadapter
+          '';
           ldflags = [
             "-s"
             "-w"
@@ -445,6 +449,7 @@
           subPackages = [
             "cmd/product-adapter"
             "cmd/product-adapter-supervisor"
+            "cmd/product-authority-selector-install"
             "cmd/product-proxy"
             "cmd/product-readiness"
             "cmd/product-runtime-exec"
@@ -500,6 +505,7 @@
           passthru.productAdapterResources = {
             env = envExecutable;
             git = "${pkgs.git}/bin/git";
+            authoritySelectorInstaller = "${outputPlaceholder}/bin/product-authority-selector-install";
             inherit
               broker
               bubblewrap
@@ -826,6 +832,7 @@
           mkDevAllRuntimeBundle
           mkPinnedCodex
           mkProductAdapterPackage
+          mkProductRuntimeProjection
           mkSourceTransportPackage
           ;
       };

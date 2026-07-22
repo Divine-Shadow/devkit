@@ -53,3 +53,7 @@ and Authority contract. Its complete core contract must fit within 4,000
 Unicode scalar values. Supplemental context may be linked separately, but it
 must not redefine or substitute for the OCVA's objective, constraints,
 verification, or authority.
+
+## Active ExecPlans
+
+- [Runtime Authority Projection And Selector](execplans/runtime-authority-projection-selector-20260722.md): derive the Product runtime projection once, share it between adapter and final bundle, and install only a verified root-owned final selector.

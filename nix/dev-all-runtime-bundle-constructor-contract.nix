@@ -32,6 +32,8 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
 
   launcher='${bundle}/bin/dev-all-runtime-bundle'
   identity='${bundle}/share/dev-all-runtime-bundle/identity.json'
+  identity_env='${bundle}/share/dev-all-runtime-bundle/identity.env'
+  product_projection='${fixture.productRuntimeProjection.envPath}'
   revision='${fixture.productSourceRev}'
   verifier='${bundle.codexAuthorizationVerifierPath}'
   config_path='${constructorArgs.codexAuthorization.configPath}'
@@ -65,11 +67,16 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
     "$config_path" "$config_sha256" "$config_path" "$config_sha256" /etc/codex/other.toml
 
   env -i PATH=/nonexistent "$launcher" validate
+  grep -Fx ". $product_projection" "$identity_env" >/dev/null
+  test "$(grep -c '^export DEVKIT_GOVERNANCE_SOURCE_REV=' "$product_projection")" = 1
+  test "$(grep -c '^export DEVKIT_GOVERNANCE_SOURCE_REV=' "$identity_env")" = 0
   env -i PATH=/nonexistent "$launcher" identity-nul > "$TMPDIR/identity.nul"
   test "$(tr -cd '\000' < "$TMPDIR/identity.nul" | wc -c)" = 33
+  env -i PATH=/nonexistent "$launcher" fleet route-check exact > "$TMPDIR/fleet"
+  grep -Fx 'fleet-fixture:route-check exact' "$TMPDIR/fleet" >/dev/null
   env -i PATH=/nonexistent "$launcher" plugin-smoke > "$TMPDIR/plugin-smoke"
   grep -Fx 'sourceRev=${fixture.productSourceRev}' "$TMPDIR/plugin-smoke" >/dev/null
-  jq -e --arg revision "$revision" '
+  jq -e --arg revision "$revision" --arg product_projection "$product_projection" '
     .schemaVersion == "fleet-runtime-authority/v1" and
     .sources["ouroboros-ide"].rev == $revision and
     (.sources | keys) == [
@@ -87,6 +94,7 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
     .artifactDigests.sbtControlPlane == .runtimeIdentity.sbtControlPlane.jarSha256 and
     .codexAuthorization.configPath == .devkitProductAdapter.codexConfigPath and
     .codexAuthorization.configSha256 == .devkitProductAdapter.artifactDigests.codex_config and
+    .devkitProductAdapter.governanceEnvPath == $product_projection and
     .codexAuthorization.systemPath == "/etc/codex/config.toml"
   ' "$identity" >/dev/null
 
@@ -127,7 +135,8 @@ pkgs.runCommand "dev-all-runtime-bundle-public-constructor-contract" {
 
   for source in \
     '${./mk-dev-all-runtime-bundle.nix}' \
-    '${./dev-all-runtime-bundle.nix}'
+    '${./dev-all-runtime-bundle.nix}' \
+    '${./product-runtime-projection.nix}'
   do
     for forbidden in \
       '6826ff0ad172d35ce2eaeb62473ae26facb765a0' \
