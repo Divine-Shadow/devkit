@@ -2480,6 +2480,10 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 	}
+	localDirectTarget, localDirect, err := localDirectFleetTarget(command)
+	if err != nil {
+		return Command{}, err
+	}
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
 		args = append(args, "--unshare-net")
 	} else {
@@ -2541,7 +2545,9 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	if err := addBind("ro", "/nix/var/nix", "/nix/var/nix", true); err != nil {
 		return Command{}, err
 	}
-	_ = addBind("ro", "/run/current-system", "/run/current-system", false)
+	if !localDirect {
+		_ = addBind("ro", "/run/current-system", "/run/current-system", false)
+	}
 	_ = addBind("ro", "/etc/nix", "/etc/nix", false)
 	_ = addBind("ro", "/etc/static", "/etc/static", false)
 	_ = addBind("ro", "/etc/ssl", "/etc/ssl", false)
@@ -2563,10 +2569,6 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		}
 	} else {
 		_ = addBind("ro", "/etc/resolv.conf", "/etc/resolv.conf", false)
-	}
-	localDirectTarget, localDirect, err := localDirectFleetTarget(command)
-	if err != nil {
-		return Command{}, err
 	}
 	if !localDirect {
 		addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
