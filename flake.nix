@@ -1248,22 +1248,10 @@
 
       packages = forEachSystem (
         { pkgs, pkgsPlaywright, ... }:
-        let
-          runtimeBundle = mkDiagnosticRuntimeBundle pkgs;
-          runtimeTools = mkDevAllRuntimeTools {
-            inherit pkgs pkgsPlaywright;
-          };
-        in
         {
           devctl = mkProductionDevctl pkgs;
           github-ssh-known-hosts = mkGitHubSSHKnownHosts pkgs;
           source-transport = mkSourceTransportPackage { inherit pkgs; };
-          dev-all-runtime-bundle = runtimeBundle;
-          dev-all-runtime-tools = runtimeTools;
-          dev-all-runtime-shell = mkDevAllRuntimeShell {
-            bundle = runtimeBundle;
-            inherit pkgs runtimeTools;
-          };
           management-inspection = mkManagementInspectionApp pkgs;
           postgres-broker = pkgs.buildGoModule {
             pname = "devkit-postgres-broker";
@@ -1295,7 +1283,6 @@
       checks = forEachSystem (
         { pkgs, pkgsPlaywright, ... }:
         let
-          runtimeBundle = mkDiagnosticRuntimeBundle pkgs;
           runtimeTools = mkDevAllRuntimeTools {
             inherit pkgs pkgsPlaywright;
           };
@@ -1305,27 +1292,14 @@
           source-transport = mkSourceTransportPackage { inherit pkgs; };
           source-transport-interface = mkSourceTransportInterfaceCheck pkgs;
           source-transport-git-ssh-lifecycle = mkSourceTransportGitSSHCheck pkgs;
-          dev-all-runtime-bundle = runtimeBundle;
-          dev-all-runtime-tools = runtimeTools;
-          dev-all-runtime-shell = mkDevAllRuntimeShell {
-            bundle = runtimeBundle;
-            inherit pkgs runtimeTools;
-          };
-          dev-all-runtime-bundle-bridge-smoke = mkDevAllRuntimeBundleBridgeSmoke pkgs;
-          dev-all-runtime-bundle-profile-smoke = mkDevAllRuntimeBundleProfileSmoke pkgs;
           dev-all-runtime-bundle-public-constructor = mkDevAllRuntimeBundleConstructorContract pkgs;
           management-inspection-cli = mkProductionDevctl pkgs;
           native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
           native-absent-index-construction = mkNativeAbsentIndexConstructionCheck pkgs;
-          # The prior fixture-only fresh-consumer check silently succeeded when
-          # its selected test no longer existed. Keep one source-selected
-          # diagnostic fixture: the exact public composed adapter lifecycle.
-          product-readiness-hermetic = productBoundary.readinessHermetic;
           product-consumer-module-contract = productBoundary.moduleContract;
           product-supervisor-identity-lifecycle = productBoundary.supervisorIdentityHermetic;
           product-codex-auth-seed-entrypoint-hermetic =
             productBoundary.codexAuthSeedEntrypointHermetic;
-          product-consumer-boundary-diagnostic = productBoundary.vmTest;
 
           devctl-openssh-executable-authority =
             let

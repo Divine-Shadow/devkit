@@ -50,8 +50,9 @@ derived artifacts once. Devkit only serializes that input as the sole
 `fleet-runtime-authority/v1` manifest, its digest and environment projection,
 and the package-owned launcher. Devkit does not select or evaluate Product
 source, deploy a controller, write a runtime selector, or promote a lifecycle.
-Its own default bundle and shell surfaces use synthetic diagnostic fixtures;
-they are not Fleet runtime promotion evidence.
+Devkit exposes no standalone fixture runtime bundle, shell, or consumer VM as
+a promotion or readiness output. Constructor fixtures are confined to narrow
+unit/serialization checks and may never appear in a lifecycle receipt.
 
 The WSL-derived manifest declares the exact
 `devkit/workspace-egress/v3` mount-policy identity. The compiled Product
@@ -64,11 +65,7 @@ Fleet/Colmena lifecycle can promote two fresh consumer runs. That promotion
 begins from absent controller and consumer state, uses only the
 manifest-declared Fleet/Devkit executables under an empty or hostile `PATH`,
 and reaches governed Product task creation and first admission twice.
-Devkit's Nix VM lifecycle proves only its compiled mechanical boundary
-(source acquisition, consumer construction, SSH forced command, app-server
-and declared MCP readiness, exact teardown, and repetition). It does not
-deploy a controller, create a Desktop GUI task, perform Scala governance, or
-promote the fleet.
+There is no Devkit-only lifecycle substitute for that proof.
 
 Use explicit experimental feature flags on hosts that do not enable flakes by
 default:

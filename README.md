@@ -34,10 +34,12 @@ wrapper examples above. The authoritative Nix derivation emits one immutable
 `fleet-runtime-authority/v1` manifest. Product consumers must use only the
 adapter and launcher paths named by that installed manifest; those consumers
 may verify the manifest but may not select source, rebuild a runtime, or
-reinterpret identity. The Devkit `product-consumer-boundary-diagnostic` check
-is prerequisite evidence only. Product promotion requires the governed
-Fleet/Colmena path to complete the entire lifecycle on two fresh consumers
-and reach governed Product admission through each one.
+reinterpret identity. Devkit does not export a fixture consumer or diagnostic
+VM as Product readiness. Product acceptance requires the governed
+Fleet/Colmena path to complete the real lifecycle on two fresh consumers,
+including package-owned Git/SSH, the real app-server and governance server,
+governed LLM computation and Git effects, and clean destruction of each
+consumer.
 
 The root-owned `/var/lib/product-runtime/authority-selector.json` is an
 immutable routing record, not a credential. It contains only the Nix-store

@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -38,6 +40,7 @@ func TestMain(m *testing.M) {
 			time.Sleep(time.Hour)
 		}
 	case "descendant":
+		signal.Ignore(syscall.SIGTERM)
 		for {
 			time.Sleep(time.Hour)
 		}

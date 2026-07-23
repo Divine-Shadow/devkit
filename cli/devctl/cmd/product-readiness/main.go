@@ -357,28 +357,39 @@ func stopProcessGroup(pid int, wait <-chan error) error {
 	if pid <= 0 {
 		return nil
 	}
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("terminate app-server process group: %w", err)
+	}
+	var waitErr error
+	parentExited := false
 	select {
 	case err := <-wait:
-		if err == nil {
+		waitErr = err
+		parentExited = true
+	case <-time.After(3 * time.Second):
+	}
+	// The group leader may exit before a descendant handles SIGTERM. Always
+	// sweep the process group after waiting for the leader so a successful
+	// command.Wait cannot be mistaken for complete lifecycle cleanup.
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	if !parentExited {
+		select {
+		case waitErr = <-wait:
+			parentExited = true
+		case <-time.After(3 * time.Second):
+			return fmt.Errorf("app-server process group leader did not terminate")
+		}
+	}
+	if waitErr == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
 			return nil
 		}
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				return nil
-			}
-		}
-		return err
-	case <-time.After(3 * time.Second):
 	}
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	select {
-	case <-wait:
-		return nil
-	case <-time.After(3 * time.Second):
-		return fmt.Errorf("app-server process group did not terminate")
-	}
+	return waitErr
 }
 
 func fail(format string, values ...any) {
