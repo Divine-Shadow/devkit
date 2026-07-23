@@ -98,7 +98,8 @@ Desktop-governed lifecycle can promote the environment.
   compiled schemas agree, no fallback or second locator was introduced, and
   the root and Nix documentation assign promotion consistently to the complete
   Fleet/Colmena lifecycle.
-- [ ] Publish the reduced single-authority Devkit constructor/parser on trunk.
+- [x] Publish the reduced single-authority Devkit constructor/parser on trunk
+  as `d294c91fba217027e489a4bceb1a0af2e8d5d5c3`.
 - [ ] Compose the published Devkit source layer with exact Product source in
   the authoritative WSL/Nix derivation. Its promotion check must use the
   resulting real governance runtime and Fleet task/access path; it must not
