@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -129,6 +130,55 @@ func TestRemoveExactSocketRefusesReplacement(t *testing.T) {
 	defer second.Close()
 	if err := removeExactSocket(path, identity); err == nil {
 		t.Fatal("replacement socket was removed")
+	}
+}
+
+func TestDrainSupervisorHandlersStopsTargetAndClosesActiveProxy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	client, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	server, err := listener.AcceptUnix()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var handlers sync.WaitGroup
+	var active sync.Map
+	active.Store(server, struct{}{})
+	handlers.Add(1)
+	handlerDone := make(chan struct{})
+	go func() {
+		defer handlers.Done()
+		defer close(handlerDone)
+		_, _ = io.Copy(io.Discard, server)
+	}()
+
+	stopped := false
+	if err := drainSupervisorHandlers(
+		func() error {
+			stopped = true
+			return nil
+		},
+		&active,
+		&handlers,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !stopped {
+		t.Fatal("supervisor waited for active proxy before stopping the target")
+	}
+	select {
+	case <-handlerDone:
+	default:
+		t.Fatal("active proxy handler did not exit during supervisor shutdown")
 	}
 }
 

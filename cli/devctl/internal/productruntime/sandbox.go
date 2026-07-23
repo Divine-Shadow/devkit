@@ -33,6 +33,7 @@ func runSandboxDiagnostic(
 			"--codex", authority.Adapter.CodexExecutablePath,
 			"--mcp-requirement", authority.Adapter.MCPRequirementPath,
 			"--mcp-requirement-digest", authority.Adapter.ArtifactDigests["mcp_requirement"],
+			"--consumer-index", strconv.Itoa(consumer.Index),
 		},
 		&stdout,
 		&stderr,

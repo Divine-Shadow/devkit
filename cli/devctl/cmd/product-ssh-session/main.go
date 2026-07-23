@@ -10,7 +10,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	"devkit/cli/devctl/internal/productadapter"
@@ -18,13 +17,17 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	attestation, err := productadapter.AttestInitialNamespaces(productadapter.RoleSSHSession)
+	if err == nil {
+		err = run(os.Args[1:], attestation)
+	}
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "product-ssh-session:", err)
 		os.Exit(2)
 	}
 }
 
-func run(args []string) error {
+func run(args []string, attestation productadapter.Attestation) error {
 	count, index, invoked, err := parseLoginShellInvocation(args)
 	if err != nil {
 		return err
@@ -40,7 +43,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	authority, err := productadapter.Load(productadapter.RoleSSHSession, index)
+	authority, err := productadapter.Load(productadapter.RoleSSHSession, index, attestation)
 	if err != nil {
 		return err
 	}
@@ -83,8 +86,19 @@ func run(args []string) error {
 	if response.SchemaVersion != productsession.ResponseSchema || !reflect.DeepEqual(response.Command, parsed) {
 		return fmt.Errorf("Product supervisor response does not match the normalized request")
 	}
-	if response.Error != "" {
-		return errors.New(response.Error)
+	if response.Failure != nil {
+		if !response.Failure.Valid() {
+			return fmt.Errorf("Product supervisor returned invalid typed failure")
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(response); err != nil {
+			return err
+		}
+		return fmt.Errorf(
+			"Product supervisor %s at %s: %s",
+			response.Failure.Code,
+			response.Failure.Phase,
+			response.Failure.Message,
+		)
 	}
 	if response.Status.SchemaVersion != productsession.StatusSchema || response.Status.ConsumerIndex != index {
 		return fmt.Errorf("Product supervisor returned invalid typed status")
@@ -140,27 +154,52 @@ func validateControlSocket(path string, uid int) error {
 }
 
 func relay(connection *net.UnixConn, input io.Reader, output io.Writer) error {
-	var wait sync.WaitGroup
-	errorsOut := make(chan error, 2)
-	wait.Add(2)
+	type copyResult struct {
+		input bool
+		err   error
+	}
+	results := make(chan copyResult, 2)
 	go func() {
-		defer wait.Done()
 		_, err := io.Copy(connection, input)
 		_ = connection.CloseWrite()
-		errorsOut <- err
+		results <- copyResult{input: true, err: err}
 	}()
 	go func() {
-		defer wait.Done()
 		_, err := io.Copy(output, connection)
-		errorsOut <- err
+		results <- copyResult{err: err}
 	}()
-	wait.Wait()
-	close(errorsOut)
-	var result error
-	for err := range errorsOut {
-		if err != nil && !errors.Is(err, net.ErrClosed) {
-			result = errors.Join(result, err)
+
+	first := <-results
+	if !first.input {
+		// A supervisor shutdown is terminal even while sshd still holds stdin
+		// open. A blocking pipe read is not guaranteed to return merely because
+		// another goroutine closes its descriptor, so do not join that copier:
+		// close the local handles and let the forced-command process exit.
+		_ = connection.Close()
+		if closer, ok := input.(io.Closer); ok {
+			_ = closer.Close()
+		}
+		return relayCopyError(first.err)
+	}
+
+	// Client EOF is only a half-close: retain the server read half so its final
+	// response can drain before the forced-command process exits.
+	second := <-results
+	_ = connection.Close()
+	if closer, ok := input.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	return errors.Join(relayCopyError(first.err), relayCopyError(second.err))
+}
+
+func relayCopyError(err error) error {
+	if err != nil {
+		if err != nil &&
+			!errors.Is(err, net.ErrClosed) &&
+			!errors.Is(err, os.ErrClosed) &&
+			!errors.Is(err, io.ErrClosedPipe) {
+			return err
 		}
 	}
-	return result
+	return nil
 }

@@ -39,6 +39,13 @@ is prerequisite evidence only. Product promotion requires the governed
 Product-owned promotion app to complete the entire lifecycle on two fresh
 consumers.
 
+The root-owned `/var/lib/product-runtime/authority-selector.json` is an
+immutable routing record, not a credential. It contains only the Nix-store
+manifest path and digest, is installed atomically beneath a protected
+root-owned directory, and is read-only to every user. This lets the declared
+unprivileged Product services consume the one authority while leaving
+replacement authority exclusively with the root installer.
+
 ## Runtime Model
 
 Each supported overlay declares an overlay-local `runtime.flake` in `overlays/<project>/devkit.yaml`, for example `./overlays/dev-all#default`. The root flake still exposes compatible shells for direct Nix use, but devkit runtime metadata is one flake ref per overlay.

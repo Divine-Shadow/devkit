@@ -2,7 +2,9 @@
   description = "Devkit Nix-native agent runtime shells and migration checks";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    # Match the authoritative WSL/Nix source so the disposable lifecycle gate
+    # and deployed system use one Nixpkgs implementation and test driver.
+    nixpkgs.url = "github:NixOS/nixpkgs/6201e203d09599479a3b3450ed24fa81537ebc4e";
     # Keep Playwright browser revisions compatible with the current
     # ouroboros-ide/frontend lockfile.
     nixpkgs-playwright.url = "github:NixOS/nixpkgs/f86a612cb49b3ca434c9b87f2049797656a0138d";
@@ -428,14 +430,44 @@
           sshExecutable ? "${pkgs.openssh}/bin/ssh",
 	      sshKeygenExecutable ? "${pkgs.openssh}/bin/ssh-keygen",
           knownHostsFile ? mkGitHubSSHKnownHosts pkgs,
-          tags ? [ ],
-          fixtureAuthorityLocator ? null,
-          fixturePostFixup ? "",
+          gitSSHExecutable ?
+            (mkSourceTransportPackage {
+              inherit
+                knownHostsFile
+                pkgs
+                sshExecutable
+                ;
+            }).sourceTransport.gitSSH.executablePath,
         }:
         let
           envExecutable = mkPackageEnv pkgs;
           outputPlaceholder = placeholder "out";
           runtimeLauncher = "${outputPlaceholder}/bin/product-runtime-exec";
+          namespaceWrapperDir = "/run/wrappers/bin";
+          namespaceWrappers = {
+            adapter = {
+              name = "devkit-product-adapter";
+              target = "product-adapter";
+            };
+            proxy = {
+              name = "devkit-product-proxy";
+              target = "product-proxy";
+            };
+            supervisor = {
+              name = "devkit-product-adapter-supervisor";
+              target = "product-adapter-supervisor";
+            };
+            sshSession = {
+              name = "devkit-product-ssh-session";
+              target = "product-ssh-session";
+            };
+            sshSetup = {
+              name = "devkit-product-ssh-setup";
+              target = "product-ssh-setup";
+              controllerOnly = true;
+            };
+          };
+          wrapperPath = wrapper: "${namespaceWrapperDir}/${wrapper.name}";
           mountPolicyContract = mkProductMountPolicyContract pkgs;
 	      sshSessionContract = mkProductSSHSessionContract pkgs;
 	      stoppedVolumeSeedContract = mkProductStoppedVolumeSeedContract pkgs;
@@ -456,12 +488,7 @@
             "cmd/product-ssh-session"
 	        "cmd/product-ssh-setup"
           ];
-          inherit tags;
           env.CGO_ENABLED = "0";
-          # The devkitintegration build is the packaged sabotage gate proving
-          # that this exact pinned Codex process cannot inherit a same-uid
-          # decoy listener. The variable is build/check input only; runtime
-          # authority remains the immutable manifest.
           env.DEVKIT_TEST_PINNED_CODEX = codexExecutable;
           ldflags = [
             "-s"
@@ -471,6 +498,7 @@
             "-X=devkit/cli/devctl/internal/productadapter.packageMode=composed"
             "-X=devkit/cli/devctl/internal/productadapter.packageAdapterExecutable=${outputPlaceholder}/bin/product-adapter"
             "-X=devkit/cli/devctl/internal/productadapter.packageGitExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/productadapter.packageGitSSHExecutable=${gitSSHExecutable}"
             "-X=devkit/cli/devctl/internal/productadapter.packageEnvExecutable=${envExecutable}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageSSHExecutable=${sshExecutable}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageSSHKeygenExecutable=${sshKeygenExecutable}"
@@ -490,21 +518,20 @@
             "-X=devkit/cli/devctl/internal/productadapter.packageMountPolicyContract=${mountPolicyContract}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductProxyExecutable=${outputPlaceholder}/bin/product-proxy"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSupervisor=${outputPlaceholder}/bin/product-adapter-supervisor"
-	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSession=${outputPlaceholder}/bin/product-ssh-session"
+            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSession=${outputPlaceholder}/bin/product-ssh-session"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSetup=${outputPlaceholder}/bin/product-ssh-setup"
+            "-X=devkit/cli/devctl/internal/productadapter.packageAdapterLaunchExecutable=${wrapperPath namespaceWrappers.adapter}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageProxyLaunchExecutable=${wrapperPath namespaceWrappers.proxy}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageSupervisorLaunchExecutable=${wrapperPath namespaceWrappers.supervisor}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageSSHSessionLaunchExecutable=${wrapperPath namespaceWrappers.sshSession}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageSSHSetupLaunchExecutable=${wrapperPath namespaceWrappers.sshSetup}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSetupContract=${stoppedVolumeSeedContract}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSessionContract=${sshSessionContract}"
-          ]
-          ++ (
-            if fixtureAuthorityLocator == null then
-              [ ]
-            else
-              [ "-X=devkit/cli/devctl/internal/productadapter.testAuthorityLocator=${fixtureAuthorityLocator}" ]
-          );
-          postFixup = fixturePostFixup;
+          ];
           passthru.productAdapterResources = {
             env = envExecutable;
             git = "${pkgs.git}/bin/git";
+            gitSSH = gitSSHExecutable;
             authoritySelectorInstaller = "${outputPlaceholder}/bin/product-authority-selector-install";
             inherit
               broker
@@ -525,6 +552,17 @@
             mountPolicy = productMountPolicy // {
               contractPath = mountPolicyContract;
             };
+            namespaceWrappers =
+              builtins.mapAttrs
+                (
+                  _: wrapper:
+                  wrapper
+                  // {
+                    path = wrapperPath wrapper;
+                    setuid = true;
+                  }
+                )
+                namespaceWrappers;
 	        sshSession = productSSHSessionContract // {
               executablePath = "${outputPlaceholder}/bin/product-ssh-session";
               supervisorExecutablePath = "${outputPlaceholder}/bin/product-adapter-supervisor";
@@ -672,7 +710,9 @@
           checkPhase = ''
             runHook preCheck
             go test ./internal/productadapter ./internal/worktrees \
-              -run '^Test(ParseAcceptsOnlyDedicatedProductGrammar|ParseRejectsAliasesDuplicatesAndAuthorityOptions|InvocationSelectsCanonicalProductAliases|LegacySetupNativeRejectsCanonicalProductIdentityBeforeEffects)$' \
+              -run '^Test(ParseAcceptsOnlyDedicatedProductGrammar|ParseRejectsAliasesDuplicatesAndAuthorityOptions|InvocationSelectsCanonicalProductAliases|LegacySetupNativeRejectsCanonicalProductIdentityBeforeEffects|SetupNativeSlotPublishesOneCompleteGenerationAndCleansFailedStaging)$' \
+              -count=1 -v
+            go test ./internal/productruntime ./internal/productseed ./internal/productsession \
               -count=1 -v
             if ! test_output="$(
               go test -tags devkitintegration ./integration \
@@ -742,6 +782,7 @@
             pkgs.bashInteractive
             pkgs.curl
             pkgs.nodejs_22
+            pkgs.openssh
           ]
           ++ (shell.nativeBuildInputs or [ ])
           ++ (shell.buildInputs or [ ]);
@@ -908,7 +949,8 @@
             pname = "devkit-npm-tools";
             version = "1.0.0";
             src = ./nix/npm-tools;
-            npmDepsHash = "sha256-GD3F9zFoliysds53NG1E/8OzsknS3V+g7duGQYj3iCA=";
+            nodejs = pkgs.nodejs_22;
+            npmDepsHash = "sha256-0MQeDR6NllOZUcRKMM1lbzNyXwZLZDBuBSH2NmLtmyU=";
             dontNpmBuild = true;
             nativeBuildInputs = with pkgs; [
               makeWrapper
@@ -1209,6 +1251,7 @@
           runtimeTools = mkDevAllRuntimeTools {
             inherit pkgs pkgsPlaywright;
           };
+          productBoundary = mkProductConsumerBoundaryDiagnostic pkgs;
         in
         {
           source-transport = mkSourceTransportPackage { inherit pkgs; };
@@ -1229,7 +1272,8 @@
           # The prior fixture-only fresh-consumer check silently succeeded when
           # its selected test no longer existed. Keep one source-selected
           # diagnostic fixture: the exact public composed adapter lifecycle.
-          product-consumer-boundary-diagnostic = mkProductConsumerBoundaryDiagnostic pkgs;
+          product-readiness-hermetic = productBoundary.readinessHermetic;
+          product-consumer-boundary-diagnostic = productBoundary.vmTest;
 
           devctl-openssh-executable-authority =
             let

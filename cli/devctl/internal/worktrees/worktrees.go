@@ -828,7 +828,9 @@ type NativeSlotOptions struct {
 	BranchPrefix     string
 	WorktreeRoot     string
 	BootstrapHome    string
-	GitSSHCommand    string
+	GitSSHExecutable string
+	SourceIdentity   string
+	TransportSocket  string
 	RequireSSHOrigin bool
 	DryRun           bool
 }
@@ -867,6 +869,33 @@ func packageGitCommand(
 	return append(command, args...)
 }
 
+func packageSlotGitCommand(
+	envExecutable string,
+	gitExecutable string,
+	gitSSHExecutable string,
+	identityPath string,
+	socketPath string,
+	args ...string,
+) []string {
+	command := make([]string, 0, 12+len(args))
+	if filepath.Base(envExecutable) == "coreutils" {
+		command = append(command, "--coreutils-prog=env")
+	}
+	command = append(
+		command,
+		"-i",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_SSH="+gitSSHExecutable,
+		"GIT_SSH_VARIANT=ssh",
+		"DEVKIT_SOURCE_TRANSPORT_IDENTITY="+identityPath,
+		"DEVKIT_SOURCE_TRANSPORT_SOCKET="+socketPath,
+		gitExecutable,
+	)
+	return append(command, args...)
+}
+
 // SetupNativeSlot creates a new independent common repository and linked
 // worktree wholly beneath one selected disposable agent leaf. It never opens
 // or mutates the legacy shared common repository or any sibling registration.
@@ -882,10 +911,19 @@ func SetupNativeSlot(opts NativeSlotOptions) error {
 	if !gitRemoteRequiresSSH(remoteURL) {
 		return fmt.Errorf("native absent-slot construction requires the source-declared SSH origin")
 	}
-	sshCommand := strings.TrimSpace(opts.GitSSHCommand)
-	if sshCommand == "" {
-		return fmt.Errorf("native absent-slot construction requires the package-owned SSH command")
+	for label, raw := range map[string]string{
+		"Git SSH executable": opts.GitSSHExecutable,
+		"source identity":    opts.SourceIdentity,
+		"transport socket":   opts.TransportSocket,
+	} {
+		if raw == "" || strings.TrimSpace(raw) != raw ||
+			filepath.Clean(raw) != raw || !filepath.IsAbs(raw) {
+			return fmt.Errorf("native absent-slot construction requires an exact package-owned %s", label)
+		}
 	}
+	gitSSHExecutable := opts.GitSSHExecutable
+	identityPath := opts.SourceIdentity
+	socketPath := opts.TransportSocket
 	gitExecutable, err := resolvedPackageGitExecutable()
 	if err != nil {
 		return err
@@ -895,46 +933,61 @@ func SetupNativeSlot(opts NativeSlotOptions) error {
 		return err
 	}
 	worktreesRoot := filepath.Clean(strings.TrimSpace(opts.WorktreeRoot))
-	agentRoot := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", opts.Index))
-	worktree := filepath.Join(agentRoot, opts.Repo)
-	commonDir := filepath.Join(agentRoot, ".devkit", "git", opts.Repo+".git")
+	finalAgentRoot := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", opts.Index))
 	bootstrapHome := filepath.Clean(strings.TrimSpace(opts.BootstrapHome))
+	if bootstrapHome == "." || !filepath.IsAbs(bootstrapHome) {
+		return fmt.Errorf("selected native slot bootstrap home must be an exact absolute path")
+	}
 	if opts.DryRun {
-		fmt.Fprintf(os.Stderr, "+ construct-native-absent-slot index=%d common=%s worktree=%s revision=%s\n",
-			opts.Index, commonDir, worktree, revision)
+		fmt.Fprintf(
+			os.Stderr,
+			"+ construct-native-absent-slot index=%d common=%s worktree=%s revision=%s\n",
+			opts.Index,
+			filepath.Join(finalAgentRoot, ".devkit", "git", opts.Repo+".git"),
+			filepath.Join(finalAgentRoot, opts.Repo),
+			revision,
+		)
 		return nil
 	}
+	if _, err := os.Lstat(finalAgentRoot); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return fmt.Errorf("selected native slot agent root %s must be absent", finalAgentRoot)
+		}
+		return err
+	}
+	agentRoot, err := os.MkdirTemp(
+		worktreesRoot,
+		fmt.Sprintf(".agent%d.construction-", opts.Index),
+	)
+	if err != nil {
+		return fmt.Errorf("create staged native slot generation: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(agentRoot)
+		}
+	}()
+	worktree := filepath.Join(agentRoot, opts.Repo)
+	commonDir := filepath.Join(agentRoot, ".devkit", "git", opts.Repo+".git")
 	if _, err := os.Lstat(commonDir); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
 			return fmt.Errorf("selected native slot common repository %s must be absent", commonDir)
 		}
 		return err
 	}
-	worktreeContainsBootstrapHome := false
-	if _, err := os.Lstat(worktree); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return err
-		}
-		relativeHome, relativeErr := filepath.Rel(worktree, bootstrapHome)
-		allowedHome := fmt.Sprintf(".devhome-agent%d", opts.Index)
-		if relativeErr != nil || relativeHome != allowedHome {
-			return fmt.Errorf("selected native slot worktree %s must be absent", worktree)
-		}
-		entries, readErr := os.ReadDir(worktree)
-		if readErr != nil ||
-			len(entries) != 1 ||
-			entries[0].Name() != allowedHome ||
-			!entries[0].IsDir() ||
-			entries[0].Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("selected native slot worktree %s contains payload other than the package-created bootstrap home", worktree)
-		}
-		worktreeContainsBootstrapHome = true
-	}
 	envLocalGit := func(args ...string) []string {
 		return packageGitCommand(envExecutable, gitExecutable, "", args...)
 	}
 	envRemoteGit := func(args ...string) []string {
-		return packageGitCommand(envExecutable, gitExecutable, sshCommand, args...)
+		return packageSlotGitCommand(
+			envExecutable,
+			gitExecutable,
+			gitSSHExecutable,
+			identityPath,
+			socketPath,
+			args...,
+		)
 	}
 	if err := os.MkdirAll(filepath.Dir(commonDir), 0o700); err != nil {
 		return fmt.Errorf("create selected native slot Git root: %w", err)
@@ -973,24 +1026,7 @@ func SetupNativeSlot(opts NativeSlotOptions) error {
 	if err := os.WriteFile(filepath.Join(commonDir, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
 		return fmt.Errorf("write selected native slot common repository marker: %w", err)
 	}
-	stagedBootstrapHome := ""
-	if worktreeContainsBootstrapHome {
-		stagedBootstrapHome, err = stageNativeWorktreePayload(
-			worktree,
-			fmt.Sprintf(".devhome-agent%d", opts.Index),
-		)
-		if err != nil {
-			return err
-		}
-	}
 	if err := runSlotWithPolicy(false, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("--git-dir", commonDir, "worktree", "add", "--detach", worktree, revision)...); err != nil {
-		return err
-	}
-	if err := restoreNativeWorktreePayload(
-		worktree,
-		fmt.Sprintf(".devhome-agent%d", opts.Index),
-		stagedBootstrapHome,
-	); err != nil {
 		return err
 	}
 	registration := filepath.Join(commonDir, "worktrees", filepath.Base(opts.Repo))
@@ -1036,6 +1072,25 @@ func SetupNativeSlot(opts NativeSlotOptions) error {
 	if status != "" {
 		return fmt.Errorf("selected native slot materialization is dirty")
 	}
+	if err := os.Rename(agentRoot, finalAgentRoot); err != nil {
+		return fmt.Errorf("atomically publish selected native slot generation: %w", err)
+	}
+	agentRoot = finalAgentRoot
+	finalWorktree := filepath.Join(finalAgentRoot, opts.Repo)
+	finalHead, err := slotGit("-C", finalWorktree, "rev-parse", "HEAD")
+	if err != nil || finalHead != revision {
+		return fmt.Errorf(
+			"published native slot revision %s does not match authoritative source revision %s: %w",
+			finalHead,
+			revision,
+			err,
+		)
+	}
+	finalStatus, err := slotGit("-C", finalWorktree, "status", "--porcelain=v1")
+	if err != nil || finalStatus != "" {
+		return fmt.Errorf("published native slot is not a clean Git worktree: %w", err)
+	}
+	committed = true
 	return nil
 }
 

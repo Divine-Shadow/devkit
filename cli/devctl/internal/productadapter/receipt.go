@@ -113,6 +113,7 @@ func NewReceipt(
 		Geometry:          geometry,
 		Artifacts: map[string]string{
 			"git":                   adapter.GitPath,
+			"git_ssh":               adapter.GitSSHPath,
 			"env":                   adapter.EnvPath,
 			"ssh":                   adapter.SSHPath,
 			"known_hosts":           adapter.KnownHostsPath,
@@ -131,6 +132,7 @@ func NewReceipt(
 			"mount_policy_contract": adapter.MountPolicyContractPath,
 			"ssh_identity":          consumer.SSHIdentityPath,
 			"ssh_public_key":        consumer.SSHPublicKeyPath,
+			"authorized_keys":       consumer.AuthorizedKeysPath,
 			"codex_auth":            consumer.CodexAuthPath,
 		},
 		MountPolicyIdentity: adapter.MountPolicyIdentity,
@@ -232,11 +234,12 @@ func ValidateReceipt(authority Authority, count, index int, receipt Receipt) err
 }
 
 func CaptureCredentialHandleDigests(consumer ConsumerManifest) (map[string]string, error) {
-	result := make(map[string]string, 3)
+	result := make(map[string]string, 4)
 	for name, path := range map[string]string{
-		"ssh_identity":   consumer.SSHIdentityPath,
-		"ssh_public_key": consumer.SSHPublicKeyPath,
-		"codex_auth":     consumer.CodexAuthPath,
+		"ssh_identity":    consumer.SSHIdentityPath,
+		"ssh_public_key":  consumer.SSHPublicKeyPath,
+		"authorized_keys": consumer.AuthorizedKeysPath,
+		"codex_auth":      consumer.CodexAuthPath,
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil {

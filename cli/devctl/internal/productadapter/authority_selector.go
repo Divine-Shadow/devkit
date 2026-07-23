@@ -12,6 +12,10 @@ import (
 const (
 	canonicalAuthoritySelector = "/var/lib/product-runtime/authority-selector.json"
 	authoritySelectorSchema    = "devkit/product-runtime-authority-selector/v1"
+	// The selector contains only the immutable Nix-store manifest path and its
+	// digest. Product consumers must be able to read it, while only root may
+	// replace it atomically through the protected parent directory.
+	authoritySelectorMode = 0o444
 )
 
 type authoritySelector struct {

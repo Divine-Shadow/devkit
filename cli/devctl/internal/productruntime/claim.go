@@ -1,7 +1,6 @@
 package productruntime
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,19 +35,20 @@ func claimCandidate(
 		return nil, productadapter.Geometry{}, err
 	}
 	parentFD := int(parentFile.Fd())
-	created := true
-	if err := syscall.Mkdirat(parentFD, leaf, 0o700); err != nil {
-		if errors.Is(err, syscall.EEXIST) {
-			created = false
-		} else {
-			parentFile.Close()
-			return nil, productadapter.Geometry{}, err
-		}
-	}
-	if created {
+	probeFD, err := syscall.Openat(
+		parentFD,
+		leaf,
+		syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
 		parentFile.Close()
-		return nil, productadapter.Geometry{}, fmt.Errorf("Product construction requires the canonical offline-seeded candidate boundary")
+		return nil, productadapter.Geometry{}, fmt.Errorf(
+			"Product construction requires the canonical offline-seeded candidate boundary: %w",
+			err,
+		)
 	}
+	_ = syscall.Close(probeFD)
 	if err := validateOfflineSeededCandidate(authority, consumer); err != nil {
 		parentFile.Close()
 		return nil, productadapter.Geometry{}, err

@@ -43,13 +43,17 @@ type supervisor struct {
 var errSocketNotReady = errors.New("Product app-server socket is not listening yet")
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	attestation, err := productadapter.AttestInitialNamespaces(productadapter.RoleSupervisor)
+	if err == nil {
+		err = run(os.Args[1:], attestation)
+	}
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "product-adapter-supervisor:", err)
 		os.Exit(2)
 	}
 }
 
-func run(args []string) error {
+func run(args []string, attestation productadapter.Attestation) error {
 	if len(args) != 5 || args[0] != "serve" || args[1] != "--count" || args[3] != "--index" {
 		return fmt.Errorf("requires exactly: product-adapter-supervisor serve --count N --index N")
 	}
@@ -57,7 +61,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	authority, err := productadapter.Load(productadapter.RoleSupervisor, index)
+	authority, err := productadapter.Load(productadapter.RoleSupervisor, index, attestation)
 	if err != nil {
 		return err
 	}
@@ -90,7 +94,7 @@ func run(args []string) error {
 	return service.serve(ctx)
 }
 
-func (service *supervisor) serve(ctx context.Context) error {
+func (service *supervisor) serve(ctx context.Context) (result error) {
 	if err := validateControlParent(filepath.Dir(service.consumer.SupervisorSocketPath), service.consumer.UID); err != nil {
 		return err
 	}
@@ -113,17 +117,18 @@ func (service *supervisor) serve(ctx context.Context) error {
 		listener.Close()
 		return err
 	}
+	var handlers sync.WaitGroup
+	var activeConnections sync.Map
 	defer func() {
 		_ = listener.Close()
-		_ = service.stopTarget()
-		_ = removeExactSocket(service.consumer.SupervisorSocketPath, socket)
+		shutdownErr := drainSupervisorHandlers(service.stopTarget, &activeConnections, &handlers)
+		socketErr := removeExactSocket(service.consumer.SupervisorSocketPath, socket)
+		result = errors.Join(result, shutdownErr, socketErr)
 	}()
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	var handlers sync.WaitGroup
-	defer handlers.Wait()
 	for {
 		connection, err := listener.AcceptUnix()
 		if err != nil {
@@ -136,13 +141,31 @@ func (service *supervisor) serve(ctx context.Context) error {
 			_ = connection.Close()
 			continue
 		}
+		activeConnections.Store(connection, struct{}{})
 		handlers.Add(1)
 		go func() {
 			defer handlers.Done()
+			defer activeConnections.Delete(connection)
 			defer connection.Close()
 			service.handle(ctx, connection)
 		}()
 	}
+}
+
+func drainSupervisorHandlers(
+	stopTarget func() error,
+	activeConnections *sync.Map,
+	handlers *sync.WaitGroup,
+) error {
+	stopErr := stopTarget()
+	activeConnections.Range(func(connection, _ any) bool {
+		if unix, ok := connection.(*net.UnixConn); ok {
+			_ = unix.Close()
+		}
+		return true
+	})
+	handlers.Wait()
+	return stopErr
 }
 
 func (service *supervisor) handle(ctx context.Context, connection *net.UnixConn) {
@@ -151,8 +174,11 @@ func (service *supervisor) handle(ctx context.Context, connection *net.UnixConn)
 		return
 	}
 	parsed, err := productsession.ParseOriginalCommand(request.OriginalCommand)
+	failureOperation := productsession.FailureRequest
 	if request.SchemaVersion != productsession.RequestSchema || request.Count != service.count || request.Index != service.index {
 		err = fmt.Errorf("Product supervisor request does not match authoritative identity")
+	} else if err == nil {
+		failureOperation = productsession.FailureOperationFor(parsed)
 	}
 	respond := func(responseError error, output string) bool {
 		status := service.status()
@@ -181,7 +207,8 @@ func (service *supervisor) handle(ctx context.Context, connection *net.UnixConn)
 			Output:        output,
 		}
 		if responseError != nil {
-			response.Error = responseError.Error()
+			response.Output = ""
+			response.Failure = productsession.FailureFor(failureOperation, responseError)
 		}
 		return productsession.WriteFrame(connection, response) == nil
 	}
@@ -241,9 +268,13 @@ func (service *supervisor) prepare(ctx context.Context) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	adapterLaunch, err := productadapter.LaunchExecutable(productadapter.RoleAdapter)
+	if err != nil {
+		return err
+	}
 	command := exec.CommandContext(
 		ctx,
-		service.authority.Adapter.ExecutablePath,
+		adapterLaunch,
 		"prepare", "--count", strconv.Itoa(service.count), "--index", strconv.Itoa(service.index),
 	)
 	command.Env = []string{}
@@ -292,8 +323,12 @@ func (service *supervisor) ensureTarget(ctx context.Context) error {
 		}
 		return err
 	}
+	adapterLaunch, err := productadapter.LaunchExecutable(productadapter.RoleAdapter)
+	if err != nil {
+		return err
+	}
 	command := exec.Command(
-		service.authority.Adapter.ExecutablePath,
+		adapterLaunch,
 		"exec", "--count", strconv.Itoa(service.count), "--index", strconv.Itoa(service.index), "--",
 		service.authority.Adapter.CodexExecutablePath,
 		"-c", "features.code_mode_host=true",

@@ -2,6 +2,7 @@ package productseed
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +21,6 @@ type Result struct {
 	Status             string `json:"status"`
 	ConsumerIndex      int    `json:"consumer_index"`
 	RelativeProjection string `json:"relative_projection"`
-}
-
-type marker struct {
-	SchemaVersion string `json:"schema_version"`
-	ConsumerIndex int    `json:"consumer_index"`
-	CandidateRoot string `json:"candidate_root"`
 }
 
 func Seed(authority productadapter.Authority, consumer productadapter.ConsumerManifest, count, index int, projection string) (Result, error) {
@@ -50,6 +45,17 @@ func Seed(authority productadapter.Authority, consumer productadapter.ConsumerMa
 	if err != nil {
 		return Result{}, err
 	}
+	authorizedKeys, err := productadapter.ReadImmutableAuthorizedKeys(
+		consumer.AuthorizedKeysPath,
+		authority.Adapter.SSHKeygenPath,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	guiAuthorizedKey := bytes.TrimPrefix(bytes.TrimSpace(authorizedKeys), []byte("restrict "))
+	if bytes.Equal(bytes.TrimSpace(public), guiAuthorizedKey) {
+		return Result{}, fmt.Errorf("Product Git and GUI SSH credentials must be distinct")
+	}
 	knownHosts, err := os.ReadFile(authority.Adapter.KnownHostsPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("read package known-hosts: %w", err)
@@ -67,7 +73,6 @@ func Seed(authority productadapter.Authority, consumer productadapter.ConsumerMa
 		{consumer.SSHPublicKeyPath, 0o600, public},
 		{filepath.Join(consumer.HomePath, ".ssh", "known_hosts"), 0o600, knownHosts},
 		{filepath.Join(consumer.HomePath, ".ssh", "config"), 0o600, sshConfig},
-		{consumer.AuthorizedKeysPath, 0o600, append([]byte("restrict "), public...)},
 	}
 	for _, target := range targets {
 		projected, err := projectGuestRelativePath(consumer.CandidateRoot, target.guest)
@@ -78,10 +83,11 @@ func Seed(authority productadapter.Authority, consumer productadapter.ConsumerMa
 			return Result{}, err
 		}
 	}
-	markerPayload, err := json.MarshalIndent(marker{
-		SchemaVersion: productadapter.OfflineSeedSchema,
-		ConsumerIndex: index,
-		CandidateRoot: consumer.CandidateRoot,
+	markerPayload, err := json.MarshalIndent(productadapter.OfflineSeedMarker{
+		SchemaVersion:        productadapter.OfflineSeedSchema,
+		ConsumerIndex:        index,
+		CandidateRoot:        consumer.CandidateRoot,
+		AuthorizedKeysSHA256: fmt.Sprintf("%x", sha256.Sum256(authorizedKeys)),
 	}, "", "  ")
 	if err != nil {
 		return Result{}, err

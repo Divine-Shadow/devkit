@@ -86,6 +86,7 @@ func TestDecodeProductReadinessResultRejectsFabricatedOrIncompleteEvidence(t *te
 	}
 	authority := productadapter.Authority{
 		Adapter: productadapter.AdapterManifest{
+			Count:              2,
 			MCPRequirementPath: requirementPath,
 			ArtifactDigests: map[string]string{
 				"mcp_requirement": valid.MCPRequirementDigest,

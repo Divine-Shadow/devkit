@@ -56,6 +56,7 @@ func TestProbeUsesTypedThreadReadAndProductDerivedMCPRequirement(t *testing.T) {
 		os.Args[0],
 		requirementPath,
 		requirementDigest,
+		1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +89,7 @@ func TestProbeDeadlineTerminatesAppServerProcessGroup(t *testing.T) {
 		os.Args[0],
 		requirementPath,
 		requirementDigest,
+		1,
 	); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("hung app-server error = %v, want context deadline", err)
 	}
@@ -134,6 +136,7 @@ func TestProbeRejectsMissingUninitializedAndWrongMCPInventory(t *testing.T) {
 				os.Args[0],
 				requirementPath,
 				requirementDigest,
+				1,
 			)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("probe error = %v, want %q", err, test.want)
@@ -157,6 +160,7 @@ func TestProbeConsumesEveryTypedMCPStatusPage(t *testing.T) {
 		os.Args[0],
 		path,
 		hex.EncodeToString(sum[:]),
+		1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +184,7 @@ func TestProbeRejectsTruncatedAndDigestMismatchedRequirementBeforeAppServer(t *t
 		os.Args[0],
 		path,
 		hex.EncodeToString(sum[:]),
+		1,
 	)
 	if err == nil || !strings.Contains(err.Error(), "decode Product MCP requirement") {
 		t.Fatalf("truncated requirement error = %v", err)
@@ -189,6 +194,7 @@ func TestProbeRejectsTruncatedAndDigestMismatchedRequirementBeforeAppServer(t *t
 		os.Args[0],
 		path,
 		strings.Repeat("0", 64),
+		1,
 	); err == nil || !strings.Contains(err.Error(), "digest does not match") {
 		t.Fatalf("mismatched requirement digest error = %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -71,16 +72,21 @@ type readinessResult struct {
 }
 
 func main() {
-	if len(os.Args) != 8 ||
+	if len(os.Args) != 10 ||
 		os.Args[1] != "probe" ||
 		os.Args[2] != "--codex" ||
 		os.Args[4] != "--mcp-requirement" ||
-		os.Args[6] != "--mcp-requirement-digest" {
-		fail("readiness probe accepts only: probe --codex PATH --mcp-requirement PATH --mcp-requirement-digest SHA256")
+		os.Args[6] != "--mcp-requirement-digest" ||
+		os.Args[8] != "--consumer-index" {
+		fail("readiness probe accepts only: probe --codex PATH --mcp-requirement PATH --mcp-requirement-digest SHA256 --consumer-index N")
+	}
+	consumerIndex, err := strconv.Atoi(os.Args[9])
+	if err != nil || consumerIndex < 1 || consumerIndex > 2 {
+		fail("readiness probe consumer index must be 1 or 2")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	result, err := probe(ctx, os.Args[3], os.Args[5], os.Args[7])
+	result, err := probe(ctx, os.Args[3], os.Args[5], os.Args[7], consumerIndex)
 	if err != nil {
 		fail("%v", err)
 	}
@@ -92,7 +98,11 @@ func main() {
 func probe(
 	ctx context.Context,
 	codexPath, requirementPath, requirementDigest string,
+	consumerIndex int,
 ) (result readinessResult, retErr error) {
+	if consumerIndex < 1 || consumerIndex > 2 {
+		return result, fmt.Errorf("Product readiness consumer index must be 1 or 2")
+	}
 	requirement, requirementInventoryDigest, err := productadapter.LoadMCPRequirement(
 		requirementPath,
 		requirementDigest,

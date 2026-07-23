@@ -56,4 +56,5 @@ verification, or authority.
 
 ## Active ExecPlans
 
+- [Reliable Disposable AI-Agent Environment](execplans/reliable-disposable-ai-agent-environment-20260723.md): replace the fixture-only VM-first diagnostic with a production-path compiled/hermetic lifecycle regression, then prove the unchanged source through two fresh VM lifecycles and Shadow.
 - [Runtime Authority Projection And Selector](execplans/runtime-authority-projection-selector-20260722.md): derive the Product runtime projection once, share it between adapter and final bundle, and install only a verified root-owned final selector.

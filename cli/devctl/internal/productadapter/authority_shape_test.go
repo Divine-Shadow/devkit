@@ -23,7 +23,8 @@ func exactConsumerEnvelopeFixture(index int) map[string]any {
 		"sandboxAppServerSocketPath": "/state/app", "governanceEnvTarget": "/candidate/state/env",
 		"governanceRepoConfigTarget": "/candidate/state/repo", "governanceStateRoot": "/candidate/state/governance",
 		"sshIdentityPath": "/candidate/home/.ssh/id", "sshPublicKeyPath": "/candidate/home/.ssh/id.pub",
-		"codexAuthPath": "/candidate/home/.codex/auth.json", "authorizedKeysPath": "/candidate/home/.ssh/authorized_keys",
+		"codexAuthPath": "/candidate/home/.codex/auth.json",
+		"authorizedKeysPath": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-product-authorized-keys",
 		"binds": []any{map[string]any{"source": "/source", "target": "/target", "mode": "ro", "required": true}},
 	}
 }
@@ -31,7 +32,7 @@ func exactConsumerEnvelopeFixture(index int) map[string]any {
 func exactAdapterEnvelopeFixture() map[string]any {
 	return map[string]any{
 		"schemaVersion": AdapterSchema, "executablePath": "/adapter", "proxyHelperPath": "/proxy",
-		"gitPath": "/git", "envPath": "/env", "sshPath": "/ssh", "sshKeygenPath": "/ssh-keygen",
+		"gitPath": "/git", "gitSSHPath": "/git-ssh", "envPath": "/env", "sshPath": "/ssh", "sshKeygenPath": "/ssh-keygen",
 		"knownHostsPath": "/known-hosts", "runtimeLauncherPath": "/runtime", "bubblewrapPath": "/bwrap",
 		"brokerPath": "/broker", "egressAllowlistPath": "/allowlist",
 		"codexConfigPath":   "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-codex-config.toml",
@@ -263,7 +264,10 @@ func consumerGeometryFixture(index int, root, supervisorRoot string) ConsumerMan
 		SSHIdentityPath:    filepath.Join(home, ".ssh", "id_ed25519"),
 		SSHPublicKeyPath:   filepath.Join(home, ".ssh", "id_ed25519.pub"),
 		CodexAuthPath:      filepath.Join(home, ".codex", "auth.json"),
-		AuthorizedKeysPath: filepath.Join(home, ".ssh", "authorized_keys"),
+		AuthorizedKeysPath: filepath.Join(
+			"/nix/store",
+			strings.Repeat(string(rune('a'+index-1)), 32)+"-product-authorized-keys",
+		),
 	}
 }
 
@@ -291,7 +295,6 @@ func TestValidateCrossConsumerGeometryRejectsEqualityAndNestingForEveryMutableFi
 		"ssh-private":       func(value *ConsumerManifest, path string) { value.SSHIdentityPath = path },
 		"ssh-public":        func(value *ConsumerManifest, path string) { value.SSHPublicKeyPath = path },
 		"codex-auth":        func(value *ConsumerManifest, path string) { value.CodexAuthPath = path },
-		"authorized-keys":   func(value *ConsumerManifest, path string) { value.AuthorizedKeysPath = path },
 	}
 	leftPaths := mutableConsumerGeometry(left)
 	for name, set := range setters {
@@ -302,7 +305,7 @@ func TestValidateCrossConsumerGeometryRejectsEqualityAndNestingForEveryMutableFi
 			"app-server": "app-server socket", "governance-env": "governance env",
 			"governance-config": "governance config", "governance-state": "governance state",
 			"ssh-private": "SSH private identity", "ssh-public": "SSH public identity",
-			"codex-auth": "Codex auth", "authorized-keys": "SSH authorized keys",
+			"codex-auth": "Codex auth",
 		}[name]]
 		if !ok {
 			t.Fatalf("missing left path for %s", name)
@@ -320,5 +323,21 @@ func TestValidateCrossConsumerGeometryRejectsEqualityAndNestingForEveryMutableFi
 				}
 			})
 		}
+	}
+}
+
+func TestValidateCrossConsumerGeometryRejectsMutableOrSharedSSHAdmission(t *testing.T) {
+	left := consumerGeometryFixture(1, "/var/lib/product-a", "/run/product-supervisor-a")
+	right := consumerGeometryFixture(2, "/var/lib/product-b", "/run/product-supervisor-b")
+
+	right.AuthorizedKeysPath = filepath.Join(left.CandidateRoot, "authorized_keys")
+	if err := validateCrossConsumerGeometry([]ConsumerManifest{left, right}); err == nil {
+		t.Fatal("immutable SSH admission inside another consumer root was accepted")
+	}
+
+	right = consumerGeometryFixture(2, "/var/lib/product-b", "/run/product-supervisor-b")
+	right.AuthorizedKeysPath = left.AuthorizedKeysPath
+	if err := validateCrossConsumerGeometry([]ConsumerManifest{left, right}); err == nil {
+		t.Fatal("shared immutable SSH admission path was accepted")
 	}
 }

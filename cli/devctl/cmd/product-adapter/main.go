@@ -10,11 +10,15 @@ import (
 )
 
 func main() {
+	attestation, err := productadapter.AttestInitialNamespaces(productadapter.RoleAdapter)
+	if err != nil {
+		fail(err)
+	}
 	command, err := productadapter.Parse(os.Args[1:])
 	if err != nil {
 		fail(err)
 	}
-	if err := productruntime.Run(*command); err != nil {
+	if err := productruntime.Run(*command, attestation); err != nil {
 		fail(err)
 	}
 }

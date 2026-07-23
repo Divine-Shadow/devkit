@@ -2,6 +2,7 @@ package productruntime
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,7 +29,6 @@ func prepareConsumerFiles(
 	command productadapter.Command,
 ) error {
 	for _, directory := range []string{
-		consumer.AgentRoot,
 		consumer.StateRoot,
 		consumer.HomePath,
 		filepath.Join(consumer.HomePath, ".ssh"),
@@ -107,15 +107,12 @@ func validateOfflineSeededCandidate(
 	if err != nil {
 		return err
 	}
-	var marker struct {
-		SchemaVersion string `json:"schema_version"`
-		ConsumerIndex int    `json:"consumer_index"`
-		CandidateRoot string `json:"candidate_root"`
-	}
+	var marker productadapter.OfflineSeedMarker
 	decoder := json.NewDecoder(bytes.NewReader(markerPayload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&marker); err != nil || marker.SchemaVersion != productadapter.OfflineSeedSchema ||
-		marker.ConsumerIndex != consumer.Index || marker.CandidateRoot != consumer.CandidateRoot {
+		marker.ConsumerIndex != consumer.Index || marker.CandidateRoot != consumer.CandidateRoot ||
+		len(marker.AuthorizedKeysSHA256) != sha256.Size*2 {
 		return fmt.Errorf("offline Product seed marker does not match authority")
 	}
 	sshConfig, err := productadapter.ProductSSHConfig(authority, consumer, authority.Adapter.Count, consumer.Index)
@@ -151,9 +148,20 @@ func validateOfflineSeededCandidate(
 	if err != nil || !bytes.Equal(bytes.TrimSpace(derived), bytes.TrimSpace(public)) {
 		return fmt.Errorf("prehydrated Product SSH public key does not match private identity")
 	}
-	authorized, err := os.ReadFile(consumer.AuthorizedKeysPath)
-	if err != nil || !bytes.Equal(authorized, append([]byte("restrict "), public...)) {
-		return fmt.Errorf("prehydrated Product authorized_keys does not match the SSH identity")
+	authorized, err := productadapter.ReadImmutableAuthorizedKeys(
+		consumer.AuthorizedKeysPath,
+		authority.Adapter.SSHKeygenPath,
+	)
+	if err != nil {
+		return fmt.Errorf("validate immutable Product SSH admission: %w", err)
+	}
+	guiKey := bytes.TrimPrefix(bytes.TrimSpace(authorized), []byte("restrict "))
+	if !bytes.HasPrefix(authorized, []byte("restrict ssh-ed25519 ")) ||
+		bytes.Count(authorized, []byte{'\n'}) != 1 ||
+		authorized[len(authorized)-1] != '\n' ||
+		bytes.Equal(guiKey, bytes.TrimSpace(public)) ||
+		fmt.Sprintf("%x", sha256.Sum256(authorized)) != marker.AuthorizedKeysSHA256 {
+		return fmt.Errorf("prehydrated Product authorized_keys does not match the distinct GUI authority")
 	}
 	return nil
 }

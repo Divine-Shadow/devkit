@@ -147,13 +147,13 @@ func replaceProtectedSelector(selectorPath string, payload []byte, requiredUID i
 		_ = temp.Close()
 		return fmt.Errorf("own Product authority selector generation: %w", err)
 	}
-	if err := temp.Chmod(0o600); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("protect Product authority selector generation: %w", err)
-	}
 	if _, err := temp.Write(payload); err != nil {
 		_ = temp.Close()
 		return fmt.Errorf("write Product authority selector generation: %w", err)
+	}
+	if err := temp.Chmod(authoritySelectorMode); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("protect Product authority selector generation: %w", err)
 	}
 	if err := temp.Sync(); err != nil {
 		_ = temp.Close()
@@ -183,8 +183,12 @@ func verifyExistingSelector(parentFD int, base string, requiredUID int) error {
 	defer syscall.Close(fd)
 	var stat syscall.Stat_t
 	if err := syscall.Fstat(fd, &stat); err != nil || stat.Mode&syscall.S_IFMT != syscall.S_IFREG ||
-		int(stat.Uid) != requiredUID || stat.Mode&0o777 != 0o600 {
-		return fmt.Errorf("existing Product authority selector is not an uid-%d plain 0600 file", requiredUID)
+		int(stat.Uid) != requiredUID || stat.Mode&0o777 != authoritySelectorMode {
+		return fmt.Errorf(
+			"existing Product authority selector is not an uid-%d plain %04o file",
+			requiredUID,
+			authoritySelectorMode,
+		)
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -38,12 +39,14 @@ const (
 )
 
 type result struct {
-	SchemaVersion          string `json:"schema_version"`
-	InitializeReady        bool   `json:"initialize_ready"`
-	EphemeralThreadCreated bool   `json:"ephemeral_thread_created"`
-	EphemeralThreadRead    bool   `json:"ephemeral_thread_read"`
-	MCPStatusRead          bool   `json:"mcp_status_read"`
-	GovernanceTools        int    `json:"governance_tools"`
+	SchemaVersion           string `json:"schema_version"`
+	InitializeReady         bool   `json:"initialize_ready"`
+	EphemeralThreadCreated  bool   `json:"ephemeral_thread_created"`
+	EphemeralThreadRead     bool   `json:"ephemeral_thread_read"`
+	MCPStatusRead           bool   `json:"mcp_status_read"`
+	MCPFixtureTools         int    `json:"mcp_fixture_tools"`
+	MCPFixtureCallVerified  bool   `json:"mcp_fixture_call_verified"`
+	MCPFixtureConsumerIndex int    `json:"mcp_fixture_consumer_index"`
 }
 
 func main() {
@@ -54,13 +57,17 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) != 13 || args[0] != "probe" || args[1] != "--ssh" ||
+	if len(args) != 15 || (args[0] != "probe" && args[0] != "hold") || args[1] != "--ssh" ||
 		args[3] != "--identity" || args[5] != "--known-hosts" ||
-		args[7] != "--port" || args[9] != "--user" || args[11] != "--cwd" {
-		return fmt.Errorf("requires probe --ssh PATH --identity PATH --known-hosts PATH --port N --user NAME --cwd PATH")
+		args[7] != "--port" || args[9] != "--user" || args[11] != "--cwd" ||
+		args[13] != "--consumer-index" {
+		return fmt.Errorf("requires probe|hold --ssh PATH --identity PATH --known-hosts PATH --port N --user NAME --cwd PATH --consumer-index N")
 	}
+	mode := args[0]
 	port, err := strconv.Atoi(args[8])
-	if err != nil || port < 1 || port > 65535 || args[10] == "" || args[12] == "" {
+	consumerIndex, indexErr := strconv.Atoi(args[14])
+	if err != nil || port < 1 || port > 65535 || args[10] == "" || args[12] == "" ||
+		indexErr != nil || consumerIndex < 1 || consumerIndex > 2 {
 		return fmt.Errorf("invalid SSH Product consumer identity")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -91,6 +98,7 @@ func run(args []string) error {
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
+	processWaited := false
 	stderrDone := make(chan []byte, 1)
 	go func() {
 		data, _ := io.ReadAll(io.LimitReader(stderr, 1<<20))
@@ -98,6 +106,9 @@ func run(args []string) error {
 	}()
 	defer func() {
 		_ = stdin.Close()
+		if processWaited {
+			return
+		}
 		_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-wait:
@@ -145,6 +156,23 @@ func run(args []string) error {
 	if err := notify("initialized", map[string]any{}); err != nil {
 		return err
 	}
+	if mode == "hold" {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"schema_version":   "devkit/product-managed-app-server-hold/v1",
+			"initialize_ready": true,
+			"status":           "holding",
+		}); err != nil {
+			return err
+		}
+		select {
+		case <-wait:
+			processWaited = true
+			<-stderrDone
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("managed app-server hold timed out: %w", ctx.Err())
+		}
+	}
 	threadPayload, err := requestRPC("thread/start", map[string]any{
 		"cwd": args[12], "approvalPolicy": "never", "sandbox": "danger-full-access", "ephemeral": true,
 	})
@@ -191,29 +219,102 @@ func run(args []string) error {
 	if err := json.Unmarshal(mcpPayload, &page); err != nil || page.NextCursor != nil {
 		return fmt.Errorf("managed app-server MCP status has unexpected shape")
 	}
-	governanceTools := 0
+	fixtureTools := 0
 	for _, server := range page.Data {
-		if server.Name == "governance" {
-			for _, required := range []string{"get_run_status", "run"} {
-				tool, ok := server.Tools[required]
-				if !ok || tool.Name != required {
-					return fmt.Errorf("managed app-server is missing governance tool %s", required)
-				}
-				governanceTools++
+		if server.Name == "devkit_fixture" {
+			tool, ok := server.Tools["lifecycle_probe"]
+			if !ok || tool.Name != "lifecycle_probe" {
+				return fmt.Errorf("managed app-server is missing the lifecycle probe fixture")
 			}
+			fixtureTools++
 		}
 	}
-	if governanceTools != 2 {
-		return fmt.Errorf("managed app-server did not expose exact governance tools")
+	if fixtureTools != 1 {
+		return fmt.Errorf("managed app-server did not expose the exact MCP fixture")
+	}
+	toolCallPayload, err := requestRPC("mcpServer/tool/call", map[string]any{
+		"threadId": threadStart.Thread.ID,
+		"server":   "devkit_fixture",
+		"tool":     "lifecycle_probe",
+		"arguments": map[string]any{
+			"schema_version": "devkit/product-mcp-tool-call-fixture/v1",
+			"consumer_index": consumerIndex,
+			"objective":      "prove-mcp-tool-call-transport",
+		},
+	})
+	if err != nil {
+		return err
+	}
+	toolCall, err := decodeMCPFixtureCall(toolCallPayload, consumerIndex)
+	if err != nil {
+		return err
 	}
 	return json.NewEncoder(os.Stdout).Encode(result{
-		SchemaVersion:          "devkit/product-managed-app-server-client/v1",
-		InitializeReady:        true,
-		EphemeralThreadCreated: true,
-		EphemeralThreadRead:    true,
-		MCPStatusRead:          true,
-		GovernanceTools:        governanceTools,
+		SchemaVersion:           "devkit/product-managed-app-server-client/v1",
+		InitializeReady:         true,
+		EphemeralThreadCreated:  true,
+		EphemeralThreadRead:     true,
+		MCPStatusRead:           true,
+		MCPFixtureTools:         fixtureTools,
+		MCPFixtureCallVerified:  true,
+		MCPFixtureConsumerIndex: toolCall.ConsumerIndex,
 	})
+}
+
+type mcpFixtureCallReceipt struct {
+	SchemaVersion string `json:"schema_version"`
+	Status        string `json:"status"`
+	ConsumerIndex int    `json:"consumer_index"`
+}
+
+func decodeMCPFixtureCall(
+	payload json.RawMessage,
+	consumerIndex int,
+) (mcpFixtureCallReceipt, error) {
+	var call struct {
+		Content           []json.RawMessage `json:"content"`
+		IsError           *bool             `json:"isError"`
+		StructuredContent json.RawMessage   `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(payload, &call); err != nil ||
+		call.IsError == nil || *call.IsError ||
+		len(call.Content) != 1 || len(call.StructuredContent) == 0 {
+		return mcpFixtureCallReceipt{}, fmt.Errorf("managed MCP fixture did not return a typed non-error result")
+	}
+	decodeReceipt := func(payload []byte) (mcpFixtureCallReceipt, error) {
+		decoder := json.NewDecoder(bytes.NewReader(payload))
+		decoder.DisallowUnknownFields()
+		var receipt mcpFixtureCallReceipt
+		if err := decoder.Decode(&receipt); err != nil {
+			return receipt, err
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return receipt, fmt.Errorf("trailing input")
+		}
+		return receipt, nil
+	}
+	receipt, err := decodeReceipt(call.StructuredContent)
+	if err != nil {
+		return receipt, fmt.Errorf("decode managed MCP fixture structured result: %w", err)
+	}
+	var content struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(call.Content[0], &content); err != nil || content.Type != "text" {
+		return receipt, fmt.Errorf("managed MCP fixture content is not one text item")
+	}
+	textReceipt, err := decodeReceipt([]byte(content.Text))
+	if err != nil || textReceipt != receipt {
+		return receipt, fmt.Errorf("managed MCP fixture text result does not match structured content")
+	}
+	if receipt.SchemaVersion != "devkit/product-mcp-tool-call-fixture/v1" ||
+		receipt.Status != "observed" ||
+		receipt.ConsumerIndex != consumerIndex {
+		return receipt, fmt.Errorf("managed MCP fixture result mismatched the exact consumer")
+	}
+	return receipt, nil
 }
 
 func websocketHandshake(writer io.Writer, reader *bufio.Reader) error {

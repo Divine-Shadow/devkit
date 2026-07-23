@@ -10,13 +10,17 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	attestation, err := productadapter.AttestInitialNamespaces(productadapter.RoleSSHSetup)
+	if err == nil {
+		err = run(os.Args[1:], attestation)
+	}
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "product-ssh-setup:", err)
 		os.Exit(2)
 	}
 }
 
-func run(args []string) error {
+func run(args []string, attestation productadapter.Attestation) error {
 	if len(args) != 7 || args[0] != "seed-git" || args[1] != "--count" ||
 		args[3] != "--index" || args[5] != "--root-projection" {
 		return fmt.Errorf("requires exactly: product-ssh-setup seed-git --count N --index N --root-projection NAME")
@@ -25,7 +29,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	authority, err := productadapter.Load(productadapter.RoleSSHSetup, index)
+	authority, err := productadapter.Load(productadapter.RoleSSHSetup, index, attestation)
 	if err != nil {
 		return err
 	}

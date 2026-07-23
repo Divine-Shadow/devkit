@@ -52,7 +52,7 @@ func TestInstallAuthoritySelectorAtomicallyCreatesAndReplacesExactGeneration(t *
 		t.Fatalf("selector = %#v", selector)
 	}
 	info, err := os.Stat(options.SelectorPath)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || info.Mode().Perm() != authoritySelectorMode {
 		t.Fatalf("selector mode = %v err=%v", info.Mode(), err)
 	}
 	secondManifest := filepath.Join(options.StoreRoot, "second.json")
@@ -162,6 +162,15 @@ func TestInstallAuthoritySelectorRejectsUntrustedIdentityAndFilesystemShapes(t *
 				}
 			},
 			want: "without symlink traversal",
+		},
+		{
+			name: "writable existing selector",
+			mutate: func(t *testing.T, options *authoritySelectorInstallOptions, _ *string, _ *string) {
+				if err := os.WriteFile(options.SelectorPath, []byte("{}\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "plain 0444 file",
 		},
 	}
 	for _, test := range tests {

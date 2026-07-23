@@ -11,6 +11,7 @@ const (
 	RequestSchema  = "devkit/product-supervisor-request/v1"
 	ResponseSchema = "devkit/product-supervisor-response/v1"
 	StatusSchema   = "devkit/product-supervisor-status/v1"
+	FailureSchema  = "devkit/product-supervisor-failure/v1"
 	maximumFrame   = 64 * 1024
 )
 
@@ -54,11 +55,85 @@ type Status struct {
 }
 
 type Response struct {
-	SchemaVersion string  `json:"schema_version"`
-	Command       Command `json:"command"`
-	Status        Status  `json:"status"`
-	Output        string  `json:"output,omitempty"`
-	Error         string  `json:"error,omitempty"`
+	SchemaVersion string   `json:"schema_version"`
+	Command       Command  `json:"command"`
+	Status        Status   `json:"status"`
+	Output        string   `json:"output,omitempty"`
+	Failure       *Failure `json:"failure,omitempty"`
+}
+
+type Failure struct {
+	SchemaVersion string `json:"schema_version"`
+	Phase         string `json:"phase"`
+	Code          string `json:"code"`
+	Message       string `json:"message"`
+}
+
+type FailureOperation string
+
+const (
+	FailureRequest FailureOperation = "request"
+	FailurePrepare FailureOperation = "consumer-prepare"
+	FailureListen  FailureOperation = "app-server-start"
+	FailureProxy   FailureOperation = "app-server-proxy"
+	FailureVersion FailureOperation = "codex-version"
+)
+
+func FailureOperationFor(command Command) FailureOperation {
+	switch command.Kind {
+	case KindPrepare:
+		return FailurePrepare
+	case KindListen:
+		return FailureListen
+	case KindProxy:
+		return FailureProxy
+	case KindVersion:
+		return FailureVersion
+	default:
+		return FailureRequest
+	}
+}
+
+func FailureFor(operation FailureOperation, cause error) *Failure {
+	if cause == nil {
+		return nil
+	}
+	code := ""
+	switch operation {
+	case FailureRequest:
+		code = "invalid-request"
+	case FailurePrepare:
+		code = "consumer-preparation-failed"
+	case FailureListen:
+		code = "app-server-start-failed"
+	case FailureProxy:
+		code = "app-server-proxy-failed"
+	case FailureVersion:
+		code = "codex-version-failed"
+	default:
+		return nil
+	}
+	return &Failure{
+		SchemaVersion: FailureSchema,
+		Phase:         string(operation),
+		Code:          code,
+		Message:       cause.Error(),
+	}
+}
+
+func (failure *Failure) Valid() bool {
+	if failure == nil || failure.SchemaVersion != FailureSchema ||
+		failure.Phase == "" || failure.Code == "" || failure.Message == "" {
+		return false
+	}
+	validPairs := map[string]string{
+		string(FailureRequest): "invalid-request",
+		string(FailurePrepare): "consumer-preparation-failed",
+		string(FailureListen):  "app-server-start-failed",
+		string(FailureProxy):   "app-server-proxy-failed",
+		string(FailureVersion): "codex-version-failed",
+	}
+	return validPairs[failure.Phase] == failure.Code
 }
 
 func WriteFrame(writer io.Writer, value any) error {

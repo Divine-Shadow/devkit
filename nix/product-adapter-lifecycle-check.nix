@@ -12,6 +12,7 @@
 let
   fixtureRoot = "/run/product-adapter-lifecycle";
   candidateParent = "/var/lib/product-adapter-candidates";
+  controllerHome = "/var/lib/product-lifecycle-controller";
   pinnedCodex = mkPinnedCodex pkgs;
   mcpFixture = mkProductMCPFixture pkgs;
 	  connectFixture = mkProductConnectFixture pkgs;
@@ -29,8 +30,8 @@ let
 	      schemaVersion = "devkit/product-mcp-requirement/v1";
 	      servers = [
 	        {
-	          name = "governance";
-	          tools = [ "get_run_status" "run" ];
+	          name = "devkit_fixture";
+	          tools = [ "lifecycle_probe" ];
 	        }
 	      ];
 	    }
@@ -39,13 +40,13 @@ let
 	  sshSessionContract = mkProductSSHSessionContract pkgs;
 	  stoppedVolumeSeedContract = mkProductStoppedVolumeSeedContract pkgs;
   lifecycleProductRevision = "7c49b072973e6ea3ced9515352c79cfbd915754e";
-  runtimeBundleFixture =
+  diagnosticRuntimeFixture =
     import ./dev-all-runtime-bundle-fixture.nix {
       inherit pkgs;
       productSourceRev = lifecycleProductRevision;
     };
-  runtimeBundle =
-    mkDevAllRuntimeBundle ({ inherit pkgs; } // runtimeBundleFixture.constructorArgs);
+  diagnosticRuntimeBundle =
+    mkDevAllRuntimeBundle ({ inherit pkgs; } // diagnosticRuntimeFixture.constructorArgs);
   brokerExecutable = pkgs.writeShellScript "devkit-product-fixture-broker" ''
     exit 0
   '';
@@ -58,18 +59,18 @@ let
 
     # Connector discovery belongs to the real Desktop promotion consumer.
     # This diagnostic has no Desktop connector catalog, so keep the fixture's
-    # immutable MCP requirement limited to the packaged governance server it
-    # can initialize and verify end to end.
+    # immutable MCP requirement limited to a packaged framing fixture. It
+    # proves transport and typed tool calls, never governed admission.
     [features]
     apps = false
 
-	[mcp_servers.governance]
+	[mcp_servers.devkit_fixture]
 	command = "${mcpFixture}/bin/product-mcp-fixture"
 	startup_timeout_sec = 30
 	tool_timeout_sec = 30
   '';
   governanceEnv =
-    runtimeBundleFixture.productRuntimeProjection.envPath;
+    diagnosticRuntimeFixture.productRuntimeProjection.envPath;
   governanceRepoConfig = pkgs.writeText "devkit-product-governance-repo-config" ''
     {}
   '';
@@ -83,10 +84,41 @@ let
     nameserver 192.0.2.53
   '';
 
-  # The fixture host key and Product repository are deterministic test
-  # authority. No private key is tracked in source. The host key is copied to
-  # tmpfs with mode 0600 before sshd starts; the client identity is generated
-  # afresh in that same tmpfs.
+  # These fixed keys are public, test-only data. They grant access only to this
+  # diagnostic's ephemeral sshd and make the derivation reproducible. Runtime
+  # copies receive mode 0600 before OpenSSH consumes them.
+  fixtureHostKey = pkgs.writeText "devkit-product-lifecycle-host-key-test-only" ''
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+    QyNTUxOQAAACDF6SwxKUBBjXOynyxKilU3Y7QpK1g9YlK8vndR+Z4YagAAALAq7esCKu3r
+    AgAAAAtzc2gtZWQyNTUxOQAAACDF6SwxKUBBjXOynyxKilU3Y7QpK1g9YlK8vndR+Z4Yag
+    AAAEDnPgc2QV1We8i1lg+mqSPUw2QFZGmoAGTf5CJ7mVIpSsXpLDEpQEGNc7KfLEqKVTdj
+    tCkrWD1iUry+d1H5nhhqAAAAJ2RldmtpdC1wcm9kdWN0LWxpZmVjeWNsZS1ob3N0LXRlc3
+    Qtb25seQECAwQFBg==
+    -----END OPENSSH PRIVATE KEY-----
+  '';
+  fixtureGUI1Key = pkgs.writeText "devkit-product-lifecycle-gui-1-key-test-only" ''
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+    QyNTUxOQAAACDWmeem46DUnQIZ4ki0YzJqH1bj7ezOIZsKYvvR9ZZtwwAAALC0Mj4GtDI+
+    BgAAAAtzc2gtZWQyNTUxOQAAACDWmeem46DUnQIZ4ki0YzJqH1bj7ezOIZsKYvvR9ZZtww
+    AAAECNVk1uKm8l+XttOU5JiCVhsFBw1bpasbOZlwTQlLNzudaZ56bjoNSdAhniSLRjMmof
+    VuPt7M4hmwpi+9H1lm3DAAAAJ2RldmtpdC1wcm9kdWN0LWxpZmVjeWNsZS1ndWkxLXRlc3
+    Qtb25seQECAwQFBg==
+    -----END OPENSSH PRIVATE KEY-----
+  '';
+  fixtureGUI2Key = pkgs.writeText "devkit-product-lifecycle-gui-2-key-test-only" ''
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+    QyNTUxOQAAACDbZhzQqtuBuq1JggrlztH1nG0/pHTFGnExmvk+eXWfwQAAALB7w1Noe8NT
+    aAAAAAtzc2gtZWQyNTUxOQAAACDbZhzQqtuBuq1JggrlztH1nG0/pHTFGnExmvk+eXWfwQ
+    AAAEBG6pwiQTDPAVMXgUnJK+wXMTJ7bz+Ii95nz+gnSfaZP9tmHNCq24G6rUmCCuXO0fWc
+    bT+kdMUacTGa+T55dZ/BAAAAJ2RldmtpdC1wcm9kdWN0LWxpZmVjeWNsZS1ndWkyLXRlc3
+    Qtb25seQECAwQFBg==
+    -----END OPENSSH PRIVATE KEY-----
+  '';
+
+  # The repository and all SSH authority below are deterministic test inputs.
   fixtureSource = pkgs.runCommand "devkit-product-lifecycle-ssh-source" {
     nativeBuildInputs = [
       pkgs.git
@@ -96,9 +128,23 @@ let
     set -euo pipefail
     umask 077
     mkdir -p "$out"
-    ssh-keygen -q -t ed25519 -N "" -f "$TMPDIR/host-key"
+    cp ${fixtureHostKey} "$TMPDIR/host-key"
+    chmod 0600 "$TMPDIR/host-key"
+    ssh-keygen -y -f "$TMPDIR/host-key" \
+      | awk '{print $1 " " $2 " devkit-product-lifecycle-host-test-only"}' \
+      > "$TMPDIR/host-key.pub"
     cp "$TMPDIR/host-key" "$out/host-key"
     cp "$TMPDIR/host-key.pub" "$out/host-key.pub"
+    cp ${fixtureGUI1Key} "$TMPDIR/gui-1"
+    cp ${fixtureGUI2Key} "$TMPDIR/gui-2"
+    chmod 0600 "$TMPDIR/gui-1" "$TMPDIR/gui-2"
+    for index in 1 2; do
+      ssh-keygen -y -f "$TMPDIR/gui-$index" \
+        > "$TMPDIR/gui-$index.pub"
+      cp "$TMPDIR/gui-$index" "$out/gui-$index"
+      awk '{print "restrict " $1 " " $2}' \
+        "$TMPDIR/gui-$index.pub" > "$out/gui-$index-authorized_keys"
+    done
     host_fields="$(awk '{print $1 " " $2}' "$TMPDIR/host-key.pub")"
     printf '[ssh.github.com]:443 %s\n' "$host_fields" > "$out/known_hosts"
 
@@ -116,36 +162,39 @@ let
     test "$(git -C "$seed" rev-parse HEAD)" = '${lifecycleProductRevision}'
     printf '%s\n' '${lifecycleProductRevision}' > "$out/revision"
   '';
-
-  fixtureManifestRelative = "share/devkit-product-adapter-fixture/authority.json";
-  fixtureAuthorityLocator = "${placeholder "out"}/${fixtureManifestRelative}";
-  fixturePostFixup = ''
+  diagnosticAdapterManifest = pkgs.runCommand "devkit-product-adapter-lifecycle-authority" {
+    nativeBuildInputs = [
+      pkgs.coreutils
+      pkgs.jq
+    ];
+  } ''
     set -eo pipefail
-    manifest="$out/${fixtureManifestRelative}"
-    mkdir -p "$(dirname "$manifest")"
+    manifest="$out/identity.json"
+    mkdir -p "$out"
     digest() {
       ${pkgs.coreutils}/bin/sha256sum "$1" | ${pkgs.coreutils}/bin/cut -d' ' -f1
     }
-    adapter="$out/bin/product-adapter"
-    proxy="$out/bin/product-proxy"
-    readiness="$out/bin/product-readiness"
-	runtime_exec="$out/bin/product-runtime-exec"
-	    supervisor="$out/bin/product-adapter-supervisor"
-	    ssh_session="$out/bin/product-ssh-session"
-	    ssh_setup="$out/bin/product-ssh-setup"
+    adapter="${productionAdapter}/bin/product-adapter"
+    proxy="${productionAdapter}/bin/product-proxy"
+    readiness="${productionAdapter}/bin/product-readiness"
+	runtime_exec="${productionAdapter}/bin/product-runtime-exec"
+	    supervisor="${productionAdapter}/bin/product-adapter-supervisor"
+	    ssh_session="${productionAdapter}/bin/product-ssh-session"
+	    ssh_setup="${productionAdapter}/bin/product-ssh-setup"
 	    ssh_session_contract='${sshSessionContract}'
 	    ssh_setup_contract='${stoppedVolumeSeedContract}'
     revision="$(${pkgs.coreutils}/bin/cat ${fixtureSource}/revision)"
 	  mount_policy_identity="$(${pkgs.jq}/bin/jq -er .identity ${mountPolicyContract})"
-    origin="ssh://root@ssh.github.com:443${fixtureSource}/ouroboros-ide.git"
+    origin="ssh://git@ssh.github.com:443${fixtureSource}/ouroboros-ide.git"
     candidate_a="${candidateParent}/a/slot"
     candidate_b="${candidateParent}/b/slot"
 	    ${pkgs.jq}/bin/jq -n \
-	      --slurpfile base ${runtimeBundle}/share/dev-all-runtime-bundle/identity.json \
+	      --slurpfile base ${diagnosticRuntimeBundle}/share/dev-all-runtime-bundle/identity.json \
       --arg revision "$revision" \
       --arg adapter "$adapter" \
       --arg proxy "$proxy" \
       --arg git ${pkgs.git}/bin/git \
+      --arg git_ssh ${productionAdapter.productAdapterResources.gitSSH} \
       --arg env ${pkgs.coreutils}/bin/coreutils \
       --arg ssh ${pkgs.openssh}/bin/ssh \
 	  --arg ssh_keygen ${pkgs.openssh}/bin/ssh-keygen \
@@ -174,9 +223,12 @@ let
       --arg resolv ${resolvConf} \
       --arg candidate_a "$candidate_a" \
       --arg candidate_b "$candidate_b" \
+      --arg authorized_a ${fixtureSource}/gui-1-authorized_keys \
+      --arg authorized_b ${fixtureSource}/gui-2-authorized_keys \
       --arg d_adapter "$(digest "$adapter")" \
       --arg d_proxy "$(digest "$proxy")" \
       --arg d_git "$(digest ${pkgs.git}/bin/git)" \
+      --arg d_git_ssh "$(digest ${productionAdapter.productAdapterResources.gitSSH})" \
       --arg d_env "$(digest ${pkgs.coreutils}/bin/coreutils)" \
       --arg d_ssh "$(digest ${pkgs.openssh}/bin/ssh)" \
 	  --arg d_ssh_keygen "$(digest ${pkgs.openssh}/bin/ssh-keygen)" \
@@ -201,7 +253,7 @@ let
 	  --arg d_ssh_setup_contract "$(digest "$ssh_setup_contract")" \
       --arg d_resolv "$(digest ${resolvConf})" \
       '
-	  def consumer($index; $uid; $candidate):
+	  def consumer($index; $uid; $candidate; $authorized_keys):
 	        ($candidate + "/agent" + ($index|tostring)) as $agent |
         ($agent + "/ouroboros-ide") as $worktree |
 	        ($candidate + "/home") as $home |
@@ -233,7 +285,7 @@ let
 	      sshIdentityPath: ($home + "/.ssh/id_ed25519"),
 	      sshPublicKeyPath: ($home + "/.ssh/id_ed25519.pub"),
 	      codexAuthPath: ($home + "/.codex/auth.json"),
-	      authorizedKeysPath: ($home + "/.ssh/authorized_keys"),
+	      authorizedKeysPath: $authorized_keys,
           binds: [
             {source:"/nix/store",target:"/nix/store",mode:"ro",required:true},
             {source:$worktree,target:"/workspaces/dev",mode:"rw",required:true},
@@ -252,6 +304,7 @@ let
           executablePath:$adapter,
           proxyHelperPath:$proxy,
           gitPath:$git,
+          gitSSHPath:$git_ssh,
           envPath:$env,
           sshPath:$ssh,
 	      sshKeygenPath:$ssh_keygen,
@@ -284,9 +337,12 @@ let
           nscdSocketPath:"",
 		  mountPolicyIdentity:$mount_policy_identity,
           runtimeEnvironment:{},
-          consumers:[consumer(1;2001;$candidate_a),consumer(2;2002;$candidate_b)],
+          consumers:[
+            consumer(1;2001;$candidate_a;$authorized_a),
+            consumer(2;2002;$candidate_b;$authorized_b)
+          ],
           artifactDigests:{
-            adapter:$d_adapter,proxy_helper:$d_proxy,git:$d_git,env:$d_env,
+            adapter:$d_adapter,proxy_helper:$d_proxy,git:$d_git,git_ssh:$d_git_ssh,env:$d_env,
 	        ssh:$d_ssh,ssh_keygen:$d_ssh_keygen,known_hosts:$d_known,runtime_launcher:$d_launcher,
             bubblewrap:$d_bwrap,broker:$d_broker,egress_allowlist:$d_allowlist,
             codex_config:$d_codex_config,governance_env:$d_governance_env,
@@ -303,26 +359,6 @@ let
 	      }' > "$manifest"
   '';
 
-  fixtureAdapter = mkProductAdapterPackage {
-    inherit
-      codexConfig
-      fixtureAuthorityLocator
-      fixturePostFixup
-      governanceEnv
-      governanceRepoConfig
-      governanceRules
-      pkgs
-      shellHook
-	  mcpRequirement
-      ;
-    egressAllowlist = allowlist;
-    bubblewrap = "${pkgs.bubblewrap}/bin/bwrap";
-    broker = brokerExecutable;
-    codexExecutable = "${pinnedCodex}/bin/codex";
-    knownHostsFile = "${fixtureSource}/known_hosts";
-    tags = [ "devkitintegration" ];
-  };
-
   productionAdapter = mkProductAdapterPackage {
     inherit
       codexConfig
@@ -337,8 +373,53 @@ let
     bubblewrap = "${pkgs.bubblewrap}/bin/bwrap";
     broker = brokerExecutable;
     codexExecutable = "${pinnedCodex}/bin/codex";
+    knownHostsFile = "${fixtureSource}/known_hosts";
   };
-  productionContract = pkgs.runCommand "devkit-product-adapter-production-contract" {
+  readinessHermetic = pkgs.runCommand "devkit-product-readiness-hermetic" {
+    nativeBuildInputs = [
+      pkgs.coreutils
+      pkgs.jq
+    ];
+  } ''
+    set -euo pipefail
+    root="$TMPDIR/product-readiness"
+    mkdir -p "$root/home/.codex" "$root/tmp" "$root/workspace"
+    cp ${codexConfig} "$root/home/.codex/config.toml"
+    chmod 0600 "$root/home/.codex/config.toml"
+    requirement_digest="$(${pkgs.coreutils}/bin/sha256sum ${mcpRequirement} | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
+    (
+      cd "$root/workspace"
+      ${pkgs.coreutils}/bin/env -i \
+        PATH=/hostile \
+        HOME="$root/home" \
+        CODEX_HOME="$root/home/.codex" \
+        TMPDIR="$root/tmp" \
+        ${productionAdapter}/bin/product-readiness probe \
+          --codex ${pinnedCodex}/bin/codex \
+          --mcp-requirement ${mcpRequirement} \
+          --mcp-requirement-digest "$requirement_digest" \
+          --consumer-index 1
+    ) > "$root/result.json"
+    ${pkgs.jq}/bin/jq -e '
+      .schema_version == "devkit/product-codex-app-server-stdio-thread-mcp-readiness/v1" and
+      .app_server_alive == true and
+      .initialize_ready == true and
+      .ephemeral_thread_created == true and
+      .ephemeral_thread_read_back == true and
+      .mcp_status_read == true and
+      .mcp_server_count == 1 and
+      .mcp_tool_count == 1 and
+      .approval_policy == "never" and
+      .sandbox_policy == "dangerFullAccess" and
+      (has("governance_admitted") | not) and
+      (has("governance_run_id") | not) and
+      (has("governance_tree_id") | not)
+    ' "$root/result.json" >/dev/null
+    mkdir -p "$out"
+    cp "$root/result.json" "$out/readiness.json"
+  '';
+  namespaceWrappers = productionAdapter.productAdapterResources.namespaceWrappers;
+  adapterPackageContract = pkgs.runCommand "devkit-product-adapter-production-contract" {
     nativeBuildInputs = [
       pkgs.binutils
       pkgs.gnugrep
@@ -349,7 +430,6 @@ let
     proxy=${productionAdapter}/bin/product-proxy
 	grep -aqF '/var/lib/product-runtime/authority-selector.json' "$adapter"
     grep -aqF -- '--coreutils-prog=env' "$adapter"
-    ! grep -aqF '${fixtureManifestRelative}' "$adapter"
     ! grep -aqF 'testAuthorityLocator' "$adapter"
     for forbidden in \
       'git+file:///workspaces/dev/ouroboros-ide' \
@@ -358,14 +438,28 @@ let
     do
       ! grep -aF "$forbidden" "$adapter" "$proxy"
     done
+    for invented_admission in \
+      'product-governance-admission-fixture' \
+      'run-devkit-product-consumer' \
+      'governance_admitted' \
+      'governance_run_id' \
+      'governance_tree_id'
+    do
+      ! grep -aF "$invented_admission" \
+        ${productionAdapter}/bin/product-adapter \
+        ${productionAdapter}/bin/product-readiness \
+        ${productionAdapter}/bin/product-adapter-supervisor \
+        ${productionAdapter}/bin/product-runtime-exec
+    done
     for executable in \
-      ${fixtureAdapter}/bin/product-adapter \
-      ${fixtureAdapter}/bin/product-proxy \
-      ${fixtureAdapter}/bin/product-readiness \
-	  ${fixtureAdapter}/bin/product-adapter-supervisor \
-	  ${fixtureAdapter}/bin/product-ssh-session \
-	  ${fixtureAdapter}/bin/product-ssh-setup \
-	  ${fixtureAdapter}/bin/product-runtime-exec \
+      ${productionAdapter}/bin/product-adapter \
+      ${productionAdapter}/bin/product-proxy \
+      ${productionAdapter}/bin/product-readiness \
+	  ${productionAdapter}/bin/product-adapter-supervisor \
+	  ${productionAdapter}/bin/product-ssh-session \
+	  ${productionAdapter}/bin/product-ssh-setup \
+      ${productionAdapter}/bin/product-runtime-exec \
+      ${productionAdapter.productAdapterResources.gitSSH} \
       ${pkgs.git}/bin/git \
       ${pkgs.coreutils}/bin/coreutils \
       ${pkgs.openssh}/bin/ssh \
@@ -393,25 +487,62 @@ let
   lifecycle = pkgs.writeShellScript "devkit-product-consumer-boundary-diagnostic" ''
     set -Eeuo pipefail
     umask 077
+    export PATH=${pkgs.lib.makeBinPath [
+      pkgs.bash
+      pkgs.coreutils
+      pkgs.findutils
+      pkgs.gawk
+      pkgs.git
+      pkgs.gnugrep
+      pkgs.gnused
+      pkgs.iproute2
+      pkgs.jq
+      pkgs.netcat-openbsd
+      pkgs.openssh
+      pkgs.procps
+      pkgs.util-linux
+    ]}
     exec 8>&1 9>&2
-    rm -rf ${fixtureRoot} ${candidateParent}
+    test ! -e ${fixtureRoot}
+    test ! -e ${candidateParent}
     mkdir -p ${fixtureRoot} ${candidateParent}/a ${candidateParent}/b
     chmod 0711 ${fixtureRoot} ${candidateParent}
 	chown 2001:2001 ${candidateParent}/a
 	chown 2002:2002 ${candidateParent}/b
 	chmod 0700 ${candidateParent}/a ${candidateParent}/b
+    test ! -e /var/lib/product-runtime/authority-selector.json
+    mkdir -p /var/lib/product-runtime
+    chown root:root /var/lib/product-runtime
+    chmod 0755 /var/lib/product-runtime
+    manifest_sha="$(${pkgs.coreutils}/bin/sha256sum ${diagnosticAdapterManifest}/identity.json | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
+    ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i PATH=/hostile \
+      ${productionAdapter}/bin/product-authority-selector-install \
+      --manifest ${diagnosticAdapterManifest}/identity.json \
+      --manifest-sha256 "$manifest_sha"
+    test "$(${pkgs.coreutils}/bin/stat -c %u /var/lib/product-runtime/authority-selector.json)" = 0
+    test "$(${pkgs.coreutils}/bin/stat -c %a /var/lib/product-runtime/authority-selector.json)" = 444
     supervisor_pid=""
+    held_client_pid=""
     lookalike_pid=""
     sshd_pid=""
     outer_proxy_pid=""
     phase="initialize"
+    process_live() {
+      pid="$1"
+      kill -0 "$pid" 2>/dev/null || return 1
+      state="$(${pkgs.gawk}/bin/awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" \
+        || return 1
+      test "$state" != Z
+    }
     cleanup() {
       test -z "$lookalike_pid" || kill "$lookalike_pid" 2>/dev/null || true
       test -z "$supervisor_pid" || kill "$supervisor_pid" 2>/dev/null || true
+      test -z "$held_client_pid" || kill "$held_client_pid" 2>/dev/null || true
       test -z "$outer_proxy_pid" || kill "$outer_proxy_pid" 2>/dev/null || true
       test -z "$sshd_pid" || kill "$sshd_pid" 2>/dev/null || true
       test -z "$lookalike_pid" || wait "$lookalike_pid" 2>/dev/null || true
       test -z "$supervisor_pid" || wait "$supervisor_pid" 2>/dev/null || true
+      test -z "$held_client_pid" || wait "$held_client_pid" 2>/dev/null || true
       test -z "$outer_proxy_pid" || wait "$outer_proxy_pid" 2>/dev/null || true
       test -z "$sshd_pid" || wait "$sshd_pid" 2>/dev/null || true
     }
@@ -442,17 +573,20 @@ let
     printf '[127.0.0.1]:2222 %s\n' "$host_fields" > ${fixtureRoot}/client-known-hosts
     chown controller:controller ${fixtureRoot}/client-known-hosts
     chmod 0600 ${fixtureRoot}/client-known-hosts
-    mkdir ${fixtureRoot}/controller-home
-    chown controller:controller ${fixtureRoot}/controller-home
+    test -d ${controllerHome}
+    test "$(${pkgs.coreutils}/bin/stat -c %U:%G ${controllerHome})" = controller:controller
 
     : > ${fixtureRoot}/root-authorized-keys
     for index in 1 2; do
       phase="consumer-$index offline seed"
       source_dir=${fixtureRoot}/source-$index
-      mkdir "$source_dir"
+      gui_dir=${fixtureRoot}/gui-$index
+      mkdir "$source_dir" "$gui_dir"
       ${pkgs.openssh}/bin/ssh-keygen -q -t ed25519 -N "" -f "$source_dir/id_ed25519"
+      cp ${fixtureSource}/gui-$index "$gui_dir/id_ed25519"
       chmod 0600 "$source_dir/id_ed25519" "$source_dir/id_ed25519.pub"
-      chown -R controller:controller "$source_dir"
+      chmod 0600 "$gui_dir/id_ed25519"
+      chown -R controller:controller "$source_dir" "$gui_dir"
     done
     cat > ${fixtureRoot}/upload-pack <<EOF
 #!${pkgs.bash}/bin/bash
@@ -460,7 +594,7 @@ set -eu
 test "\''${SSH_ORIGINAL_COMMAND:-}" = "git-upload-pack '${fixtureSource}/ouroboros-ide.git'" || exit 91
 exec ${pkgs.git}/bin/git-upload-pack '${fixtureSource}/ouroboros-ide.git'
 EOF
-    chmod 0700 ${fixtureRoot}/upload-pack
+    chmod 0555 ${fixtureRoot}/upload-pack
     for index in 1 2; do
       printf 'restrict,command="%s" %s\n' \
         ${fixtureRoot}/upload-pack \
@@ -468,28 +602,34 @@ EOF
         >> ${fixtureRoot}/root-authorized-keys
     done
     chmod 0600 ${fixtureRoot}/root-authorized-keys
+    ${pkgs.coreutils}/bin/install -d -o root -g root -m 0755 \
+      ${fixtureRoot}/authorized-keys
+    ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
+      ${fixtureRoot}/root-authorized-keys \
+      ${fixtureRoot}/authorized-keys/git
+    for index in 1 2; do
+      ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
+        ${fixtureSource}/gui-$index-authorized_keys \
+        ${fixtureRoot}/authorized-keys/product$index
+    done
 
     cat > ${fixtureRoot}/sshd_config <<EOF
 ListenAddress 127.0.0.1
 Port 2222
 PidFile ${fixtureRoot}/sshd.pid
 HostKey ${fixtureRoot}/host-key
-AuthorizedKeysFile none
-StrictModes no
+AuthorizedKeysFile ${fixtureRoot}/authorized-keys/%u
+StrictModes yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes
-PermitRootLogin prohibit-password
-AllowUsers root product1 product2
+PermitRootLogin no
+AllowUsers git product1 product2
 LogLevel VERBOSE
-Match User root
-  AuthorizedKeysFile ${fixtureRoot}/root-authorized-keys
 Match User product1
-  AuthorizedKeysFile ${candidateParent}/a/slot/home/.ssh/authorized_keys
-  ForceCommand ${fixtureAdapter}/bin/product-ssh-session force-command --count 2 --index 1
+  ForceCommand ${productionAdapter}/bin/product-ssh-session force-command --count 2 --index 1
 Match User product2
-  AuthorizedKeysFile ${candidateParent}/b/slot/home/.ssh/authorized_keys
-  ForceCommand ${fixtureAdapter}/bin/product-ssh-session force-command --count 2 --index 2
+  ForceCommand ${productionAdapter}/bin/product-ssh-session force-command --count 2 --index 2
 EOF
     ${pkgs.openssh}/bin/sshd -D -e -f ${fixtureRoot}/sshd_config \
       >${fixtureRoot}/sshd.log 2>&1 &
@@ -507,33 +647,24 @@ EOF
     done
 
     revision="$(${pkgs.coreutils}/bin/cat ${fixtureSource}/revision)"
-    test -f ${fixtureAdapter}/${fixtureManifestRelative}
+    test -f ${diagnosticAdapterManifest}/identity.json
     ${pkgs.jq}/bin/jq -e \
-      --arg launcher '${fixtureAdapter}/bin/product-runtime-exec' \
+      --arg launcher '${productionAdapter}/bin/product-runtime-exec' \
       --arg governance '${governanceEnv}' \
       '.devkitProductAdapter.runtimeLauncherPath == $launcher and
        .devkitProductAdapter.controllerCredentialOwnerUid == 1000 and
        .devkitProductAdapter.governanceEnvPath == $governance and
        (.devkitProductAdapter | has("runtimeRoot") | not)' \
-      ${fixtureAdapter}/${fixtureManifestRelative} >/dev/null
-    if ${fixtureAdapter}/bin/product-proxy supervise \
-      >${fixtureRoot}/direct-supervise.stdout \
-      2>${fixtureRoot}/direct-supervise.stderr; then
-      echo "Product proxy accepted direct supervise use" >&2
-      exit 1
-    fi
-    ${pkgs.gnugrep}/bin/grep -q 'one-shot adapter capability' \
-      ${fixtureRoot}/direct-supervise.stderr
-
+      ${diagnosticAdapterManifest}/identity.json >/dev/null
     ssh_consumer() {
       index="$1"
       shift
       ${pkgs.util-linux}/bin/runuser -u controller -- \
         ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
-        HOME=${fixtureRoot}/controller-home \
+        HOME=${controllerHome} \
         ${pkgs.openssh}/bin/ssh -T -F /dev/null \
         -o BatchMode=yes -o IdentitiesOnly=yes \
-        -o IdentityFile=${fixtureRoot}/source-$index/id_ed25519 \
+        -o IdentityFile=${fixtureRoot}/gui-$index/id_ed25519 \
         -o UserKnownHostsFile=${fixtureRoot}/client-known-hosts \
         -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes \
         -p 2222 product$index@127.0.0.1 "$@"
@@ -545,12 +676,35 @@ EOF
       candidate=${candidateParent}/$projection/slot
       mkdir "$candidate"
       chmod 0700 "$candidate"
+      if (
+        cd ${candidateParent}/$projection
+        ${pkgs.util-linux}/bin/runuser -u product$index -- \
+          ${pkgs.util-linux}/bin/unshare --user --map-root-user --mount -- \
+          ${productionAdapter}/bin/product-ssh-setup seed-git \
+          --count 2 --index "$index" --root-projection slot
+      ) >${fixtureRoot}/namespaced-ssh-setup-$index.log 2>&1; then
+        echo "caller-created child root bypassed Product SSH setup admission" >&2
+        exit 1
+      fi
+      test ! -e "$candidate/.devkit-product-offline-seed.json"
+      if (
+        cd ${candidateParent}/$projection
+        ${pkgs.util-linux}/bin/runuser -u product$index -- \
+          ${pkgs.util-linux}/bin/unshare --user --map-root-user --mount -- \
+          ${namespaceWrappers.sshSetup.path} seed-git \
+          --count 2 --index "$index" --root-projection slot
+      ) >${fixtureRoot}/unauthorized-ssh-setup-$index.log 2>&1; then
+        echo "Product consumer executed the controller-only SSH setup wrapper" >&2
+        exit 1
+      fi
+      test ! -e "$candidate/.devkit-product-offline-seed.json"
       (
         cd ${candidateParent}/$projection
-        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
-          DEVKIT_SOURCE_TRANSPORT_IDENTITY=${fixtureRoot}/source-$index/id_ed25519 \
-          ${fixtureAdapter}/bin/product-ssh-setup seed-git \
-          --count 2 --index "$index" --root-projection slot
+        ${pkgs.util-linux}/bin/runuser -u controller -- \
+          ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+            DEVKIT_SOURCE_TRANSPORT_IDENTITY=${fixtureRoot}/source-$index/id_ed25519 \
+            ${namespaceWrappers.sshSetup.path} seed-git \
+            --count 2 --index "$index" --root-projection slot
       ) >${fixtureRoot}/seed-$index.json 2>${fixtureRoot}/seed-$index.stderr
       ${pkgs.jq}/bin/jq -e \
         --argjson index "$index" \
@@ -571,11 +725,34 @@ EOF
       chown "$uid:$uid" ${fixtureRoot}/control-$index
       chmod 0700 ${fixtureRoot}/control-$index
 
+      phase="consumer-$index namespace-attested launch"
+      if ${pkgs.util-linux}/bin/setpriv \
+        --reuid="$uid" --regid="$uid" --clear-groups \
+        --inh-caps=-all --ambient-caps=-all -- \
+        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+        ${productionAdapter}/bin/product-adapter-supervisor \
+        serve --count 2 --index "$index" \
+        >${fixtureRoot}/direct-supervisor-$index.log 2>&1; then
+        echo "direct Product supervisor bypassed the package-owned entry wrapper" >&2
+        exit 1
+      fi
+      test ! -e ${fixtureRoot}/control-$index/product-supervisor.sock
+
+      if ${pkgs.util-linux}/bin/runuser -u product$index -- \
+        ${pkgs.util-linux}/bin/unshare --user --map-current-user --mount -- \
+        ${namespaceWrappers.supervisor.path} \
+        serve --count 2 --index "$index" \
+        >${fixtureRoot}/namespaced-supervisor-$index.log 2>&1; then
+        echo "caller-created namespace acquired Product supervisor authority" >&2
+        exit 1
+      fi
+      test ! -e ${fixtureRoot}/control-$index/product-supervisor.sock
+
       ${pkgs.util-linux}/bin/setpriv \
         --reuid="$uid" --regid="$uid" --clear-groups \
         --inh-caps=-all --ambient-caps=-all -- \
         ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
-        ${fixtureAdapter}/bin/product-adapter-supervisor \
+        ${namespaceWrappers.supervisor.path} \
         serve --count 2 --index "$index" \
         >${fixtureRoot}/supervisor-$index.log 2>&1 &
       supervisor_pid=$!
@@ -584,6 +761,61 @@ EOF
         ${pkgs.coreutils}/bin/sleep 0.05
       done
       test -S ${fixtureRoot}/control-$index/product-supervisor.sock
+      for status in /proc/$supervisor_pid/task/*/status; do
+        ${pkgs.gawk}/bin/awk -v expected="$uid" '
+          $1 == "Uid:" &&
+            ($2 != expected || $3 != expected || $4 != expected || $5 != expected) {
+            exit 1
+          }
+          $1 == "Gid:" &&
+            ($2 != expected || $3 != expected || $4 != expected || $5 != expected) {
+            exit 1
+          }
+          $1 == "Groups:" && NF != 1 {
+            exit 1
+          }
+          /^(CapInh|CapPrm|CapEff|CapAmb):/ && $2 != "0000000000000000" {
+            exit 1
+          }
+        ' "$status"
+      done
+      if ${pkgs.util-linux}/bin/runuser -u product$index -- \
+        ${namespaceWrappers.proxy.path} supervise \
+        >${fixtureRoot}/privileged-proxy-supervise-$index.log 2>&1; then
+        echo "privileged proxy wrapper admitted the bwrap-only supervise mode" >&2
+        exit 1
+      fi
+
+      phase="consumer-$index immutable GUI admission"
+      admission="${fixtureSource}/gui-$index-authorized_keys"
+      test "$(${pkgs.jq}/bin/jq -r \
+        ".devkitProductAdapter.consumers[$((index - 1))].authorizedKeysPath" \
+        ${diagnosticAdapterManifest}/identity.json)" = "$admission"
+      if ${pkgs.util-linux}/bin/runuser -u product$index -- \
+        ${pkgs.bash}/bin/bash -c 'printf replacement > "$1"' _ "$admission"; then
+        echo "Product consumer overwrote immutable GUI admission" >&2
+        exit 1
+      fi
+      if ${pkgs.util-linux}/bin/runuser -u product$index -- \
+        ${pkgs.coreutils}/bin/rm -f "$admission"; then
+        echo "Product consumer unlinked immutable GUI admission" >&2
+        exit 1
+      fi
+      wrong_index=$([ "$index" = 1 ] && printf 2 || printf 1)
+      if ${pkgs.util-linux}/bin/runuser -u controller -- \
+        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+        HOME=${controllerHome} \
+        ${pkgs.openssh}/bin/ssh -T -F /dev/null \
+        -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o IdentityFile=${fixtureRoot}/gui-$wrong_index/id_ed25519 \
+        -o UserKnownHostsFile=${fixtureRoot}/client-known-hosts \
+        -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes \
+        -p 2222 product$index@127.0.0.1 devkit-product-prepare/v1 \
+        >${fixtureRoot}/wrong-gui-$index.stdout \
+        2>${fixtureRoot}/wrong-gui-$index.stderr; then
+        echo "Product SSH admission accepted another consumer's GUI key" >&2
+        exit 1
+      fi
 
       phase="consumer-$index initial managed prepare"
       ssh_consumer "$index" devkit-product-prepare/v1 \
@@ -624,8 +856,12 @@ EOF
           echo "managed Product session accepted a pinned app-server lookalike" >&2
           exit 1
         fi
-        ${pkgs.gnugrep}/bin/grep -Eq 'preexisting pinned app-server|lookalike' \
-          ${fixtureRoot}/lookalike-refusal.stderr
+        ${pkgs.jq}/bin/jq -e '
+          .schema_version == "devkit/product-supervisor-response/v1" and
+          .failure.schema_version == "devkit/product-supervisor-failure/v1" and
+          .failure.phase == "app-server-start" and
+          .failure.code == "app-server-start-failed"
+        ' ${fixtureRoot}/lookalike-accepted.stdout >/dev/null
         kill "$lookalike_pid"
         wait "$lookalike_pid" 2>/dev/null || true
         lookalike_pid=""
@@ -661,20 +897,49 @@ EOF
       phase="consumer-$index real app-server thread and MCP probe"
       ${pkgs.util-linux}/bin/runuser -u controller -- \
         ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
-        HOME=${fixtureRoot}/controller-home \
+        HOME=${controllerHome} \
         ${managedClient}/bin/product-managed-client probe \
         --ssh ${pkgs.openssh}/bin/ssh \
-        --identity ${fixtureRoot}/source-$index/id_ed25519 \
+        --identity ${fixtureRoot}/gui-$index/id_ed25519 \
         --known-hosts ${fixtureRoot}/client-known-hosts \
         --port 2222 --user product$index --cwd /workspaces/dev \
+        --consumer-index "$index" \
         >${fixtureRoot}/managed-$index.json 2>${fixtureRoot}/managed-$index.stderr
-      ${pkgs.jq}/bin/jq -e '
+      ${pkgs.jq}/bin/jq -e --argjson index "$index" '
         .schema_version == "devkit/product-managed-app-server-client/v1" and
         .initialize_ready == true and
         .ephemeral_thread_created == true and
         .ephemeral_thread_read == true and
-        .mcp_status_read == true and .governance_tools == 2
+        .mcp_status_read == true and .mcp_fixture_tools == 1 and
+        .mcp_fixture_call_verified == true and
+        .mcp_fixture_consumer_index == $index and
+        (has("governance_admitted") | not) and
+        (has("governance_run_id") | not) and
+        (has("governance_tree_id") | not)
       ' ${fixtureRoot}/managed-$index.json >/dev/null
+
+      phase="consumer-$index live managed session for teardown"
+      ${pkgs.util-linux}/bin/runuser -u controller -- \
+        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+        HOME=${controllerHome} \
+        ${managedClient}/bin/product-managed-client hold \
+        --ssh ${pkgs.openssh}/bin/ssh \
+        --identity ${fixtureRoot}/gui-$index/id_ed25519 \
+        --known-hosts ${fixtureRoot}/client-known-hosts \
+        --port 2222 --user product$index --cwd /workspaces/dev \
+        --consumer-index "$index" \
+        >${fixtureRoot}/held-$index.json 2>${fixtureRoot}/held-$index.stderr &
+      held_client_pid=$!
+      for attempt in $(${pkgs.coreutils}/bin/seq 1 100); do
+        test -s ${fixtureRoot}/held-$index.json && break
+        kill -0 "$held_client_pid"
+        ${pkgs.coreutils}/bin/sleep 0.05
+      done
+      ${pkgs.jq}/bin/jq -e '
+        .schema_version == "devkit/product-managed-app-server-hold/v1" and
+        .initialize_ready == true and .status == "holding"
+      ' ${fixtureRoot}/held-$index.json >/dev/null
+      kill -0 "$held_client_pid"
 
       phase="consumer-$index construction receipt and git proof"
       receipt="$candidate/state/product-construction-receipt.json"
@@ -682,7 +947,10 @@ EOF
 	        .schema_version == "devkit/product-construction-receipt/v1" and
 	        .status == "executing" and .proxy_cleanup == "listener-active" and
         .readiness_runtime == true and .readiness_repository == true and
-        (.credential_handle_digests | length) == 3 and
+        (.credential_handle_digests | length) == 4 and
+        (.credential_handle_digests
+          | has("ssh_identity") and has("ssh_public_key")
+            and has("authorized_keys") and has("codex_auth")) and
         any(.readiness_evidence[];
           .name == "codex-app-server-stdio-thread-mcp-readiness" and
           .status == "ready" and
@@ -691,7 +959,10 @@ EOF
           .result.ephemeral_thread_created == true and
           .result.ephemeral_thread_read_back == true and
           .result.approval_policy == "never" and
-          .result.sandbox_policy == "dangerFullAccess"
+          .result.sandbox_policy == "dangerFullAccess" and
+          (.result | has("governance_admitted") | not) and
+          (.result | has("governance_run_id") | not) and
+          (.result | has("governance_tree_id") | not)
         )
 	      ' "$receipt" >/dev/null
 	      test -S "$candidate/state/product-egress.sock"
@@ -727,11 +998,33 @@ EOF
       cp "$receipt" ${fixtureRoot}/receipt-$index.json
 
       phase="consumer-$index teardown"
+      if ! process_live "$held_client_pid"; then
+        echo "held Product app-server session ended before supervisor teardown" >&2
+        exit 1
+      fi
       kill "$supervisor_pid"
+      for attempt in $(${pkgs.coreutils}/bin/seq 1 200); do
+        if ! process_live "$supervisor_pid" \
+          && ! process_live "$held_client_pid"
+        then
+          break
+        fi
+        ${pkgs.coreutils}/bin/sleep 0.05
+      done
+      if process_live "$supervisor_pid"; then
+        echo "Product supervisor did not stop within the teardown bound" >&2
+        exit 1
+      fi
+      if process_live "$held_client_pid"; then
+        echo "held Product app-server session survived supervisor teardown" >&2
+        exit 1
+      fi
       wait "$supervisor_pid"
-	      supervisor_pid=""
-	      test ! -e "$candidate/state/app-server.sock"
-	      test ! -e "$candidate/state/product-egress.sock"
+      supervisor_pid=""
+      wait "$held_client_pid"
+      held_client_pid=""
+      test ! -e "$candidate/state/app-server.sock"
+      test ! -e "$candidate/state/product-egress.sock"
       test ! -e ${fixtureRoot}/control-$index/product-supervisor.sock
       test -z "$(${pkgs.procps}/bin/pgrep -u "$uid" -f '${pinnedCodex}/bin/codex.*app-server' || true)"
       rm -rf "$candidate"
@@ -753,14 +1046,17 @@ EOF
     test ! -e ${candidateParent}
     test ! -e ${fixtureRoot}
   '';
-in
-pkgs.testers.runNixOSTest {
-  name = "product-consumer-boundary-diagnostic";
-  nodes.machine =
+  vmTest = pkgs.testers.runNixOSTest {
+    name = "product-consumer-boundary-diagnostic";
+    nodes.machine =
     { ... }:
     {
-      virtualisation.memorySize = 6144;
-      virtualisation.cores = 4;
+      # The diagnostic uses guest loopback only. Avoid host TAP/VDE authority
+      # and keep QEMU's user network unable to reach outside the guest.
+      virtualisation.vlans = [ ];
+      virtualisation.restrictNetwork = true;
+      virtualisation.memorySize = 4096;
+      virtualisation.cores = 2;
       users.groups.sshd = { };
       users.users.sshd = {
         isSystemUser = true;
@@ -771,38 +1067,76 @@ pkgs.testers.runNixOSTest {
 	    isNormalUser = true;
 	    uid = 1000;
 	    group = "controller";
-	    home = "${fixtureRoot}/controller-home";
+	    home = controllerHome;
+        createHome = true;
+        autoSubUidGidRange = false;
+        subUidRanges = [ ];
+        subGidRanges = [ ];
 	  };
       users.groups.product1.gid = 2001;
       users.groups.product2.gid = 2002;
+      users.groups.git.gid = 2000;
+      users.users.git = {
+        isSystemUser = true;
+        uid = 2000;
+        group = "git";
+        shell = "${pkgs.bashInteractive}/bin/bash";
+        hashedPassword = "";
+      };
       users.users.product1 = {
         isSystemUser = true;
         uid = 2001;
         group = "product1";
+        autoSubUidGidRange = false;
+        subUidRanges = [ ];
+        subGidRanges = [ ];
 		home = "${candidateParent}/a/slot/home";
-		shell = "${fixtureAdapter}/bin/product-ssh-session";
+		shell = namespaceWrappers.sshSession.path;
 		hashedPassword = "";
       };
       users.users.product2 = {
         isSystemUser = true;
         uid = 2002;
         group = "product2";
+        autoSubUidGidRange = false;
+        subUidRanges = [ ];
+        subGidRanges = [ ];
 		home = "${candidateParent}/b/slot/home";
-		shell = "${fixtureAdapter}/bin/product-ssh-session";
+		shell = namespaceWrappers.sshSession.path;
 		hashedPassword = "";
       };
-	  environment.shells = [ "${fixtureAdapter}/bin/product-ssh-session" ];
+	  environment.shells = [ namespaceWrappers.sshSession.path ];
+      security.wrappers =
+        pkgs.lib.mapAttrs'
+          (
+            _: wrapper:
+            pkgs.lib.nameValuePair wrapper.name {
+              inherit (wrapper) setuid;
+              source = "${productionAdapter}/bin/${wrapper.target}";
+              owner = "root";
+              group = if wrapper.controllerOnly or false then "controller" else "root";
+              permissions =
+                if wrapper.controllerOnly or false then
+                  "u+rx,g+rx,o-rwx"
+                else
+                  "u+rx,g+x,o+x";
+            }
+          )
+          namespaceWrappers;
       environment.systemPackages = [
-        fixtureAdapter
+        productionAdapter
         pkgs.bash
         pkgs.coreutils
       ];
     };
   testScript = ''
-    machine.start()
     machine.wait_for_unit("multi-user.target")
-    machine.succeed("test -f ${productionContract}/contract")
+    machine.succeed("! grep -E '^(controller|product1|product2):' /etc/subuid /etc/subgid")
+    machine.succeed("test -f ${adapterPackageContract}/contract")
     machine.succeed("${lifecycle}")
-    machine.shutdown()
   '';
+  };
+in
+{
+  inherit readinessHermetic vmTest;
 }

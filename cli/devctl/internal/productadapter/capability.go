@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -91,9 +92,10 @@ func ValidateSupervisorCapability(capability SupervisorCapability) error {
 			"probe",
 			"--codex", packageCodexExecutable,
 			"--mcp-requirement", packageMCPRequirement,
-			"--mcp-requirement-digest", capability.RuntimeArgs[len(capability.RuntimeArgs)-1],
+			"--mcp-requirement-digest", capability.RuntimeArgs[len(capability.RuntimeArgs)-3],
+			"--consumer-index", strconv.Itoa(capability.Index),
 		}
-		if len(capability.RuntimeArgs) != 9 || len(capability.RuntimeArgs[len(capability.RuntimeArgs)-1]) != 64 {
+		if len(capability.RuntimeArgs) != 11 || len(capability.RuntimeArgs[len(capability.RuntimeArgs)-3]) != 64 {
 			return fmt.Errorf("Product prepare capability runtime argv is not package-fixed")
 		}
 		if len(capability.RuntimeArgs) != len(expectedArgs) {

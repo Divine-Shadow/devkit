@@ -1,6 +1,7 @@
 package productadapter
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -49,7 +51,7 @@ var (
 	manifestAdapterKeys = []string{
 		"artifactDigests", "baseBranch", "branchPrefix", "brokerPath", "bubblewrapPath",
 		"codexConfigPath", "codexExecutablePath", "consumers", "controllerCredentialOwnerUid", "count",
-		"egressAllowlistPath", "envPath", "executablePath", "gitPath", "governanceEnvPath",
+		"egressAllowlistPath", "envPath", "executablePath", "gitPath", "gitSSHPath", "governanceEnvPath",
 		"governanceRepoConfigPath", "governanceRulesPath", "knownHostsPath", "mcpRequirementPath",
 		"mountPolicyContractPath", "mountPolicyIdentity", "nscdSocketPath", "productOrigin",
 		"proxyHelperPath", "readinessExecutablePath", "resolvConfPath", "runtimeEnvironment",
@@ -79,32 +81,38 @@ var (
 // general Devkit package. The WSL constructor enables it and binds subordinate
 // immutable artifact identities; it does not compile a Product revision.
 var (
-	packageMode                    string
-	packageAdapterExecutable       string
-	packageGitExecutable           string
-	packageEnvExecutable           string
-	packageSSHExecutable           string
-	packageSSHKeygenExecutable     string
-	packageKnownHosts              string
-	packageRuntimeLauncher         string
-	packageBubblewrapExecutable    string
-	packageBrokerExecutable        string
-	packageEgressAllowlist         string
-	packageCodexConfig             string
-	packageGovernanceEnv           string
-	packageGovernanceRepoConfig    string
-	packageGovernanceRules         string
-	packageShellHook               string
-	packageCodexExecutable         string
-	packageReadinessExecutable     string
-	packageMCPRequirement          string
-	packageMountPolicyContract     string
-	packageProductProxyExecutable  string
-	packageProductSupervisor       string
-	packageProductSSHSession       string
-	packageProductSSHSetup         string
-	packageProductSSHSetupContract string
-	packageProductSessionContract  string
+	packageMode                       string
+	packageAdapterExecutable          string
+	packageGitExecutable              string
+	packageGitSSHExecutable           string
+	packageEnvExecutable              string
+	packageSSHExecutable              string
+	packageSSHKeygenExecutable        string
+	packageKnownHosts                 string
+	packageRuntimeLauncher            string
+	packageBubblewrapExecutable       string
+	packageBrokerExecutable           string
+	packageEgressAllowlist            string
+	packageCodexConfig                string
+	packageGovernanceEnv              string
+	packageGovernanceRepoConfig       string
+	packageGovernanceRules            string
+	packageShellHook                  string
+	packageCodexExecutable            string
+	packageReadinessExecutable        string
+	packageMCPRequirement             string
+	packageMountPolicyContract        string
+	packageProductProxyExecutable     string
+	packageProductSupervisor          string
+	packageProductSSHSession          string
+	packageProductSSHSetup            string
+	packageAdapterLaunchExecutable    string
+	packageProxyLaunchExecutable      string
+	packageSupervisorLaunchExecutable string
+	packageSSHSessionLaunchExecutable string
+	packageSSHSetupLaunchExecutable   string
+	packageProductSSHSetupContract    string
+	packageProductSessionContract     string
 )
 
 type Manifest struct {
@@ -122,6 +130,7 @@ type AdapterManifest struct {
 	ExecutablePath               string             `json:"executablePath"`
 	ProxyHelperPath              string             `json:"proxyHelperPath"`
 	GitPath                      string             `json:"gitPath"`
+	GitSSHPath                   string             `json:"gitSSHPath"`
 	EnvPath                      string             `json:"envPath"`
 	SSHPath                      string             `json:"sshPath"`
 	SSHKeygenPath                string             `json:"sshKeygenPath"`
@@ -218,9 +227,34 @@ func Enabled() bool {
 	return strings.TrimSpace(packageMode) == "composed"
 }
 
-func Load(role Role, consumerIndex int) (Authority, error) {
+func LaunchExecutable(role Role) (string, error) {
+	var executable string
+	switch role {
+	case RoleAdapter:
+		executable = packageAdapterLaunchExecutable
+	case RoleProxy:
+		executable = packageProxyLaunchExecutable
+	case RoleSupervisor:
+		executable = packageSupervisorLaunchExecutable
+	case RoleSSHSession:
+		executable = packageSSHSessionLaunchExecutable
+	case RoleSSHSetup:
+		executable = packageSSHSetupLaunchExecutable
+	default:
+		return "", fmt.Errorf("Product role %q has no namespace-attested launch executable", role)
+	}
+	if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable {
+		return "", fmt.Errorf("Product role %q has no package-owned launch executable", role)
+	}
+	return executable, nil
+}
+
+func Load(role Role, consumerIndex int, attestation Attestation) (Authority, error) {
 	if !Enabled() {
 		return Authority{}, fmt.Errorf("uncomposed Devkit has no Product authority")
+	}
+	if err := attestation.consume(role); err != nil {
+		return Authority{}, err
 	}
 	locator := authorityLocator()
 	if strings.TrimSpace(locator) == "" {
@@ -278,14 +312,13 @@ func Load(role Role, consumerIndex int) (Authority, error) {
 			authority.Close()
 			return Authority{}, fmt.Errorf("offline Product SSH setup requires uid 0")
 		}
-	} else if consumer.UID != os.Geteuid() {
+		if err := attestation.validateController(authority.Adapter.ControllerCredentialOwnerUID); err != nil {
+			authority.Close()
+			return Authority{}, err
+		}
+	} else if err := validateConsumerProcessIdentity(consumer.UID, consumer.GID); err != nil {
 		authority.Close()
-		return Authority{}, fmt.Errorf(
-			"Product consumer %d requires uid %d, executing uid is %d",
-			consumer.Index,
-			consumer.UID,
-			os.Geteuid(),
-		)
+		return Authority{}, err
 	}
 	if role != RoleSSHSetup {
 		if err := validateSelectedCredentialHandles(consumer); err != nil {
@@ -293,7 +326,7 @@ func Load(role Role, consumerIndex int) (Authority, error) {
 			return Authority{}, err
 		}
 	}
-	held, err := holdCurrentGeneration(role, authority.Adapter)
+	held, err := holdCurrentGeneration(role, authority.Adapter, attestation)
 	if err != nil {
 		authority.Close()
 		return Authority{}, err
@@ -517,6 +550,7 @@ func (authority Authority) validate(role Role) error {
 		"adapter":               {label: "adapter executable", path: adapter.ExecutablePath, executable: true},
 		"proxy_helper":          {label: "proxy helper", path: adapter.ProxyHelperPath, executable: true},
 		"git":                   {label: "Git", path: adapter.GitPath, executable: true},
+		"git_ssh":               {label: "Git SSH", path: adapter.GitSSHPath, executable: true},
 		"env":                   {label: "env", path: adapter.EnvPath, executable: true},
 		"ssh":                   {label: "OpenSSH", path: adapter.SSHPath, executable: true},
 		"ssh_keygen":            {label: "OpenSSH ssh-keygen", path: adapter.SSHKeygenPath, executable: true},
@@ -549,6 +583,7 @@ func (authority Authority) validate(role Role) error {
 	expected := map[string][2]string{
 		"proxy helper":               {adapter.ProxyHelperPath, packageProductProxyExecutable},
 		"Git":                        {adapter.GitPath, packageGitExecutable},
+		"Git SSH":                    {adapter.GitSSHPath, packageGitSSHExecutable},
 		"env":                        {adapter.EnvPath, packageEnvExecutable},
 		"OpenSSH":                    {adapter.SSHPath, packageSSHExecutable},
 		"OpenSSH ssh-keygen":         {adapter.SSHKeygenPath, packageSSHKeygenExecutable},
@@ -655,6 +690,9 @@ func (authority Authority) validate(role Role) error {
 		if err := validateConsumerGeometry(consumer); err != nil {
 			return fmt.Errorf("validate Product consumer %d: %w", consumer.Index, err)
 		}
+		if _, err := ReadImmutableAuthorizedKeys(consumer.AuthorizedKeysPath, adapter.SSHKeygenPath); err != nil {
+			return fmt.Errorf("validate Product consumer %d GUI admission: %w", consumer.Index, err)
+		}
 		for _, path := range []string{
 			consumer.SSHIdentityPath,
 			consumer.SSHPublicKeyPath,
@@ -689,6 +727,20 @@ type mutableConsumerPath struct {
 func validateCrossConsumerGeometry(consumers []ConsumerManifest) error {
 	var prior []mutableConsumerPath
 	for _, consumer := range consumers {
+		for _, other := range consumers {
+			if consumer.Index != other.Index &&
+				pathsOverlap(consumer.AuthorizedKeysPath, other.CandidateRoot) {
+				return fmt.Errorf(
+					"Product consumer %d immutable SSH admission overlaps consumer %d mutable root",
+					consumer.Index,
+					other.Index,
+				)
+			}
+			if consumer.Index < other.Index &&
+				pathsOverlap(consumer.AuthorizedKeysPath, other.AuthorizedKeysPath) {
+				return fmt.Errorf("Product consumers share or nest immutable SSH admission paths")
+			}
+		}
 		var current []mutableConsumerPath
 		for label, path := range mutableConsumerGeometry(consumer) {
 			clean := filepath.Clean(path)
@@ -733,7 +785,6 @@ func mutableConsumerGeometry(consumer ConsumerManifest) map[string]string {
 		"SSH private identity": consumer.SSHIdentityPath,
 		"SSH public identity":  consumer.SSHPublicKeyPath,
 		"Codex auth":           consumer.CodexAuthPath,
-		"SSH authorized keys":  consumer.AuthorizedKeysPath,
 	}
 }
 
@@ -839,7 +890,6 @@ func validateConsumerGeometry(consumer ConsumerManifest) error {
 		"SSH private":       consumer.SSHIdentityPath,
 		"SSH public":        consumer.SSHPublicKeyPath,
 		"Codex auth":        consumer.CodexAuthPath,
-		"authorized keys":   consumer.AuthorizedKeysPath,
 	} {
 		if !pathWithin(consumer.CandidateRoot, path) {
 			return fmt.Errorf("%s escapes the candidate root", label)
@@ -865,9 +915,11 @@ func validateConsumerGeometry(consumer ConsumerManifest) error {
 	sshDirectory := filepath.Join(consumer.HomePath, ".ssh")
 	if consumer.SSHIdentityPath != filepath.Join(sshDirectory, "id_ed25519") ||
 		consumer.SSHPublicKeyPath != filepath.Join(sshDirectory, "id_ed25519.pub") ||
-		consumer.AuthorizedKeysPath != filepath.Join(sshDirectory, "authorized_keys") ||
 		consumer.CodexAuthPath != filepath.Join(consumer.HomePath, ".codex", "auth.json") {
 		return fmt.Errorf("Product credential handles are not final guest-local paths")
+	}
+	if pathsOverlap(consumer.CandidateRoot, consumer.AuthorizedKeysPath) {
+		return fmt.Errorf("Product immutable SSH admission overlaps mutable candidate state")
 	}
 	seenTargets := map[string]bool{}
 	for _, bind := range consumer.Binds {
@@ -1029,7 +1081,6 @@ func validateSelectedCredentialHandles(consumer ConsumerManifest) error {
 		"SSH private identity": consumer.SSHIdentityPath,
 		"SSH public identity":  consumer.SSHPublicKeyPath,
 		"Codex auth":           consumer.CodexAuthPath,
-		"SSH authorized keys":  consumer.AuthorizedKeysPath,
 	} {
 		if err := validateCredentialHandle(label, path, consumer.UID); err != nil {
 			return fmt.Errorf("validate Product consumer %d: %w", consumer.Index, err)
@@ -1045,6 +1096,42 @@ func validateSelectedCredentialHandles(consumer ConsumerManifest) error {
 		seen[identity] = path
 	}
 	return nil
+}
+
+// ReadImmutableAuthorizedKeys validates the exact public admission artifact
+// selected by the authoritative Nix manifest. SSH authentication happens
+// before any Product process can run, so this file must not live in mutable
+// consumer state.
+func ReadImmutableAuthorizedKeys(path, sshKeygenPath string) ([]byte, error) {
+	if !strings.HasPrefix(path, "/nix/store/") {
+		return nil, fmt.Errorf("Product GUI authorized_keys must be a Nix-store artifact")
+	}
+	if err := validateImmutableArtifact("Product GUI authorized_keys", path, false, false); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimSpace(data)
+	fields := bytes.Fields(trimmed)
+	if len(fields) != 3 || string(fields[0]) != "restrict" ||
+		string(fields[1]) != "ssh-ed25519" || bytes.ContainsAny(trimmed, "\r\n") ||
+		bytes.Count(data, []byte{'\n'}) != 1 || data[len(data)-1] != '\n' {
+		return nil, fmt.Errorf("Product GUI authorized_keys is not one exact restricted Ed25519 key")
+	}
+	validate := exec.Command(sshKeygenPath, "-l", "-f", path)
+	validate.Env = []string{}
+	var stderr bytes.Buffer
+	validate.Stderr = &stderr
+	if err := validate.Run(); err != nil {
+		return nil, fmt.Errorf(
+			"Product GUI authorized_keys is not a valid Ed25519 key: %w: %s",
+			err,
+			strings.TrimSpace(stderr.String()),
+		)
+	}
+	return data, nil
 }
 
 func fileIdentity(path string) (uint64, uint64, error) {

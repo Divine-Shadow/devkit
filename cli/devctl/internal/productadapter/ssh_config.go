@@ -16,6 +16,10 @@ func ProductSSHConfig(authority Authority, consumer ConsumerManifest, count, ind
 	if count != authority.Adapter.Count || index != consumer.Index {
 		return nil, fmt.Errorf("Product SSH config identity does not match authority")
 	}
+	proxyLaunch, err := LaunchExecutable(RoleProxy)
+	if err != nil {
+		return nil, err
+	}
 	return []byte(strings.Join([]string{
 		"Host github.com ssh.github.com",
 		"  HostName ssh.github.com",
@@ -25,7 +29,7 @@ func ProductSSHConfig(authority Authority, consumer ConsumerManifest, count, ind
 		"  IdentityFile " + consumer.SSHIdentityPath,
 		"  UserKnownHostsFile " + filepath.Join(consumer.HomePath, ".ssh", "known_hosts"),
 		"  StrictHostKeyChecking yes",
-		"  ProxyCommand " + authority.Adapter.ProxyHelperPath +
+		"  ProxyCommand " + proxyLaunch +
 			" stdio --count " + strconv.Itoa(count) +
 			" --index " + strconv.Itoa(index),
 		"",

@@ -20,8 +20,8 @@ import (
 // Run is the sole Product effect engine. It consumes one already-parsed
 // request and one root-owned manifest authority. It never calls legacy Devkit
 // preparation, evaluates a flake, or reads caller runtime/governance settings.
-func Run(command productadapter.Command) error {
-	authority, err := productadapter.Load(productadapter.RoleAdapter, command.Index)
+func Run(command productadapter.Command, attestation productadapter.Attestation) error {
+	authority, err := productadapter.Load(productadapter.RoleAdapter, command.Index, attestation)
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,6 @@ func prepare(
 	if err := claim.Validate("before exact source acquisition"); err != nil {
 		return fail(err)
 	}
-	sshCommand := exactGitSSHCommand(authority, consumer)
 	if err := wtx.SetupNativeSlot(wtx.NativeSlotOptions{
 		Repo:             productadapter.ProductRepo,
 		Origin:           authority.Adapter.ProductOrigin,
@@ -112,7 +111,9 @@ func prepare(
 		BranchPrefix:     authority.Adapter.BranchPrefix,
 		WorktreeRoot:     filepath.Dir(consumer.AgentRoot),
 		BootstrapHome:    consumer.HomePath,
-		GitSSHCommand:    sshCommand,
+		GitSSHExecutable: authority.Adapter.GitSSHPath,
+		SourceIdentity:   consumer.SSHIdentityPath,
+		TransportSocket:  consumer.ProxySocketPath,
 		RequireSSHOrigin: true,
 	}); err != nil {
 		return fail(err)
@@ -199,14 +200,6 @@ func execute(
 		return err
 	}
 	return runSandboxCommand(authority, consumer, command, command.Child)
-}
-
-func exactGitSSHCommand(authority productadapter.Authority, consumer productadapter.ConsumerManifest) string {
-	return strings.Join([]string{
-		authority.Adapter.SSHPath,
-		"-F",
-		filepath.Join(consumer.HomePath, ".ssh", "config"),
-	}, " ")
 }
 
 func validatePreparedConsumer(

@@ -154,7 +154,6 @@ func TestWriteOwnedAtRejectsEverySeedLeafSymlinkWithoutOutsideEffect(t *testing.
 		"home/.ssh/id_ed25519.pub",
 		"home/.ssh/known_hosts",
 		"home/.ssh/config",
-		"home/.ssh/authorized_keys",
 		"home/.codex/auth.json",
 		".devkit-product-offline-seed.json",
 	} {

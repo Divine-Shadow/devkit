@@ -94,9 +94,13 @@ func openProtectedSelector(path string) (*os.File, error) {
 	}
 	var stat syscall.Stat_t
 	if err := syscall.Fstat(fd, &stat); err != nil ||
-		stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Uid != 0 || stat.Mode&0o777 != 0o600 {
+		stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Uid != 0 ||
+		stat.Mode&0o777 != authoritySelectorMode {
 		_ = file.Close()
-		return nil, fmt.Errorf("Product authority selector is not a root-owned plain 0600 file")
+		return nil, fmt.Errorf(
+			"Product authority selector is not a root-owned plain %04o file",
+			authoritySelectorMode,
+		)
 	}
 	return file, nil
 }

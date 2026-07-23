@@ -21,12 +21,30 @@ func main() {
 	if len(os.Args) < 2 {
 		fail("expected stdio or supervise")
 	}
+	privilegedEntry := os.Getuid() != os.Geteuid()
+	var attestation productadapter.Attestation
+	if privilegedEntry {
+		var err error
+		attestation, err = productadapter.AttestInitialNamespaces(productadapter.RoleProxy)
+		if err != nil {
+			fail("%v", err)
+		}
+		if os.Args[1] != "stdio" {
+			fail("privileged Product proxy entry accepts only stdio")
+		}
+	}
 	switch os.Args[1] {
 	case "stdio":
-		runStdio(os.Args[2:])
+		if !privilegedEntry {
+			fail("Product proxy stdio requires its package-owned privileged entry wrapper")
+		}
+		runStdio(os.Args[2:], attestation)
 	case "supervise":
 		if len(os.Args) != 2 {
 			fail("supervise accepts no command-line authority")
+		}
+		if os.Getuid() == 0 || os.Geteuid() == 0 {
+			fail("Product proxy supervise refuses numeric root identity")
 		}
 		runSupervisor()
 	default:
@@ -34,7 +52,7 @@ func main() {
 	}
 }
 
-func runStdio(args []string) {
+func runStdio(args []string, attestation productadapter.Attestation) {
 	if len(args) != 4 || args[0] != "--count" || args[2] != "--index" {
 		fail("usage: product-proxy stdio --count N --index N")
 	}
@@ -42,7 +60,7 @@ func runStdio(args []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	authority, err := productadapter.Load(productadapter.RoleProxy, index)
+	authority, err := productadapter.Load(productadapter.RoleProxy, index, attestation)
 	if err != nil {
 		fail("%v", err)
 	}

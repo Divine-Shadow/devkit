@@ -688,6 +688,104 @@ func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 	}
 }
 
+func TestSetupNativeSlotPublishesOneCompleteGenerationAndCleansFailedStaging(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	env, err := exec.LookPath("env")
+	if err != nil {
+		t.Skip("env not available")
+	}
+	uploadPack, err := exec.LookPath("git-upload-pack")
+	if err != nil {
+		t.Skip("git-upload-pack not available")
+	}
+	previousGit, previousEnv := packageGitExecutable, packageEnvExecutable
+	packageGitExecutable, packageEnvExecutable = git, env
+	t.Cleanup(func() {
+		packageGitExecutable, packageEnvExecutable = previousGit, previousEnv
+	})
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	bare := filepath.Join(root, "source.git")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, git, "init", "--initial-branch=main", source)
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, git, "-C", source, "add", "README.md")
+	mustRun(t, git, "-C", source, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")
+	revision := readTrim(t, git, "-C", source, "rev-parse", "HEAD")
+	mustRun(t, git, "clone", "--bare", source, bare)
+
+	ssh := filepath.Join(root, "package-ssh")
+	if err := os.WriteFile(
+		ssh,
+		[]byte("#!/bin/sh\nexec '"+uploadPack+"' '"+bare+"'\n"),
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(root, "candidate")
+	home := filepath.Join(candidate, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	options := NativeSlotOptions{
+		Repo:             "fixture-repo",
+		Origin:           "ssh://git@fixture.invalid/fixture-repo.git",
+		Count:            1,
+		Index:            1,
+		BaseBranch:       "main",
+		SourceRevision:   revision,
+		BranchPrefix:     "agent",
+		WorktreeRoot:     candidate,
+		BootstrapHome:    home,
+		GitSSHExecutable: ssh,
+		SourceIdentity:   ssh,
+		TransportSocket:  bare,
+		RequireSSHOrigin: true,
+	}
+	if err := SetupNativeSlot(options); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(candidate, "agent1", "fixture-repo")
+	if got := readTrim(t, git, "-C", worktree, "rev-parse", "HEAD"); got != revision {
+		t.Fatalf("published revision = %s, want %s", got, revision)
+	}
+	staging, err := filepath.Glob(filepath.Join(candidate, ".agent1.construction-*"))
+	if err != nil || len(staging) != 0 {
+		t.Fatalf("successful construction left staging %v: %v", staging, err)
+	}
+
+	failedCandidate := filepath.Join(root, "failed-candidate")
+	failedHome := filepath.Join(failedCandidate, "home")
+	if err := os.MkdirAll(failedHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	failingSSH := filepath.Join(root, "failing-ssh")
+	if err := os.WriteFile(failingSSH, []byte("#!/bin/sh\nexit 71\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	options.WorktreeRoot = failedCandidate
+	options.BootstrapHome = failedHome
+	options.GitSSHExecutable = failingSSH
+	if err := SetupNativeSlot(options); err == nil {
+		t.Fatal("failed source acquisition was accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(failedCandidate, "agent1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed construction published an agent root: %v", err)
+	}
+	staging, err = filepath.Glob(filepath.Join(failedCandidate, ".agent1.construction-*"))
+	if err != nil || len(staging) != 0 {
+		t.Fatalf("failed construction left staging %v: %v", staging, err)
+	}
+}
+
 func TestSetupNativeRejectsRepositoryPathTraversalBeforeBootstrap(t *testing.T) {
 	root := t.TempDir()
 	worktreeRoot := filepath.Join(root, "isolated-product")

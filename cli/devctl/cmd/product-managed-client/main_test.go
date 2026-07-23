@@ -187,3 +187,37 @@ func TestRequestWebSocketRPCHandlesPingThenResponse(t *testing.T) {
 		t.Fatalf("missing correlated pong: opcode=%#x payload=%q err=%v", opcode, payload, err)
 	}
 }
+
+func TestDecodeMCPFixtureCallRequiresMatchingTypedContent(t *testing.T) {
+	receipt := mcpFixtureCallReceipt{
+		SchemaVersion: "devkit/product-mcp-tool-call-fixture/v1",
+		Status:        "observed",
+		ConsumerIndex: 2,
+	}
+	receiptJSON, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	success, err := json.Marshal(map[string]any{
+		"content":           []any{map[string]any{"type": "text", "text": string(receiptJSON)}},
+		"structuredContent": receipt,
+		"isError":           false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := decodeMCPFixtureCall(success, 2); err != nil || got != receipt {
+		t.Fatalf("typed fixture call = %#v, %v", got, err)
+	}
+	for name, payload := range map[string][]byte{
+		"error":          []byte(`{"content":[{"type":"text","text":"{}"}],"structuredContent":{},"isError":true}`),
+		"wrong consumer": bytes.ReplaceAll(success, []byte(`"consumer_index":2`), []byte(`"consumer_index":1`)),
+		"no content":     []byte(`{"content":[],"structuredContent":{},"isError":false}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := decodeMCPFixtureCall(payload, 2); err == nil {
+				t.Fatal("invalid MCP fixture result was accepted")
+			}
+		})
+	}
+}
