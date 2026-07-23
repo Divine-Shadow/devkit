@@ -1090,7 +1090,7 @@ func validOuroGovernanceJavaXmx(value string) bool {
 
 const ouroGovernanceRuntimeIdentitySchema = "fleet-runtime-authority/v1"
 
-var ouroGovernanceSystemRuntimeLauncherPath = "/run/current-system/sw/bin/dev-all-runtime-bundle"
+var ouroGovernanceSystemRuntimeLauncherPath = ""
 
 func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
 	if strings.TrimSpace(os.Getenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV")) != "1" {
@@ -1783,7 +1783,7 @@ func codexGovernanceConfigBlock(p nativeplan.Plan, runtimeBundlePath string) str
 	b.WriteString("# source = devkit native launch generator\n")
 	fmt.Fprintf(&b, "# governance_mcp_entrypoint_sha256 = %s\n", tomlQuote(fingerprint))
 	b.WriteString("[mcp_servers.governance]\n")
-	b.WriteString("command = \"/run/current-system/sw/bin/bash\"\n")
+	b.WriteString("command = \"/bin/bash\"\n")
 	fmt.Fprintf(&b, "cwd = %s\n", tomlQuote(cwd))
 	fmt.Fprintf(&b, "args = [\"-lc\", %s]\n", tomlQuote(entrypoint))
 	b.WriteString("startup_timeout_sec = 240\n")
@@ -2575,6 +2575,13 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		addSymlink("/run/current-system/sw/bin/bash", "/usr/bin/bash")
 		addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
 		addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
+	} else {
+		packageBash, err := sourceLayerRuntimeBashPath(p.RuntimeAuthorityRoot)
+		if err != nil {
+			return Command{}, err
+		}
+		addSymlink(packageBash, "/usr/bin/bash")
+		addSymlink(packageBash, "/bin/bash")
 	}
 
 	var projectedSocket *os.File
@@ -2840,7 +2847,7 @@ func resolveFleetLocalDirectSocket(manifest fleetRuntimeAuthorityManifest, targe
 }
 
 func localDirectFleetTarget(command []string) (string, bool, error) {
-	if len(command) < 2 || filepath.Base(command[0]) != "fleet-control" || command[1] != "app-rpc" {
+	if len(command) < 2 || command[1] != "app-rpc" {
 		return "", false, nil
 	}
 	if len(command) < 3 || command[2] == "resolve-target" {
