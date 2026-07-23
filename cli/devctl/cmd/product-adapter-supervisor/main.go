@@ -37,7 +37,6 @@ type supervisor struct {
 	appServerSocket     socketOwnership
 	startCount          int
 	supervisorStartTime uint64
-	consumerCgroup      string
 }
 
 var errSocketNotReady = errors.New("Product app-server socket is not listening yet")
@@ -77,17 +76,12 @@ func run(args []string, attestation productadapter.Attestation) error {
 	if err != nil {
 		return err
 	}
-	cgroup, err := processCgroup(os.Getpid())
-	if err != nil {
-		return err
-	}
 	service := &supervisor{
 		authority:           authority,
 		consumer:            consumer,
 		count:               count,
 		index:               index,
 		supervisorStartTime: startTime,
-		consumerCgroup:      cgroup,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -216,6 +210,10 @@ func (service *supervisor) handle(ctx context.Context, connection *net.UnixConn)
 		respond(err, "")
 		return
 	}
+	if err = service.authority.ValidateSelectedCredentialHandles(service.index); err != nil {
+		respond(fmt.Errorf("validate Product credential handles at supervisor effect boundary: %w", err), "")
+		return
+	}
 	switch parsed.Kind {
 	case productsession.KindPrepare:
 		err = service.prepare(ctx)
@@ -310,7 +308,6 @@ func (service *supervisor) ensureTarget(ctx context.Context) error {
 	if processes, err := findConsumerAppServers(
 		service.authority.Adapter.CodexExecutablePath,
 		service.consumer.UID,
-		service.consumerCgroup,
 		service.consumer.SandboxAppServerSocketPath,
 	); err != nil {
 		return err
@@ -362,7 +359,6 @@ func (service *supervisor) ensureTarget(ctx context.Context) error {
 		processes, scanErr := findConsumerAppServers(
 			service.authority.Adapter.CodexExecutablePath,
 			service.consumer.UID,
-			service.consumerCgroup,
 			service.consumer.SandboxAppServerSocketPath,
 		)
 		if scanErr != nil {
@@ -490,7 +486,6 @@ func (service *supervisor) targetHealthyLocked() bool {
 	processes, err := findConsumerAppServers(
 		service.authority.Adapter.CodexExecutablePath,
 		service.consumer.UID,
-		service.consumerCgroup,
 		service.consumer.SandboxAppServerSocketPath,
 	)
 	if err != nil || len(processes) != 1 || processes[0].PID != service.appServerPID || !processes[0].ExactTarget {
@@ -593,7 +588,6 @@ func (service *supervisor) status() productsession.Status {
 	if processes, err := findConsumerAppServers(
 		service.authority.Adapter.CodexExecutablePath,
 		service.consumer.UID,
-		service.consumerCgroup,
 		service.consumer.SandboxAppServerSocketPath,
 	); err == nil {
 		status.AppServerProcessCount = len(processes)
@@ -658,8 +652,12 @@ type codexProcess struct {
 	Arguments   []string
 }
 
-func findConsumerAppServers(executable string, uid int, consumerCgroup, sandboxSocket string) ([]codexProcess, error) {
-	entries, err := os.ReadDir("/proc")
+func findConsumerAppServers(executable string, uid int, sandboxSocket string) ([]codexProcess, error) {
+	return findConsumerAppServersAt("/proc", executable, uid, sandboxSocket)
+}
+
+func findConsumerAppServersAt(procRoot, executable string, uid int, sandboxSocket string) ([]codexProcess, error) {
+	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -673,19 +671,15 @@ func findConsumerAppServers(executable string, uid int, consumerCgroup, sandboxS
 		if err != nil || !entry.IsDir() {
 			continue
 		}
-		resolved, err := os.Readlink(filepath.Join("/proc", entry.Name(), "exe"))
+		resolved, err := os.Readlink(filepath.Join(procRoot, entry.Name(), "exe"))
 		if err != nil || strings.TrimSuffix(resolved, " (deleted)") != resolvedExecutable {
 			continue
 		}
-		processUID, err := processEffectiveUID(pid)
+		processUID, err := processEffectiveUIDAt(procRoot, pid)
 		if err != nil || processUID != uid {
 			continue
 		}
-		cgroup, err := processCgroup(pid)
-		if err != nil || cgroup != consumerCgroup {
-			continue
-		}
-		payload, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		payload, err := os.ReadFile(filepath.Join(procRoot, entry.Name(), "cmdline"))
 		if err != nil {
 			continue
 		}
@@ -740,7 +734,11 @@ func isExactReadinessAppServer(arguments []string) bool {
 }
 
 func processEffectiveUID(pid int) (int, error) {
-	payload, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	return processEffectiveUIDAt("/proc", pid)
+}
+
+func processEffectiveUIDAt(procRoot string, pid int) (int, error) {
+	payload, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"))
 	if err != nil {
 		return 0, err
 	}
@@ -755,17 +753,6 @@ func processEffectiveUID(pid int) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("process status has no effective uid")
-}
-
-func processCgroup(pid int) (string, error) {
-	payload, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cgroup"))
-	if err != nil {
-		return "", err
-	}
-	if len(payload) == 0 {
-		return "", fmt.Errorf("process cgroup is empty")
-	}
-	return string(payload), nil
 }
 
 type processStat struct {

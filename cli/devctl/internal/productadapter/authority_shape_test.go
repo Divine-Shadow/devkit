@@ -328,3 +328,25 @@ func TestValidateCrossConsumerGeometryRejectsMutableOrSharedSSHAdmission(t *test
 		t.Fatal("shared immutable SSH admission path was accepted")
 	}
 }
+
+func TestOnlyInertBootstrapRolesMayLoadBeforeCredentialSeeding(t *testing.T) {
+	for _, test := range []struct {
+		role Role
+		want bool
+	}{
+		{role: RoleAdapter, want: true},
+		{role: RoleProxy, want: true},
+		{role: RoleSupervisor, want: false},
+		{role: RoleSSHSession, want: true},
+		{role: RoleSSHSetup, want: false},
+	} {
+		if got := roleRequiresSelectedCredentialHandlesAtLoad(test.role); got != test.want {
+			t.Fatalf(
+				"roleRequiresSelectedCredentialHandlesAtLoad(%q) = %t, want %t",
+				test.role,
+				got,
+				test.want,
+			)
+		}
+	}
+}

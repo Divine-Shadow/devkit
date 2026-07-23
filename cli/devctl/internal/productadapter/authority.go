@@ -312,7 +312,7 @@ func Load(role Role, consumerIndex int, attestation Attestation) (Authority, err
 		authority.Close()
 		return Authority{}, err
 	}
-	if role != RoleSSHSetup {
+	if roleRequiresSelectedCredentialHandlesAtLoad(role) {
 		if err := validateSelectedCredentialHandles(consumer); err != nil {
 			authority.Close()
 			return Authority{}, err
@@ -931,6 +931,18 @@ func (authority Authority) Consumer(index int) (ConsumerManifest, error) {
 	return ConsumerManifest{}, fmt.Errorf("Product consumer index %d is not declared", index)
 }
 
+// ValidateSelectedCredentialHandles revalidates the mutable, guest-local
+// credential handles at an effect boundary. The long-lived supervisor is
+// allowed to boot before an absent consumer is seeded, but no prepare, Codex,
+// app-server, or proxy operation may cross the supervisor without this check.
+func (authority Authority) ValidateSelectedCredentialHandles(index int) error {
+	consumer, err := authority.Consumer(index)
+	if err != nil {
+		return err
+	}
+	return validateSelectedCredentialHandles(consumer)
+}
+
 func (authority Authority) ReceiptPath(index int) string {
 	consumer, _ := authority.Consumer(index)
 	return consumer.ReceiptPath
@@ -1076,6 +1088,10 @@ func validateSelectedCredentialHandles(consumer ConsumerManifest) error {
 		seen[identity] = path
 	}
 	return nil
+}
+
+func roleRequiresSelectedCredentialHandlesAtLoad(role Role) bool {
+	return role != RoleSSHSetup && role != RoleSupervisor
 }
 
 // ReadImmutableAuthorizedKeys validates the exact public admission artifact

@@ -1,6 +1,7 @@
 {
   pkgs,
   mkDevAllRuntimeBundle,
+  mkNixosSystem,
   mkPinnedCodex,
   mkProductAdapterPackage,
   mkProductConnectFixture,
@@ -8,10 +9,12 @@
   mkProductMountPolicyContract,
 	  mkProductSSHSessionContract,
 	  mkProductStoppedVolumeSeedContract,
+  productConsumerModule,
 }:
 let
+  consumerGeometry = import ./product-consumer-geometry.nix;
   fixtureRoot = "/run/product-adapter-lifecycle";
-  candidateParent = "/var/lib/product-adapter-candidates";
+  inherit (consumerGeometry) candidateParent supervisorRoot;
   controllerHome = "/var/lib/product-lifecycle-controller";
   pinnedCodex = mkPinnedCodex pkgs;
   mcpFixture = mkProductMCPFixture pkgs;
@@ -218,7 +221,7 @@ let
 	  --arg ssh_setup "$ssh_setup" \
 	  --arg ssh_setup_contract "$ssh_setup_contract" \
 	  --arg mount_policy_identity "$mount_policy_identity" \
-	  --arg supervisor_root ${fixtureRoot} \
+	  --arg supervisor_root ${supervisorRoot} \
       --arg origin "$origin" \
       --arg resolv ${resolvConf} \
       --arg candidate_a "$candidate_a" \
@@ -357,6 +360,9 @@ let
             resolv_conf:$d_resolv
           }
 	      }' > "$manifest"
+    ${pkgs.coreutils}/bin/sha256sum "$manifest" \
+      | ${pkgs.coreutils}/bin/cut -d' ' -f1 \
+      > "$out/identity.sha256"
   '';
 
   productionAdapter = mkProductAdapterPackage {
@@ -418,7 +424,122 @@ let
     mkdir -p "$out"
     cp "$root/result.json" "$out/readiness.json"
   '';
+  supervisorIdentityHermetic = pkgs.buildGoModule {
+    pname = "devkit-product-supervisor-identity-lifecycle";
+    version = "dev";
+    src = ../cli/devctl;
+    modRoot = ".";
+    vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+    subPackages = [ "cmd/product-adapter-supervisor" ];
+    env.CGO_ENABLED = "0";
+    DEVKIT_TEST_PINNED_CODEX = "${pinnedCodex}/bin/codex";
+    DEVKIT_TEST_PRODUCT_AUTHORITY_MANIFEST = "${diagnosticAdapterManifest}/identity.json";
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      go test ./cmd/product-adapter-supervisor \
+        -run '^Test(ExactManagedAppServerPreservesApprovedLeadingConfiguration|ProcessInventoryRejectsSameUIDLookalikeAcrossCgroupBoundary|DrainSupervisorHandlersStopsTargetAndClosesActiveProxy)$' \
+        -count=1 -v
+      go test -tags devkitintegration ./cmd/product-adapter-supervisor \
+        -run '^Test(SupervisorChildFirstStopCleansProductionAdapterAndProxy|SupervisorBootsBeforeCredentialSeedingAndGatesPrepare)$' \
+        -count=1 -v
+      runHook postCheck
+    '';
+  };
   namespaceWrappers = productionAdapter.productAdapterResources.namespaceWrappers;
+  moduleSystem = mkNixosSystem {
+    system = pkgs.system;
+    modules = [
+      productConsumerModule
+      {
+        users.groups.controller.gid = 1000;
+        system.stateVersion = "26.05";
+        services.devkitProductConsumer = {
+          enable = true;
+          adapterPackage = productionAdapter;
+          authorityManifest = "${diagnosticAdapterManifest}/identity.json";
+          authorityManifestSha256File = "${diagnosticAdapterManifest}/identity.sha256";
+          consumer1AuthorizedKeys = "${fixtureSource}/gui-1-authorized_keys";
+          consumer2AuthorizedKeys = "${fixtureSource}/gui-2-authorized_keys";
+        };
+      }
+    ];
+  };
+  moduleConfig = moduleSystem.config;
+  moduleSelectorInstaller =
+    moduleConfig.systemd.services.devkit-product-authority-selector.serviceConfig.ExecStart;
+  moduleContract =
+    assert moduleConfig.users.users.product1.uid == 2001;
+    assert moduleConfig.users.users.product2.uid == 2002;
+    assert moduleConfig.users.users.product1.shell == namespaceWrappers.sshSession.path;
+    assert moduleConfig.users.users.product2.shell == namespaceWrappers.sshSession.path;
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.supervisor.name}.source
+      == "${productionAdapter}/bin/${namespaceWrappers.supervisor.target}";
+    assert
+      moduleConfig.systemd.services.devkit-product-consumer-1.serviceConfig.ExecStart
+      == "${namespaceWrappers.supervisor.path} serve --count 2 --index 1";
+    assert
+      moduleConfig.systemd.services.devkit-product-consumer-2.serviceConfig.ExecStart
+      == "${namespaceWrappers.supervisor.path} serve --count 2 --index 2";
+    assert
+      builtins.elem "multi-user.target"
+        moduleConfig.systemd.services.devkit-product-consumer-1.wantedBy;
+    assert
+      builtins.elem "multi-user.target"
+        moduleConfig.systemd.services.devkit-product-consumer-2.wantedBy;
+    assert moduleConfig.systemd.services.devkit-product-consumer-1.serviceConfig.KillMode == "mixed";
+    assert moduleConfig.systemd.services.devkit-product-consumer-2.serviceConfig.KillMode == "mixed";
+    assert
+      builtins.match ".*ForceCommand .*product-ssh-session force-command --count 2 --index 1.*"
+        moduleConfig.environment.etc."devkit/product-consumer-force-command.conf".text
+      != null;
+    pkgs.runCommand "devkit-product-consumer-module-contract"
+      {
+        nativeBuildInputs = [
+          pkgs.bubblewrap
+          pkgs.coreutils
+          pkgs.jq
+        ];
+      }
+      ''
+      root="$TMPDIR/selector-root"
+      mkdir -p "$root/var/lib/product-runtime" "$root/tmp"
+      chmod 0755 "$root/var/lib/product-runtime"
+      cp ${diagnosticAdapterManifest}/identity.json "$root/identity.json"
+      chmod 0444 "$root/identity.json"
+      bwrap \
+        --die-with-parent \
+        --unshare-user --uid 0 --gid 0 \
+        --unshare-pid --unshare-uts --unshare-ipc \
+        --ro-bind /nix/store /nix/store \
+        --ro-bind "$root/identity.json" ${diagnosticAdapterManifest}/identity.json \
+        --bind "$root/var" /var \
+        --bind "$root/tmp" /tmp \
+        --proc /proc \
+        --dev /dev \
+        ${pkgs.bash}/bin/bash -euc '
+          ${moduleSelectorInstaller}
+          ${moduleSelectorInstaller}
+          selector=/var/lib/product-runtime/authority-selector.json
+          test "$(${pkgs.coreutils}/bin/stat -c %u "$selector")" = 0
+          test "$(${pkgs.coreutils}/bin/stat -c %a "$selector")" = 444
+          ${pkgs.jq}/bin/jq -e \
+            --arg manifest ${diagnosticAdapterManifest}/identity.json \
+            --arg digest "$(${pkgs.coreutils}/bin/cut -d" " -f1 ${diagnosticAdapterManifest}/identity.sha256)" \
+            ".schemaVersion == \"devkit/product-runtime-authority-selector/v1\" and
+             .manifestPath == \$manifest and .manifestSha256 == \$digest" \
+            "$selector" >/dev/null
+        '
+      mkdir -p "$out"
+      printf '%s\n' \
+        'two fixed Product identities: product1=2001 product2=2002' \
+        'generated immutable selector service executed twice and validated exact manifest binding' \
+        'package-owned initial namespace wrappers and forced sessions' \
+        'both Product supervisors activate canonically at multi-user.target' \
+        'supervisors receive graceful main-process-first teardown before bounded cgroup kill' \
+        > "$out/contract"
+      '';
   adapterPackageContract = pkgs.runCommand "devkit-product-adapter-production-contract" {
     nativeBuildInputs = [
       pkgs.binutils
@@ -504,27 +625,18 @@ let
     ]}
     exec 8>&1 9>&2
     test ! -e ${fixtureRoot}
-    test ! -e ${candidateParent}
-    mkdir -p ${fixtureRoot} ${candidateParent}/a ${candidateParent}/b
-    chmod 0711 ${fixtureRoot} ${candidateParent}
-	chown 2001:2001 ${candidateParent}/a
-	chown 2002:2002 ${candidateParent}/b
-	chmod 0700 ${candidateParent}/a ${candidateParent}/b
-    test ! -e /var/lib/product-runtime/authority-selector.json
-    mkdir -p /var/lib/product-runtime
-    chown root:root /var/lib/product-runtime
-    chmod 0755 /var/lib/product-runtime
-    manifest_sha="$(${pkgs.coreutils}/bin/sha256sum ${diagnosticAdapterManifest}/identity.json | ${pkgs.coreutils}/bin/cut -d' ' -f1)"
-    ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i PATH=/hostile \
-      ${productionAdapter}/bin/product-authority-selector-install \
-      --manifest ${diagnosticAdapterManifest}/identity.json \
-      --manifest-sha256 "$manifest_sha"
+    test -d ${candidateParent}/a
+    test -d ${candidateParent}/b
+    test ! -e ${candidateParent}/a/slot
+    test ! -e ${candidateParent}/b/slot
+    mkdir -p ${fixtureRoot}
+    chmod 0711 ${fixtureRoot}
+    test -f /var/lib/product-runtime/authority-selector.json
     test "$(${pkgs.coreutils}/bin/stat -c %u /var/lib/product-runtime/authority-selector.json)" = 0
     test "$(${pkgs.coreutils}/bin/stat -c %a /var/lib/product-runtime/authority-selector.json)" = 444
     supervisor_pid=""
     held_client_pid=""
     lookalike_pid=""
-    sshd_pid=""
     outer_proxy_pid=""
     phase="initialize"
     process_live() {
@@ -536,15 +648,15 @@ let
     }
     cleanup() {
       test -z "$lookalike_pid" || kill "$lookalike_pid" 2>/dev/null || true
-      test -z "$supervisor_pid" || kill "$supervisor_pid" 2>/dev/null || true
+      ${pkgs.systemd}/bin/systemctl stop \
+        devkit-product-consumer-1.service \
+        devkit-product-consumer-2.service \
+        >/dev/null 2>&1 || true
       test -z "$held_client_pid" || kill "$held_client_pid" 2>/dev/null || true
       test -z "$outer_proxy_pid" || kill "$outer_proxy_pid" 2>/dev/null || true
-      test -z "$sshd_pid" || kill "$sshd_pid" 2>/dev/null || true
       test -z "$lookalike_pid" || wait "$lookalike_pid" 2>/dev/null || true
-      test -z "$supervisor_pid" || wait "$supervisor_pid" 2>/dev/null || true
       test -z "$held_client_pid" || wait "$held_client_pid" 2>/dev/null || true
       test -z "$outer_proxy_pid" || wait "$outer_proxy_pid" 2>/dev/null || true
-      test -z "$sshd_pid" || wait "$sshd_pid" 2>/dev/null || true
     }
     report_failure() {
       result="$1"
@@ -567,8 +679,6 @@ let
     trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
     phase="prepare diagnostic ssh transport"
-    cp ${fixtureSource}/host-key ${fixtureRoot}/host-key
-    chmod 0600 ${fixtureRoot}/host-key
     host_fields="$(${pkgs.gawk}/bin/awk '{print $1 " " $2}' ${fixtureSource}/host-key.pub)"
     printf '[127.0.0.1]:2222 %s\n' "$host_fields" > ${fixtureRoot}/client-known-hosts
     chown controller:controller ${fixtureRoot}/client-known-hosts
@@ -607,33 +717,14 @@ EOF
     ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
       ${fixtureRoot}/root-authorized-keys \
       ${fixtureRoot}/authorized-keys/git
-    for index in 1 2; do
-      ${pkgs.coreutils}/bin/install -o root -g root -m 0644 \
-        ${fixtureSource}/gui-$index-authorized_keys \
-        ${fixtureRoot}/authorized-keys/product$index
-    done
-
-    cat > ${fixtureRoot}/sshd_config <<EOF
-ListenAddress 127.0.0.1
-Port 2222
-PidFile ${fixtureRoot}/sshd.pid
-HostKey ${fixtureRoot}/host-key
-AuthorizedKeysFile ${fixtureRoot}/authorized-keys/%u
-StrictModes yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PubkeyAuthentication yes
-PermitRootLogin no
-AllowUsers git product1 product2
-LogLevel VERBOSE
-Match User product1
-  ForceCommand ${productionAdapter}/bin/product-ssh-session force-command --count 2 --index 1
-Match User product2
-  ForceCommand ${productionAdapter}/bin/product-ssh-session force-command --count 2 --index 2
-EOF
-    ${pkgs.openssh}/bin/sshd -D -e -f ${fixtureRoot}/sshd_config \
-      >${fixtureRoot}/sshd.log 2>&1 &
-    sshd_pid=$!
+    ${pkgs.openssh}/bin/sshd -T \
+      -C user=product1,host=127.0.0.1,addr=127.0.0.1 \
+      | ${pkgs.gnugrep}/bin/grep -F \
+        'forcecommand ${productionAdapter}/bin/product-ssh-session force-command --count 2 --index 1'
+    ${pkgs.openssh}/bin/sshd -T \
+      -C user=product2,host=127.0.0.1,addr=127.0.0.1 \
+      | ${pkgs.gnugrep}/bin/grep -F \
+        'forcecommand ${productionAdapter}/bin/product-ssh-session force-command --count 2 --index 2'
     ${connectFixture}/bin/product-connect-fixture serve \
       --listen 127.0.0.1:18080 --upstream 127.0.0.1:2222 \
       >${fixtureRoot}/proxy.log 2>&1 &
@@ -721,9 +812,8 @@ EOF
       chown -R "$uid:$uid" "$candidate/home/.codex"
       chmod 0700 "$candidate/home/.codex"
       chmod 0600 "$candidate/home/.codex/auth.json"
-      mkdir ${fixtureRoot}/control-$index
-      chown "$uid:$uid" ${fixtureRoot}/control-$index
-      chmod 0700 ${fixtureRoot}/control-$index
+      test "$(${pkgs.coreutils}/bin/stat -c %u:%g ${supervisorRoot}/control-$index)" = "$uid:$uid"
+      test "$(${pkgs.coreutils}/bin/stat -c %a ${supervisorRoot}/control-$index)" = 700
 
       phase="consumer-$index namespace-attested launch"
       if ${pkgs.util-linux}/bin/setpriv \
@@ -736,7 +826,7 @@ EOF
         echo "direct Product supervisor bypassed the package-owned entry wrapper" >&2
         exit 1
       fi
-      test ! -e ${fixtureRoot}/control-$index/product-supervisor.sock
+      test -S ${supervisorRoot}/control-$index/product-supervisor.sock
 
       if ${pkgs.util-linux}/bin/runuser -u product$index -- \
         ${pkgs.util-linux}/bin/unshare --user --map-current-user --mount -- \
@@ -746,21 +836,18 @@ EOF
         echo "caller-created namespace acquired Product supervisor authority" >&2
         exit 1
       fi
-      test ! -e ${fixtureRoot}/control-$index/product-supervisor.sock
+      test -S ${supervisorRoot}/control-$index/product-supervisor.sock
 
-      ${pkgs.util-linux}/bin/setpriv \
-        --reuid="$uid" --regid="$uid" --clear-groups \
-        --inh-caps=-all --ambient-caps=-all -- \
-        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
-        ${namespaceWrappers.supervisor.path} \
-        serve --count 2 --index "$index" \
-        >${fixtureRoot}/supervisor-$index.log 2>&1 &
-      supervisor_pid=$!
+      ${pkgs.systemd}/bin/systemctl is-active --quiet \
+        "devkit-product-consumer-$index.service"
+      supervisor_pid="$(${pkgs.systemd}/bin/systemctl show \
+        --property MainPID --value "devkit-product-consumer-$index.service")"
+      test "$supervisor_pid" -gt 0
       for attempt in $(${pkgs.coreutils}/bin/seq 1 100); do
-        test -S ${fixtureRoot}/control-$index/product-supervisor.sock && break
+        test -S ${supervisorRoot}/control-$index/product-supervisor.sock && break
         ${pkgs.coreutils}/bin/sleep 0.05
       done
-      test -S ${fixtureRoot}/control-$index/product-supervisor.sock
+      test -S ${supervisorRoot}/control-$index/product-supervisor.sock
       for status in /proc/$supervisor_pid/task/*/status; do
         ${pkgs.gawk}/bin/awk -v expected="$uid" '
           $1 == "Uid:" &&
@@ -1002,7 +1089,7 @@ EOF
         echo "held Product app-server session ended before supervisor teardown" >&2
         exit 1
       fi
-      kill "$supervisor_pid"
+      ${pkgs.systemd}/bin/systemctl stop "devkit-product-consumer-$index.service"
       for attempt in $(${pkgs.coreutils}/bin/seq 1 200); do
         if ! process_live "$supervisor_pid" \
           && ! process_live "$held_client_pid"
@@ -1019,13 +1106,12 @@ EOF
         echo "held Product app-server session survived supervisor teardown" >&2
         exit 1
       fi
-      wait "$supervisor_pid"
       supervisor_pid=""
       wait "$held_client_pid"
       held_client_pid=""
       test ! -e "$candidate/state/app-server.sock"
       test ! -e "$candidate/state/product-egress.sock"
-      test ! -e ${fixtureRoot}/control-$index/product-supervisor.sock
+      test ! -e ${supervisorRoot}/control-$index/product-supervisor.sock
       test -z "$(${pkgs.procps}/bin/pgrep -u "$uid" -f '${pinnedCodex}/bin/codex.*app-server' || true)"
       rm -rf "$candidate"
       test ! -e "$candidate"
@@ -1038,12 +1124,12 @@ EOF
       ${fixtureRoot}/receipt-1.json ${fixtureRoot}/receipt-2.json \
       ${fixtureRoot}/seed-1.json ${fixtureRoot}/seed-2.json
     cleanup
-    sshd_pid=""
     outer_proxy_pid=""
     trap - EXIT
     trap - ERR
-    rm -rf ${candidateParent} ${fixtureRoot}
-    test ! -e ${candidateParent}
+    rm -rf ${fixtureRoot}
+    test ! -e ${candidateParent}/a/slot
+    test ! -e ${candidateParent}/b/slot
     test ! -e ${fixtureRoot}
   '';
   vmTest = pkgs.testers.runNixOSTest {
@@ -1057,6 +1143,7 @@ EOF
       virtualisation.restrictNetwork = true;
       virtualisation.memorySize = 4096;
       virtualisation.cores = 2;
+      imports = [ productConsumerModule ];
       users.groups.sshd = { };
       users.users.sshd = {
         isSystemUser = true;
@@ -1073,8 +1160,47 @@ EOF
         subUidRanges = [ ];
         subGidRanges = [ ];
 	  };
-      users.groups.product1.gid = 2001;
-      users.groups.product2.gid = 2002;
+      services.devkitProductConsumer = {
+        enable = true;
+        adapterPackage = productionAdapter;
+        authorityManifest = "${diagnosticAdapterManifest}/identity.json";
+        authorityManifestSha256File = "${diagnosticAdapterManifest}/identity.sha256";
+        consumer1AuthorizedKeys = "${fixtureSource}/gui-1-authorized_keys";
+        consumer2AuthorizedKeys = "${fixtureSource}/gui-2-authorized_keys";
+      };
+      services.openssh = {
+        enable = true;
+        ports = [ 2222 ];
+        listenAddresses = [
+          {
+            addr = "127.0.0.1";
+            port = 2222;
+          }
+        ];
+        hostKeys = [
+          {
+            path = "/etc/ssh/devkit-product-lifecycle-host-key";
+            type = "ed25519";
+          }
+        ];
+        settings = {
+          AuthorizedKeysFile = "${fixtureRoot}/authorized-keys/%u";
+          PasswordAuthentication = false;
+          KbdInteractiveAuthentication = false;
+          PermitRootLogin = "no";
+          AllowUsers = [
+            "git"
+            "product1"
+            "product2"
+          ];
+        };
+      };
+      environment.etc."ssh/devkit-product-lifecycle-host-key" = {
+        source = fixtureHostKey;
+        mode = "0600";
+        user = "root";
+        group = "root";
+      };
       users.groups.git.gid = 2000;
       users.users.git = {
         isSystemUser = true;
@@ -1083,54 +1209,11 @@ EOF
         shell = "${pkgs.bashInteractive}/bin/bash";
         hashedPassword = "";
       };
-      users.users.product1 = {
-        isSystemUser = true;
-        uid = 2001;
-        group = "product1";
-        autoSubUidGidRange = false;
-        subUidRanges = [ ];
-        subGidRanges = [ ];
-		home = "${candidateParent}/a/slot/home";
-		shell = namespaceWrappers.sshSession.path;
-		hashedPassword = "";
-      };
-      users.users.product2 = {
-        isSystemUser = true;
-        uid = 2002;
-        group = "product2";
-        autoSubUidGidRange = false;
-        subUidRanges = [ ];
-        subGidRanges = [ ];
-		home = "${candidateParent}/b/slot/home";
-		shell = namespaceWrappers.sshSession.path;
-		hashedPassword = "";
-      };
-	  environment.shells = [ namespaceWrappers.sshSession.path ];
-      security.wrappers =
-        pkgs.lib.mapAttrs'
-          (
-            _: wrapper:
-            pkgs.lib.nameValuePair wrapper.name {
-              inherit (wrapper) setuid;
-              source = "${productionAdapter}/bin/${wrapper.target}";
-              owner = "root";
-              group = if wrapper.controllerOnly or false then "controller" else "root";
-              permissions =
-                if wrapper.controllerOnly or false then
-                  "u+rx,g+rx,o-rwx"
-                else
-                  "u+rx,g+x,o+x";
-            }
-          )
-          namespaceWrappers;
-      environment.systemPackages = [
-        productionAdapter
-        pkgs.bash
-        pkgs.coreutils
-      ];
     };
   testScript = ''
     machine.wait_for_unit("multi-user.target")
+    machine.wait_for_unit("devkit-product-authority-selector.service")
+    machine.wait_for_unit("sshd.service")
     machine.succeed("! grep -E '^(controller|product1|product2):' /etc/subuid /etc/subgid")
     machine.succeed("test -f ${adapterPackageContract}/contract")
     machine.succeed("${lifecycle}")
@@ -1138,5 +1221,5 @@ EOF
   };
 in
 {
-  inherit readinessHermetic vmTest;
+  inherit moduleContract readinessHermetic supervisorIdentityHermetic vmTest;
 }

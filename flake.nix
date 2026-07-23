@@ -38,6 +38,7 @@
             };
           }
         );
+      productConsumerModule = import ./nix/product-consumer.nix;
       systemDetails = {
         x86_64-linux = {
           dockerArch = "x86_64";
@@ -770,6 +771,8 @@
 	        mkProductStoppedVolumeSeedContract
             pkgs
             ;
+          mkNixosSystem = nixpkgs.lib.nixosSystem;
+          inherit productConsumerModule;
         };
       mkDevAllRuntimeTools =
         {
@@ -876,6 +879,11 @@
           mkProductRuntimeProjection
           mkSourceTransportPackage
           ;
+      };
+
+      nixosModules = {
+        product-consumer = productConsumerModule;
+        default = self.nixosModules.product-consumer;
       };
 
       devShells = forEachSystem (
@@ -1273,6 +1281,8 @@
           # its selected test no longer existed. Keep one source-selected
           # diagnostic fixture: the exact public composed adapter lifecycle.
           product-readiness-hermetic = productBoundary.readinessHermetic;
+          product-consumer-module-contract = productBoundary.moduleContract;
+          product-supervisor-identity-lifecycle = productBoundary.supervisorIdentityHermetic;
           product-consumer-boundary-diagnostic = productBoundary.vmTest;
 
           devctl-openssh-executable-authority =

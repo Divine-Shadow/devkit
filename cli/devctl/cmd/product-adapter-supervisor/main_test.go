@@ -87,6 +87,59 @@ func TestExactReadinessAppServerIsOnlyTheOwnedTransientShape(t *testing.T) {
 	}
 }
 
+func TestProcessInventoryRejectsSameUIDLookalikeAcrossCgroupBoundary(t *testing.T) {
+	procRoot := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	processRoot := filepath.Join(procRoot, "4242")
+	if err := os.Mkdir(processRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(processRoot, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	uid := os.Geteuid()
+	status := fmt.Sprintf("Name:\tcodex\nUid:\t%d\t%d\t%d\t%d\n", uid, uid, uid, uid)
+	if err := os.WriteFile(filepath.Join(processRoot, "status"), []byte(status), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(processRoot, "cgroup"),
+		[]byte("0::/system.slice/foreign-product-lookalike.service\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	lookalikeSocket := "/tmp/foreign-lookalike.sock"
+	arguments := []string{
+		executable,
+		"-c", "features.code_mode_host=true",
+		"app-server", "--listen", "unix://" + lookalikeSocket,
+	}
+	if err := os.WriteFile(
+		filepath.Join(processRoot, "cmdline"),
+		[]byte(strings.Join(arguments, "\x00")+"\x00"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	processes, err := findConsumerAppServersAt(
+		procRoot,
+		executable,
+		uid,
+		"/agent-state/product/app-server.sock",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processes) != 1 || processes[0].PID != 4242 || processes[0].ExactTarget {
+		t.Fatalf("foreign-cgroup same-uid lookalike was not rejected: %+v", processes)
+	}
+}
+
 func TestCandidateStateReusesOnlyReadyOrExactHealthyExecution(t *testing.T) {
 	for _, test := range []struct {
 		status  string
