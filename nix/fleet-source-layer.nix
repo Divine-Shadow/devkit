@@ -6,7 +6,7 @@
   controllerSourceInventory,
   controllerGUIInventory,
   runtimeBashExecutable ? "${pkgs.bash}/bin/bash",
-  runtimePath ? pkgs.lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.findutils pkgs.gawk pkgs.gnugrep pkgs.gnused pkgs.procps ],
+  runtimePath ? pkgs.lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.findutils pkgs.gawk pkgs.gnugrep pkgs.gnused pkgs.iproute2 pkgs.procps ],
 }:
 
 let

@@ -1096,7 +1096,26 @@ func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
 	if strings.TrimSpace(os.Getenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV")) != "1" {
 		return "", false, nil
 	}
-	launcherPath := filepath.Clean(ouroGovernanceSystemRuntimeLauncherPath)
+	launcherPath := filepath.Clean(strings.TrimSpace(os.Getenv("FLEET_RUNTIME_AUTHORITY_LAUNCHER")))
+	if launcherPath == "." || launcherPath == "" {
+		return "", false, fmt.Errorf("authoritative governance runtime launcher projection is missing")
+	}
+	if !strings.HasPrefix(launcherPath, "/nix/store/") {
+		return "", false, fmt.Errorf("authoritative governance runtime launcher is not immutable: %s", launcherPath)
+	}
+	manifestPath := filepath.Clean(strings.TrimSpace(os.Getenv("FLEET_RUNTIME_AUTHORITY_MANIFEST")))
+	declaredSHA := strings.TrimSpace(os.Getenv("FLEET_RUNTIME_AUTHORITY_SHA256"))
+	if manifestPath == "." || manifestPath == "" || !strings.HasPrefix(manifestPath, "/nix/store/") || declaredSHA == "" {
+		return "", false, fmt.Errorf("authoritative governance runtime manifest projection is incomplete")
+	}
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", false, fmt.Errorf("read authoritative governance runtime manifest: %w", err)
+	}
+	actualSHA := fmt.Sprintf("%x", sha256.Sum256(manifestData))
+	if declaredSHA != actualSHA {
+		return "", false, fmt.Errorf("authoritative governance runtime manifest digest mismatch")
+	}
 	if !isExecutable(launcherPath) {
 		return "", false, fmt.Errorf("authoritative system governance runtime launcher is missing or not executable: %s", launcherPath)
 	}
