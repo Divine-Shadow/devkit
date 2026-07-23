@@ -36,8 +36,8 @@ adapter and launcher paths named by that installed manifest; those consumers
 may verify the manifest but may not select source, rebuild a runtime, or
 reinterpret identity. The Devkit `product-consumer-boundary-diagnostic` check
 is prerequisite evidence only. Product promotion requires the governed
-Product-owned promotion app to complete the entire lifecycle on two fresh
-consumers.
+Fleet/Colmena path to complete the entire lifecycle on two fresh consumers
+and reach governed Product admission through each one.
 
 The root-owned `/var/lib/product-runtime/authority-selector.json` is an
 immutable routing record, not a credential. It contains only the Nix-store

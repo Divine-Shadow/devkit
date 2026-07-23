@@ -38,11 +38,8 @@ devkit.lib.mkDevAllRuntimeBundle {
     controllerFleetPath
     devctlLauncherPath
     devkitProductAdapter
-    nativeControllerStation
     pkgs
-    productRealConvergencePromotionAppPath
     runtimeIdentity
-    sourceEvidence
     sources
     ;
 }
@@ -62,16 +59,16 @@ consumer validates that declaration against its immutable package contract;
 it does not infer policy from a launcher, Python adapter, ambient `PATH`, or
 mutable station state. `/run/current-system` comparisons are fail-closed
 same-executable checks against the already selected manifest generation, not
-an identity-selection or derivation mechanism. Only the governed Product
-`product-real-convergence-promotion` lifecycle can promote two fresh consumer
-runs. That Product-owned promotion begins from absent controller and consumer
-state, uses only the manifest-declared Fleet/Devkit executables under an empty
-or hostile `PATH`, and reaches governed Product task creation and first
-admission twice. Devkit's Nix VM lifecycle proves only its compiled mechanical
-boundary (source acquisition, consumer construction, SSH forced command,
-app-server and declared MCP readiness, exact teardown, and repetition). It
-does not deploy a controller, create a Desktop GUI task, perform Scala
-governance, or promote the fleet.
+an identity-selection or derivation mechanism. Only the complete
+Fleet/Colmena lifecycle can promote two fresh consumer runs. That promotion
+begins from absent controller and consumer state, uses only the
+manifest-declared Fleet/Devkit executables under an empty or hostile `PATH`,
+and reaches governed Product task creation and first admission twice.
+Devkit's Nix VM lifecycle proves only its compiled mechanical boundary
+(source acquisition, consumer construction, SSH forced command, app-server
+and declared MCP readiness, exact teardown, and repetition). It does not
+deploy a controller, create a Desktop GUI task, perform Scala governance, or
+promote the fleet.
 
 Use explicit experimental feature flags on hosts that do not enable flakes by
 default:

@@ -4,12 +4,9 @@
   controllerFleetPath,
   devctlLauncherPath,
   devkitProductAdapter,
-  nativeControllerStation,
   pkgs,
-  productRealConvergencePromotionAppPath,
   productRuntimeProjection,
   runtimeIdentity,
-  sourceEvidence,
   sources,
 }:
 
@@ -34,30 +31,6 @@ let
     && builtins.all
       (id: builtins.attrNames sources.${id} == [ "rev" ] && isRevision sources.${id}.rev)
       exactSourceIds;
-  sourceEvidenceShapeIsExact =
-    builtins.isAttrs sourceEvidence
-    && builtins.attrNames sourceEvidence == [
-      "path"
-      "schemaVersion"
-      "sourceIds"
-      "validationPath"
-      "wslLockSha256"
-    ]
-    && sourceEvidence.sourceIds == exactSourceIds
-    && builtins.isString sourceEvidence.wslLockSha256
-    && builtins.match "[0-9a-f]{64}" sourceEvidence.wslLockSha256 != null;
-  nativeShapeIsExact =
-    builtins.attrNames nativeControllerStation == [
-      "guestSystemPath"
-      "interfaceContractPath"
-      "launcherPath"
-      "mechanicalContractPath"
-      "prerequisiteContractPath"
-      "readinessPath"
-      "runnerPath"
-      "schemaVersion"
-    ]
-    && nativeControllerStation.schemaVersion == "wsl-nix/native-controller-station-runtime/v1";
   runtime = runtimeIdentity;
   productRuntimeProjectionShapeIsExact =
     builtins.isAttrs productRuntimeProjection
@@ -167,10 +140,7 @@ let
       codexAuthorization
       controllerFleetPath
       devkitProductAdapter
-      nativeControllerStation
-      productRealConvergencePromotionAppPath
       runtimeIdentity
-      sourceEvidence
       sources
       ;
     bundlePath = "@bundleRoot@";
@@ -189,11 +159,8 @@ let
     "identityEnvPath"
     "identityJsonPath"
     "launcherPath"
-    "nativeControllerStation"
-    "productRealConvergencePromotionAppPath"
     "runtimeIdentity"
     "schemaVersion"
-    "sourceEvidence"
     "sources"
   ];
   authorityTemplate = pkgs.writeText "fleet-runtime-authority-json-template" (
@@ -256,17 +223,7 @@ let
       require_executable "$JAVA_HOME/bin/java"
       require_executable '${controllerFleetPath}'
       require_executable '${devctlLauncherPath}'
-      require_executable '${productRealConvergencePromotionAppPath}'
       require_executable '${devkitProductAdapter.executablePath}'
-      require_readable '${sourceEvidence.path}'
-      require_readable '${sourceEvidence.validationPath}'
-      require_readable '${nativeControllerStation.guestSystemPath}'
-      require_executable '${nativeControllerStation.runnerPath}'
-      require_executable '${nativeControllerStation.launcherPath}'
-      require_readable '${nativeControllerStation.interfaceContractPath}'
-      require_readable '${nativeControllerStation.mechanicalContractPath}'
-      require_readable '${nativeControllerStation.readinessPath}'
-      require_readable '${nativeControllerStation.prerequisiteContractPath}'
     }
     command="''${1:-}"
     case "$command" in
@@ -365,8 +322,6 @@ let
   };
 in
 assert sourceShapeIsExact;
-assert sourceEvidenceShapeIsExact;
-assert nativeShapeIsExact;
 assert requiredRuntimeShape;
 assert productRuntimeProjectionShapeIsExact;
 assert artifactDigestShapeIsExact;

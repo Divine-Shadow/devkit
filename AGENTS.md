@@ -18,7 +18,7 @@ Principles
 Canonical flow
 - Build once: `make -C devkit/cli/devctl build` (outputs `devkit/kit/bin/devctl`).
 - Run ordinary non-Product overlays with `devkit/kit/scripts/devkit …` (this calls the binary). Direct invocation is diagnostic only and never establishes Product authority.
-- Run Product only through the installed authority manifest and its exact adapter/launcher paths. The Devkit consumer-boundary lifecycle is a prerequisite diagnostic; only the governed Product-owned twice-fresh promotion app may promote the resulting runtime.
+- Run Product only through the installed authority manifest and its exact adapter/launcher paths. The Devkit consumer-boundary lifecycle is a prerequisite diagnostic; only the complete canonical Fleet/Colmena lifecycle may promote the resulting runtime after it constructs two fresh consumers and reaches governed Product admission through each one.
 - Do not start the expensive VM diagnostic until the production-path
   compiled/hermetic lifecycle regression passes from absent consumer state and
   the unchanged source/test tree has received ordinary review. Then run the VM

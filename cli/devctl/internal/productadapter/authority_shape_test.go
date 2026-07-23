@@ -23,9 +23,9 @@ func exactConsumerEnvelopeFixture(index int) map[string]any {
 		"sandboxAppServerSocketPath": "/state/app", "governanceEnvTarget": "/candidate/state/env",
 		"governanceRepoConfigTarget": "/candidate/state/repo", "governanceStateRoot": "/candidate/state/governance",
 		"sshIdentityPath": "/candidate/home/.ssh/id", "sshPublicKeyPath": "/candidate/home/.ssh/id.pub",
-		"codexAuthPath": "/candidate/home/.codex/auth.json",
+		"codexAuthPath":      "/candidate/home/.codex/auth.json",
 		"authorizedKeysPath": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-product-authorized-keys",
-		"binds": []any{map[string]any{"source": "/source", "target": "/target", "mode": "ro", "required": true}},
+		"binds":              []any{map[string]any{"source": "/source", "target": "/target", "mode": "ro", "required": true}},
 	}
 }
 
@@ -85,25 +85,15 @@ func exactManifestEnvelopeFixture(t *testing.T) map[string]any {
 			"configSha256": strings.Repeat("e", 64),
 			"systemPath":   "/etc/codex/config.toml",
 		},
-		"controllerFleetPath":                    "/nix/store/fixture/bin/fleet",
-		"devctlLauncherPath":                     "/nix/store/fixture/bin/devctl",
-		"devkitProductAdapter":                   exactAdapterEnvelopeFixture(),
-		"identityEnvPath":                        "/nix/store/fixture/identity.env",
-		"identityJsonPath":                       "/nix/store/fixture/identity.json",
-		"launcherPath":                           "/nix/store/fixture/bin/launcher",
-		"productRealConvergencePromotionAppPath": "/nix/store/fixture/bin/promote",
-		"runtimeIdentity":                        exactRuntimeIdentityEnvelopeFixture(),
-		"schemaVersion":                          ManifestSchema,
-		"sources":                                sources,
-		"sourceEvidence": map[string]any{
-			"path": "source-evidence", "schemaVersion": "fixture", "sourceIds": manifestSourceKeys,
-			"validationPath": "validation", "wslLockSha256": strings.Repeat("a", 64),
-		},
-		"nativeControllerStation": map[string]any{
-			"guestSystemPath": "system", "interfaceContractPath": "interface", "launcherPath": "launcher",
-			"mechanicalContractPath": "mechanical", "prerequisiteContractPath": "prerequisite",
-			"readinessPath": "readiness", "runnerPath": "runner", "schemaVersion": "fixture",
-		},
+		"controllerFleetPath":  "/nix/store/fixture/bin/fleet",
+		"devctlLauncherPath":   "/nix/store/fixture/bin/devctl",
+		"devkitProductAdapter": exactAdapterEnvelopeFixture(),
+		"identityEnvPath":      "/nix/store/fixture/identity.env",
+		"identityJsonPath":     "/nix/store/fixture/identity.json",
+		"launcherPath":         "/nix/store/fixture/bin/launcher",
+		"runtimeIdentity":      exactRuntimeIdentityEnvelopeFixture(),
+		"schemaVersion":        ManifestSchema,
+		"sources":              sources,
 	}
 }
 
@@ -202,9 +192,6 @@ func TestValidateManifestEnvelopeRequiresSingleExactAuthorityShape(t *testing.T)
 		"codex-authorization-valid-absolute-but-wrong-system-path": func(value map[string]any) {
 			value["codexAuthorization"].(map[string]any)["systemPath"] = "/etc/codex/other.toml"
 		},
-		"extra-native-authority": func(value map[string]any) {
-			value["nativeControllerStation"].(map[string]any)["compiledRevision"] = "forbidden"
-		},
 		"extra-adapter-compiled-revision": func(value map[string]any) {
 			value["devkitProductAdapter"].(map[string]any)["compiledRevision"] = strings.Repeat("1", 40)
 		},
@@ -261,9 +248,9 @@ func consumerGeometryFixture(index int, root, supervisorRoot string) ConsumerMan
 		SupervisorSocketPath: filepath.Join(supervisorRoot, "control.sock"),
 		AppServerSocketPath:  filepath.Join(state, "app.sock"), GovernanceEnvTarget: filepath.Join(state, "governance.env"),
 		GovernanceRepoConfigTarget: filepath.Join(state, "governance.json"), GovernanceStateRoot: filepath.Join(state, "governance"),
-		SSHIdentityPath:    filepath.Join(home, ".ssh", "id_ed25519"),
-		SSHPublicKeyPath:   filepath.Join(home, ".ssh", "id_ed25519.pub"),
-		CodexAuthPath:      filepath.Join(home, ".codex", "auth.json"),
+		SSHIdentityPath:  filepath.Join(home, ".ssh", "id_ed25519"),
+		SSHPublicKeyPath: filepath.Join(home, ".ssh", "id_ed25519.pub"),
+		CodexAuthPath:    filepath.Join(home, ".codex", "auth.json"),
 		AuthorizedKeysPath: filepath.Join(
 			"/nix/store",
 			strings.Repeat(string(rune('a'+index-1)), 32)+"-product-authorized-keys",

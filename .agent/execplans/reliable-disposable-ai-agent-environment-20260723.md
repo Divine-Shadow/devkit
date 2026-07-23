@@ -77,7 +77,28 @@ Desktop-governed lifecycle can promote the environment.
 - [x] Pass the exact-tree runtime-tools build, all 20 checks in `nix flake
   check --show-trace`, the focused Go tests, and both staged/unstaged diff
   checks after the corrected diagnostic.
-- [ ] Publish the accepted Devkit source layer on trunk.
+- [x] Publish the accepted Devkit source layer on trunk as
+  `4a1eeb837a2b4a399413b3d8fccf310e05066613`.
+- [x] Reject the WSL composition draft that required proof paperwork, a
+  selected VM station, and a nonexistent Product promotion executable before
+  it could derive the runtime. Those were parallel authorities and a bootstrap
+  cycle, not prerequisites.
+- [x] Remove `sourceEvidence`, `nativeControllerStation`, and
+  `productRealConvergencePromotionAppPath` from the public Nix constructor,
+  immutable authority manifest, compiled exact-key parser, fixture, tests, and
+  operative documentation. The constructor now emits a 12-field runtime
+  authority envelope derived from its exact sources and installed packages;
+  the complete Fleet/Colmena lifecycle owns promotion.
+- [x] Dispose of the first fresh VM after the reduced constructor exposed the
+  stale compiled manifest parser as one typed exact-field-set failure. Repair
+  that parser in source, pass the focused constructor/parser/hermetic checks,
+  then pass the unchanged corrected tree through the full two-consumer VM
+  diagnostic and deterministic teardown.
+- [x] Obtain independent source-audit approval that the reduced Nix and
+  compiled schemas agree, no fallback or second locator was introduced, and
+  the root and Nix documentation assign promotion consistently to the complete
+  Fleet/Colmena lifecycle.
+- [ ] Publish the reduced single-authority Devkit constructor/parser on trunk.
 - [ ] Compose the published Devkit source layer with exact Product source in
   the authoritative WSL/Nix derivation. Its promotion check must use the
   resulting real governance runtime and Fleet task/access path; it must not

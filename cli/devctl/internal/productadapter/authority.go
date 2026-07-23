@@ -28,25 +28,17 @@ var (
 	manifestTopLevelKeys = []string{
 		"artifactDigests", "bundlePath", "codexAuthorization", "controllerFleetPath",
 		"devctlLauncherPath", "devkitProductAdapter", "identityEnvPath", "identityJsonPath",
-		"launcherPath", "nativeControllerStation", "productRealConvergencePromotionAppPath",
-		"runtimeIdentity", "schemaVersion", "sourceEvidence", "sources",
+		"launcherPath", "runtimeIdentity", "schemaVersion", "sources",
 	}
 	manifestSourceKeys = []string{
 		"dev-workspace", "devkit", "fleet-control", "microvm", "nixos-wsl",
 		"nixpkgs", "ouroboros-ide", "wsl",
-	}
-	manifestSourceEvidenceKeys = []string{
-		"path", "schemaVersion", "sourceIds", "validationPath", "wslLockSha256",
 	}
 	manifestArtifactDigestKeys = []string{
 		"artifactColumnPlugin", "governance", "sbtControlPlane", "submitToCi",
 	}
 	manifestCodexAuthorizationKeys = []string{
 		"configPath", "configSha256", "systemPath",
-	}
-	manifestNativeControllerKeys = []string{
-		"guestSystemPath", "interfaceContractPath", "launcherPath", "mechanicalContractPath",
-		"prerequisiteContractPath", "readinessPath", "runnerPath", "schemaVersion",
 	}
 	manifestAdapterKeys = []string{
 		"artifactDigests", "baseBranch", "branchPrefix", "brokerPath", "bubblewrapPath",
@@ -405,18 +397,6 @@ func validateManifestEnvelope(data []byte) error {
 	if err := json.Unmarshal(codexAuthorization["systemPath"], &systemPath); err != nil ||
 		systemPath != "/etc/codex/config.toml" {
 		return fmt.Errorf("Product authority Codex authorization systemPath is invalid")
-	}
-	for key, expected := range map[string][]string{
-		"sourceEvidence":          manifestSourceEvidenceKeys,
-		"nativeControllerStation": manifestNativeControllerKeys,
-	} {
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(top[key], &object); err != nil {
-			return fmt.Errorf("parse Product authority %s: %w", key, err)
-		}
-		if err := requireExactJSONKeys("Product authority "+key, object, expected); err != nil {
-			return err
-		}
 	}
 	var adapter map[string]json.RawMessage
 	if err := json.Unmarshal(top["devkitProductAdapter"], &adapter); err != nil {

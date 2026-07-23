@@ -71,16 +71,9 @@ let
     chmod 0555 "$out/bin/java"
   '';
   fixtureRuntimeTools = pkgs.runCommand "fixture-fleet-runtime-authority-tools" { } ''
-    mkdir -p "$out/bin" "$out/share/contracts" "$out/system"
-    for executable in \
-      devctl \
-      product-real-convergence-promotion \
-      native-controller-runner \
-      native-controller-launcher
-    do
-      printf '%s\n' '#!${pkgs.dash}/bin/dash' 'exit 0' > "$out/bin/$executable"
-      chmod 0555 "$out/bin/$executable"
-    done
+    mkdir -p "$out/bin"
+    printf '%s\n' '#!${pkgs.dash}/bin/dash' 'exit 0' > "$out/bin/devctl"
+    chmod 0555 "$out/bin/devctl"
     cat > "$out/bin/controller-fleet" <<'EOF'
     #!${pkgs.dash}/bin/dash
     set -eu
@@ -99,29 +92,6 @@ let
     printf 'fleet-fixture:%s\n' "$*"
     EOF
     chmod 0555 "$out/bin/controller-fleet"
-    for contract in interface mechanical readiness prerequisite; do
-      printf '%s\n' "diagnostic $contract contract" > "$out/share/contracts/$contract"
-    done
-    printf '%s\n' 'diagnostic native controller guest system' > "$out/system/identity"
-  '';
-  sourceIds = [
-    "dev-workspace"
-    "devkit"
-    "fleet-control"
-    "microvm"
-    "nixos-wsl"
-    "nixpkgs"
-    "ouroboros-ide"
-    "wsl"
-  ];
-  sourceEvidencePath = pkgs.writeText "fixture-source-evidence.json" (
-    builtins.toJSON {
-      schemaVersion = "wsl-nix/source-evidence/v1";
-      inherit sourceIds;
-    }
-  );
-  sourceEvidenceValidationPath = pkgs.writeText "fixture-source-evidence-validation" ''
-    diagnostic source evidence validation passed
   '';
   governanceJarSHA256 = builtins.hashString "sha256" "fixture-product-governance-jar\n";
   submitToCiJarSHA256 = builtins.hashString "sha256" "fixture-product-submit-to-ci-jar\n";
@@ -185,28 +155,9 @@ in
     ouroboros-ide.rev = productSourceRev;
     wsl.rev = "8888888888888888888888888888888888888888";
     };
-    sourceEvidence = {
-    schemaVersion = "wsl-nix/source-evidence/v1";
-    path = sourceEvidencePath;
-    validationPath = sourceEvidenceValidationPath;
-    wslLockSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    inherit sourceIds;
-    };
     controllerFleetPath = "${fixtureRuntimeTools}/bin/controller-fleet";
     devctlLauncherPath = "${fixtureRuntimeTools}/bin/devctl";
-    productRealConvergencePromotionAppPath =
-      "${fixtureRuntimeTools}/bin/product-real-convergence-promotion";
     inherit productRuntimeProjection;
-    nativeControllerStation = {
-    schemaVersion = "wsl-nix/native-controller-station-runtime/v1";
-    guestSystemPath = "${fixtureRuntimeTools}/system";
-    runnerPath = "${fixtureRuntimeTools}/bin/native-controller-runner";
-    launcherPath = "${fixtureRuntimeTools}/bin/native-controller-launcher";
-    interfaceContractPath = "${fixtureRuntimeTools}/share/contracts/interface";
-    mechanicalContractPath = "${fixtureRuntimeTools}/share/contracts/mechanical";
-    readinessPath = "${fixtureRuntimeTools}/share/contracts/readiness";
-    prerequisiteContractPath = "${fixtureRuntimeTools}/share/contracts/prerequisite";
-    };
     inherit runtimeIdentity;
     devkitProductAdapter = {
     schemaVersion = "wsl-nix-devkit-product-adapter/v1";
