@@ -2564,22 +2564,33 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	} else {
 		_ = addBind("ro", "/etc/resolv.conf", "/etc/resolv.conf", false)
 	}
-	addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
-	addSymlink("/run/current-system/sw/bin/bash", "/usr/bin/bash")
-	addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
-	addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
+	localDirectTarget, localDirect, err := localDirectFleetTarget(command)
+	if err != nil {
+		return Command{}, err
+	}
+	if !localDirect {
+		addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
+		addSymlink("/run/current-system/sw/bin/bash", "/usr/bin/bash")
+		addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
+		addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
+	}
 
 	var projectedSocket *os.File
 	var projectedManifestPath, projectedManifestSHA string
-	if targetID, ok, err := localDirectFleetTarget(command); err != nil {
-		return Command{}, err
-	} else if ok {
+	if localDirect {
+		targetID := localDirectTarget
 		identity, err := resolveOuroGovernanceRuntimeIdentityForPlan(p.RuntimeAuthorityRoot)
 		if err != nil {
 			return Command{}, fmt.Errorf("resolve runtime authority for Fleet app-rpc: %w", err)
 		}
 		manifest, err := loadFleetRuntimeAuthorityManifest(identity.RuntimeBundlePath)
 		if err != nil {
+			return Command{}, err
+		}
+		if filepath.Clean(command[0]) != filepath.Clean(manifest.ControllerSourceLayer.ControllerFleet) {
+			return Command{}, fmt.Errorf("Fleet app-rpc executable is not the manifest-selected controller")
+		}
+		if err := verifyNestedSourceLayerBinding(manifest); err != nil {
 			return Command{}, err
 		}
 		projection, err := resolveFleetLocalDirectSocket(manifest, targetID)
@@ -2598,7 +2609,9 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 			projectedSocket.Close()
 			return Command{}, fmt.Errorf("stat pinned Fleet local-direct socket: %w", err)
 		}
-		if uint64(stat.Ino) != projection.SocketInode || uint64(stat.Dev) != projection.SocketDevice || uint32(stat.Uid) != projection.SocketUID || projection.SocketMode&0o077 != 0 || uint32(stat.Mode&0o777) != projection.SocketMode {
+		const sIFMT = 0o170000
+		const sIFSOCK = 0o140000
+		if uint32(stat.Mode)&sIFMT != sIFSOCK || uint64(stat.Ino) != projection.SocketInode || uint64(stat.Dev) != projection.SocketDevice || uint32(stat.Uid) != projection.SocketUID || projection.SocketMode&0o077 != 0 || uint32(stat.Mode&0o777) != projection.SocketMode {
 			projectedSocket.Close()
 			return Command{}, fmt.Errorf("Fleet local-direct socket changed between resolve and bind")
 		}
@@ -2649,7 +2662,14 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	runtimeArgs := []string{runtimeLauncher}
 	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
-		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
+		proxyBash := "/run/current-system/sw/bin/bash"
+		if localDirect {
+			proxyBash, err = sourceLayerRuntimeBashPath(p.RuntimeAuthorityRoot)
+			if err != nil {
+				return Command{}, err
+			}
+		}
+		args = append(args, proxyBash, "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
 	} else {
 		args = append(args, runtimeArgs...)
 	}
@@ -2730,6 +2750,67 @@ func loadFleetRuntimeAuthorityManifest(bundlePath string) (fleetRuntimeAuthority
 		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("Fleet runtime authority manifest self/identity shape rejected")
 	}
 	return manifest, nil
+}
+
+func sourceLayerRuntimeBashPath(runtimeRoot string) (string, error) {
+	manifestPath := filepath.Join(runtimeRoot, "share/dev-all-runtime-bundle/identity.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("read runtime authority for package shell: %w", err)
+	}
+	var manifest struct {
+		ControllerSourceLayer struct {
+			ManifestPath string `json:"manifestPath"`
+		} `json:"controllerSourceLayer"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", fmt.Errorf("parse runtime authority for package shell: %w", err)
+	}
+	sourceData, err := os.ReadFile(manifest.ControllerSourceLayer.ManifestPath)
+	if err != nil {
+		return "", fmt.Errorf("read source-layer runtime projection: %w", err)
+	}
+	var source struct {
+		Runtime struct {
+			BashExecutablePath string `json:"bashExecutablePath"`
+		} `json:"runtime"`
+	}
+	if err := json.Unmarshal(sourceData, &source); err != nil || !strings.HasPrefix(source.Runtime.BashExecutablePath, "/nix/store/") || !isExecutable(source.Runtime.BashExecutablePath) {
+		return "", fmt.Errorf("source-layer package shell projection is invalid")
+	}
+	return source.Runtime.BashExecutablePath, nil
+}
+
+func verifyNestedSourceLayerBinding(manifest fleetRuntimeAuthorityManifest) error {
+	data, err := os.ReadFile(manifest.ControllerSourceLayer.ManifestPath)
+	if err != nil {
+		return fmt.Errorf("read nested Fleet source-layer manifest: %w", err)
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(data)) != manifest.ControllerSourceLayer.ManifestSHA256 {
+		return fmt.Errorf("nested Fleet source-layer manifest digest mismatch")
+	}
+	var source struct {
+		PackagePath               string `json:"packagePath"`
+		LauncherPath              string `json:"launcherPath"`
+		ControllerFleetPath       string `json:"controllerFleetPath"`
+		ControllerDevctlPath      string `json:"controllerDevctlPath"`
+		ControllerSourceInventory struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"controllerSourceInventory"`
+		ControllerGUIInventory struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"controllerGUIInventory"`
+	}
+	if err := json.Unmarshal(data, &source); err != nil {
+		return fmt.Errorf("parse nested Fleet source-layer manifest: %w", err)
+	}
+	packageRoot := filepath.Dir(filepath.Dir(manifest.ControllerSourceLayer.LauncherPath))
+	if source.PackagePath != manifest.ControllerSourceLayer.PackagePath || source.LauncherPath != manifest.ControllerSourceLayer.LauncherPath || source.ControllerFleetPath != manifest.ControllerSourceLayer.ControllerFleet || source.ControllerDevctlPath != manifest.ControllerSourceLayer.ControllerDevctl || source.ControllerSourceInventory.Path != manifest.ControllerSourceLayer.SourceInventory.Path || source.ControllerSourceInventory.SHA256 != manifest.ControllerSourceLayer.SourceInventory.SHA256 || source.ControllerGUIInventory.Path != manifest.ControllerSourceLayer.GUIInventory.Path || source.ControllerGUIInventory.SHA256 != manifest.ControllerSourceLayer.GUIInventory.SHA256 || packageRoot != manifest.ControllerSourceLayer.PackagePath {
+		return fmt.Errorf("nested Fleet source-layer binding disagrees with final runtime authority")
+	}
+	return nil
 }
 
 func resolveFleetLocalDirectSocket(manifest fleetRuntimeAuthorityManifest, targetID string) (fleetLocalDirectSocketProjection, error) {
