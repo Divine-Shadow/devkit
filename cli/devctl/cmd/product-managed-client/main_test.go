@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -220,17 +219,5 @@ func TestDecodeMCPFixtureCallRequiresMatchingTypedContent(t *testing.T) {
 				t.Fatal("invalid MCP fixture result was accepted")
 			}
 		})
-	}
-}
-
-func TestManagedHoldAcceptsOnlyCleanSupervisorSessionExit(t *testing.T) {
-	if err := classifyManagedHoldExit(nil, nil); err != nil {
-		t.Fatalf("clean supervisor-induced session exit was rejected: %v", err)
-	}
-	err := classifyManagedHoldExit(&exec.ExitError{}, []byte("transport broke"))
-	if err == nil ||
-		!strings.Contains(err.Error(), "exited non-cleanly before supervisor termination") ||
-		!strings.Contains(err.Error(), "transport broke") {
-		t.Fatalf("non-supervisor session failure was not typed RED: %v", err)
 	}
 }

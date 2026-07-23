@@ -22,6 +22,7 @@ import (
 	"devkit/cli/devctl/internal/runtime/capacity"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/runtime/readiness"
+	"devkit/cli/devctl/internal/testsupport"
 )
 
 func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
@@ -1048,7 +1049,7 @@ func TestWithManagedEgressProxyEstablishesSocketBeforeBootstrapAndCleansUp(t *te
 
 func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) {
 	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
-	tmp := t.TempDir()
+	tmp := testsupport.UnixSocketDir(t)
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1080,7 +1081,7 @@ func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) 
 
 func TestEnsureManagedEgressProxyRefusesArbitraryExistingListener(t *testing.T) {
 	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
-	tmp := t.TempDir()
+	tmp := testsupport.UnixSocketDir(t)
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)

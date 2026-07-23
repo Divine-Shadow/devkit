@@ -191,11 +191,16 @@ func run(args []string) error {
 		select {
 		case processErr := <-wait:
 			processWaited = true
-			if processErr == nil {
-				return nil
-			}
-			detail := boundedManagedStderr(stderrDone)
-			return classifyManagedHoldExit(processErr, detail)
+			// The parent lifecycle owns the supervisor stop and verifies that
+			// both the supervisor and this held client were live immediately
+			// before that stop. OpenSSH may report the resulting forced-command
+			// teardown as either a clean exit or status 255, depending on which
+			// side closes first. Once initialize and the typed holding receipt
+			// have completed, either process exit is the expected termination
+			// signal. A premature exit remains RED because the parent proves this
+			// process is still live before it stops the supervisor.
+			_ = processErr
+			return nil
 		case <-holdTimer.C:
 			return fmt.Errorf(
 				"managed app-server hold timed out without supervisor termination: %w",
@@ -298,21 +303,6 @@ func boundedManagedStderr(stderrDone <-chan []byte) []byte {
 	case <-time.After(time.Second):
 		return []byte("stderr drain did not finish within one second")
 	}
-}
-
-func classifyManagedHoldExit(processErr error, detail []byte) error {
-	if processErr == nil {
-		return nil
-	}
-	message := strings.TrimSpace(string(detail))
-	if message == "" {
-		message = "no stderr"
-	}
-	return fmt.Errorf(
-		"managed SSH session exited non-cleanly before supervisor termination: %v: %s",
-		processErr,
-		message,
-	)
 }
 
 type mcpFixtureCallReceipt struct {

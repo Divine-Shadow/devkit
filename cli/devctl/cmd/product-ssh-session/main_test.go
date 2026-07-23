@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"net"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"devkit/cli/devctl/internal/productsession"
+	"devkit/cli/devctl/internal/testsupport"
 )
 
 func TestParseLoginShellInvocationAcceptsOnlyExactSSHDShape(t *testing.T) {
@@ -33,7 +33,7 @@ func TestParseLoginShellInvocationAcceptsOnlyExactSSHDShape(t *testing.T) {
 }
 
 func TestRelayReturnsWhenSupervisorClosesWhileSSHInputRemainsOpen(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "supervisor.sock")
+	socketPath := testsupport.UnixSocketPath(t, "supervisor.sock")
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
