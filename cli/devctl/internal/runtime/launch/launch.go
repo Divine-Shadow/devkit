@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"devkit/cli/devctl/internal/governanceentrypoint"
@@ -23,9 +24,10 @@ import (
 )
 
 type Command struct {
-	Path string
-	Args []string
-	Dir  string
+	Path       string
+	Args       []string
+	Dir        string
+	ExtraFiles []*os.File
 }
 
 // packageGitExecutable is injected by the immutable Devkit package build.
@@ -1016,6 +1018,11 @@ type ouroGovernanceRuntimeIdentity struct {
 	SbtControlPlanePinnedArtifact   string
 	SbtControlPlaneFlakeArtifact    string
 	JavaHome                        string
+	ControllerFleetPath             string
+	ControllerSourceInventoryPath   string
+	ControllerSourceInventorySHA256 string
+	ControllerGUIInventoryPath      string
+	ControllerGUIInventorySHA256    string
 }
 
 const ouroGovernanceRuntimeIdentityMarker = "__FLEET_RUNTIME_AUTHORITY__"
@@ -2543,6 +2550,43 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
 	addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
 
+	var projectedSocket *os.File
+	var projectedManifestPath, projectedManifestSHA string
+	if targetID, ok, err := localDirectFleetTarget(command); err != nil {
+		return Command{}, err
+	} else if ok {
+		identity, err := resolveOuroGovernanceRuntimeIdentityForPlan(p.RuntimeAuthorityRoot)
+		if err != nil {
+			return Command{}, fmt.Errorf("resolve runtime authority for Fleet app-rpc: %w", err)
+		}
+		manifest, err := loadFleetRuntimeAuthorityManifest(identity.RuntimeBundlePath)
+		if err != nil {
+			return Command{}, err
+		}
+		projection, err := resolveFleetLocalDirectSocket(manifest, targetID)
+		if err != nil {
+			return Command{}, err
+		}
+		const oPath = 0x200000 // Linux O_PATH; syscall.O_PATH is not exposed by all Go toolchains.
+		fd, err := syscall.Open(projection.SocketPath, oPath|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return Command{}, fmt.Errorf("open Fleet local-direct socket without following links: %w", err)
+		}
+		projectedSocket = os.NewFile(uintptr(fd), projection.SocketPath)
+		projectedManifestPath, projectedManifestSHA = manifest.IdentityJSONPath, manifest.ManifestSHA256
+		var stat syscall.Stat_t
+		if err := syscall.Fstat(fd, &stat); err != nil {
+			projectedSocket.Close()
+			return Command{}, fmt.Errorf("stat pinned Fleet local-direct socket: %w", err)
+		}
+		if uint64(stat.Ino) != projection.SocketInode || uint64(stat.Dev) != projection.SocketDevice || uint32(stat.Uid) != projection.SocketUID || projection.SocketMode&0o077 != 0 || uint32(stat.Mode&0o777) != projection.SocketMode {
+			projectedSocket.Close()
+			return Command{}, fmt.Errorf("Fleet local-direct socket changed between resolve and bind")
+		}
+		addDir(filepath.Dir(projection.SocketPath))
+		bindArgs = append(bindArgs, "--ro-bind", "/proc/self/fd/3", projection.SocketPath)
+	}
+
 	args = append(args, dirArgs...)
 	args = append(args, bindArgs...)
 	args = append(args, symlinkArgs...)
@@ -2554,6 +2598,12 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		args = append(args, "--setenv", key, p.Env[key])
+	}
+	if projectedManifestPath != "" {
+		args = append(args,
+			"--setenv", "FLEET_RUNTIME_AUTHORITY_MANIFEST", projectedManifestPath,
+			"--setenv", "FLEET_RUNTIME_AUTHORITY_SHA256", projectedManifestSHA,
+		)
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
@@ -2584,7 +2634,132 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	} else {
 		args = append(args, runtimeArgs...)
 	}
-	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
+	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot, ExtraFiles: filesOrNil(projectedSocket)}, nil
+}
+
+type fleetRuntimeAuthorityManifest struct {
+	SchemaVersion         string                     `json:"schemaVersion"`
+	BundlePath            string                     `json:"bundlePath"`
+	LauncherPath          string                     `json:"launcherPath"`
+	IdentityEnvPath       string                     `json:"identityEnvPath"`
+	IdentityJSONPath      string                     `json:"identityJsonPath"`
+	ArtifactDigests       map[string]json.RawMessage `json:"artifactDigests"`
+	CodexAuthorization    json.RawMessage            `json:"codexAuthorization"`
+	DevkitProductAdapter  json.RawMessage            `json:"devkitProductAdapter"`
+	RuntimeIdentity       json.RawMessage            `json:"runtimeIdentity"`
+	Sources               map[string]json.RawMessage `json:"sources"`
+	ControllerSourceLayer struct {
+		PackagePath      string `json:"packagePath"`
+		PackageSHA256    string `json:"packageSha256"`
+		ManifestPath     string `json:"manifestPath"`
+		ManifestSHA256   string `json:"manifestSha256"`
+		LauncherPath     string `json:"launcherPath"`
+		ControllerFleet  string `json:"controllerFleetPath"`
+		ControllerDevctl string `json:"controllerDevctlPath"`
+		SourceInventory  struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"controllerSourceInventory"`
+		GUIInventory struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"controllerGUIInventory"`
+	} `json:"controllerSourceLayer"`
+	ManifestSHA256 string `json:"-"`
+}
+
+type fleetLocalDirectSocketProjection struct {
+	SchemaVersion   string `json:"schemaVersion"`
+	TargetID        string `json:"targetId"`
+	Route           string `json:"route"`
+	SocketPath      string `json:"socketPath"`
+	SocketUID       uint32 `json:"socketUid"`
+	SocketMode      uint32 `json:"socketMode"`
+	SocketDevice    uint64 `json:"socketDevice"`
+	SocketInode     uint64 `json:"socketInode"`
+	SourceInventory struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+	} `json:"sourceInventory"`
+	GUIInventory struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+	} `json:"guiInventory"`
+}
+
+func filesOrNil(file *os.File) []*os.File {
+	if file == nil {
+		return nil
+	}
+	return []*os.File{file}
+}
+
+func loadFleetRuntimeAuthorityManifest(bundlePath string) (fleetRuntimeAuthorityManifest, error) {
+	path := filepath.Join(bundlePath, "share/dev-all-runtime-bundle/identity.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("read Fleet runtime authority manifest: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var manifest fleetRuntimeAuthorityManifest
+	if err := decoder.Decode(&manifest); err != nil {
+		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("parse Fleet runtime authority manifest: %w", err)
+	}
+	manifest.ManifestSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+	if manifest.SchemaVersion != "fleet-runtime-authority/v1" || manifest.IdentityJSONPath != path || !filepath.IsAbs(manifest.ControllerSourceLayer.ControllerFleet) || !strings.HasPrefix(manifest.ControllerSourceLayer.ControllerFleet, "/nix/store/") || !filepath.IsAbs(manifest.ControllerSourceLayer.ControllerDevctl) || !strings.HasPrefix(manifest.ControllerSourceLayer.ControllerDevctl, "/nix/store/") {
+		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("Fleet runtime authority manifest self/identity shape rejected")
+	}
+	return manifest, nil
+}
+
+func resolveFleetLocalDirectSocket(manifest fleetRuntimeAuthorityManifest, targetID string) (fleetLocalDirectSocketProjection, error) {
+	if strings.TrimSpace(targetID) == "" || strings.ContainsAny(targetID, " \t\r\n") {
+		return fleetLocalDirectSocketProjection{}, fmt.Errorf("Fleet app-rpc target id is not exact")
+	}
+	cmd := exec.Command(manifest.ControllerSourceLayer.ControllerFleet, "app-rpc", "resolve-target", "--target", targetID)
+	cmd.Env = []string{"HOME=/nonexistent", "PATH=", "FLEET_RUNTIME_AUTHORITY_MANIFEST=" + manifest.IdentityJSONPath, "FLEET_RUNTIME_AUTHORITY_SHA256=" + manifest.ManifestSHA256}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fleetLocalDirectSocketProjection{}, fmt.Errorf("Fleet local-direct resolver failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	decoder := json.NewDecoder(&stdout)
+	decoder.DisallowUnknownFields()
+	var projection fleetLocalDirectSocketProjection
+	if err := decoder.Decode(&projection); err != nil {
+		return fleetLocalDirectSocketProjection{}, fmt.Errorf("parse Fleet local-direct projection: %w", err)
+	}
+	if projection.SchemaVersion != "fleet/local-direct-socket/v1" || projection.TargetID != targetID || projection.Route != "local-direct" || projection.SocketPath == "" || projection.SocketUID == 0 || projection.SocketInode == 0 || projection.SourceInventory.Path != manifest.ControllerSourceLayer.SourceInventory.Path || projection.SourceInventory.SHA256 != manifest.ControllerSourceLayer.SourceInventory.SHA256 || projection.GUIInventory.Path != manifest.ControllerSourceLayer.GUIInventory.Path || projection.GUIInventory.SHA256 != manifest.ControllerSourceLayer.GUIInventory.SHA256 {
+		return fleetLocalDirectSocketProjection{}, fmt.Errorf("Fleet local-direct projection failed closed")
+	}
+	return projection, nil
+}
+
+func localDirectFleetTarget(command []string) (string, bool, error) {
+	if len(command) < 2 || filepath.Base(command[0]) != "fleet-control" || command[1] != "app-rpc" {
+		return "", false, nil
+	}
+	if len(command) < 3 || command[2] == "resolve-target" {
+		return "", false, nil
+	}
+	target := ""
+	for i := 3; i < len(command); i++ {
+		if command[i] == "--target" {
+			if i+1 >= len(command) || target != "" {
+				return "", false, fmt.Errorf("Fleet app-rpc requires exactly one --target")
+			}
+			target = command[i+1]
+			i++
+		} else if command[i] == "--socket" || command[i] == "--inventory" || command[i] == "--gui-inventory" || command[i] == "--route" {
+			return "", false, fmt.Errorf("Fleet app-rpc caller override %s is rejected", command[i])
+		}
+	}
+	if target == "" {
+		return "", false, nil
+	}
+	return target, true, nil
 }
 
 func ShellString(cmd Command) string {

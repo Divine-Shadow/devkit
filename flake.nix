@@ -173,6 +173,7 @@
       mkGitHubSSHKnownHosts =
         pkgs: pkgs.writeText "devkit-github-ssh-known-hosts" (builtins.readFile githubSSHKnownHosts);
       mkDevAllRuntimeBundle = import ./nix/mk-dev-all-runtime-bundle.nix;
+      mkFleetSourceLayer = import ./nix/fleet-source-layer.nix;
       mkProductRuntimeProjection = import ./nix/product-runtime-projection.nix;
       mkDiagnosticRuntimeFixture =
         pkgs:

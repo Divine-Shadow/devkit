@@ -92,6 +92,26 @@ let
     printf 'fleet-fixture:%s\n' "$*"
     EOF
     chmod 0555 "$out/bin/controller-fleet"
+    ln -s controller-fleet "$out/bin/fleet-source-layer"
+  '';
+  sourceLayerManifest = pkgs.runCommand "fixture-fleet-controller-source-layer-manifest" { } ''
+    mkdir -p "$out"
+    cat > "$out/manifest.json" <<EOF
+    ${builtins.toJSON {
+      schemaVersion = "fleet-controller-source-layer/v1";
+      packagePath = fixtureRuntimeTools;
+      launcherPath = "${fixtureRuntimeTools}/bin/fleet-source-layer";
+      controllerFleetPath = "${fixtureRuntimeTools}/bin/controller-fleet";
+      controllerDevctlPath = "${fixtureRuntimeTools}/bin/devctl";
+      controllerSourceInventory = { path = controllerSourceInventory; sha256 = builtins.hashString "sha256" "{}\n"; };
+      controllerGUIInventory = { path = controllerGUIInventory; sha256 = builtins.hashString "sha256" "{}\n"; };
+      gitExecutablePath = "${pkgs.git}/bin/git";
+      gitSSHExecutablePath = "${pkgs.openssh}/bin/ssh";
+      openSSHExecutablePath = "${pkgs.openssh}/bin/ssh";
+      sourceTransportFields = { fixture = "true"; };
+    }}
+    EOF
+    sha256sum "$out/manifest.json" | awk '{print $1}' > "$out/manifest.json.sha256"
   '';
   governanceJarSHA256 = builtins.hashString "sha256" "fixture-product-governance-jar\n";
   submitToCiJarSHA256 = builtins.hashString "sha256" "fixture-product-submit-to-ci-jar\n";
@@ -103,6 +123,8 @@ let
   '';
   codexConfig = pkgs.writeText "fixture-codex-authorization.toml" codexConfigContents;
   codexConfigSHA256 = builtins.hashString "sha256" codexConfigContents;
+  controllerSourceInventory = pkgs.writeText "fixture-controller-source-inventory.json" "{}\n";
+  controllerGUIInventory = pkgs.writeText "fixture-controller-gui-inventory.json" "{}\n";
   runtimeIdentity = {
     governance = {
       packagePath = governanceJar;
@@ -156,6 +178,31 @@ in
     wsl.rev = "8888888888888888888888888888888888888888";
     };
     controllerFleetPath = "${fixtureRuntimeTools}/bin/controller-fleet";
+    controllerSourceLayer = {
+      packagePath = fixtureRuntimeTools;
+      packageSha256 = builtins.hashString "sha256" "fixture-source-layer";
+      manifestPath = "${sourceLayerManifest}/manifest.json";
+      manifestSha256 = builtins.hashFile "sha256" "${sourceLayerManifest}/manifest.json";
+      launcherPath = "${fixtureRuntimeTools}/bin/fleet-source-layer";
+      controllerFleetPath = "${fixtureRuntimeTools}/bin/controller-fleet";
+      controllerDevctlPath = "${fixtureRuntimeTools}/bin/devctl";
+      controllerSourceInventory = {
+        path = controllerSourceInventory;
+        sha256 = builtins.hashString "sha256" "{}\n";
+      };
+      controllerGUIInventory = {
+        path = controllerGUIInventory;
+        sha256 = builtins.hashString "sha256" "{}\n";
+      };
+    };
+    controllerSourceInventory = {
+      path = controllerSourceInventory;
+      sha256 = builtins.hashString "sha256" "{}\n";
+    };
+    controllerGUIInventory = {
+      path = controllerGUIInventory;
+      sha256 = builtins.hashString "sha256" "{}\n";
+    };
     devctlLauncherPath = "${fixtureRuntimeTools}/bin/devctl";
     inherit productRuntimeProjection;
     inherit runtimeIdentity;

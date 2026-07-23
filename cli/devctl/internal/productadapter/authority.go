@@ -26,9 +26,12 @@ const (
 
 var (
 	manifestTopLevelKeys = []string{
-		"artifactDigests", "bundlePath", "codexAuthorization", "controllerFleetPath",
+		"artifactDigests", "bundlePath", "codexAuthorization", "controllerSourceLayer",
 		"devctlLauncherPath", "devkitProductAdapter", "identityEnvPath", "identityJsonPath",
 		"launcherPath", "runtimeIdentity", "schemaVersion", "sources",
+	}
+	manifestSourceLayerKeys = []string{
+		"launcherPath", "manifestPath", "manifestSha256", "packagePath", "packageSha256",
 	}
 	manifestSourceKeys = []string{
 		"dev-workspace", "devkit", "fleet-control", "microvm", "nixos-wsl",
@@ -351,6 +354,32 @@ func validateManifestEnvelope(data []byte) error {
 	}
 	if err := requireExactJSONKeys("Product authority manifest", top, manifestTopLevelKeys); err != nil {
 		return err
+	}
+	var sourceLayer map[string]json.RawMessage
+	if err := json.Unmarshal(top["controllerSourceLayer"], &sourceLayer); err != nil {
+		return fmt.Errorf("parse Product authority controller source layer: %w", err)
+	}
+	if err := requireExactJSONKeys("Product authority controller source layer", sourceLayer, manifestSourceLayerKeys); err != nil {
+		return err
+	}
+	for _, key := range manifestSourceLayerKeys {
+		var value string
+		if err := json.Unmarshal(sourceLayer[key], &value); err != nil || value == "" {
+			return fmt.Errorf("Product authority controller source layer %s is invalid", key)
+		}
+	}
+	var packagePath, manifestPath, launcherPath string
+	_ = json.Unmarshal(sourceLayer["packagePath"], &packagePath)
+	_ = json.Unmarshal(sourceLayer["manifestPath"], &manifestPath)
+	_ = json.Unmarshal(sourceLayer["launcherPath"], &launcherPath)
+	if !strings.HasPrefix(packagePath, "/nix/store/") || !strings.HasPrefix(manifestPath, "/nix/store/") || !strings.HasPrefix(launcherPath, "/nix/store/") {
+		return fmt.Errorf("Product authority controller source layer paths are not immutable store paths")
+	}
+	var packageSha256, manifestSha256 string
+	_ = json.Unmarshal(sourceLayer["packageSha256"], &packageSha256)
+	_ = json.Unmarshal(sourceLayer["manifestSha256"], &manifestSha256)
+	if !isExactSHA256(packageSha256) || !isExactSHA256(manifestSha256) {
+		return fmt.Errorf("Product authority controller source layer digests are invalid")
 	}
 	var sources map[string]json.RawMessage
 	if err := json.Unmarshal(top["sources"], &sources); err != nil {

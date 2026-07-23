@@ -1,8 +1,11 @@
 {
   artifactDigests,
   codexAuthorization,
-  controllerFleetPath,
-  devctlLauncherPath,
+  controllerFleetPath ? null,
+  controllerSourceLayer,
+  controllerSourceInventory ? null,
+  controllerGUIInventory ? null,
+  devctlLauncherPath ? null,
   devkitProductAdapter,
   pkgs,
   productRuntimeProjection,
@@ -138,14 +141,13 @@ let
     inherit
       artifactDigests
       codexAuthorization
-      controllerFleetPath
+      controllerSourceLayer
       devkitProductAdapter
       runtimeIdentity
       sources
       ;
     bundlePath = "@bundleRoot@";
     launcherPath = "@bundleRoot@/bin/dev-all-runtime-bundle";
-    inherit devctlLauncherPath;
     identityEnvPath = "@bundleRoot@/share/dev-all-runtime-bundle/identity.env";
     identityJsonPath = "@bundleRoot@/share/dev-all-runtime-bundle/identity.json";
   };
@@ -153,8 +155,7 @@ let
     "artifactDigests"
     "bundlePath"
     "codexAuthorization"
-    "controllerFleetPath"
-    "devctlLauncherPath"
+    "controllerSourceLayer"
     "devkitProductAdapter"
     "identityEnvPath"
     "identityJsonPath"
@@ -197,7 +198,13 @@ let
         --arg json "$identity_json" \
         '.schemaVersion == $schema and .bundlePath == $bundle and
          .launcherPath == $launcher and .identityEnvPath == $env and
-         .identityJsonPath == $json' "$identity_json" >/dev/null \
+         .identityJsonPath == $json and
+         (.controllerSourceLayer.packagePath | startswith("/nix/store/")) and
+         (.controllerSourceLayer.packageSha256 | test("^[0-9a-f]{64}$")) and
+         (.controllerSourceLayer.manifestPath | startswith("/nix/store/")) and
+         (.controllerSourceLayer.manifestSha256 | test("^[0-9a-f]{64}$")) and
+         (.controllerSourceLayer.launcherPath | startswith("/nix/store/")) and
+         (.controllerSourceLayer.controllerDevctlPath | startswith("/nix/store/"))' "$identity_json" >/dev/null \
         || fail "runtime authority self-path mismatch"
       set -a
       # shellcheck disable=SC1090
@@ -221,8 +228,34 @@ let
         "$ARTIFACT_COLUMN_PLUGIN_JAR_SHA256"
       require_sha256 "$SBT_CONTROL_PLANE_RUNTIME_JAR" "$SBT_CONTROL_PLANE_RUNTIME_JAR_SHA256"
       require_executable "$JAVA_HOME/bin/java"
-      require_executable '${controllerFleetPath}'
-      require_executable '${devctlLauncherPath}'
+      source_layer_package="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.packagePath' "$identity_json")"
+      source_layer_package_sha="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.packageSha256' "$identity_json")"
+      source_layer_manifest="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.manifestPath' "$identity_json")"
+      source_layer_manifest_sha="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.manifestSha256' "$identity_json")"
+      source_layer_launcher="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.launcherPath' "$identity_json")"
+      source_layer_devctl="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.controllerDevctlPath' "$identity_json")"
+      require_readable "$source_layer_package"
+      require_executable "$source_layer_launcher"
+      require_sha256 "$source_layer_manifest" "$source_layer_manifest_sha"
+      require_readable "$source_layer_manifest.sha256"
+      [ "$(${pkgs.coreutils}/bin/cat "$source_layer_manifest.sha256")" = "$source_layer_manifest_sha" ] \
+        || fail "source-layer adjacent digest mismatch"
+      source_layer_launcher_package="''${source_layer_launcher%/bin/*}"
+      [ "$source_layer_launcher_package" = "$source_layer_package" ] \
+        || fail "source-layer launcher is outside its package"
+      ${pkgs.jq}/bin/jq -e \
+        --arg package "$source_layer_package" \
+        --arg launcher "$source_layer_launcher" \
+        '.schemaVersion == "fleet-controller-source-layer/v1" and
+         .packagePath == $package and .launcherPath == ($package + "/bin/fleet-source-layer") and
+         $launcher == .launcherPath and
+         (.controllerSourceInventory.path | startswith("/nix/store/")) and
+         (.controllerGUIInventory.path | startswith("/nix/store/")) and
+         (.controllerSourceInventory.sha256 | test("^[0-9a-f]{64}$")) and
+         (.controllerGUIInventory.sha256 | test("^[0-9a-f]{64}$")) and
+         (.controllerDevctlPath | startswith("/nix/store/"))' \
+        "$source_layer_manifest" >/dev/null || fail "source-layer manifest contract mismatch"
+      require_executable "$source_layer_devctl"
       require_executable '${devkitProductAdapter.executablePath}'
     }
     command="''${1:-}"
@@ -282,7 +315,8 @@ let
         export FLEET_RUNTIME_AUTHORITY_MANIFEST="$identity_json"
         export FLEET_RUNTIME_AUTHORITY_SHA256="$(${pkgs.coreutils}/bin/cat "$identity_sha")"
         unset BASH_ENV ENV
-        exec '${controllerFleetPath}' "$@"
+        source_layer_launcher="$(${pkgs.jq}/bin/jq -r '.controllerSourceLayer.launcherPath' "$identity_json")"
+        exec "$source_layer_launcher" "$@"
         ;;
       *) fail "usage: $0 {validate|identity-env|identity-json|identity-fingerprint|identity-nul|plugin-smoke|exec COMMAND...|governance-forward FORWARDER|fleet FLEET_ARGS...}" ;;
     esac

@@ -950,6 +950,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	}
 	if ctx.DryRun {
 		fmt.Fprintln(os.Stdout, launch.ShellString(cmdSpec))
+		for _, file := range cmdSpec.ExtraFiles {
+			_ = file.Close()
+		}
 		return nil
 	}
 	if _, err := exec.LookPath(cmdSpec.Path); err != nil {
@@ -957,10 +960,15 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	}
 	cmd := exec.Command(cmdSpec.Path, cmdSpec.Args...)
 	cmd.Dir = cmdSpec.Dir
+	cmd.ExtraFiles = cmdSpec.ExtraFiles
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return runCommandPreservingExit(cmd)
+	err = runCommandPreservingExit(cmd)
+	for _, file := range cmdSpec.ExtraFiles {
+		_ = file.Close()
+	}
+	return err
 }
 
 func isolateManagedEgressProxyForRun(p nativeplan.Plan, pid int) (nativeplan.Plan, error) {
@@ -1940,6 +1948,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	if dryRun {
 		fmt.Fprintln(os.Stdout, launch.ShellString(cmdSpec))
+		for _, file := range cmdSpec.ExtraFiles {
+			_ = file.Close()
+		}
 		return nil
 	}
 	if _, err := exec.LookPath(cmdSpec.Path); err != nil {
@@ -1947,10 +1958,15 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	cmd := exec.Command(cmdSpec.Path, cmdSpec.Args...)
 	cmd.Dir = cmdSpec.Dir
+	cmd.ExtraFiles = cmdSpec.ExtraFiles
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return runCommandPreservingExit(cmd)
+	err = runCommandPreservingExit(cmd)
+	for _, file := range cmdSpec.ExtraFiles {
+		_ = file.Close()
+	}
+	return err
 }
 
 func runCommandPreservingExit(cmd *exec.Cmd) error {
@@ -2708,11 +2724,15 @@ func runSandboxCommandContext(ctx context.Context, p nativeplan.Plan, command []
 	}
 	cmd := exec.Command(cmdSpec.Path, cmdSpec.Args...)
 	cmd.Dir = cmdSpec.Dir
+	cmd.ExtraFiles = cmdSpec.ExtraFiles
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
+		for _, file := range cmdSpec.ExtraFiles {
+			_ = file.Close()
+		}
 		return "", err
 	}
 	waited := make(chan error, 1)
@@ -2721,6 +2741,9 @@ func runSandboxCommandContext(ctx context.Context, p nativeplan.Plan, command []
 	}()
 	select {
 	case err := <-waited:
+		for _, file := range cmdSpec.ExtraFiles {
+			_ = file.Close()
+		}
 		return output.String(), err
 	case <-ctx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
@@ -2731,6 +2754,9 @@ func runSandboxCommandContext(ctx context.Context, p nativeplan.Plan, command []
 		case <-timer.C:
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			<-waited
+		}
+		for _, file := range cmdSpec.ExtraFiles {
+			_ = file.Close()
 		}
 		return output.String(), fmt.Errorf("native sandbox command deadline exceeded: %w", ctx.Err())
 	}
