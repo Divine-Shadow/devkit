@@ -39,7 +39,7 @@ let
     PidFile /run/devkit-source-transport/sshd.pid
     HostKey /run/devkit-source-transport/host-key
     AuthorizedKeysFile /var/lib/git/.ssh/authorized_keys
-    StrictModes no
+    StrictModes yes
     PasswordAuthentication no
     KbdInteractiveAuthentication no
     PubkeyAuthentication yes
@@ -212,8 +212,15 @@ let
       '${pkgs.git}/bin/git-upload-pack ${fixture}/repository.git' \
       "$(cat "$root/client-key.pub")" > "$root/authorized-keys"
     chmod 0600 "$root/authorized-keys"
+    install -d -o git -g git -m0700 /var/lib/git
     install -d -o git -g git -m0700 /var/lib/git/.ssh
     install -o git -g git -m0600 "$root/authorized-keys" /var/lib/git/.ssh/authorized_keys
+    test "$(stat -c %U:%G /var/lib/git)" = git:git
+    test "$(stat -c %a /var/lib/git)" = 700
+    test "$(stat -c %U:%G /var/lib/git/.ssh)" = git:git
+    test "$(stat -c %a /var/lib/git/.ssh)" = 700
+    test "$(stat -c %U:%G /var/lib/git/.ssh/authorized_keys)" = git:git
+    test "$(stat -c %a /var/lib/git/.ssh/authorized_keys)" = 600
 
     '${pkgs.openssh}/bin/sshd' -D -e -f '${sshdConfig}' >"$root/sshd.log" 2>&1 &
     sshd_pid=$!
