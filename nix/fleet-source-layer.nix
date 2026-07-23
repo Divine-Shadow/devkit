@@ -5,6 +5,8 @@
   sourceTransport,
   controllerSourceInventory,
   controllerGUIInventory,
+  runtimeBashExecutable ? "${pkgs.bash}/bin/bash",
+  runtimePath ? pkgs.lib.makeBinPath [ pkgs.bash pkgs.coreutils pkgs.curl pkgs.findutils pkgs.gawk pkgs.gnugrep pkgs.gnused pkgs.procps ],
 }:
 
 let
@@ -25,6 +27,10 @@ let
     gitSSHExecutablePath = sourceTransport.gitSSH.executablePath;
     openSSHExecutablePath = sourceTransport.openSSHExecutablePath;
     inherit sourceTransportFields;
+    runtime = {
+      bashExecutablePath = runtimeBashExecutable;
+      path = runtimePath;
+    };
   });
   launcher = pkgs.writeShellScriptBin "fleet-source-layer" ''
     set -eu
@@ -44,6 +50,8 @@ let
       '.schemaVersion == $schema and .packagePath == $self and .launcherPath == ($self + "/bin/fleet-source-layer") and .controllerFleetPath == $fleet and
        (.controllerSourceInventory.path | startswith("/nix/store/")) and
        (.controllerGUIInventory.path | startswith("/nix/store/")) and
+       (.runtime.bashExecutablePath | startswith("/nix/store/")) and
+       (.runtime.path | length > 0) and
        (.sourceTransportFields | type == "object")' \
       "$manifest" >/dev/null || fail "source-layer manifest shape mismatch"
     for projection in controllerSourceInventory controllerGUIInventory; do
