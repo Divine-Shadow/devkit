@@ -915,6 +915,7 @@
       lib = {
         inherit
           mkDevAllRuntimeBundle
+          mkFleetSourceLayer
           mkPinnedCodex
           mkProductAdapterPackage
           mkProductRuntimeProjection

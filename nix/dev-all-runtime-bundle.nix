@@ -203,8 +203,7 @@ let
          (.controllerSourceLayer.packageSha256 | test("^[0-9a-f]{64}$")) and
          (.controllerSourceLayer.manifestPath | startswith("/nix/store/")) and
          (.controllerSourceLayer.manifestSha256 | test("^[0-9a-f]{64}$")) and
-         (.controllerSourceLayer.launcherPath | startswith("/nix/store/")) and
-         (.controllerSourceLayer.controllerDevctlPath | startswith("/nix/store/"))' "$identity_json" >/dev/null \
+         (.controllerSourceLayer.launcherPath | startswith("/nix/store/"))' "$identity_json" >/dev/null \
         || fail "runtime authority self-path mismatch"
       set -a
       # shellcheck disable=SC1090

@@ -28,7 +28,7 @@ let
   });
   launcher = pkgs.writeShellScriptBin "fleet-source-layer" ''
     set -eu
-    bundle_root="$(dirname "$(dirname "$0")")"
+    bundle_root="''${0%/bin/fleet-source-layer}"
     manifest="$bundle_root/share/fleet-controller-source-layer/manifest.json"
     fail() { echo "fleet-source-layer: $*" >&2; exit 1; }
     [ -r "$manifest" ] || fail "missing immutable source-layer manifest"
@@ -65,5 +65,6 @@ pkgs.runCommand "fleet-source-layer" { } ''
   substitute '${manifestTemplate}' "$out/share/fleet-controller-source-layer/manifest.json" --replace-fail '@out@' "$out"
   sha256sum "$out/share/fleet-controller-source-layer/manifest.json" | cut -d' ' -f1 > "$out/share/fleet-controller-source-layer/manifest.json.sha256"
   chmod 0555 "$out/bin/fleet-source-layer"
-  chmod 0444 "$out/share/fleet-source-layer/manifest.json"
+  chmod 0444 "$out/share/fleet-controller-source-layer/manifest.json"
+  chmod 0444 "$out/share/fleet-controller-source-layer/manifest.json.sha256"
 ''
