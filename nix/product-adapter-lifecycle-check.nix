@@ -28,6 +28,18 @@ let
 	    subPackages = [ "cmd/product-managed-client" ];
 	    env.CGO_ENABLED = "0";
 	  };
+	  managedClientTimeoutSabotage = pkgs.buildGoModule {
+	    pname = "devkit-product-managed-client-timeout-sabotage";
+	    version = "dev";
+	    src = ../cli/devctl;
+	    modRoot = ".";
+	    vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
+	    subPackages = [ "cmd/product-managed-client" ];
+	    env.CGO_ENABLED = "0";
+	    ldflags = [
+	      "-X=main.packageManagedHoldTimeout=250ms"
+	    ];
+	  };
 	  mcpRequirement = pkgs.writeText "devkit-product-mcp-requirement.json" (
 	    builtins.toJSON {
 	      schemaVersion = "devkit/product-mcp-requirement/v1";
@@ -468,6 +480,10 @@ let
     env.CGO_ENABLED = "0";
     DEVKIT_TEST_PINNED_CODEX = "${pinnedCodex}/bin/codex";
     DEVKIT_TEST_PRODUCT_AUTHORITY_MANIFEST = "${diagnosticAdapterManifest}/identity.json";
+    DEVKIT_TEST_MANAGED_CLIENT = "${managedClient}/bin/product-managed-client";
+    DEVKIT_TEST_MANAGED_CLIENT_TIMEOUT =
+      "${managedClientTimeoutSabotage}/bin/product-managed-client";
+    DEVKIT_TEST_BASH = "${pkgs.bash}/bin/bash";
     doCheck = true;
     checkPhase = ''
       runHook preCheck
@@ -475,7 +491,7 @@ let
         -run '^Test(ExactManagedAppServerPreservesApprovedLeadingConfiguration|ProcessInventoryRejectsSameUIDLookalikeAcrossCgroupBoundary|DrainSupervisorHandlersStopsTargetAndClosesActiveProxy)$' \
         -count=1 -v
       go test -tags devkitintegration ./cmd/product-adapter-supervisor \
-        -run '^Test(SupervisorChildFirstStopCleansProductionAdapterAndProxy|SupervisorBootsBeforeCredentialSeedingAndGatesPrepare)$' \
+        -run '^Test(SupervisorChildFirstStopCleansProductionAdapterAndProxy|SupervisorBootsBeforeCredentialSeedingAndGatesPrepare|HeldManagedSessionStopsCleanlyAndTimeoutSabotageStaysRed)$' \
         -count=1 -v
       runHook postCheck
     '';
@@ -1432,29 +1448,6 @@ EOF
         (has("governance_tree_id") | not)
       ' ${fixtureRoot}/managed-$index.json >/dev/null
 
-      phase="consumer-$index live managed session for teardown"
-      ${pkgs.util-linux}/bin/runuser -u controller -- \
-        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
-        HOME=${controllerHome} \
-        ${managedClient}/bin/product-managed-client hold \
-        --ssh ${pkgs.openssh}/bin/ssh \
-        --identity ${fixtureRoot}/gui-$index/id_ed25519 \
-        --known-hosts ${fixtureRoot}/client-known-hosts \
-        --port 2222 --user product$index --cwd /workspaces/dev \
-        --consumer-index "$index" \
-        >${fixtureRoot}/held-$index.json 2>${fixtureRoot}/held-$index.stderr &
-      held_client_pid=$!
-      for attempt in $(${pkgs.coreutils}/bin/seq 1 100); do
-        test -s ${fixtureRoot}/held-$index.json && break
-        kill -0 "$held_client_pid"
-        ${pkgs.coreutils}/bin/sleep 0.05
-      done
-      ${pkgs.jq}/bin/jq -e '
-        .schema_version == "devkit/product-managed-app-server-hold/v1" and
-        .initialize_ready == true and .status == "holding"
-      ' ${fixtureRoot}/held-$index.json >/dev/null
-      kill -0 "$held_client_pid"
-
       phase="consumer-$index construction receipt and git proof"
       receipt="$candidate/state/product-construction-receipt.json"
 	      ${pkgs.jq}/bin/jq -e '
@@ -1510,6 +1503,32 @@ EOF
         exit 1
       fi
       cp "$receipt" ${fixtureRoot}/receipt-$index.json
+
+      # Begin the held session only after the unrelated construction and Git
+      # assertions. Its package timeout now measures a missing supervisor
+      # termination, not how slowly a fresh QEMU consumer proves earlier work.
+      phase="consumer-$index live managed session for teardown"
+      ${pkgs.util-linux}/bin/runuser -u controller -- \
+        ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+        HOME=${controllerHome} \
+        ${managedClient}/bin/product-managed-client hold \
+        --ssh ${pkgs.openssh}/bin/ssh \
+        --identity ${fixtureRoot}/gui-$index/id_ed25519 \
+        --known-hosts ${fixtureRoot}/client-known-hosts \
+        --port 2222 --user product$index --cwd /workspaces/dev \
+        --consumer-index "$index" \
+        >${fixtureRoot}/held-$index.json 2>${fixtureRoot}/held-$index.stderr &
+      held_client_pid=$!
+      for attempt in $(${pkgs.coreutils}/bin/seq 1 100); do
+        test -s ${fixtureRoot}/held-$index.json && break
+        kill -0 "$held_client_pid"
+        ${pkgs.coreutils}/bin/sleep 0.05
+      done
+      ${pkgs.jq}/bin/jq -e '
+        .schema_version == "devkit/product-managed-app-server-hold/v1" and
+        .initialize_ready == true and .status == "holding"
+      ' ${fixtureRoot}/held-$index.json >/dev/null
+      kill -0 "$held_client_pid"
 
       phase="consumer-$index teardown"
       if ! process_live "$held_client_pid"; then

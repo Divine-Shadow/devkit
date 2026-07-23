@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -118,7 +117,7 @@ func run(args []string, attestation productadapter.Attestation) error {
 		if !response.Status.AppServerRunning {
 			return fmt.Errorf("managed Product app-server is not running")
 		}
-		return relay(connection, os.Stdin, os.Stdout)
+		return productsession.Relay(connection, os.Stdin, os.Stdout)
 	default:
 		return fmt.Errorf("unsupported normalized Product command")
 	}
@@ -149,57 +148,6 @@ func validateControlSocket(path string, uid int) error {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || info.Mode()&os.ModeSocket == 0 || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || int(stat.Uid) != uid {
 		return fmt.Errorf("Product supervisor socket has unsafe identity")
-	}
-	return nil
-}
-
-func relay(connection *net.UnixConn, input io.Reader, output io.Writer) error {
-	type copyResult struct {
-		input bool
-		err   error
-	}
-	results := make(chan copyResult, 2)
-	go func() {
-		_, err := io.Copy(connection, input)
-		_ = connection.CloseWrite()
-		results <- copyResult{input: true, err: err}
-	}()
-	go func() {
-		_, err := io.Copy(output, connection)
-		results <- copyResult{err: err}
-	}()
-
-	first := <-results
-	if !first.input {
-		// A supervisor shutdown is terminal even while sshd still holds stdin
-		// open. A blocking pipe read is not guaranteed to return merely because
-		// another goroutine closes its descriptor, so do not join that copier:
-		// close the local handles and let the forced-command process exit.
-		_ = connection.Close()
-		if closer, ok := input.(io.Closer); ok {
-			_ = closer.Close()
-		}
-		return relayCopyError(first.err)
-	}
-
-	// Client EOF is only a half-close: retain the server read half so its final
-	// response can drain before the forced-command process exits.
-	second := <-results
-	_ = connection.Close()
-	if closer, ok := input.(io.Closer); ok {
-		_ = closer.Close()
-	}
-	return errors.Join(relayCopyError(first.err), relayCopyError(second.err))
-}
-
-func relayCopyError(err error) error {
-	if err != nil {
-		if err != nil &&
-			!errors.Is(err, net.ErrClosed) &&
-			!errors.Is(err, os.ErrClosed) &&
-			!errors.Is(err, io.ErrClosedPipe) {
-			return err
-		}
 	}
 	return nil
 }

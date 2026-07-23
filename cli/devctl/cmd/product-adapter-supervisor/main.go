@@ -979,8 +979,13 @@ func processUnixListeners(pid int, exactPath string) ([]uint64, error) {
 		if len(fields) < 8 || fields[7] != exactPath {
 			continue
 		}
+		// A live proxy session creates connected server-side sockets that retain
+		// the listener path in /proc/net/unix. They are effects of the one
+		// accepted listener, not competing listener authority. Count only exact
+		// listening streams; the caller separately proves that the one listener
+		// inode is held by the pinned process.
 		if fields[3] != "00010000" || fields[4] != "0001" || fields[5] != "01" {
-			return nil, fmt.Errorf("declared Product app-server socket is not one listening stream")
+			continue
 		}
 		inode, err := strconv.ParseUint(fields[6], 10, 64)
 		if err != nil || inode == 0 {

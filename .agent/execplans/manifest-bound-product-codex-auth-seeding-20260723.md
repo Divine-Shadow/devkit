@@ -36,10 +36,25 @@ UID/GID with mode `0600`.
 - [x] Add and pass the cheap Nix gate that executes both compiled fixed-slot
   entrypoints against immutable production-shaped manifests and binds them to
   the declared module wrappers.
-- [ ] Obtain an independent read-only source audit on the unchanged candidate.
+- [x] Obtain an independent read-only source audit on committed candidate
+  `de12583e69617b8256e068435162b522c67779d7`; the audit approved admission to
+  the named QEMU diagnostic.
+- [x] Run the named QEMU diagnostic once and retain its RED as evidence: both
+  consumers passed auth seed, Git, app-server, and MCP, while consumer 2 failed
+  at the held-session/supervisor teardown boundary before zero-residue.
+- [x] Reproduce the teardown nondeterminism in a cheap compiled production-path
+  regression and repair the two owning defects: established Unix connections
+  no longer invalidate the sole-listener predicate, and the production SSH
+  session relay no longer selects a Linux splice waiter that can survive peer
+  teardown.
+- [x] Prove the repair with five consecutive local held-session lifecycles and
+  the named `product-supervisor-identity-lifecycle` Nix gate, including a
+  package-linked timeout sabotage that remains exact typed RED.
+- [ ] Obtain a fresh independent read-only source audit on the repaired,
+  unchanged candidate.
 - [ ] After audit approval, pass the named Product consumer VM lifecycle and
   full relevant flake checks.
-- [x] Commit the accepted local candidate and return its diff/check receipts
+- [ ] Commit the accepted local candidate and return its diff/check receipts
   without publishing.
 
 ## Milestones
@@ -115,13 +130,26 @@ UID/GID with mode `0600`.
 - The current generic controller-only wrapper is privileged correctly, but its
   caller-selected index makes it unsuitable as the fixed-slot credential
   boundary.
+- The first QEMU run exposed a test-coupling defect and a real relay defect at
+  the same final boundary. The diagnostic started its 45-second held-session
+  lifetime before unrelated receipt/Git assertions, while the production
+  session's `io.Copy` could select Linux splice and nondeterministically remain
+  blocked after supervisor close. Extending the timeout alone would have
+  hidden the latter defect.
+- A live accepted app-server connection can retain the listener pathname on
+  connected `/proc/net/unix` entries. Those entries are not competing listener
+  authority; the process/socket proof must count exactly one listening entry
+  and separately require that the pinned PID holds that listener inode.
 
 ## Outcomes & Retrospective
 
-The repaired candidate passes the full Go suite, Nix flake evaluation, the
-named `product-codex-auth-seed-entrypoint-hermetic` gate, the Product consumer
-module contract, supervisor identity lifecycle, readiness hermetic, and absent
-consumer construction checks. The QEMU lifecycle remains intentionally blocked
-on a fresh independent audit of the final committed tree. No publication,
-deployment, station contact, or real credential hydration is in scope for this
-plan.
+The original auth-seed candidate passed the full Go suite, Nix flake evaluation,
+the named `product-codex-auth-seed-entrypoint-hermetic` gate, Product consumer
+module contract, readiness hermetic, absent-consumer construction, and its first
+independent audit. Its first QEMU lifecycle then correctly failed at consumer
+2 teardown. The repaired candidate now passes the strengthened compiled
+held-session lifecycle and timeout sabotage in
+`product-supervisor-identity-lifecycle`; its full cheap gate matrix and fresh
+independent audit remain required before the one authorized QEMU rerun. No
+publication, deployment, station contact, or real credential hydration is in
+scope for this plan.

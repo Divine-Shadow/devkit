@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"devkit/cli/devctl/internal/productsession"
 )
 
 func TestParseLoginShellInvocationAcceptsOnlyExactSSHDShape(t *testing.T) {
@@ -60,7 +62,7 @@ func TestRelayReturnsWhenSupervisorClosesWhileSSHInputRemainsOpen(t *testing.T) 
 	var output bytes.Buffer
 	result := make(chan error, 1)
 	go func() {
-		result <- relay(client, inputReader, &output)
+		result <- productsession.Relay(client, inputReader, &output)
 	}()
 
 	if err := server.Close(); err != nil {

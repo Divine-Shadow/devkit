@@ -38,6 +38,12 @@ const (
 	rpcRequestTimeout    = 15 * time.Second
 )
 
+// packageManagedHoldTimeout is immutable package configuration. The normal
+// diagnostic client waits long enough for a deliberately slow fresh consumer;
+// the named hermetic sabotage build links a much shorter value to prove that a
+// missing supervisor shutdown remains a typed RED rather than false success.
+var packageManagedHoldTimeout = "2m"
+
 type result struct {
 	SchemaVersion           string `json:"schema_version"`
 	InitializeReady         bool   `json:"initialize_ready"`
@@ -72,7 +78,7 @@ func run(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, args[2],
+	command := exec.Command(args[2],
 		"-T", "-F", "/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
 		"-o", "IdentityFile="+args[4], "-o", "UserKnownHostsFile="+args[6],
 		"-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
@@ -120,6 +126,18 @@ func run(args []string) error {
 
 	reader := bufio.NewReaderSize(stdout, maximumHandshakeLine)
 	if err := websocketHandshake(stdin, reader); err != nil {
+		select {
+		case processErr := <-wait:
+			processWaited = true
+			detail := boundedManagedStderr(stderrDone)
+			return fmt.Errorf(
+				"managed app-server WebSocket handshake: SSH session exited: %v: %s: %w",
+				processErr,
+				strings.TrimSpace(string(detail)),
+				err,
+			)
+		default:
+		}
 		return fmt.Errorf("managed app-server WebSocket handshake: %w", err)
 	}
 	nextRequestID := 1
@@ -164,13 +182,25 @@ func run(args []string) error {
 		}); err != nil {
 			return err
 		}
+		holdTimeout, err := time.ParseDuration(packageManagedHoldTimeout)
+		if err != nil || holdTimeout <= 0 {
+			return fmt.Errorf("invalid package-managed hold timeout %q", packageManagedHoldTimeout)
+		}
+		holdTimer := time.NewTimer(holdTimeout)
+		defer holdTimer.Stop()
 		select {
-		case <-wait:
+		case processErr := <-wait:
 			processWaited = true
-			<-stderrDone
-			return nil
-		case <-ctx.Done():
-			return fmt.Errorf("managed app-server hold timed out: %w", ctx.Err())
+			if processErr == nil {
+				return nil
+			}
+			detail := boundedManagedStderr(stderrDone)
+			return classifyManagedHoldExit(processErr, detail)
+		case <-holdTimer.C:
+			return fmt.Errorf(
+				"managed app-server hold timed out without supervisor termination: %w",
+				context.DeadlineExceeded,
+			)
 		}
 	}
 	threadPayload, err := requestRPC("thread/start", map[string]any{
@@ -259,6 +289,30 @@ func run(args []string) error {
 		MCPFixtureCallVerified:  true,
 		MCPFixtureConsumerIndex: toolCall.ConsumerIndex,
 	})
+}
+
+func boundedManagedStderr(stderrDone <-chan []byte) []byte {
+	select {
+	case detail := <-stderrDone:
+		return detail
+	case <-time.After(time.Second):
+		return []byte("stderr drain did not finish within one second")
+	}
+}
+
+func classifyManagedHoldExit(processErr error, detail []byte) error {
+	if processErr == nil {
+		return nil
+	}
+	message := strings.TrimSpace(string(detail))
+	if message == "" {
+		message = "no stderr"
+	}
+	return fmt.Errorf(
+		"managed SSH session exited non-cleanly before supervisor termination: %v: %s",
+		processErr,
+		message,
+	)
 }
 
 type mcpFixtureCallReceipt struct {

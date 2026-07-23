@@ -62,6 +62,20 @@ selection rationale, safety checks, rollback plan, and decision scope shape.
   malformed input, duplicate/concurrent seed, anonymous-generation discovery,
   in-place mutation, post-link failure classification, exact metadata, no
   secret output, cleanup, ordinary launch, and teardown.
+- The held-session teardown check starts only after unrelated construction and
+  Git assertions. Its immutable client timeout therefore diagnoses a missing
+  supervisor termination rather than QEMU speed. A separately linked
+  short-timeout sabotage must fail with the exact timeout diagnostic.
+- A clean held session succeeds only when the session process exits zero.
+  Non-clean SSH/session exits remain typed RED, and stderr collection is
+  bounded after process exit.
+- The production SSH session relay deliberately suppresses `io.Copy`
+  ReaderFrom/WriterTo fast paths. Ordinary Go reads observe supervisor EOF
+  reliably; Linux splice was empirically capable of surviving the peer close.
+- App-server ownership counts exactly one listening `/proc/net/unix` entry and
+  proves its inode is held by the pinned PID. Connected sockets retaining the
+  same pathname are effects of that listener and do not invalidate its
+  authority.
 - The named cheap Nix gate executes both fixed compiled command entrypoints
   against immutable production-shaped manifests; the module contract
   separately proves that deployed controller-only wrappers bind those package

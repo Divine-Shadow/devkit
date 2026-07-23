@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -27,6 +28,53 @@ import (
 type productionLifecycleIdentity struct {
 	AppServerPID       int    `json:"app_server_pid"`
 	AppServerStartTime uint64 `json:"app_server_start_time"`
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("DEVKIT_TEST_MANAGED_SSH_SESSION") == "1" {
+		if err := runManagedSSHSessionHelper(); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "managed Product SSH session helper:", err)
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// runManagedSSHSessionHelper is the authentication-free boundary fixture for
+// the focused supervisor teardown gate. It deliberately begins after sshd's
+// forced-command validation, then uses the production request/response schema
+// and the exact productsession.Relay implementation used by product-ssh-session.
+func runManagedSSHSessionHelper() error {
+	control := os.Getenv("DEVKIT_TEST_MANAGED_SSH_CONTROL")
+	if control == "" {
+		return fmt.Errorf("managed Product SSH control path is absent")
+	}
+	connection, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: control, Net: "unix"})
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	original := "codex -c features.code_mode_host=true app-server proxy"
+	if err := productsession.WriteFrame(connection, productsession.Request{
+		SchemaVersion:   productsession.RequestSchema,
+		Count:           2,
+		Index:           1,
+		OriginalCommand: original,
+	}); err != nil {
+		return err
+	}
+	var response productsession.Response
+	if err := productsession.ReadFrame(connection, &response); err != nil {
+		return err
+	}
+	if response.SchemaVersion != productsession.ResponseSchema ||
+		response.Command.Kind != productsession.KindProxy ||
+		response.Failure != nil ||
+		!response.Status.AppServerRunning {
+		return fmt.Errorf("managed Product supervisor refused the exact proxy session: %+v", response)
+	}
+	return productsession.Relay(connection, os.Stdin, os.Stdout)
 }
 
 func TestSupervisorRunLoadBootstrapHelper(t *testing.T) {
@@ -587,6 +635,370 @@ func TestSupervisorChildFirstStopCleansProductionAdapterAndProxy(t *testing.T) {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("production shutdown left Unix socket residue at %s: %v", path, err)
 		}
+	}
+}
+
+// TestHeldManagedSessionStopsCleanlyAndTimeoutSabotageStaysRed exercises the
+// exact compiled client -> production session relay -> supervisor proxy -> real
+// pinned Codex app-server boundary. It proves that supervisor shutdown, rather
+// than a client lifetime expiring, ends a held session and cleans every
+// disposable path. A separately linked short-timeout client is then sabotaged
+// by deliberately withholding shutdown and must remain typed RED.
+func TestHeldManagedSessionStopsCleanlyAndTimeoutSabotageStaysRed(t *testing.T) {
+	pinnedCodex := os.Getenv("DEVKIT_TEST_PINNED_CODEX")
+	managedClient := os.Getenv("DEVKIT_TEST_MANAGED_CLIENT")
+	timeoutClient := os.Getenv("DEVKIT_TEST_MANAGED_CLIENT_TIMEOUT")
+	bash := os.Getenv("DEVKIT_TEST_BASH")
+	if pinnedCodex == "" || managedClient == "" || timeoutClient == "" || bash == "" {
+		t.Fatal("packaged held-session lifecycle inputs are required")
+	}
+
+	root, err := os.MkdirTemp("/tmp", "devkit-product-held-session-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRemoved := false
+	t.Cleanup(func() {
+		if !rootRemoved {
+			_ = os.RemoveAll(root)
+		}
+	})
+	candidate := filepath.Join(root, "candidate")
+	state := filepath.Join(candidate, "state")
+	home := filepath.Join(candidate, "home")
+	worktree := filepath.Join(candidate, "agent1", productadapter.ProductRepo)
+	controlParent := filepath.Join(root, "control")
+	for _, path := range []string{
+		state,
+		filepath.Join(home, ".ssh"),
+		filepath.Join(home, ".codex"),
+		worktree,
+		controlParent,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(controlParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity := filepath.Join(home, ".ssh", "id_ed25519")
+	public := identity + ".pub"
+	auth := filepath.Join(home, ".codex", "auth.json")
+	knownHosts := filepath.Join(home, ".ssh", "known_hosts")
+	for path, mode := range map[string]os.FileMode{
+		identity:   0o600,
+		public:     0o644,
+		auth:       0o600,
+		knownHosts: 0o600,
+	} {
+		if err := os.WriteFile(path, []byte("held-session fixture\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "HEAD"), []byte("exact\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selector := filepath.Join(root, "authority-selector.json")
+	if err := os.WriteFile(selector, []byte("{\"schema\":\"fixture\"}\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	proxySocket := filepath.Join(state, "product-egress.sock")
+	appServerSocket := filepath.Join(state, "app-server.sock")
+	controlSocket := filepath.Join(controlParent, "product-supervisor.sock")
+	adapter := exec.Command(
+		os.Args[0],
+		"-test.run=^TestProductionAdapterProxyLifecycleHelper$",
+		"-test.v",
+	)
+	adapter.Env = append(
+		os.Environ(),
+		"DEVKIT_TEST_PRODUCTION_ADAPTER_LIFECYCLE=1",
+		"DEVKIT_TEST_PRODUCTION_LIFECYCLE_ROOT="+state,
+	)
+	adapter.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	adapterStdout, err := adapter.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.Stderr = os.Stderr
+	if err := adapter.Start(); err != nil {
+		t.Fatal(err)
+	}
+	adapterPID := adapter.Process.Pid
+	adapterDone := make(chan error, 1)
+	go func() { adapterDone <- adapter.Wait() }()
+	targetStopped := false
+	t.Cleanup(func() {
+		if targetStopped {
+			return
+		}
+		_ = syscall.Kill(-adapterPID, syscall.SIGKILL)
+		select {
+		case <-adapterDone:
+		case <-time.After(2 * time.Second):
+		}
+	})
+
+	var target productionLifecycleIdentity
+	scanner := bufio.NewScanner(adapterStdout)
+	for scanner.Scan() {
+		if json.Unmarshal(scanner.Bytes(), &target) == nil && target.AppServerPID > 0 {
+			break
+		}
+	}
+	if target.AppServerPID == 0 {
+		t.Fatalf("production target did not report its exact identity: %v", scanner.Err())
+	}
+	ownership, err := proveProcessOwnsListeningUnixSocket(
+		target.AppServerPID,
+		target.AppServerStartTime,
+		appServerSocket,
+		appServerSocket,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := productadapter.ConsumerManifest{
+		Index:                      1,
+		UID:                        os.Geteuid(),
+		GID:                        os.Getegid(),
+		CandidateRoot:              candidate,
+		WorktreePath:               worktree,
+		HomePath:                   home,
+		StateRoot:                  state,
+		ProxySocketPath:            proxySocket,
+		SupervisorSocketPath:       controlSocket,
+		AppServerSocketPath:        appServerSocket,
+		SandboxAppServerSocketPath: appServerSocket,
+		SSHIdentityPath:            identity,
+		SSHPublicKeyPath:           public,
+		CodexAuthPath:              auth,
+	}
+	service := &supervisor{
+		authority: productadapter.Authority{
+			ManifestPath:   selector,
+			ManifestDigest: strings.Repeat("0", 64),
+			Adapter: productadapter.AdapterManifest{
+				Count:               2,
+				CodexExecutablePath: pinnedCodex,
+				Consumers:           []productadapter.ConsumerManifest{consumer},
+			},
+		},
+		consumer:           consumer,
+		count:              2,
+		index:              1,
+		command:            adapter,
+		done:               adapterDone,
+		processGroup:       adapterPID,
+		commandStartTime:   mustProcessStartTime(t, adapterPID),
+		appServerPID:       target.AppServerPID,
+		appServerStartTime: target.AppServerStartTime,
+		appServerSocket:    ownership,
+		startCount:         1,
+	}
+	serveContext, stopServing := context.WithCancel(context.Background())
+	defer stopServing()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- service.serve(serveContext) }()
+	if err := waitForTestUnixSocket(controlSocket, serveDone, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeSSH := filepath.Join(root, "managed-ssh")
+	sessionStderr := filepath.Join(root, "managed-session.stderr")
+	script := fmt.Sprintf(
+		"#!%s\nexport DEVKIT_TEST_MANAGED_SSH_SESSION=1\nexport DEVKIT_TEST_MANAGED_SSH_CONTROL=%q\nexec %q 2>>%q\n",
+		bash,
+		controlSocket,
+		testExecutable,
+		sessionStderr,
+	)
+	if err := os.WriteFile(fakeSSH, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	startClient := func(executable, label string) (*exec.Cmd, string, string, <-chan error) {
+		t.Helper()
+		stdoutPath := filepath.Join(root, label+".json")
+		stderrPath := filepath.Join(root, label+".stderr")
+		stdout, openErr := os.Create(stdoutPath)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		stderr, openErr := os.Create(stderrPath)
+		if openErr != nil {
+			_ = stdout.Close()
+			t.Fatal(openErr)
+		}
+		command := exec.Command(
+			executable,
+			"hold",
+			"--ssh", fakeSSH,
+			"--identity", identity,
+			"--known-hosts", knownHosts,
+			"--port", "22",
+			"--user", "product1",
+			"--cwd", worktree,
+			"--consumer-index", "1",
+		)
+		command.Env = []string{}
+		command.Stdout = stdout
+		command.Stderr = stderr
+		if startErr := command.Start(); startErr != nil {
+			_ = stdout.Close()
+			_ = stderr.Close()
+			t.Fatal(startErr)
+		}
+		done := make(chan error, 1)
+		go func() {
+			waitErr := command.Wait()
+			_ = stdout.Close()
+			_ = stderr.Close()
+			done <- waitErr
+		}()
+		return command, stdoutPath, stderrPath, done
+	}
+	waitHolding := func(command *exec.Cmd, path, stderrPath string, limit time.Duration) {
+		t.Helper()
+		deadline := time.Now().Add(limit)
+		for time.Now().Before(deadline) {
+			payload, _ := os.ReadFile(path)
+			var value struct {
+				SchemaVersion   string `json:"schema_version"`
+				InitializeReady bool   `json:"initialize_ready"`
+				Status          string `json:"status"`
+			}
+			if json.Unmarshal(payload, &value) == nil &&
+				value.SchemaVersion == "devkit/product-managed-app-server-hold/v1" &&
+				value.InitializeReady && value.Status == "holding" {
+				return
+			}
+			if _, err := processStartTime(command.Process.Pid); err != nil {
+				detail, _ := os.ReadFile(stderrPath)
+				sessionDetail, _ := os.ReadFile(sessionStderr)
+				t.Fatalf(
+					"managed client exited before holding: %v: client=%s session=%s",
+					err,
+					detail,
+					sessionDetail,
+				)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatal("managed client did not reach the held-session boundary")
+	}
+
+	held, heldStdout, heldStderr, heldDone := startClient(managedClient, "held")
+	waitHolding(held, heldStdout, heldStderr, 15*time.Second)
+	timeout, timeoutStdout, timeoutStderr, timeoutDone :=
+		startClient(timeoutClient, "timeout-sabotage")
+	waitHolding(timeout, timeoutStdout, timeoutStderr, 15*time.Second)
+	select {
+	case timeoutErr := <-timeoutDone:
+		exit, ok := timeoutErr.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 2 {
+			t.Fatalf("withheld-shutdown sabotage did not exit typed RED: %v", timeoutErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("withheld-shutdown sabotage did not honor its package timeout")
+	}
+	timeoutDetail, err := os.ReadFile(timeoutStderr)
+	if err != nil ||
+		!bytes.Contains(
+			timeoutDetail,
+			[]byte("managed app-server hold timed out without supervisor termination: context deadline exceeded"),
+		) {
+		t.Fatalf("timeout sabotage lacked its exact typed diagnostic: %q %v", timeoutDetail, err)
+	}
+	if _, err := processStartTime(held.Process.Pid); err != nil {
+		t.Fatalf("nominal held client died during timeout sabotage: %v", err)
+	}
+	if !service.status().AppServerRunning {
+		t.Fatal("timeout sabotage stopped or invalidated the managed target")
+	}
+
+	stopServing()
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("production supervisor shutdown failed: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("production supervisor did not stop within its bounded path")
+	}
+	targetStopped = true
+	select {
+	case err := <-heldDone:
+		if err != nil {
+			detail, _ := os.ReadFile(heldStderr)
+			t.Fatalf("supervisor-induced held-session exit was not clean: %v: %s", err, detail)
+		}
+	case <-time.After(5 * time.Second):
+		children, _ := os.ReadFile(
+			filepath.Join("/proc", strconv.Itoa(held.Process.Pid), "task", strconv.Itoa(held.Process.Pid), "children"),
+		)
+		for _, field := range strings.Fields(string(children)) {
+			pid, parseErr := strconv.Atoi(field)
+			if parseErr == nil {
+				_ = syscall.Kill(pid, syscall.SIGQUIT)
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+		sessionDetail, _ := os.ReadFile(sessionStderr)
+		t.Fatalf(
+			"held managed client survived supervisor shutdown: children=%q session=%s",
+			children,
+			sessionDetail,
+		)
+	}
+
+	for label, path := range map[string]string{
+		"supervisor socket": controlSocket,
+		"proxy socket":      proxySocket,
+		"app-server socket": appServerSocket,
+	} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s survived production shutdown: %v", label, err)
+		}
+	}
+	for label, pid := range map[string]int{
+		"adapter":        adapterPID,
+		"app-server":     target.AppServerPID,
+		"held client":    held.Process.Pid,
+		"timeout client": timeout.Process.Pid,
+	} {
+		if _, err := processStartTime(pid); err == nil {
+			t.Fatalf("%s process %d survived the bounded lifecycle", label, pid)
+		}
+	}
+	if err := os.RemoveAll(candidate); err != nil {
+		t.Fatal(err)
+	}
+	for label, path := range map[string]string{
+		"Codex auth": auth,
+		"worktree":   worktree,
+	} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s survived disposable candidate teardown: %v", label, err)
+		}
+	}
+	if err := os.Remove(selector); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(selector); !os.IsNotExist(err) {
+		t.Fatalf("diagnostic selector survived authority teardown: %v", err)
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	rootRemoved = true
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatalf("held-session lifecycle root survived teardown: %v", err)
 	}
 }
 
