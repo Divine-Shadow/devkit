@@ -41,7 +41,9 @@ func exactAdapterEnvelopeFixture() map[string]any {
 		"readinessExecutablePath": "/readiness", "mcpRequirementPath": "/mcp",
 		"mountPolicyContractPath": "/mount-policy", "supervisorExecutablePath": "/supervisor",
 		"sshSessionExecutablePath": "/ssh-session", "sshSetupExecutablePath": "/ssh-setup",
-		"sshSetupContractPath": "/ssh-setup-contract", "sshSessionContractPath": "/ssh-session-contract",
+		"codexAuthSeed1ExecutablePath": "/codex-auth-seed-1",
+		"codexAuthSeed2ExecutablePath": "/codex-auth-seed-2",
+		"sshSetupContractPath":         "/ssh-setup-contract", "sshSessionContractPath": "/ssh-session-contract",
 		"productOrigin": "ssh://git@example/product", "controllerCredentialOwnerUid": 1000,
 		"count": 1, "baseBranch": "main", "branchPrefix": "agent", "upstreamProxyUrl": "",
 		"resolvConfPath": "/resolv.conf", "nscdSocketPath": "", "mountPolicyIdentity": "devkit/workspace-egress/v3",
@@ -195,6 +197,9 @@ func TestValidateManifestEnvelopeRequiresSingleExactAuthorityShape(t *testing.T)
 		"extra-adapter-compiled-revision": func(value map[string]any) {
 			value["devkitProductAdapter"].(map[string]any)["compiledRevision"] = strings.Repeat("1", 40)
 		},
+		"missing-fixed-slot-codex-auth-seeder": func(value map[string]any) {
+			delete(value["devkitProductAdapter"].(map[string]any), "codexAuthSeed2ExecutablePath")
+		},
 		"extra-runtime-identity": func(value map[string]any) {
 			value["runtimeIdentity"].(map[string]any)["launcherIdentity"] = "forbidden"
 		},
@@ -339,6 +344,8 @@ func TestOnlyInertBootstrapRolesMayLoadBeforeCredentialSeeding(t *testing.T) {
 		{role: RoleSupervisor, want: false},
 		{role: RoleSSHSession, want: true},
 		{role: RoleSSHSetup, want: false},
+		{role: RoleCodexAuthSeed1, want: false},
+		{role: RoleCodexAuthSeed2, want: false},
 	} {
 		if got := roleRequiresSelectedCredentialHandlesAtLoad(test.role); got != test.want {
 			t.Fatalf(
@@ -347,6 +354,29 @@ func TestOnlyInertBootstrapRolesMayLoadBeforeCredentialSeeding(t *testing.T) {
 				got,
 				test.want,
 			)
+		}
+	}
+}
+
+func TestCodexAuthSeedRolesHaveOneFixedConsumerIdentity(t *testing.T) {
+	for _, test := range []struct {
+		role Role
+		want int
+	}{
+		{role: RoleCodexAuthSeed1, want: 1},
+		{role: RoleCodexAuthSeed2, want: 2},
+	} {
+		got, ok := FixedConsumerIndex(test.role)
+		if !ok || got != test.want {
+			t.Fatalf("FixedConsumerIndex(%q) = %d, %t; want %d, true", test.role, got, ok, test.want)
+		}
+		if !isControllerSeedRole(test.role) {
+			t.Fatalf("fixed-slot role %q did not require controller admission", test.role)
+		}
+	}
+	for _, role := range []Role{RoleAdapter, RoleProxy, RoleSupervisor, RoleSSHSession, RoleSSHSetup} {
+		if got, ok := FixedConsumerIndex(role); ok || got != 0 {
+			t.Fatalf("non-fixed role %q acquired consumer identity %d", role, got)
 		}
 	}
 }

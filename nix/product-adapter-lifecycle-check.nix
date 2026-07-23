@@ -43,13 +43,13 @@ let
 	  sshSessionContract = mkProductSSHSessionContract pkgs;
 	  stoppedVolumeSeedContract = mkProductStoppedVolumeSeedContract pkgs;
   lifecycleProductRevision = "7c49b072973e6ea3ced9515352c79cfbd915754e";
-  diagnosticRuntimeFixture =
+  runtimeBundleFixture =
     import ./dev-all-runtime-bundle-fixture.nix {
       inherit pkgs;
       productSourceRev = lifecycleProductRevision;
     };
-  diagnosticRuntimeBundle =
-    mkDevAllRuntimeBundle ({ inherit pkgs; } // diagnosticRuntimeFixture.constructorArgs);
+  runtimeBundle =
+    mkDevAllRuntimeBundle ({ inherit pkgs; } // runtimeBundleFixture.constructorArgs);
   brokerExecutable = pkgs.writeShellScript "devkit-product-fixture-broker" ''
     exit 0
   '';
@@ -73,7 +73,7 @@ let
 	tool_timeout_sec = 30
   '';
   governanceEnv =
-    diagnosticRuntimeFixture.productRuntimeProjection.envPath;
+    runtimeBundleFixture.productRuntimeProjection.envPath;
   governanceRepoConfig = pkgs.writeText "devkit-product-governance-repo-config" ''
     {}
   '';
@@ -165,7 +165,7 @@ let
     test "$(git -C "$seed" rev-parse HEAD)" = '${lifecycleProductRevision}'
     printf '%s\n' '${lifecycleProductRevision}' > "$out/revision"
   '';
-  diagnosticAdapterManifest = pkgs.runCommand "devkit-product-adapter-lifecycle-authority" {
+  mkDiagnosticAdapterManifest = name: adapterPackage: pkgs.runCommand name {
     nativeBuildInputs = [
       pkgs.coreutils
       pkgs.jq
@@ -177,13 +177,15 @@ let
     digest() {
       ${pkgs.coreutils}/bin/sha256sum "$1" | ${pkgs.coreutils}/bin/cut -d' ' -f1
     }
-    adapter="${productionAdapter}/bin/product-adapter"
-    proxy="${productionAdapter}/bin/product-proxy"
-    readiness="${productionAdapter}/bin/product-readiness"
-	runtime_exec="${productionAdapter}/bin/product-runtime-exec"
-	    supervisor="${productionAdapter}/bin/product-adapter-supervisor"
-	    ssh_session="${productionAdapter}/bin/product-ssh-session"
-	    ssh_setup="${productionAdapter}/bin/product-ssh-setup"
+    adapter="${adapterPackage}/bin/product-adapter"
+    proxy="${adapterPackage}/bin/product-proxy"
+    readiness="${adapterPackage}/bin/product-readiness"
+	runtime_exec="${adapterPackage}/bin/product-runtime-exec"
+	    supervisor="${adapterPackage}/bin/product-adapter-supervisor"
+	    ssh_session="${adapterPackage}/bin/product-ssh-session"
+	    ssh_setup="${adapterPackage}/bin/product-ssh-setup"
+	    codex_auth_seed_1="${adapterPackage}/bin/product-codex-auth-seed-1"
+	    codex_auth_seed_2="${adapterPackage}/bin/product-codex-auth-seed-2"
 	    ssh_session_contract='${sshSessionContract}'
 	    ssh_setup_contract='${stoppedVolumeSeedContract}'
     revision="$(${pkgs.coreutils}/bin/cat ${fixtureSource}/revision)"
@@ -192,12 +194,12 @@ let
     candidate_a="${candidateParent}/a/slot"
     candidate_b="${candidateParent}/b/slot"
 	    ${pkgs.jq}/bin/jq -n \
-	      --slurpfile base ${diagnosticRuntimeBundle}/share/dev-all-runtime-bundle/identity.json \
+	      --slurpfile base ${runtimeBundle}/share/dev-all-runtime-bundle/identity.json \
       --arg revision "$revision" \
       --arg adapter "$adapter" \
       --arg proxy "$proxy" \
       --arg git ${pkgs.git}/bin/git \
-      --arg git_ssh ${productionAdapter.productAdapterResources.gitSSH} \
+      --arg git_ssh ${adapterPackage.productAdapterResources.gitSSH} \
       --arg env ${pkgs.coreutils}/bin/coreutils \
       --arg ssh ${pkgs.openssh}/bin/ssh \
 	  --arg ssh_keygen ${pkgs.openssh}/bin/ssh-keygen \
@@ -220,6 +222,8 @@ let
 	  --arg ssh_session_contract "$ssh_session_contract" \
 	  --arg ssh_setup "$ssh_setup" \
 	  --arg ssh_setup_contract "$ssh_setup_contract" \
+	  --arg codex_auth_seed_1 "$codex_auth_seed_1" \
+	  --arg codex_auth_seed_2 "$codex_auth_seed_2" \
 	  --arg mount_policy_identity "$mount_policy_identity" \
 	  --arg supervisor_root ${supervisorRoot} \
       --arg origin "$origin" \
@@ -231,7 +235,7 @@ let
       --arg d_adapter "$(digest "$adapter")" \
       --arg d_proxy "$(digest "$proxy")" \
       --arg d_git "$(digest ${pkgs.git}/bin/git)" \
-      --arg d_git_ssh "$(digest ${productionAdapter.productAdapterResources.gitSSH})" \
+      --arg d_git_ssh "$(digest ${adapterPackage.productAdapterResources.gitSSH})" \
       --arg d_env "$(digest ${pkgs.coreutils}/bin/coreutils)" \
       --arg d_ssh "$(digest ${pkgs.openssh}/bin/ssh)" \
 	  --arg d_ssh_keygen "$(digest ${pkgs.openssh}/bin/ssh-keygen)" \
@@ -254,6 +258,8 @@ let
 	  --arg d_ssh_session_contract "$(digest "$ssh_session_contract")" \
 	  --arg d_ssh_setup "$(digest "$ssh_setup")" \
 	  --arg d_ssh_setup_contract "$(digest "$ssh_setup_contract")" \
+	  --arg d_codex_auth_seed_1 "$(digest "$codex_auth_seed_1")" \
+	  --arg d_codex_auth_seed_2 "$(digest "$codex_auth_seed_2")" \
       --arg d_resolv "$(digest ${resolvConf})" \
       '
 	  def consumer($index; $uid; $candidate; $authorized_keys):
@@ -330,6 +336,8 @@ let
 				  sshSessionContractPath:$ssh_session_contract,
 		  sshSetupExecutablePath:$ssh_setup,
 		  sshSetupContractPath:$ssh_setup_contract,
+		  codexAuthSeed1ExecutablePath:$codex_auth_seed_1,
+		  codexAuthSeed2ExecutablePath:$codex_auth_seed_2,
           productOrigin:$origin,
 	      controllerCredentialOwnerUid:1000,
           count:2,
@@ -357,6 +365,7 @@ let
 					supervisor:$d_supervisor,ssh_session:$d_ssh_session,
 					ssh_session_contract:$d_ssh_session_contract,
 			ssh_setup:$d_ssh_setup,ssh_setup_contract:$d_ssh_setup_contract,
+			codex_auth_seed_1:$d_codex_auth_seed_1,codex_auth_seed_2:$d_codex_auth_seed_2,
             resolv_conf:$d_resolv
           }
 	      }' > "$manifest"
@@ -381,6 +390,31 @@ let
     codexExecutable = "${pinnedCodex}/bin/codex";
     knownHostsFile = "${fixtureSource}/known_hosts";
   };
+  diagnosticAdapterManifest =
+    mkDiagnosticAdapterManifest
+      "devkit-product-adapter-lifecycle-authority"
+      productionAdapter;
+  codexAuthSeedRootlessAdapter = mkProductAdapterPackage {
+    inherit
+      codexConfig
+      governanceEnv
+      governanceRepoConfig
+      governanceRules
+      pkgs
+      shellHook
+      mcpRequirement
+      ;
+    egressAllowlist = allowlist;
+    bubblewrap = "${pkgs.bubblewrap}/bin/bwrap";
+    broker = brokerExecutable;
+    codexExecutable = "${pinnedCodex}/bin/codex";
+    knownHostsFile = "${fixtureSource}/known_hosts";
+    rootlessWrapperCheck = true;
+  };
+  codexAuthSeedRootlessManifest =
+    mkDiagnosticAdapterManifest
+      "devkit-product-codex-auth-seed-rootless-authority"
+      codexAuthSeedRootlessAdapter;
   readinessHermetic = pkgs.runCommand "devkit-product-readiness-hermetic" {
     nativeBuildInputs = [
       pkgs.coreutils
@@ -446,6 +480,310 @@ let
       runHook postCheck
     '';
   };
+  codexAuthSeedRootlessModuleSystem = mkNixosSystem {
+    system = pkgs.system;
+    modules = [
+      productConsumerModule
+      {
+        users.groups.controller.gid = 1000;
+        system.stateVersion = "26.05";
+        services.devkitProductConsumer = {
+          enable = true;
+          adapterPackage = codexAuthSeedRootlessAdapter;
+          authorityManifest = "${codexAuthSeedRootlessManifest}/identity.json";
+          authorityManifestSha256File = "${codexAuthSeedRootlessManifest}/identity.sha256";
+          consumer1AuthorizedKeys = "${fixtureSource}/gui-1-authorized_keys";
+          consumer2AuthorizedKeys = "${fixtureSource}/gui-2-authorized_keys";
+        };
+      }
+    ];
+  };
+  codexAuthSeedRootlessModuleConfig = codexAuthSeedRootlessModuleSystem.config;
+  codexAuthSeedRootlessWrappers =
+    codexAuthSeedRootlessAdapter.productAdapterResources.namespaceWrappers;
+  codexAuthSeedRootlessWrapperSurface =
+    assert
+      codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed1.name}.source
+      == "${codexAuthSeedRootlessAdapter}/bin/${codexAuthSeedRootlessWrappers.codexAuthSeed1.target}";
+    assert
+      codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed2.name}.source
+      == "${codexAuthSeedRootlessAdapter}/bin/${codexAuthSeedRootlessWrappers.codexAuthSeed2.target}";
+    pkgs.runCommand "devkit-product-codex-auth-seed-rootless-wrapper-surface" { } ''
+      mkdir -p "$out"
+      ln -s \
+        ${codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed1.name}.source} \
+        "$out/${codexAuthSeedRootlessWrappers.codexAuthSeed1.name}"
+      ln -s \
+        ${codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed2.name}.source} \
+        "$out/${codexAuthSeedRootlessWrappers.codexAuthSeed2.name}"
+    '';
+  codexAuthSeedEntrypointHermetic =
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.codexAuthSeed1.name}.source
+      == "${productionAdapter}/bin/${namespaceWrappers.codexAuthSeed1.target}";
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.codexAuthSeed2.name}.source
+      == "${productionAdapter}/bin/${namespaceWrappers.codexAuthSeed2.target}";
+    assert
+      codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed1.name}.owner
+      == "root";
+    assert
+      codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed1.name}.group
+      == "controller";
+    assert
+      codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed2.name}.owner
+      == "root";
+    assert
+      codexAuthSeedRootlessModuleConfig.security.wrappers.${codexAuthSeedRootlessWrappers.codexAuthSeed2.name}.group
+      == "controller";
+    pkgs.runCommand "devkit-product-codex-auth-seed-entrypoint-hermetic"
+      {
+        nativeBuildInputs = [
+          pkgs.bubblewrap
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        test -f ${adapterPackageContract}/contract
+        root=/build/product-codex-auth-seed-hermetic
+        test ! -e "$root"
+        mkdir -p \
+          "$root/var/lib/product-runtime" \
+          "$root/var/lib/product-consumer-candidates/a/slot" \
+          "$root/var/lib/product-consumer-candidates/b/slot" \
+          "$root/run/current-system/sw/bin" \
+          "$root/run/wrappers/bin" \
+          "$root/etc" \
+          "$root/tmp"
+        chmod 0755 "$root/var/lib/product-runtime"
+        printf 'root:x:0:0:root:/root:/noshell\n' > "$root/etc/passwd"
+        printf 'root:x:0:\n' > "$root/etc/group"
+        chmod 0444 "$root/etc/passwd" "$root/etc/group"
+        cp ${codexAuthSeedRootlessManifest}/identity.json "$root/identity.json"
+        chmod 0444 "$root/identity.json"
+        ln -s \
+          ${codexAuthSeedRootlessAdapter}/bin/product-codex-auth-seed-1 \
+          "$root/run/current-system/sw/bin/product-codex-auth-seed-1"
+        ln -s \
+          ${codexAuthSeedRootlessAdapter}/bin/product-codex-auth-seed-2 \
+          "$root/run/current-system/sw/bin/product-codex-auth-seed-2"
+        ln -s \
+          ${codexAuthSeedRootlessWrapperSurface}/${codexAuthSeedRootlessWrappers.codexAuthSeed1.name} \
+          "$root/run/wrappers/bin/${codexAuthSeedRootlessWrappers.codexAuthSeed1.name}"
+        ln -s \
+          ${codexAuthSeedRootlessWrapperSurface}/${codexAuthSeedRootlessWrappers.codexAuthSeed2.name} \
+          "$root/run/wrappers/bin/${codexAuthSeedRootlessWrappers.codexAuthSeed2.name}"
+        report_failure() {
+          status="$?"
+          test "$status" -eq 0 && return
+          for evidence in "$root"/tmp/*.stderr "$root"/tmp/duplicate-*.json; do
+            test -f "$evidence" || continue
+            printf '%s: ' "$(basename "$evidence")" >&2
+            cat "$evidence" >&2
+          done
+          exit "$status"
+        }
+        trap report_failure EXIT
+
+        prepare_slot() {
+          index="$1"
+          manifest=${codexAuthSeedRootlessManifest}/identity.json
+          candidate="$(jq -er \
+            --argjson index "$index" \
+            '.devkitProductAdapter.consumers[] |
+             select(.index == $index) | .candidateRoot' \
+            "$manifest")"
+          home="$(jq -er \
+            --argjson index "$index" \
+            '.devkitProductAdapter.consumers[] |
+             select(.index == $index) | .homePath' \
+            "$manifest")"
+          authorized="$(jq -er \
+            --argjson index "$index" \
+            '.devkitProductAdapter.consumers[] |
+             select(.index == $index) | .authorizedKeysPath' \
+            "$manifest")"
+          host_candidate="$root$candidate"
+          host_home="$root$home"
+          mkdir -p "$host_home/.ssh" "$host_home/.codex"
+          chmod 0700 "$host_candidate" "$host_home" "$host_home/.ssh" "$host_home/.codex"
+          for field in sshIdentityPath sshPublicKeyPath; do
+            path="$(jq -er \
+              --argjson index "$index" --arg field "$field" \
+              '.devkitProductAdapter.consumers[] |
+               select(.index == $index) | .[$field]' \
+              "$manifest")"
+            printf 'hermetic fixed-slot %s\n' "$field" > "$root$path"
+            chmod 0600 "$root$path"
+          done
+          printf 'hermetic known hosts\n' > "$host_home/.ssh/known_hosts"
+          printf 'hermetic ssh config\n' > "$host_home/.ssh/config"
+          chmod 0600 "$host_home/.ssh/known_hosts" "$host_home/.ssh/config"
+          authorized_digest="$(sha256sum "$authorized" | cut -d' ' -f1)"
+          jq -n \
+            --argjson index "$index" \
+            --arg candidate "$candidate" \
+            --arg digest "$authorized_digest" \
+            '{
+              schema_version:"devkit/product-stopped-volume-seed/v1",
+              consumer_index:$index,
+              candidate_root:$candidate,
+              authorized_keys_sha256:$digest
+            }' > "$host_candidate/.devkit-product-offline-seed.json"
+          chmod 0600 "$host_candidate/.devkit-product-offline-seed.json"
+        }
+
+        prepare_slot 1
+        prepare_slot 2
+        bwrap \
+          --die-with-parent \
+          --unshare-user --uid 0 --gid 0 \
+          --unshare-pid --unshare-uts --unshare-ipc \
+          --ro-bind /nix/store /nix/store \
+          --ro-bind "$root/identity.json" ${codexAuthSeedRootlessManifest}/identity.json \
+          --bind "$root/var" /var \
+          --bind "$root/run" /run \
+          --ro-bind "$root/etc" /etc \
+          --bind "$root/tmp" /tmp \
+          --proc /proc \
+          --dev /dev \
+          ${pkgs.bash}/bin/bash -euc '
+            ${codexAuthSeedRootlessModuleConfig.systemd.services.devkit-product-authority-selector.serviceConfig.ExecStart}
+            selector=/var/lib/product-runtime/authority-selector.json
+            test "$(${pkgs.coreutils}/bin/stat -c %u:%g "$selector")" = 0:0
+            test "$(${pkgs.coreutils}/bin/stat -c %a "$selector")" = 444
+            ${pkgs.jq}/bin/jq -e \
+              --arg manifest ${codexAuthSeedRootlessManifest}/identity.json \
+              --arg digest "$(${pkgs.coreutils}/bin/cut -d" " -f1 ${codexAuthSeedRootlessManifest}/identity.sha256)" \
+              ".schemaVersion == \"devkit/product-runtime-authority-selector/v1\" and
+               .manifestPath == \$manifest and .manifestSha256 == \$digest" \
+              "$selector" >/dev/null
+
+            auth_1="$(${pkgs.jq}/bin/jq -er \
+              ".devkitProductAdapter.consumers[] |
+               select(.index == 1) | .codexAuthPath" \
+              ${codexAuthSeedRootlessManifest}/identity.json)"
+            bad_digest="$(${pkgs.coreutils}/bin/printf "%064d" 0)"
+            ${pkgs.jq}/bin/jq \
+              --arg digest "$bad_digest" \
+              ".manifestSha256 = \$digest" \
+              "$selector" > /tmp/divergent-selector.json
+            ${pkgs.coreutils}/bin/rm "$selector"
+            ${pkgs.coreutils}/bin/install -m 0444 \
+              /tmp/divergent-selector.json "$selector"
+            if ${pkgs.coreutils}/bin/printf "{\"fixture\":\"selector-divergence\"}\n" |
+              ${pkgs.coreutils}/bin/env -i \
+                /run/wrappers/bin/devkit-product-codex-auth-seed-1 \
+                > /tmp/divergent-selector.stdout \
+                2> /tmp/divergent-selector.stderr
+            then
+              echo "divergent canonical selector was accepted" >&2
+              exit 1
+            fi
+            ${pkgs.gnugrep}/bin/grep -F \
+              "selected Product authority manifest digest does not match" \
+              /tmp/divergent-selector.stderr >/dev/null
+            test ! -e "$auth_1"
+            ${pkgs.coreutils}/bin/rm "$selector"
+            ${codexAuthSeedRootlessModuleConfig.systemd.services.devkit-product-authority-selector.serviceConfig.ExecStart}
+
+            current_seed_1=/run/current-system/sw/bin/product-codex-auth-seed-1
+            ${pkgs.coreutils}/bin/rm "$current_seed_1"
+            ${pkgs.coreutils}/bin/ln -s \
+              ${codexAuthSeedRootlessAdapter}/bin/product-codex-auth-seed-2 \
+              "$current_seed_1"
+            if ${pkgs.coreutils}/bin/printf "{\"fixture\":\"generation-divergence\"}\n" |
+              ${pkgs.coreutils}/bin/env -i \
+                /run/wrappers/bin/devkit-product-codex-auth-seed-1 \
+                > /tmp/divergent-generation.stdout \
+                2> /tmp/divergent-generation.stderr
+            then
+              echo "divergent current-system generation was accepted" >&2
+              exit 1
+            fi
+            ${pkgs.gnugrep}/bin/grep -F \
+              "authority locator and current-system executable belong to different generations" \
+              /tmp/divergent-generation.stderr >/dev/null
+            test ! -e "$auth_1"
+            ${pkgs.coreutils}/bin/rm "$current_seed_1"
+            ${pkgs.coreutils}/bin/ln -s \
+              ${codexAuthSeedRootlessAdapter}/bin/product-codex-auth-seed-1 \
+              "$current_seed_1"
+
+            for index in 1 2; do
+              manifest=${codexAuthSeedRootlessManifest}/identity.json
+              wrapper=/run/wrappers/bin/devkit-product-codex-auth-seed-"$index"
+              candidate="$(${pkgs.jq}/bin/jq -er \
+                --argjson index "$index" \
+                ".devkitProductAdapter.consumers[] |
+                 select(.index == \$index) | .candidateRoot" \
+                "$manifest")"
+              auth="$(${pkgs.jq}/bin/jq -er \
+                --argjson index "$index" \
+                ".devkitProductAdapter.consumers[] |
+                 select(.index == \$index) | .codexAuthPath" \
+                "$manifest")"
+              secret="{\"fixture\":\"fixed-slot-$index\"}"
+              printf "%s\n" "$secret" |
+                ${pkgs.coreutils}/bin/env -i "$wrapper" \
+                > /tmp/receipt-"$index".json \
+                2> /tmp/seed-"$index".stderr
+              ${pkgs.jq}/bin/jq -e \
+                --argjson index "$index" \
+                ".schema_version == \"devkit/product-codex-auth-seed/v1\" and
+                 .status == \"seeded\" and
+                 .consumer_index == \$index and
+                 (keys == [\"consumer_index\", \"schema_version\", \"status\"])" \
+                /tmp/receipt-"$index".json >/dev/null
+              test "$(${pkgs.coreutils}/bin/stat -c %u:%g "$auth")" = 0:0
+              test "$(${pkgs.coreutils}/bin/stat -c %a "$auth")" = 600
+              test "$(${pkgs.coreutils}/bin/cat "$auth")" = "$secret"
+              test ! -s /tmp/seed-"$index".stderr
+              test "$(${pkgs.findutils}/bin/find "$(${pkgs.coreutils}/bin/dirname "$auth")" -maxdepth 1 -type f | ${pkgs.coreutils}/bin/wc -l)" = 1
+              if printf "{\"replacement\":true}\n" |
+                ${pkgs.coreutils}/bin/env -i "$wrapper" \
+                > /tmp/duplicate-"$index".stdout \
+                2> /tmp/duplicate-"$index".json
+              then
+                echo "duplicate fixed-slot entrypoint replaced accepted auth" >&2
+                exit 1
+              fi
+              ${pkgs.jq}/bin/jq -e \
+                --argjson index "$index" \
+                ".schema_version == \"devkit/product-codex-auth-seed-failure/v1\" and
+                 .status == \"failed\" and
+                 .consumer_index == \$index and
+                 .outcome == \"attempted\" and
+                 .phase == \"link-generation\" and
+                 .reconciliation == \"target-not-created\"" \
+                /tmp/duplicate-"$index".json >/dev/null
+              test "$(${pkgs.coreutils}/bin/cat "$auth")" = "$secret"
+              test "$(${pkgs.findutils}/bin/find "$(${pkgs.coreutils}/bin/dirname "$auth")" -maxdepth 1 -type f | ${pkgs.coreutils}/bin/wc -l)" = 1
+              ! ${pkgs.findutils}/bin/find "$candidate" -name ".auth.json.seed-*" -print -quit |
+                ${pkgs.gnugrep}/bin/grep -q .
+              ! ${pkgs.gnugrep}/bin/grep -R -F "$secret" \
+                /tmp/receipt-"$index".json \
+                /tmp/seed-"$index".stderr \
+                /tmp/duplicate-"$index".stdout \
+                /tmp/duplicate-"$index".json
+            done
+          '
+        mkdir -p "$out"
+        cp "$root/tmp/receipt-1.json" "$out/"
+        cp "$root/tmp/receipt-2.json" "$out/"
+        printf '%s\n' \
+          'rootless logic/path coverage only; real setuid and UID transitions require the named QEMU promotion' \
+          'both exact fixed wrapper paths consumed the one canonical selector and immutable manifest' \
+          'module contracts bind both production and check wrappers to their exact package binaries' \
+          'manifest retains distinct logical Product identities 2001 and 2002 without slot rewriting' \
+          'running, manifest, and current-system executable generations were inode-identical' \
+          'selector-digest and current-system-generation divergence both failed before auth effects' \
+          'anonymous create-only generation, typed duplicate outcome, byte identity, and no residue proved' \
+          > "$out/contract"
+      '';
   namespaceWrappers = productionAdapter.productAdapterResources.namespaceWrappers;
   moduleSystem = mkNixosSystem {
     system = pkgs.system;
@@ -476,6 +814,18 @@ let
     assert
       moduleConfig.security.wrappers.${namespaceWrappers.supervisor.name}.source
       == "${productionAdapter}/bin/${namespaceWrappers.supervisor.target}";
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.codexAuthSeed1.name}.source
+      == "${productionAdapter}/bin/${namespaceWrappers.codexAuthSeed1.target}";
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.codexAuthSeed2.name}.source
+      == "${productionAdapter}/bin/${namespaceWrappers.codexAuthSeed2.target}";
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.codexAuthSeed1.name}.group
+      == "controller";
+    assert
+      moduleConfig.security.wrappers.${namespaceWrappers.codexAuthSeed2.name}.group
+      == "controller";
     assert
       moduleConfig.systemd.services.devkit-product-consumer-1.serviceConfig.ExecStart
       == "${namespaceWrappers.supervisor.path} serve --count 2 --index 1";
@@ -536,6 +886,7 @@ let
         'two fixed Product identities: product1=2001 product2=2002' \
         'generated immutable selector service executed twice and validated exact manifest binding' \
         'package-owned initial namespace wrappers and forced sessions' \
+        'two zero-argument controller-only fixed-slot Codex auth seed wrappers' \
         'both Product supervisors activate canonically at multi-user.target' \
         'supervisors receive graceful main-process-first teardown before bounded cgroup kill' \
         > "$out/contract"
@@ -579,6 +930,8 @@ let
 	  ${productionAdapter}/bin/product-adapter-supervisor \
 	  ${productionAdapter}/bin/product-ssh-session \
 	  ${productionAdapter}/bin/product-ssh-setup \
+	  ${productionAdapter}/bin/product-codex-auth-seed-1 \
+	  ${productionAdapter}/bin/product-codex-auth-seed-2 \
       ${productionAdapter}/bin/product-runtime-exec \
       ${productionAdapter.productAdapterResources.gitSSH} \
       ${pkgs.git}/bin/git \
@@ -592,6 +945,12 @@ let
       test -x "$executable"
       test ! -L "$executable"
       test "$(readlink -f "$executable")" = "$executable"
+    done
+    for seeder in \
+      ${productionAdapter}/bin/product-codex-auth-seed-1 \
+      ${productionAdapter}/bin/product-codex-auth-seed-2
+    do
+      ! grep -aF 'DEVKIT_TEST_PRODUCT_CODEX_AUTH_SEED_AUTHORITY' "$seeder"
     done
     mkdir -p "$out"
     printf '%s\n' \
@@ -805,13 +1164,81 @@ EOF
         ${fixtureRoot}/seed-$index.json >/dev/null
       ! ${pkgs.gnugrep}/bin/grep -q 'OPENSSH PRIVATE KEY' ${fixtureRoot}/seed-$index.json
 
-      # Non-promoting Fleet-auth diagnostic fixture. The promotion gate uses
-      # Fleet's real `auth plan` + confirmed apply into the stopped volume.
+      phase="consumer-$index fixed-slot Codex auth seed"
+      auth_seed_wrapper=$([ "$index" = 1 ] && \
+        printf %s ${namespaceWrappers.codexAuthSeed1.path} || \
+        printf %s ${namespaceWrappers.codexAuthSeed2.path})
+      wrong_auth_seed_wrapper=$([ "$index" = 1 ] && \
+        printf %s ${namespaceWrappers.codexAuthSeed2.path} || \
+        printf %s ${namespaceWrappers.codexAuthSeed1.path})
+      if printf '{"wrong_slot":true}\n' | \
+        ${pkgs.util-linux}/bin/runuser -u controller -- \
+          ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+            "$wrong_auth_seed_wrapper" \
+        >${fixtureRoot}/wrong-slot-auth-seed-$index.json \
+        2>${fixtureRoot}/wrong-slot-auth-seed-$index.stderr; then
+        echo "wrong fixed-slot Codex auth seeder was accepted" >&2
+        exit 1
+      fi
+      test ! -e "$candidate/home/.codex/auth.json"
+      if printf '{"unauthorized":true}\n' | \
+        ${pkgs.util-linux}/bin/runuser -u product$index -- \
+          "$auth_seed_wrapper" \
+        >${fixtureRoot}/unauthorized-auth-seed-$index.json \
+        2>${fixtureRoot}/unauthorized-auth-seed-$index.stderr; then
+        echo "Product consumer executed the controller-only Codex auth seed" >&2
+        exit 1
+      fi
+      test ! -e "$candidate/home/.codex/auth.json"
       mkdir -p "$candidate/home/.codex"
-      printf '{}\n' > "$candidate/home/.codex/auth.json"
-      chown -R "$uid:$uid" "$candidate/home/.codex"
+      chown "$uid:$uid" "$candidate/home/.codex"
       chmod 0700 "$candidate/home/.codex"
-      chmod 0600 "$candidate/home/.codex/auth.json"
+      printf outside > ${fixtureRoot}/auth-outside-$index
+      ln -s ${fixtureRoot}/auth-outside-$index "$candidate/home/.codex/auth.json"
+      if printf '{"symlink":true}\n' | \
+        ${pkgs.util-linux}/bin/runuser -u controller -- \
+          ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+            "$auth_seed_wrapper" \
+        >${fixtureRoot}/symlink-auth-seed-$index.json \
+        2>${fixtureRoot}/symlink-auth-seed-$index.stderr; then
+        echo "symlink Codex auth target was accepted" >&2
+        exit 1
+      fi
+      test "$(${pkgs.coreutils}/bin/cat ${fixtureRoot}/auth-outside-$index)" = outside
+      rm "$candidate/home/.codex/auth.json"
+      test -d "$candidate/home/.codex"
+      test "$(${pkgs.coreutils}/bin/stat -c %u:%g "$candidate/home/.codex")" = "$uid:$uid"
+      test "$(${pkgs.coreutils}/bin/stat -c %a "$candidate/home/.codex")" = 700
+      printf '{"fixture":"codex-auth-%s"}\n' "$index" | \
+        ${pkgs.util-linux}/bin/runuser -u controller -- \
+          ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+            "$auth_seed_wrapper" \
+        >${fixtureRoot}/auth-seed-$index.json \
+        2>${fixtureRoot}/auth-seed-$index.stderr
+      ${pkgs.jq}/bin/jq -e \
+        --argjson index "$index" \
+        '.schema_version == "devkit/product-codex-auth-seed/v1" and
+         .status == "seeded" and .consumer_index == $index and
+         (keys == ["consumer_index", "schema_version", "status"])' \
+        ${fixtureRoot}/auth-seed-$index.json >/dev/null
+      test "$(${pkgs.coreutils}/bin/stat -c %u:%g "$candidate/home/.codex/auth.json")" = "$uid:$uid"
+      test "$(${pkgs.coreutils}/bin/stat -c %a "$candidate/home/.codex/auth.json")" = 600
+      test "$(${pkgs.coreutils}/bin/stat -c %u:%g "$candidate/home/.codex")" = "$uid:$uid"
+      test "$(${pkgs.coreutils}/bin/stat -c %a "$candidate/home/.codex")" = 700
+      if printf '{"replacement":true}\n' | \
+        ${pkgs.util-linux}/bin/runuser -u controller -- \
+          ${pkgs.coreutils}/bin/coreutils --coreutils-prog=env -i \
+            "$auth_seed_wrapper" \
+        >${fixtureRoot}/duplicate-auth-seed-$index.json \
+        2>${fixtureRoot}/duplicate-auth-seed-$index.stderr; then
+        echo "duplicate Codex auth seed replaced the fixed target" >&2
+        exit 1
+      fi
+      test "$(${pkgs.coreutils}/bin/cat "$candidate/home/.codex/auth.json")" = \
+        "{\"fixture\":\"codex-auth-$index\"}"
+      test "$(${pkgs.findutils}/bin/find "$candidate/home/.codex" -maxdepth 1 -type f | ${pkgs.coreutils}/bin/wc -l)" = 1
+      ! ${pkgs.gnugrep}/bin/grep -R -q '"fixture":"codex-auth-' \
+        ${fixtureRoot}/*.json ${fixtureRoot}/*.stderr
       test "$(${pkgs.coreutils}/bin/stat -c %u:%g ${supervisorRoot}/control-$index)" = "$uid:$uid"
       test "$(${pkgs.coreutils}/bin/stat -c %a ${supervisorRoot}/control-$index)" = 700
 
@@ -1221,5 +1648,11 @@ EOF
   };
 in
 {
-  inherit moduleContract readinessHermetic supervisorIdentityHermetic vmTest;
+  inherit
+    codexAuthSeedEntrypointHermetic
+    moduleContract
+    readinessHermetic
+    supervisorIdentityHermetic
+    vmTest
+    ;
 }

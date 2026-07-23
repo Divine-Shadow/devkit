@@ -115,7 +115,28 @@
 	      absoluteHostPathsAccepted = false;
 	      rewritesGuestHandles = false;
 	    };
+	    codexAuthSeed = {
+	      schemaVersion = "devkit/product-codex-auth-seed/v1";
+	      failureSchemaVersion = "devkit/product-codex-auth-seed-failure/v1";
+	      input = "stdin";
+	      argumentsAccepted = false;
+	      target = "manifest-consumer.codexAuthPath";
+	      mode = "0600";
+	      createOnly = true;
+	      anonymousGeneration = "linux-o-tmpfile";
+	      failureOutcomes = [
+	        "attempted"
+	        "effect"
+	        "ambiguous"
+	      ];
+	      failedEffectRequiresFreshConsumer = true;
+	      slots = {
+	        "1" = "product-codex-auth-seed-1";
+	        "2" = "product-codex-auth-seed-2";
+	      };
+	    };
 	    privateKeyMaterialInOutput = false;
+	    codexAuthMaterialInOutput = false;
 	  };
 	  mkProductStoppedVolumeSeedContract =
 	    pkgs: pkgs.writeText "devkit-product-stopped-volume-seed.json" (
@@ -439,6 +460,7 @@
                 sshExecutable
                 ;
             }).sourceTransport.gitSSH.executablePath,
+          rootlessWrapperCheck ? false,
         }:
         let
           envExecutable = mkPackageEnv pkgs;
@@ -467,6 +489,16 @@
               target = "product-ssh-setup";
               controllerOnly = true;
             };
+            codexAuthSeed1 = {
+              name = "devkit-product-codex-auth-seed-1";
+              target = "product-codex-auth-seed-1";
+              controllerOnly = true;
+            };
+            codexAuthSeed2 = {
+              name = "devkit-product-codex-auth-seed-2";
+              target = "product-codex-auth-seed-2";
+              controllerOnly = true;
+            };
           };
           wrapperPath = wrapper: "${namespaceWrapperDir}/${wrapper.name}";
           mountPolicyContract = mkProductMountPolicyContract pkgs;
@@ -488,9 +520,13 @@
             "cmd/product-runtime-exec"
             "cmd/product-ssh-session"
 	        "cmd/product-ssh-setup"
+            "cmd/product-codex-auth-seed-1"
+            "cmd/product-codex-auth-seed-2"
           ];
           env.CGO_ENABLED = "0";
           env.DEVKIT_TEST_PINNED_CODEX = codexExecutable;
+          tags = nixpkgs.lib.optional rootlessWrapperCheck "devkitrootlesswrappercheck";
+          doCheck = !rootlessWrapperCheck;
           ldflags = [
             "-s"
             "-w"
@@ -521,11 +557,15 @@
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSupervisor=${outputPlaceholder}/bin/product-adapter-supervisor"
             "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSession=${outputPlaceholder}/bin/product-ssh-session"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSetup=${outputPlaceholder}/bin/product-ssh-setup"
+            "-X=devkit/cli/devctl/internal/productadapter.packageProductCodexAuthSeed1=${outputPlaceholder}/bin/product-codex-auth-seed-1"
+            "-X=devkit/cli/devctl/internal/productadapter.packageProductCodexAuthSeed2=${outputPlaceholder}/bin/product-codex-auth-seed-2"
             "-X=devkit/cli/devctl/internal/productadapter.packageAdapterLaunchExecutable=${wrapperPath namespaceWrappers.adapter}"
             "-X=devkit/cli/devctl/internal/productadapter.packageProxyLaunchExecutable=${wrapperPath namespaceWrappers.proxy}"
             "-X=devkit/cli/devctl/internal/productadapter.packageSupervisorLaunchExecutable=${wrapperPath namespaceWrappers.supervisor}"
             "-X=devkit/cli/devctl/internal/productadapter.packageSSHSessionLaunchExecutable=${wrapperPath namespaceWrappers.sshSession}"
             "-X=devkit/cli/devctl/internal/productadapter.packageSSHSetupLaunchExecutable=${wrapperPath namespaceWrappers.sshSetup}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageCodexAuthSeed1Launch=${wrapperPath namespaceWrappers.codexAuthSeed1}"
+            "-X=devkit/cli/devctl/internal/productadapter.packageCodexAuthSeed2Launch=${wrapperPath namespaceWrappers.codexAuthSeed2}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSSHSetupContract=${stoppedVolumeSeedContract}"
 	            "-X=devkit/cli/devctl/internal/productadapter.packageProductSessionContract=${sshSessionContract}"
           ];
@@ -1283,6 +1323,8 @@
           product-readiness-hermetic = productBoundary.readinessHermetic;
           product-consumer-module-contract = productBoundary.moduleContract;
           product-supervisor-identity-lifecycle = productBoundary.supervisorIdentityHermetic;
+          product-codex-auth-seed-entrypoint-hermetic =
+            productBoundary.codexAuthSeedEntrypointHermetic;
           product-consumer-boundary-diagnostic = productBoundary.vmTest;
 
           devctl-openssh-executable-authority =

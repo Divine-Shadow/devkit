@@ -18,8 +18,15 @@ func AttestInitialNamespaces(role Role) (Attestation, error) {
 }
 
 func (attestation Attestation) validateController(ownerUID int) error {
-	if attestation.role != RoleSSHSetup || attestation.realUID != ownerUID {
-		return fmt.Errorf("offline Product SSH setup caller does not match controller authority")
+	if !isControllerSeedRole(attestation.role) || attestation.realUID != ownerUID {
+		return fmt.Errorf("offline Product seed caller does not match controller authority")
+	}
+	return nil
+}
+
+func validateControllerEffectIdentity() error {
+	if os.Geteuid() != os.Getuid() {
+		return fmt.Errorf("Product integration controller identity changed unexpectedly")
 	}
 	return nil
 }
@@ -55,6 +62,10 @@ func holdCurrentGeneration(
 		expected = adapter.SSHSessionExecutablePath
 	} else if role == RoleSSHSetup {
 		expected = adapter.SSHSetupExecutablePath
+	} else if role == RoleCodexAuthSeed1 {
+		expected = adapter.CodexAuthSeed1ExecutablePath
+	} else if role == RoleCodexAuthSeed2 {
+		expected = adapter.CodexAuthSeed2ExecutablePath
 	}
 	running, err := os.Open("/proc/self/exe")
 	if err != nil {

@@ -2,10 +2,13 @@ package productseed
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 )
@@ -88,6 +91,20 @@ func openTestProjection(t *testing.T, path string) *os.File {
 	file := os.NewFile(uintptr(fd), path)
 	t.Cleanup(func() { _ = file.Close() })
 	return file
+}
+
+func prepareTestAuthParent(t *testing.T, rootPath string) string {
+	t.Helper()
+	parent := filepath.Join(rootPath, "home", ".codex")
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(rootPath, "home"), parent} {
+		if err := os.Chmod(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return parent
 }
 
 func TestOpenProjectionRootRejectsSymlinkWithoutOutsideEffect(t *testing.T) {
@@ -242,6 +259,404 @@ func TestValidateProtectedIdentityStatRejectsWrongOwnerAndMode(t *testing.T) {
 	if err := validateProtectedIdentityStat(wrongMode, 1000); err == nil {
 		t.Fatal("wrong mode was accepted")
 	}
+}
+
+func TestReadCodexAuthAcceptsOneBoundedJSONDocumentWithoutNormalization(t *testing.T) {
+	input := []byte("{\"tokens\":{\"access_token\":\"secret\"}}\n")
+	payload, err := readCodexAuth(bytes.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, input) {
+		t.Fatalf("Codex auth bytes were normalized: %q", payload)
+	}
+	wipe(payload)
+	if !bytes.Equal(payload, make([]byte, len(payload))) {
+		t.Fatal("Codex auth payload was not wiped")
+	}
+	for _, invalid := range [][]byte{
+		nil,
+		[]byte(" \n"),
+		[]byte("not-json"),
+		bytes.Repeat([]byte("x"), maxCodexAuthBytes+1),
+	} {
+		if _, err := readCodexAuth(bytes.NewReader(invalid)); err == nil {
+			t.Fatalf("invalid Codex auth payload was accepted: %d bytes", len(invalid))
+		}
+	}
+}
+
+func TestWriteOwnedAtomicAtIsCreateOnlyExactAndResidueFree(t *testing.T) {
+	rootPath := t.TempDir()
+	root := openTestProjection(t, rootPath)
+	parent := prepareTestAuthParent(t, rootPath)
+	uid, gid := os.Geteuid(), os.Getegid()
+	first := []byte("{\"fixture\":1}\n")
+	second := []byte("{\"fixture\":2}\n")
+	target := "home/.codex/auth.json"
+	if err := writeOwnedAtomicAt(root, target, first, 0o600, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(rootPath, target)
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 ||
+		int(stat.Uid) != uid || int(stat.Gid) != gid {
+		t.Fatalf("unexpected installed identity: mode=%s uid=%d gid=%d", info.Mode(), stat.Uid, stat.Gid)
+	}
+	if err := writeOwnedAtomicAt(root, target, second, 0o600, uid, gid); err == nil {
+		t.Fatal("duplicate Codex auth seed replaced the accepted target")
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, first) {
+		t.Fatalf("duplicate seed changed target: %q", payload)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "auth.json" {
+		t.Fatalf("temporary seed residue remained: %+v", entries)
+	}
+}
+
+func TestWriteOwnedAtomicAtRejectsSymlinkAndWrongDirectoryIdentity(t *testing.T) {
+	uid, gid := os.Geteuid(), os.Getegid()
+	t.Run("symlink-leaf", func(t *testing.T) {
+		rootPath := t.TempDir()
+		root := openTestProjection(t, rootPath)
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := snapshotPath(t, outside)
+		parent := filepath.Join(rootPath, "home", ".codex")
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(parent, "auth.json")); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeOwnedAtomicAt(root, "home/.codex/auth.json", []byte("{}\n"), 0o600, uid, gid); err == nil {
+			t.Fatal("symlink target was accepted")
+		}
+		assertPathSnapshot(t, outside, before)
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "auth.json" {
+			t.Fatalf("temporary residue remained after symlink rejection: %+v", entries)
+		}
+	})
+	t.Run("wrong-parent-mode", func(t *testing.T) {
+		rootPath := t.TempDir()
+		root := openTestProjection(t, rootPath)
+		parent := filepath.Join(rootPath, "home")
+		if err := os.Mkdir(parent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(parent, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeOwnedAtomicAt(root, "home/.codex/auth.json", []byte("{}\n"), 0o600, uid, gid); err == nil {
+			t.Fatal("wrong parent mode was repaired instead of rejected")
+		}
+		if _, err := os.Lstat(filepath.Join(parent, ".codex")); !os.IsNotExist(err) {
+			t.Fatalf("wrong parent admission left effects: %v", err)
+		}
+	})
+}
+
+func TestWriteOwnedAtomicAtConcurrentSeedHasOneWinner(t *testing.T) {
+	rootPath := t.TempDir()
+	uid, gid := os.Geteuid(), os.Getegid()
+	prepareTestAuthParent(t, rootPath)
+	const writers = 8
+	results := make(chan error, writers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for index := 0; index < writers; index++ {
+		go func(index int) {
+			rootFD, err := syscall.Open(
+				rootPath,
+				syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+				0,
+			)
+			if err != nil {
+				results <- err
+				return
+			}
+			root := os.NewFile(uintptr(rootFD), rootPath)
+			defer root.Close()
+			start.Wait()
+			results <- writeOwnedAtomicAt(
+				root,
+				"home/.codex/auth.json",
+				[]byte(fmt.Sprintf("{\"writer\":%d}\n", index)),
+				0o600,
+				uid,
+				gid,
+			)
+		}(index)
+	}
+	start.Done()
+	successes := 0
+	for index := 0; index < writers; index++ {
+		if err := <-results; err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent create-only seed successes = %d, want 1", successes)
+	}
+	entries, err := os.ReadDir(filepath.Join(rootPath, "home", ".codex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "auth.json" ||
+		strings.Contains(entries[0].Name(), ".seed-") {
+		t.Fatalf("concurrent seed residue remained: %+v", entries)
+	}
+}
+
+func TestWriteOwnedAtomicAtKeepsGenerationAnonymousUntilExactInstall(t *testing.T) {
+	rootPath := t.TempDir()
+	parent := prepareTestAuthParent(t, rootPath)
+	root := openTestProjection(t, rootPath)
+	uid, gid := os.Geteuid(), os.Getegid()
+	payload := []byte("{\"fixture\":\"anonymous\"}\n")
+	observedBeforeLink := false
+	err := writeOwnedAtomicAtWithHooks(
+		root,
+		"home/.codex/auth.json",
+		payload,
+		0o600,
+		uid,
+		gid,
+		atomicWriteHooks{
+			beforeLink: func(parentFD, anonymousFD int, leaf string) error {
+				observedBeforeLink = true
+				entries, err := os.ReadDir(fmt.Sprintf("/proc/self/fd/%d", parentFD))
+				if err != nil {
+					return err
+				}
+				if len(entries) != 0 {
+					return fmt.Errorf("anonymous generation was discoverable before link: %+v", entries)
+				}
+				if info, err := os.Stat(fmt.Sprintf("/proc/self/fd/%d", anonymousFD)); err != nil ||
+					!info.Mode().IsRegular() {
+					return fmt.Errorf("anonymous generation descriptor was not held: %v", err)
+				}
+				var stat syscall.Stat_t
+				if err := syscall.Fstat(anonymousFD, &stat); err != nil {
+					return err
+				}
+				if stat.Mode&syscall.S_IFMT != syscall.S_IFREG ||
+					stat.Mode&0o777 != 0o600 ||
+					int(stat.Uid) != uid ||
+					int(stat.Gid) != gid ||
+					stat.Size != int64(len(payload)) {
+					return fmt.Errorf(
+						"anonymous generation lacked final identity before link: mode=%o uid=%d gid=%d size=%d",
+						stat.Mode&0o777,
+						stat.Uid,
+						stat.Gid,
+						stat.Size,
+					)
+				}
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !observedBeforeLink {
+		t.Fatal("before-link sabotage was not exercised")
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "auth.json" {
+		t.Fatalf("unexpected final generation entries: %+v", entries)
+	}
+	actual, err := os.ReadFile(filepath.Join(parent, "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, payload) {
+		t.Fatalf("installed bytes changed: %q", actual)
+	}
+}
+
+func TestWriteOwnedAtomicAtClassifiesAttemptedEffectAndAmbiguousFailures(t *testing.T) {
+	uid, gid := os.Geteuid(), os.Getegid()
+	payload := []byte("{\"fixture\":\"classification\"}\n")
+	assertFailure := func(
+		t *testing.T,
+		hooks atomicWriteHooks,
+		wantOutcome CodexAuthInstallOutcome,
+		wantReconciliation string,
+	) string {
+		t.Helper()
+		rootPath := t.TempDir()
+		parent := prepareTestAuthParent(t, rootPath)
+		root := openTestProjection(t, rootPath)
+		err := writeOwnedAtomicAtWithHooks(
+			root,
+			"home/.codex/auth.json",
+			payload,
+			0o600,
+			uid,
+			gid,
+			hooks,
+		)
+		var failure *CodexAuthInstallFailure
+		if !errors.As(err, &failure) {
+			t.Fatalf("failure was not typed: %v", err)
+		}
+		if failure.SchemaVersion != CodexAuthSeedFailureSchema ||
+			failure.Status != "failed" ||
+			failure.Outcome != wantOutcome ||
+			failure.Reconciliation != wantReconciliation {
+			t.Fatalf("unexpected typed failure: %+v", failure)
+		}
+		entries, readErr := os.ReadDir(parent)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, entry := range entries {
+			if strings.Contains(entry.Name(), ".seed-") {
+				t.Fatalf("named secret generation residue remained: %+v", entries)
+			}
+		}
+		return filepath.Join(parent, "auth.json")
+	}
+
+	t.Run("attempted-before-link", func(t *testing.T) {
+		target := assertFailure(
+			t,
+			atomicWriteHooks{
+				beforeLink: func(parentFD, anonymousFD int, leaf string) error {
+					return fmt.Errorf("injected pre-link failure")
+				},
+			},
+			CodexAuthInstallAttempted,
+			"target-not-created",
+		)
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			t.Fatalf("attempted failure left final effect: %v", err)
+		}
+	})
+
+	t.Run("effect-after-link", func(t *testing.T) {
+		target := assertFailure(
+			t,
+			atomicWriteHooks{
+				beforeParentSync: func(parentFD, anonymousFD int, leaf string) error {
+					return fmt.Errorf("injected post-link durability failure")
+				},
+			},
+			CodexAuthInstallEffect,
+			"exact-target-installed",
+		)
+		actual, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(actual, payload) {
+			t.Fatalf("typed effect did not preserve exact bytes: %q", actual)
+		}
+	})
+
+	t.Run("ambiguous-in-place-mutation", func(t *testing.T) {
+		target := assertFailure(
+			t,
+			atomicWriteHooks{
+				afterLink: func(parentFD, anonymousFD int, leaf string) error {
+					fd, err := syscall.Openat(
+						parentFD,
+						leaf,
+						syscall.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+						0,
+					)
+					if err != nil {
+						return err
+					}
+					file := os.NewFile(uintptr(fd), leaf)
+					if file == nil {
+						_ = syscall.Close(fd)
+						return fmt.Errorf("hold sabotage target")
+					}
+					defer file.Close()
+					replacement := bytes.Repeat([]byte("x"), len(payload))
+					if _, err := file.WriteAt(replacement, 0); err != nil {
+						return err
+					}
+					return file.Sync()
+				},
+			},
+			CodexAuthInstallAmbiguous,
+			"installed-bytes-changed",
+		)
+		actual, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(actual, payload) {
+			t.Fatal("in-place sabotage was not applied")
+		}
+	})
+
+	t.Run("ambiguous-immediate-generation-swap", func(t *testing.T) {
+		target := assertFailure(
+			t,
+			atomicWriteHooks{
+				afterLink: func(parentFD, anonymousFD int, leaf string) error {
+					if err := syscall.Unlinkat(parentFD, leaf); err != nil {
+						return err
+					}
+					fd, err := syscall.Openat(
+						parentFD,
+						leaf,
+						syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|
+							syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+						0o600,
+					)
+					if err != nil {
+						return err
+					}
+					file := os.NewFile(uintptr(fd), leaf)
+					if file == nil {
+						_ = syscall.Close(fd)
+						return fmt.Errorf("hold replacement generation")
+					}
+					defer file.Close()
+					if err := writeAll(file, payload); err != nil {
+						return err
+					}
+					return file.Sync()
+				},
+			},
+			CodexAuthInstallAmbiguous,
+			"target-generation-changed",
+		)
+		actual, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(actual, payload) {
+			t.Fatalf("replacement sabotage bytes changed unexpectedly: %q", actual)
+		}
+	})
 }
 
 func writeProtectedTestIdentity(t *testing.T, path string, payload []byte) {

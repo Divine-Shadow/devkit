@@ -1,4 +1,4 @@
-//go:build !devkitintegration
+//go:build !devkitintegration && !devkitrootlesswrappercheck
 
 package productadapter
 
@@ -46,7 +46,7 @@ func AttestInitialNamespaces(role Role) (Attestation, error) {
 	if err != nil {
 		return Attestation{}, err
 	}
-	if role == RoleSSHSetup {
+	if isControllerSeedRole(role) {
 		if realUID == 0 || effectiveUID != 0 || savedUID != 0 ||
 			realGID == 0 || effectiveGID != realGID || savedGID != realGID {
 			return Attestation{}, fmt.Errorf("offline Product SSH setup requires its controller-only privileged entry wrapper")
@@ -90,7 +90,7 @@ func AttestInitialNamespaces(role Role) (Attestation, error) {
 		}
 	}
 	closeHeld()
-	if role != RoleSSHSetup {
+	if !isControllerSeedRole(role) {
 		if err := dropNamespaceAttestationPrivileges(realUID, realGID); err != nil {
 			return Attestation{}, err
 		}
@@ -99,8 +99,15 @@ func AttestInitialNamespaces(role Role) (Attestation, error) {
 }
 
 func (attestation Attestation) validateController(ownerUID int) error {
-	if attestation.role != RoleSSHSetup || attestation.realUID != ownerUID {
-		return fmt.Errorf("offline Product SSH setup caller does not match controller authority")
+	if !isControllerSeedRole(attestation.role) || attestation.realUID != ownerUID {
+		return fmt.Errorf("offline Product seed caller does not match controller authority")
+	}
+	return nil
+}
+
+func validateControllerEffectIdentity() error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("offline Product SSH setup requires uid 0")
 	}
 	return nil
 }
@@ -205,74 +212,4 @@ func validateConsumerProcessIdentity(uid, gid int) error {
 		return fmt.Errorf("Product consumer process retains supplementary groups")
 	}
 	return nil
-}
-
-func holdCurrentGeneration(role Role, adapter AdapterManifest, attestation Attestation) ([]*os.File, error) {
-	if err := attestation.consume(role); err != nil {
-		return nil, err
-	}
-	// The manifest has already selected the immutable executable. The
-	// current-system handle is only an activated-generation equality check; it
-	// never selects, derives, or rewrites Product runtime identity.
-	expected := adapter.ExecutablePath
-	name := "product-adapter"
-	if role == RoleProxy {
-		expected = adapter.ProxyHelperPath
-		name = "product-proxy"
-	} else if role == RoleSupervisor {
-		expected = adapter.SupervisorExecutablePath
-		name = "product-adapter-supervisor"
-	} else if role == RoleSSHSession {
-		expected = adapter.SSHSessionExecutablePath
-		name = "product-ssh-session"
-	} else if role == RoleSSHSetup {
-		expected = adapter.SSHSetupExecutablePath
-		name = "product-ssh-setup"
-	}
-	running, err := os.Open("/proc/self/exe")
-	if err != nil {
-		return nil, fmt.Errorf("open running Product executable: %w", err)
-	}
-	closeOnError := func(values ...*os.File) {
-		for _, value := range values {
-			if value != nil {
-				_ = value.Close()
-			}
-		}
-	}
-	expectedFile, err := os.Open(expected)
-	if err != nil {
-		closeOnError(running)
-		return nil, fmt.Errorf("open manifest Product executable: %w", err)
-	}
-	runningInfo, err := running.Stat()
-	if err != nil {
-		closeOnError(running, expectedFile)
-		return nil, err
-	}
-	expectedInfo, err := expectedFile.Stat()
-	if err != nil {
-		closeOnError(running, expectedFile)
-		return nil, err
-	}
-	if !os.SameFile(runningInfo, expectedInfo) {
-		closeOnError(running, expectedFile)
-		return nil, fmt.Errorf("running Product executable does not match manifest executable")
-	}
-	currentPath := filepath.Join("/run/current-system/sw/bin", name)
-	currentFile, err := os.Open(currentPath)
-	if err != nil {
-		closeOnError(running, expectedFile)
-		return nil, fmt.Errorf("open current-system Product executable %s: %w", currentPath, err)
-	}
-	currentInfo, err := currentFile.Stat()
-	if err != nil {
-		closeOnError(running, expectedFile, currentFile)
-		return nil, err
-	}
-	if !os.SameFile(currentInfo, expectedInfo) {
-		closeOnError(running, expectedFile, currentFile)
-		return nil, fmt.Errorf("Product authority locator and current-system executable belong to different generations")
-	}
-	return []*os.File{running, expectedFile, currentFile}, nil
 }

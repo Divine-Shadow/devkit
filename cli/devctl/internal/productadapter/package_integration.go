@@ -59,11 +59,15 @@ func ConfigureIntegrationPackageFromManifest(manifestPath string) error {
 	packageProductSupervisor = adapter.SupervisorExecutablePath
 	packageProductSSHSession = adapter.SSHSessionExecutablePath
 	packageProductSSHSetup = adapter.SSHSetupExecutablePath
+	packageProductCodexAuthSeed1 = adapter.CodexAuthSeed1ExecutablePath
+	packageProductCodexAuthSeed2 = adapter.CodexAuthSeed2ExecutablePath
 	packageAdapterLaunchExecutable = "/run/wrappers/bin/devkit-product-adapter"
 	packageProxyLaunchExecutable = "/run/wrappers/bin/devkit-product-proxy"
 	packageSupervisorLaunchExecutable = "/run/wrappers/bin/devkit-product-adapter-supervisor"
 	packageSSHSessionLaunchExecutable = "/run/wrappers/bin/devkit-product-ssh-session"
 	packageSSHSetupLaunchExecutable = "/run/wrappers/bin/devkit-product-ssh-setup"
+	packageCodexAuthSeed1Launch = "/run/wrappers/bin/devkit-product-codex-auth-seed-1"
+	packageCodexAuthSeed2Launch = "/run/wrappers/bin/devkit-product-codex-auth-seed-2"
 	packageProductSSHSetupContract = adapter.SSHSetupContractPath
 	packageProductSessionContract = adapter.SSHSessionContractPath
 	testAuthorityLocator = clean

@@ -42,7 +42,8 @@ var (
 	}
 	manifestAdapterKeys = []string{
 		"artifactDigests", "baseBranch", "branchPrefix", "brokerPath", "bubblewrapPath",
-		"codexConfigPath", "codexExecutablePath", "consumers", "controllerCredentialOwnerUid", "count",
+		"codexAuthSeed1ExecutablePath", "codexAuthSeed2ExecutablePath", "codexConfigPath",
+		"codexExecutablePath", "consumers", "controllerCredentialOwnerUid", "count",
 		"egressAllowlistPath", "envPath", "executablePath", "gitPath", "gitSSHPath", "governanceEnvPath",
 		"governanceRepoConfigPath", "governanceRulesPath", "knownHostsPath", "mcpRequirementPath",
 		"mountPolicyContractPath", "mountPolicyIdentity", "nscdSocketPath", "productOrigin",
@@ -98,11 +99,15 @@ var (
 	packageProductSupervisor          string
 	packageProductSSHSession          string
 	packageProductSSHSetup            string
+	packageProductCodexAuthSeed1      string
+	packageProductCodexAuthSeed2      string
 	packageAdapterLaunchExecutable    string
 	packageProxyLaunchExecutable      string
 	packageSupervisorLaunchExecutable string
 	packageSSHSessionLaunchExecutable string
 	packageSSHSetupLaunchExecutable   string
+	packageCodexAuthSeed1Launch       string
+	packageCodexAuthSeed2Launch       string
 	packageProductSSHSetupContract    string
 	packageProductSessionContract     string
 )
@@ -132,6 +137,8 @@ type AdapterManifest struct {
 	BrokerPath                   string             `json:"brokerPath"`
 	EgressAllowlistPath          string             `json:"egressAllowlistPath"`
 	CodexConfigPath              string             `json:"codexConfigPath"`
+	CodexAuthSeed1ExecutablePath string             `json:"codexAuthSeed1ExecutablePath"`
+	CodexAuthSeed2ExecutablePath string             `json:"codexAuthSeed2ExecutablePath"`
 	GovernanceEnvPath            string             `json:"governanceEnvPath"`
 	GovernanceRepoConfigPath     string             `json:"governanceRepoConfigPath"`
 	GovernanceRulesPath          string             `json:"governanceRulesPath"`
@@ -208,11 +215,13 @@ type Authority struct {
 type Role string
 
 const (
-	RoleAdapter    Role = "adapter"
-	RoleProxy      Role = "proxy"
-	RoleSupervisor Role = "supervisor"
-	RoleSSHSession Role = "ssh-session"
-	RoleSSHSetup   Role = "ssh-setup"
+	RoleAdapter        Role = "adapter"
+	RoleProxy          Role = "proxy"
+	RoleSupervisor     Role = "supervisor"
+	RoleSSHSession     Role = "ssh-session"
+	RoleSSHSetup       Role = "ssh-setup"
+	RoleCodexAuthSeed1 Role = "codex-auth-seed-1"
+	RoleCodexAuthSeed2 Role = "codex-auth-seed-2"
 )
 
 func Enabled() bool {
@@ -232,6 +241,10 @@ func LaunchExecutable(role Role) (string, error) {
 		executable = packageSSHSessionLaunchExecutable
 	case RoleSSHSetup:
 		executable = packageSSHSetupLaunchExecutable
+	case RoleCodexAuthSeed1:
+		executable = packageCodexAuthSeed1Launch
+	case RoleCodexAuthSeed2:
+		executable = packageCodexAuthSeed2Launch
 	default:
 		return "", fmt.Errorf("Product role %q has no namespace-attested launch executable", role)
 	}
@@ -290,6 +303,10 @@ func Load(role Role, consumerIndex int, attestation Attestation) (Authority, err
 		Adapter:        manifest.ProductAdapter,
 		held:           []*os.File{manifestFile},
 	}
+	if fixedIndex, fixed := FixedConsumerIndex(role); fixed && consumerIndex != fixedIndex {
+		authority.Close()
+		return Authority{}, fmt.Errorf("fixed-slot Product role does not match consumer index")
+	}
 	if err := authority.validate(role); err != nil {
 		authority.Close()
 		return Authority{}, err
@@ -299,10 +316,10 @@ func Load(role Role, consumerIndex int, attestation Attestation) (Authority, err
 		authority.Close()
 		return Authority{}, err
 	}
-	if role == RoleSSHSetup {
-		if os.Geteuid() != 0 {
+	if isControllerSeedRole(role) {
+		if err := validateControllerEffectIdentity(); err != nil {
 			authority.Close()
-			return Authority{}, fmt.Errorf("offline Product SSH setup requires uid 0")
+			return Authority{}, err
 		}
 		if err := attestation.validateController(authority.Adapter.ControllerCredentialOwnerUID); err != nil {
 			authority.Close()
@@ -551,6 +568,8 @@ func (authority Authority) validate(role Role) error {
 		"supervisor":            {label: "supervisor executable", path: adapter.SupervisorExecutablePath, executable: true},
 		"ssh_session":           {label: "SSH session executable", path: adapter.SSHSessionExecutablePath, executable: true},
 		"ssh_setup":             {label: "offline SSH setup executable", path: adapter.SSHSetupExecutablePath, executable: true},
+		"codex_auth_seed_1":     {label: "fixed-slot Codex auth seed 1", path: adapter.CodexAuthSeed1ExecutablePath, executable: true},
+		"codex_auth_seed_2":     {label: "fixed-slot Codex auth seed 2", path: adapter.CodexAuthSeed2ExecutablePath, executable: true},
 		"ssh_setup_contract":    {label: "offline SSH setup contract", path: adapter.SSHSetupContractPath},
 		"ssh_session_contract":  {label: "SSH session contract", path: adapter.SSHSessionContractPath},
 		"resolv_conf":           {label: "resolv.conf", path: adapter.ResolvConfPath},
@@ -561,31 +580,33 @@ func (authority Authority) validate(role Role) error {
 		}
 	}
 	expected := map[string][2]string{
-		"proxy helper":               {adapter.ProxyHelperPath, packageProductProxyExecutable},
-		"Git":                        {adapter.GitPath, packageGitExecutable},
-		"Git SSH":                    {adapter.GitSSHPath, packageGitSSHExecutable},
-		"env":                        {adapter.EnvPath, packageEnvExecutable},
-		"OpenSSH":                    {adapter.SSHPath, packageSSHExecutable},
-		"OpenSSH ssh-keygen":         {adapter.SSHKeygenPath, packageSSHKeygenExecutable},
-		"known-hosts":                {adapter.KnownHostsPath, packageKnownHosts},
-		"runtime launcher":           {adapter.RuntimeLauncherPath, packageRuntimeLauncher},
-		"bubblewrap":                 {adapter.BubblewrapPath, packageBubblewrapExecutable},
-		"broker":                     {adapter.BrokerPath, packageBrokerExecutable},
-		"egress allowlist":           {adapter.EgressAllowlistPath, packageEgressAllowlist},
-		"Codex config":               {adapter.CodexConfigPath, packageCodexConfig},
-		"governance env":             {adapter.GovernanceEnvPath, packageGovernanceEnv},
-		"governance repo":            {adapter.GovernanceRepoConfigPath, packageGovernanceRepoConfig},
-		"governance rules":           {adapter.GovernanceRulesPath, packageGovernanceRules},
-		"shell hook":                 {adapter.ShellHookPath, packageShellHook},
-		"Codex executable":           {adapter.CodexExecutablePath, packageCodexExecutable},
-		"readiness probe":            {adapter.ReadinessExecutablePath, packageReadinessExecutable},
-		"MCP requirement":            {adapter.MCPRequirementPath, packageMCPRequirement},
-		"mount-policy contract":      {adapter.MountPolicyContractPath, packageMountPolicyContract},
-		"supervisor":                 {adapter.SupervisorExecutablePath, packageProductSupervisor},
-		"SSH session":                {adapter.SSHSessionExecutablePath, packageProductSSHSession},
-		"offline SSH setup":          {adapter.SSHSetupExecutablePath, packageProductSSHSetup},
-		"offline SSH setup contract": {adapter.SSHSetupContractPath, packageProductSSHSetupContract},
-		"SSH session contract":       {adapter.SSHSessionContractPath, packageProductSessionContract},
+		"proxy helper":                 {adapter.ProxyHelperPath, packageProductProxyExecutable},
+		"Git":                          {adapter.GitPath, packageGitExecutable},
+		"Git SSH":                      {adapter.GitSSHPath, packageGitSSHExecutable},
+		"env":                          {adapter.EnvPath, packageEnvExecutable},
+		"OpenSSH":                      {adapter.SSHPath, packageSSHExecutable},
+		"OpenSSH ssh-keygen":           {adapter.SSHKeygenPath, packageSSHKeygenExecutable},
+		"known-hosts":                  {adapter.KnownHostsPath, packageKnownHosts},
+		"runtime launcher":             {adapter.RuntimeLauncherPath, packageRuntimeLauncher},
+		"bubblewrap":                   {adapter.BubblewrapPath, packageBubblewrapExecutable},
+		"broker":                       {adapter.BrokerPath, packageBrokerExecutable},
+		"egress allowlist":             {adapter.EgressAllowlistPath, packageEgressAllowlist},
+		"Codex config":                 {adapter.CodexConfigPath, packageCodexConfig},
+		"governance env":               {adapter.GovernanceEnvPath, packageGovernanceEnv},
+		"governance repo":              {adapter.GovernanceRepoConfigPath, packageGovernanceRepoConfig},
+		"governance rules":             {adapter.GovernanceRulesPath, packageGovernanceRules},
+		"shell hook":                   {adapter.ShellHookPath, packageShellHook},
+		"Codex executable":             {adapter.CodexExecutablePath, packageCodexExecutable},
+		"readiness probe":              {adapter.ReadinessExecutablePath, packageReadinessExecutable},
+		"MCP requirement":              {adapter.MCPRequirementPath, packageMCPRequirement},
+		"mount-policy contract":        {adapter.MountPolicyContractPath, packageMountPolicyContract},
+		"supervisor":                   {adapter.SupervisorExecutablePath, packageProductSupervisor},
+		"SSH session":                  {adapter.SSHSessionExecutablePath, packageProductSSHSession},
+		"offline SSH setup":            {adapter.SSHSetupExecutablePath, packageProductSSHSetup},
+		"fixed-slot Codex auth seed 1": {adapter.CodexAuthSeed1ExecutablePath, packageProductCodexAuthSeed1},
+		"fixed-slot Codex auth seed 2": {adapter.CodexAuthSeed2ExecutablePath, packageProductCodexAuthSeed2},
+		"offline SSH setup contract":   {adapter.SSHSetupContractPath, packageProductSSHSetupContract},
+		"SSH session contract":         {adapter.SSHSessionContractPath, packageProductSessionContract},
 	}
 	for label, pair := range expected {
 		if filepath.Clean(strings.TrimSpace(pair[0])) != filepath.Clean(strings.TrimSpace(pair[1])) {
@@ -617,6 +638,10 @@ func (authority Authority) validate(role Role) error {
 		expectedExecutable = adapter.SSHSessionExecutablePath
 	} else if role == RoleSSHSetup {
 		expectedExecutable = adapter.SSHSetupExecutablePath
+	} else if role == RoleCodexAuthSeed1 {
+		expectedExecutable = adapter.CodexAuthSeed1ExecutablePath
+	} else if role == RoleCodexAuthSeed2 {
+		expectedExecutable = adapter.CodexAuthSeed2ExecutablePath
 	}
 	expectedExecutable, err = filepath.EvalSymlinks(expectedExecutable)
 	if err != nil {
@@ -1091,7 +1116,23 @@ func validateSelectedCredentialHandles(consumer ConsumerManifest) error {
 }
 
 func roleRequiresSelectedCredentialHandlesAtLoad(role Role) bool {
-	return role != RoleSSHSetup && role != RoleSupervisor
+	return role != RoleSSHSetup && role != RoleSupervisor &&
+		role != RoleCodexAuthSeed1 && role != RoleCodexAuthSeed2
+}
+
+func FixedConsumerIndex(role Role) (int, bool) {
+	switch role {
+	case RoleCodexAuthSeed1:
+		return 1, true
+	case RoleCodexAuthSeed2:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+func isControllerSeedRole(role Role) bool {
+	return role == RoleSSHSetup || role == RoleCodexAuthSeed1 || role == RoleCodexAuthSeed2
 }
 
 // ReadImmutableAuthorizedKeys validates the exact public admission artifact
