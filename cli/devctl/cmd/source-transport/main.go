@@ -18,10 +18,12 @@ import (
 const usage = "usage: devkit-source-transport serve --socket ABSOLUTE_PATH --allowlist ABSOLUTE_PATH\n" +
 	"       devkit-source-transport connect --socket ABSOLUTE_PATH --target HOST:PORT"
 
-// managedConnectBridgeURL is the only network effect available to the source
-// transport server. It is projected by the workspace-egress sandbox and is
-// deliberately not configurable through argv or environment.
-const managedConnectBridgeURL = "http://127.0.0.1:18888"
+// packageUpstreamProxyURL is selected by the immutable Nix package. The normal
+// workspace transport is chained through its managed loopback bridge. The
+// Product source-acquirer package binds this to empty so its owned Unix proxy
+// direct-dials only the compiled allowlist. Neither mode is configurable by
+// argv or environment.
+var packageUpstreamProxyURL = "http://127.0.0.1:18888"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -69,7 +71,7 @@ func sourceTransportServerConfig(socketPath, allowlistPath string) egressproxy.C
 	return egressproxy.Config{
 		SocketPath:       socketPath,
 		AllowlistPath:    allowlistPath,
-		UpstreamProxyURL: managedConnectBridgeURL,
+		UpstreamProxyURL: packageUpstreamProxyURL,
 	}
 }
 

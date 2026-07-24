@@ -34,6 +34,7 @@ type RuntimeBinding struct {
 
 type TransportBinding struct {
 	SchemaVersion        string `json:"schemaVersion"`
+	NetworkMode          string `json:"networkMode"`
 	ExecutablePath       string `json:"executablePath"`
 	GitSSHExecutablePath string `json:"gitSSHExecutablePath"`
 	SSHConfigPath        string `json:"sshConfigPath"`

@@ -269,18 +269,20 @@
           sshExecutable ? "${pkgs.openssh}/bin/ssh",
           shellExecutable ? "${pkgs.bash}/bin/bash",
           knownHostsFile ? mkGitHubSSHKnownHosts pkgs,
+          directNetwork ? false,
         }:
         let
           outputPlaceholder = placeholder "out";
           sourceAllowlist = pkgs.writeText "devkit-source-transport-allowlist" ''
             ssh.github.com
           '';
+          upstreamProxyURL = if directNetwork then "" else "http://127.0.0.1:18888";
           networkContractFields = {
             schemaVersion = "devkit/source-transport-network/v2";
-            mode = "managed-loopback-connect";
+            mode = if directNetwork then "package-owned-direct-connect" else "managed-loopback-connect";
             allowlistPath = sourceAllowlist;
             connectTarget = "ssh.github.com:443";
-            managedConnectProxy = "http://127.0.0.1:18888";
+            managedConnectProxy = upstreamProxyURL;
             directFallback = false;
           };
           networkContract = pkgs.writeText "devkit-source-transport-network.json" (
@@ -304,6 +306,7 @@
               "-X=devkit/cli/devctl/internal/sourcetransport.packageShellExecutable=${outputPlaceholder}/libexec/devkit-source-transport/bash"
               "-X=devkit/cli/devctl/internal/sourcetransport.packageSSHConfig=${outputPlaceholder}/share/devkit-source-transport/ssh-config"
               "-X=devkit/cli/devctl/internal/sourcetransport.packageTransport=${outputPlaceholder}/bin/devkit-source-transport"
+              "-X=main.packageUpstreamProxyURL=${upstreamProxyURL}"
             ];
             nativeCheckInputs = [ pkgs.git ];
             doCheck = true;
@@ -486,7 +489,8 @@
                 .product.checkoutPath == $checkout and
                 .product.receiptPath == $receipt and
                 .transport.schemaVersion == "devkit/source-transport/v4" and
-                .transport.managedConnectProxy == "http://127.0.0.1:18888" and
+                .transport.networkMode == "package-owned-direct-connect" and
+                .transport.managedConnectProxy == "" and
                 (.runtime.gitExecutablePath | startswith("/nix/store/")) and
                 (.runtime.openSSHExecutablePath | startswith("/nix/store/"))
               ' '${interface.manifestPath}' >/dev/null

@@ -65,8 +65,11 @@ func validateManifest(manifest Manifest) error {
 	if manifest.Transport.SchemaVersion != "devkit/source-transport/v4" {
 		return fmt.Errorf("unsupported source transport schema")
 	}
-	if manifest.Transport.ManagedConnectProxy != "http://127.0.0.1:18888" {
-		return fmt.Errorf("unsupported managed CONNECT proxy")
+	if manifest.Transport.NetworkMode != "package-owned-direct-connect" {
+		return fmt.Errorf("unsupported source transport network mode")
+	}
+	if manifest.Transport.ManagedConnectProxy != "" {
+		return fmt.Errorf("Product source transport must not depend on an upstream proxy")
 	}
 	if !validProductOrigin(manifest.Product.Origin) {
 		return fmt.Errorf("Product origin is not one exact GitHub SSH origin")

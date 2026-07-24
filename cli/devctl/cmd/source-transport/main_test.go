@@ -23,7 +23,7 @@ func TestSourceTransportServerPinsManagedBridgeAndIgnoresAmbientProxy(t *testing
 	config := sourceTransportServerConfig("/run/source.sock", "/nix/store/allowlist")
 	if config.SocketPath != "/run/source.sock" ||
 		config.AllowlistPath != "/nix/store/allowlist" ||
-		config.UpstreamProxyURL != managedConnectBridgeURL ||
+		config.UpstreamProxyURL != packageUpstreamProxyURL ||
 		config != want {
 		t.Fatalf("source transport server config = %+v", config)
 	}

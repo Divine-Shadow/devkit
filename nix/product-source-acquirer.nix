@@ -9,7 +9,10 @@
 
 let
   lib = pkgs.lib;
-  sourceTransportPackage = mkSourceTransportPackage { inherit pkgs; };
+  sourceTransportPackage = mkSourceTransportPackage {
+    inherit pkgs;
+    directNetwork = true;
+  };
   sourceTransport = sourceTransportPackage.sourceTransport;
   checkoutPath = "${lifecycleRoot}/product";
   receiptPath = "${lifecycleRoot}/source-acquisition-receipt.json";
@@ -44,6 +47,7 @@ let
       };
       transport = {
         inherit (sourceTransport) schemaVersion;
+        networkMode = sourceTransport.network.mode;
         executablePath = sourceTransport.executablePath;
         gitSSHExecutablePath = sourceTransport.gitSSH.executablePath;
         sshConfigPath = sourceTransport.gitSSH.configPath;
@@ -113,5 +117,7 @@ assert lib.hasPrefix "/" identityPath;
 assert sourceTransport.schemaVersion == "devkit/source-transport/v4";
 assert sourceTransport.gitSSH.schemaVersion == "devkit/source-transport-git-ssh/v2";
 assert sourceTransport.network.schemaVersion == "devkit/source-transport-network/v2";
+assert sourceTransport.network.mode == "package-owned-direct-connect";
+assert sourceTransport.network.managedConnectProxy == "";
 assert sourceTransport.network.directFallback == false;
 package

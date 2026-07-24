@@ -94,13 +94,14 @@ func testManifest(root string) Manifest {
 		},
 		Transport: TransportBinding{
 			SchemaVersion:        "devkit/source-transport/v4",
+			NetworkMode:          "package-owned-direct-connect",
 			ExecutablePath:       transportPath + "/bin/devkit-source-transport",
 			GitSSHExecutablePath: transportPath + "/bin/devkit-source-git-ssh",
 			SSHConfigPath:        transportPath + "/share/devkit-source-transport/ssh-config",
 			KnownHostsPath:       transportPath + "/share/devkit-source-transport/github-ssh-known-hosts",
 			AllowlistPath:        transportPath + "/share/devkit-source-transport/allowlist",
 			NetworkContractPath:  transportPath + "/share/devkit-source-transport/network.json",
-			ManagedConnectProxy:  "http://127.0.0.1:18888",
+			ManagedConnectProxy:  "",
 			SocketPath:           filepath.Join(root, "source-transport.sock"),
 		},
 	}
