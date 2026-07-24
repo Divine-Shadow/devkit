@@ -880,7 +880,8 @@ func validateNativeResetCandidate(candidate nativeResetCandidate, protectedRoots
 // PlanNativeReset validates the complete destructive boundary before any
 // broker, session, workspace, home, or bootstrap effect occurs. Existing
 // payload beneath an exact owned target is intentionally opaque: a foreign
-// .git pointer is inert data to unlink, never a source of expanded custody.
+// The .git pointer is opaque data to unlink; it never expands the reset
+// boundary.
 func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 	if strings.TrimSpace(opts.Project) != "dev-all" {
 		return nil, fmt.Errorf("native destructive reset requires the exact dev-all prefix")

@@ -31,15 +31,18 @@ Place supporting material according to its lifecycle:
   ExecPlan only when they affect acceptance, a decision, a blocker, or the next
   action.
 - Put stable specifications and reusable operating guidance in durable docs.
-- Put cross-owner custody, acceptance, and lifecycle state in the applicable
-  transfer or lease record.
+- Put accepted durable effects, active external-transaction safety, and
+  current writer-collision state in the applicable durable record. A task,
+  run, tree, station, home, worktree, candidate, or failed attempt is not a
+  prerequisite for continuing the objective.
 
 An active ExecPlan has a hard limit of 32,000 Unicode scalar values, not bytes
 or tokens. The writer must count the complete proposed document before every
 write and count it again before commit and closeout. If the next write would
 exceed the limit, stop and file material in the correct ledger, evidence,
-durable-doc, or transfer/lease surface before continuing. Never replace content
-with a pointer-only plan, silently truncate it, or write past the limit.
+durable-doc, or external-transaction record before continuing. Never replace
+content with a pointer-only plan, silently truncate it, or write past the
+limit.
 
 A task OCVA is a separate, self-contained Objective, Constraints, Verification,
 and Authority contract. Its complete core contract must fit within 4,000
@@ -54,4 +57,4 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
-- [Prune recursive Product bootstrap authority](execplans/prune-recursive-product-bootstrap-authority-20260724.md): return Devkit to a generic, source-derived agent runtime which WSL can compose with one Product revision.
+There are no active ExecPlans.
