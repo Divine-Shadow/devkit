@@ -682,9 +682,15 @@
                  .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
                  .sandbox_state_root == "/agent-state" and
                  .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
+                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/dev-all-agent1-workspace-egress.sock" and
                  .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
-                .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"' \
+                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" and
+                 any(.binds[]; .source == "/home/bayesartre/dev/.devkit/ouro8-governance-env.sh") and
+                 any(.binds[]; .source == "/home/bayesartre/dev/.devkit/ouro8-governance-repo-env.json") and
+                 any(.binds[]; .source == "/home/bayesartre/dev/.devkit/governance-control-plane" and .mode == "rw") and
+                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
+                 (tostring | contains("/nix/store/.devkit/") | not)' \
                 "$plan"
               allowlist="$(${pkgs.jq}/bin/jq -r '.proxy.allowlist_path' "$plan")"
               test "$allowlist" = '${devctl}/kit/proxy/allowlist.txt'

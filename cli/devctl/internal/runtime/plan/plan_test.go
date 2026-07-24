@@ -445,6 +445,68 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	}
 }
 
+func TestBuildDevAllInstalledRuntimeUsesDeclaredHostRootForEveryMutableEffect(t *testing.T) {
+	root := t.TempDir()
+	hostRoot := filepath.Join(root, "host-dev")
+	hostWorktree := filepath.Join(hostRoot, "agent-worktrees", "agent1", "ouroboros-ide")
+	for _, path := range []string{
+		hostWorktree,
+		filepath.Join(hostRoot, ".devkit", "governance-control-plane"),
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"ouro8-governance-env.sh", "ouro8-governance-repo-env.json"} {
+		if err := os.WriteFile(filepath.Join(hostRoot, ".devkit", name), []byte("fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	packageRoot := "/nix/store/example-devkit-devctl"
+	p, err := BuildDevAll(BuildOptions{
+		Paths: devkitpaths.Paths{
+			Root:                 packageRoot,
+			RuntimeAuthorityRoot: packageRoot,
+		},
+		HostRoot:              hostRoot,
+		Project:               "dev-all",
+		Index:                 1,
+		Repo:                  "ouroboros-ide",
+		WorktreeRoot:          filepath.Join(hostRoot, "agent-worktrees"),
+		StateRoot:             filepath.Join(hostRoot, ".devkit", "native-agents"),
+		WorktreeContainerRoot: "/workspaces/dev/agent-worktrees",
+		StateContainerRoot:    "/agent-state",
+		BrokerEndpoint:        filepath.Join(hostRoot, ".devkit", "native-broker", "broker.sock"),
+		IsolationProfile:      IsolationProfileWorkspaceEgress,
+		EgressAllowlist:       filepath.Join(packageRoot, "kit", "proxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProxy := filepath.Join(hostRoot, ".devkit", "native-egress", "dev-all-agent1-workspace-egress.sock")
+	if p.Proxy.UnixSocket != wantProxy {
+		t.Fatalf("proxy socket = %q, want %q", p.Proxy.UnixSocket, wantProxy)
+	}
+	for _, want := range []Bind{
+		{Source: filepath.Join(hostRoot, ".devkit", "ouro8-governance-env.sh"), Target: "/workspaces/dev/.devkit/ouro8-governance-env.sh", Mode: "ro", Required: true},
+		{Source: filepath.Join(hostRoot, ".devkit", "ouro8-governance-repo-env.json"), Target: "/workspaces/dev/.devkit/ouro8-governance-repo-env.json", Mode: "ro", Required: true},
+		{Source: filepath.Join(hostRoot, ".devkit", "governance-control-plane"), Target: "/workspaces/dev/.devkit/governance-control-plane", Mode: "rw", Required: true},
+		{Source: wantProxy, Target: wantProxy, Mode: "rw", Required: true},
+	} {
+		if !hasExactBind(p.Binds, want) {
+			t.Fatalf("missing declared host-root bind %#v in %#v", want, p.Binds)
+		}
+	}
+	for _, bind := range p.Binds {
+		if bind.Mode == "rw" && strings.HasPrefix(bind.Source, "/nix/store") {
+			t.Fatalf("installed runtime exposed writable Nix-store bind: %#v", bind)
+		}
+	}
+	if strings.Contains(strings.Join(p.LauncherArgs, " "), "/nix/store/.devkit/") {
+		t.Fatalf("installed runtime launcher retained mutable Nix-store state: %s", strings.Join(p.LauncherArgs, " "))
+	}
+}
+
 func TestBuildDevAllWorkspaceEgressProjectsPreparedRuntimeSupportExactly(t *testing.T) {
 	devRoot := t.TempDir()
 	devkitRoot := filepath.Join(devRoot, "devkit")

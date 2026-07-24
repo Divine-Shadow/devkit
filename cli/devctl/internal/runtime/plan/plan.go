@@ -68,6 +68,7 @@ type Plan struct {
 
 type BuildOptions struct {
 	Paths                 devkitpaths.Paths
+	HostRoot              string
 	Project               string
 	Index                 int
 	Repo                  string
@@ -127,6 +128,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	paths, err := agent.ResolvePaths(agent.PathConfig{
 		DevkitRoot:            opts.Paths.Root,
+		HostRoot:              opts.HostRoot,
 		Project:               project,
 		Repo:                  repo,
 		Index:                 index,

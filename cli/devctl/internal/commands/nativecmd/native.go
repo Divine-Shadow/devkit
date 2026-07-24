@@ -135,7 +135,8 @@ type topExecArgs struct {
 }
 
 func handleEgressProxy(ctx *cmdregistry.Context) error {
-	socketPath := filepath.Join(ctx.Paths.Root, "..", ".devkit", "native-egress", "proxy.sock")
+	cfg, _, _ := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	socketPath := filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), ".devkit", "native-egress", "proxy.sock")
 	allowlistPath := filepath.Join(ctx.Paths.Kit, "proxy", "allowlist.txt")
 	for i := 1; i < len(ctx.Args); i++ {
 		switch ctx.Args[i] {
@@ -1060,6 +1061,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	return nativeplan.BuildOptions{
 		Paths:                 ctx.Paths,
+		HostRoot:              hostRoot,
 		Project:               ctx.Project,
 		Repo:                  repo,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
@@ -1084,6 +1086,9 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 
 func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) error {
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
+	if strings.TrimSpace(opts.HostRoot) == "" {
+		opts.HostRoot = hostRoot
+	}
 	if strings.TrimSpace(opts.Repo) == "" {
 		opts.Repo = strings.TrimSpace(cfg.Defaults.Repo)
 	}

@@ -10,6 +10,7 @@ import (
 
 type PathConfig struct {
 	DevkitRoot            string
+	HostRoot              string
 	Project               string
 	Repo                  string
 	Index                 int
@@ -41,6 +42,12 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 	}
 	devkitRoot = filepath.Clean(devkitRoot)
 	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
+	if hostRoot := strings.TrimSpace(cfg.HostRoot); hostRoot != "" {
+		if !filepath.IsAbs(hostRoot) {
+			return Paths{}, fmt.Errorf("native host root must be absolute")
+		}
+		devRoot = filepath.Clean(hostRoot)
+	}
 	project := strings.TrimSpace(cfg.Project)
 	if project == "" {
 		project = "dev-all"

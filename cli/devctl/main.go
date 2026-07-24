@@ -1909,8 +1909,15 @@ func nativeHostWorktree(paths devkitpaths.Paths, project, repo string, index int
 
 func nativeResolvedAgentPaths(paths devkitpaths.Paths, project, repo string, index int) (nativeagent.Paths, error) {
 	cfg, _, _ := config.ReadAll(paths.OverlayPaths, project)
+	hostRoot := strings.TrimSpace(cfg.Native.HostRoot)
+	if hostRoot == "" {
+		hostRoot = filepath.Clean(filepath.Join(paths.Root, ".."))
+	} else if !filepath.IsAbs(hostRoot) {
+		hostRoot = filepath.Clean(filepath.Join(paths.Root, hostRoot))
+	}
 	return nativeagent.ResolvePaths(nativeagent.PathConfig{
 		DevkitRoot:            paths.Root,
+		HostRoot:              hostRoot,
 		Project:               project,
 		Repo:                  repo,
 		Index:                 index,
