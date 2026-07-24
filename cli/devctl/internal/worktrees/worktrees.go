@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -188,6 +189,28 @@ func rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir string) error {
 	return nil
 }
 
+func ensureNativeLinkedWorktreeNonBare(wt string, envLocalGit func(...string) []string, dryRun bool) error {
+	gitFile := filepath.Join(wt, ".git")
+	if dryRun {
+		return run(true, "env", envLocalGit("--git-dir", gitFile, "config", "--worktree", "core.bare", "false")...)
+	}
+	value, err := readGitdirPointer(gitFile)
+	if err != nil {
+		return err
+	}
+	gitdir := filepath.Clean(value)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Clean(filepath.Join(wt, gitdir))
+	}
+	if err := run(false, "env", envLocalGit("--git-dir", gitdir, "config", "extensions.worktreeConfig", "true")...); err != nil {
+		return err
+	}
+	if err := run(false, "env", envLocalGit("--git-dir", gitdir, "config", "--worktree", "core.bare", "false")...); err != nil {
+		return err
+	}
+	return nil
+}
+
 func canonicalOrClean(path string) string {
 	if canonical, err := canonicalExistingPath(path); err == nil {
 		return canonical
@@ -346,7 +369,9 @@ func verifyFreshNativeWorktree(wt, baseRef string) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("fresh native worktree %s is not a Git checkout", wt)
+		out, err := exec.Command("git", "-C", wt, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir").CombinedOutput()
+		gitFile, _ := os.ReadFile(filepath.Join(wt, ".git"))
+		return fmt.Errorf("fresh native worktree %s is not a Git checkout: %v: %s; gitdir=%q", wt, err, strings.TrimSpace(string(out)), strings.TrimSpace(string(gitFile)))
 	}
 	head, result := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "HEAD")
 	if result.Code != 0 {
@@ -632,8 +657,11 @@ func ensureNativeOwnedCommonRepository(
 	return commonDir, nil
 }
 
-func preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo string, count int) error {
-	for i := 1; i <= count; i++ {
+func preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo string, first, last int) error {
+	if first < 1 || last < first {
+		return fmt.Errorf("native worktree preflight range %d..%d is invalid", first, last)
+	}
+	for i := first; i <= last; i++ {
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i), repo)
 		info, err := os.Lstat(worktree)
 		if errors.Is(err, os.ErrNotExist) {
@@ -741,9 +769,13 @@ func restoreNativeWorktreePayload(worktree, allowedHome, stagingDir string) erro
 }
 
 type NativeOptions struct {
-	DevkitRoot       string
-	Repo             string
-	Origin           string
+	DevkitRoot string
+	Repo       string
+	Origin     string
+	// Index selects one slot when positive. A zero index preserves the existing
+	// multi-slot SetupNative behavior for callers that intentionally prepare the
+	// complete declared capacity.
+	Index            int
 	Count            int
 	BaseBranch       string
 	BranchPrefix     string
@@ -766,6 +798,22 @@ type NativeResetOptions struct {
 	DryRun         bool
 }
 
+// NativeSlotResetOptions identifies exactly one source-declared native slot.
+// The command layer derives these roots from the selected overlay; this type
+// carries no arbitrary extra deletion paths.
+type NativeSlotResetOptions struct {
+	Project        string
+	Repo           string
+	Origin         string
+	BranchPrefix   string
+	Index          int
+	Count          int
+	WorktreeRoot   string
+	StateRoot      string
+	ProtectedRoots []string
+	DryRun         bool
+}
+
 type nativeResetCandidate struct {
 	path     string
 	boundary string
@@ -779,6 +827,9 @@ type NativeResetPlan struct {
 	candidates     []nativeResetCandidate
 	protectedRoots []string
 	mountPoints    []string
+	gitCommonDir   string
+	gitRef         string
+	gitRefOld      string
 }
 
 var nativeResetMountPoints = readNativeResetMountPoints
@@ -961,6 +1012,169 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 	}, nil
 }
 
+func nativeSelectedWorktreeMetadata(commonDir, worktree string) (string, error) {
+	metadataRoot := filepath.Join(commonDir, "worktrees")
+	entries, err := os.ReadDir(metadataRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("enumerate package-owned worktree metadata %s: %w", metadataRoot, err)
+	}
+	expectedGitFile, err := filepath.Abs(filepath.Join(worktree, ".git"))
+	if err != nil {
+		return "", err
+	}
+	match := ""
+	for _, entry := range entries {
+		metadata := filepath.Join(metadataRoot, entry.Name())
+		info, err := os.Lstat(metadata)
+		if err != nil {
+			return "", fmt.Errorf("inspect package-owned worktree metadata %s: %w", metadata, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("package-owned worktree metadata %s must be a real directory", metadata)
+		}
+		value, err := readPlainMetadataPath(filepath.Join(metadata, "gitdir"))
+		if err != nil {
+			return "", err
+		}
+		candidate := filepath.Clean(value)
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Clean(filepath.Join(metadata, candidate))
+		}
+		if candidate != expectedGitFile {
+			continue
+		}
+		if match != "" {
+			return "", fmt.Errorf("selected native worktree %s has multiple package-owned metadata registrations", worktree)
+		}
+		match = metadata
+	}
+	return match, nil
+}
+
+// PlanNativeSlotReset validates the complete selected-slot destructive
+// boundary before any process, Git, home, or filesystem effect occurs. Shared
+// common-repository and manifest paths are deliberately excluded.
+func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) {
+	if strings.TrimSpace(opts.Project) != "dev-all" {
+		return nil, fmt.Errorf("native slot reset requires the exact dev-all prefix")
+	}
+	repo := strings.TrimSpace(opts.Repo)
+	if opts.Count < 1 {
+		return nil, fmt.Errorf("native slot reset declared count must be positive")
+	}
+	if opts.Index < 1 || opts.Index > opts.Count {
+		return nil, fmt.Errorf("native slot reset index %d is outside declared capacity 1..%d", opts.Index, opts.Count)
+	}
+	if strings.TrimSpace(opts.WorktreeRoot) == "" {
+		return nil, fmt.Errorf("native slot reset worktree root is required")
+	}
+	worktreeRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(opts.WorktreeRoot)))
+	if err != nil {
+		return nil, fmt.Errorf("resolve native slot reset worktree root %s: %w", opts.WorktreeRoot, err)
+	}
+	if strings.TrimSpace(opts.StateRoot) == "" {
+		return nil, fmt.Errorf("native slot reset state root is required")
+	}
+	stateRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(opts.StateRoot)))
+	if err != nil {
+		return nil, fmt.Errorf("resolve native slot reset state root %s: %w", opts.StateRoot, err)
+	}
+	if err := validateNativeResetPathComponents(worktreeRoot); err != nil {
+		return nil, err
+	}
+	if err := validateNativeResetPathComponents(stateRoot); err != nil {
+		return nil, err
+	}
+
+	agentRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", opts.Index))
+	worktree := filepath.Join(agentRoot, repo)
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo)
+	if err != nil {
+		return nil, err
+	}
+	candidates := []nativeResetCandidate{
+		{path: worktree, boundary: agentRoot},
+		{
+			path:     filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, opts.Index)),
+			boundary: stateRoot,
+		},
+	}
+	// Agent 1's home is inside its worktree. Later slots keep the home beside
+	// the worktree, so select that exact directory without deleting the shared
+	// agent root or any other repository beneath it.
+	if opts.Index > 1 {
+		candidates = append(candidates, nativeResetCandidate{
+			path:     filepath.Join(agentRoot, fmt.Sprintf(".devhome-agent%d", opts.Index)),
+			boundary: agentRoot,
+		})
+	}
+
+	gitCommonDir := ""
+	gitRef := ""
+	gitRefOld := ""
+	if info, statErr := os.Lstat(commonDir); statErr == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("package-owned common repository %s must be a real directory", commonDir)
+		}
+		origin := strings.TrimSpace(opts.Origin)
+		if origin == "" {
+			return nil, fmt.Errorf("native slot reset requires the source-declared origin to validate existing common Git metadata")
+		}
+		envLocalGit := func(args ...string) []string {
+			return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}, args...)
+		}
+		if err := validateNativeOwnedCommonRepository(worktreeRoot, commonDir, repo, origin, envLocalGit); err != nil {
+			return nil, err
+		}
+		metadata, err := nativeSelectedWorktreeMetadata(commonDir, worktree)
+		if err != nil {
+			return nil, err
+		}
+		if metadata != "" {
+			candidates = append(candidates, nativeResetCandidate{
+				path: metadata, boundary: filepath.Join(commonDir, "worktrees"),
+			})
+		}
+		branchPrefix := strings.TrimSpace(opts.BranchPrefix)
+		if branchPrefix == "" {
+			branchPrefix = "agent"
+		}
+		gitRef = "refs/heads/" + fmt.Sprintf("%s%d", branchPrefix, opts.Index)
+		if err := run(false, "env", envLocalGit("check-ref-format", gitRef)...); err != nil {
+			return nil, fmt.Errorf("validate selected native slot branch ref %s: %w", gitRef, err)
+		}
+		old, result := execx.Capture(context.Background(), "env", envLocalGit("--git-dir", commonDir, "rev-parse", "--verify", gitRef)...)
+		if result.Code == 0 {
+			gitRefOld = strings.TrimSpace(old)
+		}
+		gitCommonDir = commonDir
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect package-owned common repository %s: %w", commonDir, statErr)
+	}
+
+	mountPoints, err := nativeResetMountPoints()
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		if err := validateNativeResetCandidate(candidate, opts.ProtectedRoots, mountPoints); err != nil {
+			return nil, err
+		}
+	}
+	return &NativeResetPlan{
+		dryRun:         opts.DryRun,
+		candidates:     candidates,
+		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
+		mountPoints:    append([]string(nil), mountPoints...),
+		gitCommonDir:   gitCommonDir,
+		gitRef:         gitRef,
+		gitRefOld:      gitRefOld,
+	}, nil
+}
+
 type stagedNativeResetPath struct {
 	source string
 	target string
@@ -991,6 +1205,9 @@ func (plan *NativeResetPlan) Apply() error {
 	if plan.dryRun {
 		for _, candidate := range plan.candidates {
 			fmt.Fprintf(os.Stderr, "+ reset-owned %s\n", candidate.path)
+		}
+		if plan.gitRefOld != "" {
+			fmt.Fprintf(os.Stderr, "+ reset-owned-git-ref %s %s\n", plan.gitCommonDir, plan.gitRef)
 		}
 		return nil
 	}
@@ -1034,6 +1251,15 @@ func (plan *NativeResetPlan) Apply() error {
 		}
 		staged = append(staged, stagedNativeResetPath{source: candidate.path, target: target})
 	}
+	if plan.gitRefOld != "" {
+		envLocalGit := []string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}
+		args := append(envLocalGit, "--git-dir", plan.gitCommonDir, "update-ref", "-d", plan.gitRef, plan.gitRefOld)
+		if err := run(false, "env", args...); err != nil {
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("remove selected native slot branch %s: %w", plan.gitRef, err), rollbackErr)
+		}
+	}
 	for _, quarantine := range quarantines {
 		if err := os.RemoveAll(quarantine); err != nil {
 			return fmt.Errorf("discard native reset quarantine %s: %w", quarantine, err)
@@ -1068,11 +1294,20 @@ func PreflightNative(opts NativeOptions) error {
 	if err != nil {
 		return err
 	}
-	return preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo, count)
+	first, last := 1, count
+	if opts.Index > 0 {
+		if opts.Index > count {
+			return fmt.Errorf("native slot index %d is outside declared capacity 1..%d", opts.Index, count)
+		}
+		first, last = opts.Index, opts.Index
+	}
+	return preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo, first, last)
 }
 
 // SetupNative creates dedicated worktrees for every native agent, including
-// agent1, without changing the primary checkout's current branch.
+// agent1, without changing the primary checkout's current branch. When Index
+// is positive, only that slot is materialized while Count remains the declared
+// capacity used to validate the selection.
 func SetupNative(opts NativeOptions) error {
 	devkitRoot := filepath.Clean(opts.DevkitRoot)
 	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
@@ -1167,7 +1402,14 @@ func SetupNative(opts NativeOptions) error {
 	if err := run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
 		return err
 	}
-	for i := 1; i <= count; i++ {
+	first, last := 1, count
+	if opts.Index > 0 {
+		if opts.Index > count {
+			return fmt.Errorf("native slot index %d is outside declared capacity 1..%d", opts.Index, count)
+		}
+		first, last = opts.Index, opts.Index
+	}
+	for i := first; i <= last; i++ {
 		parent := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i))
 		if !opts.DryRun {
 			_ = os.MkdirAll(parent, 0o755)
@@ -1219,6 +1461,9 @@ func SetupNative(opts NativeOptions) error {
 			if err := rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir); err != nil {
 				return err
 			}
+		}
+		if err := ensureNativeLinkedWorktreeNonBare(wt, envLocalGit, opts.DryRun); err != nil {
+			return err
 		}
 		if err := run(opts.DryRun, "env", envLocalGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
 			return err

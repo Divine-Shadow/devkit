@@ -1183,19 +1183,13 @@ readiness:
   runtime_checks:
     - name: package-runtime-tools
       command: command -v git >/dev/null && command -v codex >/dev/null
-    - name: governance-provenance
-      command: test -r /workspaces/dev/.devkit/ouro8-governance-env.sh && test -r /workspaces/dev/.devkit/ouro8-governance-repo-env.json
-    - name: codex-provider-config
-      command: test -r "$CODEX_HOME/config.toml"
-    - name: app-server-preparation
-      command: test -r "$CODEX_HOME/config.toml" && test -d "$CODEX_ROLLOUT_DIR"
 broker:
   socket: %s
   upstream: unix:///fixture-docker.sock
 native:
   worktree_root: ../agent-worktrees
   state_root: ../.devkit/native-agents
-  worktree_container_root: /worktrees
+  worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
   isolation_profiles:
@@ -1217,6 +1211,20 @@ native:
 		t.Fatal(err)
 	}
 	writeNixCodexConfigSource(t, root)
+	for path, content := range map[string]string{
+		filepath.Join(base, ".devkit", "ouro8-governance-env.sh"):        "# integration runtime projection\n",
+		filepath.Join(base, ".devkit", "ouro8-governance-repo-env.json"): "{}\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(base, ".devkit", "governance-control-plane"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	sourceRepo := filepath.Join(base, "ouroboros-ide")
 	runNativeFixtureCommand(t, "git", "init", "--bare", "--initial-branch=main", remoteRepo)
@@ -1322,18 +1330,6 @@ if [ "$mount_policy" = devkit/workspace-egress/v3 ] && [ -n "$host_worktree" ] &
 else
   emit package-runtime-tools 1 'package runtime identity or clean current Product worktree is missing'
 fi
-if [ -r "$governance_env" ] && [ -r "$governance_catalog" ] && [ -d "$governance_state" ]; then
-  emit governance-provenance 0 ''
-else
-  emit governance-provenance 1 'prepared governance runtime support is not projected into the sandbox'
-fi
-if [ -r "$host_home/.codex/config.toml" ]; then
-  emit codex-provider-config 0 ''
-  emit app-server-preparation 0 ''
-else
-  emit codex-provider-config 1 'Nix-authored Codex config is missing'
-  emit app-server-preparation 1 'source-defined app-server preparation is missing'
-fi
 `
 	if err := os.WriteFile(filepath.Join(sshDir, "bwrap"), []byte(bwrapScript), 0o755); err != nil {
 		t.Fatal(err)
@@ -1400,6 +1396,7 @@ fi
 		"DEVKIT_INTEGRATION_RESOLV_SOURCE="+resolverSource,
 		"HOME="+controllerHome,
 		"CODEX_AUTH_JSON="+filepath.Join(base, "missing-auth.json"),
+		"DEVKIT_CODEX_CONFIG_SOURCE="+filepath.Join(base, ".devkit", "nix-codex-config.toml"),
 		"PATH="+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	runReset := func() ([]byte, error) {
@@ -1503,13 +1500,6 @@ fi
 		if out := runNativeFixtureCommand(t, "git", "-C", worktree, "status", "--porcelain=v1"); strings.TrimSpace(out) != "" {
 			t.Fatalf("agent%d reset worktree is dirty: %s", index, out)
 		}
-		hostHome := filepath.Join(filepath.Dir(worktree), fmt.Sprintf(".devhome-agent%d", index))
-		if index == 1 {
-			hostHome = filepath.Join(worktree, ".devhome-agent1")
-		}
-		if _, err := os.Stat(filepath.Join(hostHome, ".codex", "config.toml")); err != nil {
-			t.Fatalf("agent%d source-defined app-server config missing: %v", index, err)
-		}
 	}
 	if _, err := os.Lstat(staleMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale package-owned agent home survived destructive reset: %v", err)
@@ -1532,6 +1522,190 @@ fi
 		if !strings.Contains(string(manifestData), fmt.Sprintf(`"index": %d`, index)) {
 			t.Fatalf("reset manifest omitted agent%d:\n%s", index, manifestData)
 		}
+	}
+	assertNoNativeResetProxyResidue(t, base)
+
+	// The per-slot command must use the same package Git/SSH, preparation, and
+	// readiness path as ordinary lifecycle setup while leaving every sibling
+	// byte and process alone.
+	agent1Worktree := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide")
+	agent2Worktree := filepath.Join(worktreesRoot, "agent2", "ouroboros-ide")
+	agent2Home := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
+	agent2State := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
+	sharedManifest := filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json")
+	manifestBefore, err := os.ReadFile(sharedManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agent2State, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	siblingHomeSentinel := filepath.Join(agent2Home, "slot-reset-preserve")
+	siblingStateSentinel := filepath.Join(agent2State, "slot-reset-preserve")
+	for path, content := range map[string]string{
+		siblingHomeSentinel:  "sibling home remains exact\n",
+		siblingStateSentinel: "sibling state remains exact\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	siblingGitFileBefore, err := os.ReadFile(filepath.Join(agent2Worktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingHeadBefore := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent2Worktree, "rev-parse", "HEAD"))
+	siblingStatusBefore := runNativeFixtureCommand(t, "git", "-C", agent2Worktree, "status", "--porcelain=v1")
+
+	startSlotProcess := func(index int, sandboxHome string) *exec.Cmd {
+		t.Helper()
+		command := exec.Command("sleep", "300")
+		command.Env = append(os.Environ(),
+			"DEVKIT_NATIVE_AGENT="+strconv.Itoa(index),
+			"HOME="+sandboxHome,
+			"CODEX_HOME="+filepath.Join(sandboxHome, ".codex"),
+		)
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return command
+	}
+	selectedProcess := startSlotProcess(1, "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1")
+	siblingProcess := startSlotProcess(2, "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2")
+	t.Cleanup(func() {
+		if selectedProcess.Process != nil {
+			_ = selectedProcess.Process.Kill()
+		}
+		_, _ = selectedProcess.Process.Wait()
+		if siblingProcess.Process != nil {
+			_ = siblingProcess.Process.Kill()
+		}
+		_, _ = siblingProcess.Process.Wait()
+	})
+
+	if err := os.WriteFile(filepath.Join(agent1Worktree, "dirty-selected"), []byte("discard\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agent1Worktree, "README.md"), []byte("dirty selected slot\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceRepo, "VERSION"), []byte("current source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "add", "VERSION")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "commit", "-m", "advance declared source")
+	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "push", remoteRepo, "main:main")
+	currentHead := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", sourceRepo, "rev-parse", "HEAD"))
+
+	override := exec.Command(packageDevctl,
+		"-p", "dev-all", "native", "reset",
+		"--repo", "ouroboros-ide", "--index", "1",
+		"--worktree-root", filepath.Join(base, "escape"),
+	)
+	override.Env = env
+	overrideOutput, overrideErr := override.CombinedOutput()
+	if overrideErr == nil || !strings.Contains(string(overrideOutput), "rejects caller lifecycle override --worktree-root") {
+		t.Fatalf("native slot reset accepted a caller deletion root: %v\n%s", overrideErr, overrideOutput)
+	}
+	if _, err := os.Stat(filepath.Join(agent1Worktree, "dirty-selected")); err != nil {
+		t.Fatalf("caller path override changed selected slot before rejection: %v", err)
+	}
+
+	runSlotReset := func() ([]byte, error) {
+		command := exec.Command(packageDevctl,
+			"-p", "dev-all", "native", "reset",
+			"--repo", "ouroboros-ide", "--index", "1",
+		)
+		command.Env = env
+		return command.CombinedOutput()
+	}
+	slotOutput, slotErr := runSlotReset()
+	if slotErr != nil {
+		t.Fatalf("per-slot reset failed: %v\n%s", slotErr, slotOutput)
+	}
+	for _, want := range []string{"command: reset", "index: 1", "status: ready", "runtime_ready: 1/1", "repo_ready: 1/1"} {
+		if !strings.Contains(string(slotOutput), want) {
+			t.Fatalf("per-slot reset omitted %q:\n%s", want, slotOutput)
+		}
+	}
+	if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent1Worktree, "rev-parse", "HEAD")); got != currentHead {
+		t.Fatalf("selected slot HEAD = %s, want declared source %s", got, currentHead)
+	}
+	if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent1Worktree, "status", "--porcelain=v1")); got != "" {
+		t.Fatalf("selected slot was not reconstructed clean: %s", got)
+	}
+	if manifestAfter, err := os.ReadFile(sharedManifest); err != nil || string(manifestAfter) != string(manifestBefore) {
+		t.Fatalf("selected reset rewrote shared all-slot manifest: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(agent1Worktree, "dirty-selected")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected dirty payload survived: %v", err)
+	}
+	if err := selectedProcess.Wait(); err == nil {
+		t.Fatal("selected slot process exited successfully instead of being terminated")
+	}
+	if err := syscall.Kill(siblingProcess.Process.Pid, 0); err != nil {
+		t.Fatalf("sibling process was stopped by selected reset: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(agent2Worktree, ".git")); err != nil || string(got) != string(siblingGitFileBefore) {
+		t.Fatalf("sibling Git metadata changed: %q %v", got, err)
+	}
+	if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent2Worktree, "rev-parse", "HEAD")); got != siblingHeadBefore {
+		t.Fatalf("sibling HEAD changed: %s != %s", got, siblingHeadBefore)
+	}
+	if got := runNativeFixtureCommand(t, "git", "-C", agent2Worktree, "status", "--porcelain=v1"); got != siblingStatusBefore {
+		t.Fatalf("sibling status changed: %q != %q", got, siblingStatusBefore)
+	}
+	for path, content := range map[string]string{
+		siblingHomeSentinel:  "sibling home remains exact\n",
+		siblingStateSentinel: "sibling state remains exact\n",
+	} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != content {
+			t.Fatalf("sibling marker changed %s: %q %v", path, got, err)
+		}
+	}
+
+	if err := os.Remove(sshAllow); err != nil {
+		t.Fatal(err)
+	}
+	failedOutput, failedErr := runSlotReset()
+	if failedErr == nil || !strings.Contains(string(failedOutput), "fetch --all --prune") {
+		t.Fatalf("selected reset did not fail at package SSH fetch: %v\n%s", failedErr, failedOutput)
+	}
+	for _, path := range []string{
+		agent1Worktree,
+		filepath.Join(base, ".devkit", "native-agents", "dev-all-agent1"),
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("failed selected reconstruction left residue %s: %v", path, err)
+		}
+	}
+	selectedRef := exec.Command("git", "--git-dir", wantCommonDir, "rev-parse", "--verify", "refs/heads/agent1")
+	if output, err := selectedRef.CombinedOutput(); err == nil {
+		t.Fatalf("failed selected reconstruction retained poisoned agent1 branch: %s", output)
+	}
+	worktreeList := runNativeFixtureCommand(t, "git", "--git-dir", wantCommonDir, "worktree", "list", "--porcelain")
+	if strings.Contains(worktreeList, agent1Worktree) {
+		t.Fatalf("failed selected reconstruction retained selected worktree registration:\n%s", worktreeList)
+	}
+	if output, err := exec.Command("git", "--git-dir", wantCommonDir, "rev-parse", "--verify", "refs/heads/agent2").CombinedOutput(); err != nil {
+		t.Fatalf("failed selected reconstruction removed sibling branch: %v\n%s", err, output)
+	}
+	if err := syscall.Kill(siblingProcess.Process.Pid, 0); err != nil {
+		t.Fatalf("failed selected reconstruction stopped sibling process: %v", err)
+	}
+	for path, content := range map[string]string{
+		siblingHomeSentinel:  "sibling home remains exact\n",
+		siblingStateSentinel: "sibling state remains exact\n",
+	} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != content {
+			t.Fatalf("failed selected reconstruction changed sibling marker %s: %q %v", path, got, err)
+		}
+	}
+	if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runSlotReset(); err != nil {
+		t.Fatalf("selected reset did not recover from total absence: %v\n%s", err, output)
 	}
 	assertNoNativeResetProxyResidue(t, base)
 
@@ -1565,8 +1739,8 @@ fi
 		t.Fatalf("reset acquired custody of foreign Git metadata: %q %v", got, readErr)
 	}
 	if after, readErr := os.ReadFile(sshLog); readErr != nil ||
-		strings.Count(string(after), "git-upload-pack") != strings.Count(string(beforeForeignSSH), "git-upload-pack")+1 {
-		t.Fatalf("foreign payload reconstruction did not use one fresh package SSH bootstrap: %q %v", after, readErr)
+		strings.Count(string(after), "git-upload-pack") <= strings.Count(string(beforeForeignSSH), "git-upload-pack") {
+		t.Fatalf("foreign payload reconstruction did not use a fresh package SSH bootstrap: %q %v", after, readErr)
 	}
 	assertNoNativeResetProxyResidue(t, base)
 

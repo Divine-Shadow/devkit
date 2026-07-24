@@ -84,8 +84,29 @@ func WriteManifest(path string, manifest Manifest, dryRun bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir manifest dir %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write manifest %s: %w", path, err)
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".manifest-*")
+	if err != nil {
+		return fmt.Errorf("create temporary manifest beside %s: %w", path, err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("set temporary manifest mode for %s: %w", path, err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write temporary manifest for %s: %w", path, err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync temporary manifest for %s: %w", path, err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary manifest for %s: %w", path, err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("install manifest %s atomically: %w", path, err)
 	}
 	return nil
 }

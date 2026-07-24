@@ -45,13 +45,15 @@ func Register(r *cmdregistry.Registry) {
 
 func handle(ctx *cmdregistry.Context) error {
 	if len(ctx.Args) == 0 {
-		return fmt.Errorf("Usage: native plan|prepare|exec|readiness|capacity --repo REPO [--index N] [--flake REF]")
+		return fmt.Errorf("Usage: native plan|prepare|reset|exec|readiness|capacity --repo REPO [--index N] [--flake REF]")
 	}
 	switch ctx.Args[0] {
 	case "plan":
 		return handlePlan(ctx)
 	case "prepare":
 		return handlePrepare(ctx)
+	case "reset":
+		return handleNativeSlotReset(ctx)
 	case "exec":
 		return handleExec(ctx)
 	case "readiness":

@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -826,6 +828,91 @@ func TestRegisterTopLevelLifecycleAndNativeNamespace(t *testing.T) {
 		if _, ok := reg.Lookup(name); !ok {
 			t.Fatalf("expected registered command %s", name)
 		}
+	}
+}
+
+func TestParseNativeSlotResetArgsAcceptsOnlyRepoIndexAndFormat(t *testing.T) {
+	parsed, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: []string{
+		"reset", "--repo", "ouroboros-ide", "--index", "2", "--format", "json",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.repo != "ouroboros-ide" || parsed.index != 2 || parsed.format != "json" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+	for _, args := range [][]string{
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--worktree-root", "/tmp/escape"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--agent-state-root", "/tmp/escape"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--base-branch", "other"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--proxy-socket", "/tmp/proxy"},
+	} {
+		if _, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: args}); err == nil || !strings.Contains(err.Error(), "rejects caller lifecycle override") {
+			t.Fatalf("args %v error = %v", args, err)
+		}
+	}
+}
+
+func TestPlanNativeSlotProcessesSelectsOnlyExactSlotIdentity(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+	nativeSlotProcRoot = t.TempDir()
+	identity := nativeSlotProcessIdentity{
+		index:           1,
+		hostWorktree:    "/host/worktrees/agent1/ouroboros-ide",
+		sandboxWorktree: "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
+		hostHome:        "/host/worktrees/agent1/ouroboros-ide/.devhome-agent1",
+		sandboxHome:     "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
+		stateRoot:       "/host/state/dev-all-agent1",
+		sandboxState:    "/agent-state/dev-all-agent1",
+	}
+	writeProc := func(pid, ppid int, env map[string]string, cwd string) {
+		t.Helper()
+		root := filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid))
+		if err := os.MkdirAll(filepath.Join(root, "fd"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var fields []string
+		for key, value := range env {
+			fields = append(fields, key+"="+value)
+		}
+		if err := os.WriteFile(filepath.Join(root, "environ"), []byte(strings.Join(fields, "\x00")+"\x00"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "stat"), []byte(fmt.Sprintf("%d (fixture) S %d 0 0 0\n", pid, ppid)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if cwd != "" {
+			if err := os.Symlink(cwd, filepath.Join(root, "cwd")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	writeProc(101, 1, map[string]string{
+		"DEVKIT_NATIVE_AGENT": "1",
+		"HOME":                identity.sandboxHome,
+		"CODEX_HOME":          filepath.Join(identity.sandboxHome, ".codex"),
+	}, identity.sandboxWorktree)
+	writeProc(102, 1, map[string]string{
+		"DEVKIT_NATIVE_AGENT": "2",
+		"HOME":                "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2",
+		"CODEX_HOME":          "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2/.codex",
+	}, "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide")
+	// A legitimate child may sanitize its environment while retaining a cwd or
+	// file descriptor in the slot. Descendant closure must happen before the
+	// unowned-touch rejection.
+	writeProc(103, 101, map[string]string{}, identity.sandboxWorktree)
+	plan, err := planNativeSlotProcesses(identity, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(plan.pids); got != "[103 101]" {
+		t.Fatalf("selected pids = %s", got)
+	}
+
+	writeProc(104, 1, map[string]string{}, identity.hostWorktree)
+	if _, err := planNativeSlotProcesses(identity, true); err == nil || !strings.Contains(err.Error(), "unowned active process 104") {
+		t.Fatalf("unowned process error = %v", err)
 	}
 }
 

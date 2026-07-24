@@ -946,6 +946,119 @@ func TestNativeResetRevalidatesCompleteBoundaryBeforeDisposal(t *testing.T) {
 	}
 }
 
+func TestNativeSlotResetDisposesOnlySelectedSlot(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	selectedWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	siblingWorktree := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
+	siblingHome := filepath.Join(worktreeRoot, "agent2", ".devhome-agent2")
+	siblingState := filepath.Join(stateRoot, "dev-all-agent2")
+	for _, path := range []string{selectedWorktree, selectedState, siblingWorktree, siblingHome, siblingState} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "sentinel"), []byte(path+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Index:        1,
+		Count:        2,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{selectedWorktree, selectedState} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("selected slot path survived %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{siblingWorktree, siblingHome, siblingState} {
+		data, err := os.ReadFile(filepath.Join(path, "sentinel"))
+		if err != nil || string(data) != path+"\n" {
+			t.Fatalf("sibling path changed %s: %q %v", path, data, err)
+		}
+	}
+}
+
+func TestNativeSlotResetRejectsInvalidIndexAndSelectedEscapesBeforeDisposal(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	newOptions := func(root string) NativeSlotResetOptions {
+		return NativeSlotResetOptions{
+			Project:      "dev-all",
+			Repo:         "ouroboros-ide",
+			Index:        1,
+			Count:        2,
+			WorktreeRoot: filepath.Join(root, "worktrees"),
+			StateRoot:    filepath.Join(root, "state"),
+		}
+	}
+	t.Run("out of range", func(t *testing.T) {
+		opts := newOptions(t.TempDir())
+		opts.Index = 3
+		if _, err := PlanNativeSlotReset(opts); err == nil || !strings.Contains(err.Error(), "outside declared capacity") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("symlink", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		outside := filepath.Join(root, "outside")
+		if err := os.MkdirAll(outside, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(opts.WorktreeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(opts.WorktreeRoot, "agent1")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PlanNativeSlotReset(opts); err == nil || !strings.Contains(err.Error(), "symlink or junction") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("mount", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		selected := filepath.Join(opts.WorktreeRoot, "agent1", "ouroboros-ide")
+		if err := os.MkdirAll(selected, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		nativeResetMountPoints = func() ([]string, error) { return []string{filepath.Join(selected, "mounted")}, nil }
+		if _, err := PlanNativeSlotReset(opts); err == nil || !strings.Contains(err.Error(), "contains mount point") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("protected root", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		selected := filepath.Join(opts.WorktreeRoot, "agent1", "ouroboros-ide")
+		if err := os.MkdirAll(selected, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		opts.ProtectedRoots = []string{selected}
+		if _, err := PlanNativeSlotReset(opts); err == nil || !strings.Contains(err.Error(), "overlaps protected root") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
 func TestSetupNativeSSHOriginRejectsMissingBootstrapCommand(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
