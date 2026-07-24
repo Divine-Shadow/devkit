@@ -228,7 +228,13 @@ func applyOverlayEnvInternal(cfg config.OverlayConfig, overlayDir string, root s
 		_ = os.Setenv("DEVKIT_WORKTREE_CONTAINER_ROOT", "/worktrees")
 	}
 	if _, ok := os.LookupEnv("DEVKIT_WORKTREE_ROOT"); !ok {
-		defaultRoot := filepath.Join(filepath.Clean(filepath.Join(root, "..")), pth.AgentWorktreesDir)
+		hostRoot := strings.TrimSpace(cfg.Native.HostRoot)
+		if hostRoot == "" {
+			hostRoot = filepath.Clean(filepath.Join(root, ".."))
+		} else if !filepath.IsAbs(hostRoot) {
+			hostRoot = filepath.Clean(filepath.Join(root, hostRoot))
+		}
+		defaultRoot := filepath.Join(hostRoot, pth.AgentWorktreesDir)
 		if strings.TrimSpace(defaultRoot) != "" {
 			_ = os.Setenv("DEVKIT_WORKTREE_ROOT", defaultRoot)
 		}
@@ -1877,12 +1883,18 @@ func nativeDefaultAgentCount(paths devkitpaths.Paths, project string, fallback i
 func nativeWorktreeRoot(paths devkitpaths.Paths, project string) string {
 	cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
 	if err == nil {
+		hostRoot := strings.TrimSpace(cfg.Native.HostRoot)
+		if hostRoot == "" {
+			hostRoot = paths.Root
+		} else if !filepath.IsAbs(hostRoot) {
+			hostRoot = filepath.Join(paths.Root, hostRoot)
+		}
 		value := strings.TrimSpace(cfg.Native.WorktreeRoot)
 		if value != "" {
 			if filepath.IsAbs(value) {
 				return filepath.Clean(value)
 			}
-			return filepath.Clean(filepath.Join(paths.Root, value))
+			return filepath.Clean(filepath.Join(hostRoot, value))
 		}
 	}
 	return filepath.Clean(filepath.Join(paths.Root, "..", pth.AgentWorktreesDir))
@@ -2020,12 +2032,18 @@ func writeNativeSSHConfig(hostHome, configHome string, identityNames []string) e
 func nativeStateRoot(paths devkitpaths.Paths, project string) string {
 	cfg, _, err := config.ReadAll(paths.OverlayPaths, project)
 	if err == nil {
+		hostRoot := strings.TrimSpace(cfg.Native.HostRoot)
+		if hostRoot == "" {
+			hostRoot = paths.Root
+		} else if !filepath.IsAbs(hostRoot) {
+			hostRoot = filepath.Join(paths.Root, hostRoot)
+		}
 		value := strings.TrimSpace(cfg.Native.StateRoot)
 		if value != "" {
 			if filepath.IsAbs(value) {
 				return filepath.Clean(value)
 			}
-			return filepath.Clean(filepath.Join(paths.Root, value))
+			return filepath.Clean(filepath.Join(hostRoot, value))
 		}
 	}
 	return filepath.Clean(filepath.Join(paths.Root, "..", ".devkit", "native-agents"))

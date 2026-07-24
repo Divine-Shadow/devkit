@@ -1027,9 +1027,10 @@ func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.O
 }
 
 func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs) runtimebroker.Config {
+	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	brokerCfg := runtimebroker.Config{
-		DevkitRoot:    ctx.Paths.Root,
-		Socket:        resolveNativeRoot(ctx.Paths.Root, strings.TrimSpace(cfg.Broker.Socket)),
+		DevkitRoot:    hostRoot,
+		Socket:        resolveNativeRoot(hostRoot, strings.TrimSpace(cfg.Broker.Socket)),
 		Upstream:      strings.TrimSpace(cfg.Broker.Upstream),
 		AllowedImages: append([]string{}, cfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(cfg.Broker.LogLevel),
@@ -1040,7 +1041,7 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 		brokerCfg.AllowPulls = *cfg.Broker.AllowPulls
 	}
 	if strings.TrimSpace(parsed.brokerSocket) != "" {
-		brokerCfg.Socket = resolveNativeRoot(ctx.Paths.Root, parsed.brokerSocket)
+		brokerCfg.Socket = resolveNativeRoot(hostRoot, parsed.brokerSocket)
 		if strings.TrimSpace(parsed.brokerStateRoot) == "" {
 			brokerCfg.StateRoot = filepath.Dir(brokerCfg.Socket)
 		}
@@ -1056,6 +1057,7 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 
 func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs, repo string, brokerCfg runtimebroker.Config) nativeplan.BuildOptions {
 	isolationProfile, egressAllowlist, proxy, proxySocket := nativeIsolationOptions(ctx, cfg, repo, parsed.isolationProfile, parsed.egressAllowlist, parsed.proxy, parsed.proxySocket)
+	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	return nativeplan.BuildOptions{
 		Paths:                 ctx.Paths,
 		Project:               ctx.Project,
@@ -1065,8 +1067,8 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		RuntimeLauncher:       strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER")),
 		BubblewrapBinary:      strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY")),
 		Launcher:              "bubblewrap",
-		WorktreeRoot:          resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
-		StateRoot:             resolveNativeRoot(ctx.Paths.Root, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
+		WorktreeRoot:          resolveNativeRoot(hostRoot, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
+		StateRoot:             resolveNativeRoot(hostRoot, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
 		WorktreeContainerRoot: firstNonEmpty(parsed.worktreeContainerRoot, cfg.Native.WorktreeContainerRoot),
 		StateContainerRoot:    firstNonEmpty(parsed.agentStateContainerRoot, cfg.Native.StateContainerRoot),
 		BaseBranch:            strings.TrimSpace(parsed.baseBranch),
@@ -1081,6 +1083,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 }
 
 func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) error {
+	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	if strings.TrimSpace(opts.Repo) == "" {
 		opts.Repo = strings.TrimSpace(cfg.Defaults.Repo)
 	}
@@ -1100,10 +1103,10 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 		opts.BubblewrapBinary = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY"))
 	}
 	if strings.TrimSpace(opts.WorktreeRoot) == "" {
-		opts.WorktreeRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.WorktreeRoot)
+		opts.WorktreeRoot = resolveNativeRoot(hostRoot, cfg.Native.WorktreeRoot)
 	}
 	if strings.TrimSpace(opts.StateRoot) == "" {
-		opts.StateRoot = resolveNativeRoot(ctx.Paths.Root, cfg.Native.StateRoot)
+		opts.StateRoot = resolveNativeRoot(hostRoot, cfg.Native.StateRoot)
 	}
 	if strings.TrimSpace(opts.WorktreeContainerRoot) == "" {
 		opts.WorktreeContainerRoot = strings.TrimSpace(cfg.Native.WorktreeContainerRoot)
@@ -1112,7 +1115,7 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 		opts.StateContainerRoot = strings.TrimSpace(cfg.Native.StateContainerRoot)
 	}
 	if strings.TrimSpace(opts.BrokerEndpoint) == "" {
-		opts.BrokerEndpoint = resolveNativeRoot(ctx.Paths.Root, cfg.Broker.Socket)
+		opts.BrokerEndpoint = resolveNativeRoot(hostRoot, cfg.Broker.Socket)
 	}
 	if strings.TrimSpace(opts.BaseBranch) == "" {
 		opts.BaseBranch = strings.TrimSpace(cfg.Defaults.BaseBranch)
@@ -1154,7 +1157,7 @@ func nativeIsolationOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, 
 	proxy := firstNonEmpty(requestedProxy, profileCfg.Proxy)
 	proxySocket := firstNonEmpty(requestedProxySocket, profileCfg.ProxySocket)
 	if strings.TrimSpace(proxySocket) != "" {
-		proxySocket = resolveNativeRoot(ctx.Paths.Root, proxySocket)
+		proxySocket = resolveNativeRoot(resolveNativeHostRoot(ctx.Paths.Root, cfg), proxySocket)
 	}
 	return profileName, allowlist, strings.TrimSpace(proxy), proxySocket
 }
@@ -1224,6 +1227,14 @@ func resolveNativeRoot(devkitRoot, value string) string {
 	return filepath.Clean(filepath.Join(devkitRoot, value))
 }
 
+func resolveNativeHostRoot(devkitRoot string, cfg config.OverlayConfig) string {
+	hostRoot := strings.TrimSpace(cfg.Native.HostRoot)
+	if hostRoot == "" {
+		return filepath.Clean(devkitRoot)
+	}
+	return resolveNativeRoot(devkitRoot, hostRoot)
+}
+
 func writeNativeManifest(ctx *cmdregistry.Context, opts nativeplan.BuildOptions, count int, dryRun bool) (nativeagent.Manifest, string, error) {
 	manifest, err := nativeplan.BuildManifest(opts, count)
 	if err != nil {
@@ -1257,10 +1268,11 @@ func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr err
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
 	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
+	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	protectedRoots := []string{
 		ctx.Paths.Root,
 		ctx.Paths.RuntimeAuthorityRoot,
-		filepath.Join(filepath.Dir(filepath.Clean(ctx.Paths.Root)), repo),
+		filepath.Join(hostRoot, repo),
 	}
 	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
 	resetOptions := wtx.NativeResetOptions{

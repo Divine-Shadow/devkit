@@ -1187,8 +1187,9 @@ broker:
   socket: %s
   upstream: unix:///fixture-docker.sock
 native:
-  worktree_root: ../agent-worktrees
-  state_root: ../.devkit/native-agents
+  host_root: %s
+  worktree_root: agent-worktrees
+  state_root: .devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
@@ -1196,7 +1197,7 @@ native:
     workspace-egress:
       filesystem: workspace-only
       egress_allowlist: %s
-`, remoteRepo, brokerSocket, allowlistPath)
+`, remoteRepo, brokerSocket, base, allowlistPath)
 	overlayPath := filepath.Join(root, "overlays", "dev-all", "devkit.yaml")
 	if err := os.MkdirAll(filepath.Dir(overlayPath), 0o755); err != nil {
 		t.Fatal(err)

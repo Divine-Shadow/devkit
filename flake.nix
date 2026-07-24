@@ -646,9 +646,13 @@
           devctl-overlay-runtime-authority-layout =
             let
               devctl = mkProductionDevctl pkgs;
+              broker = self.packages.${pkgs.system}.postgres-broker;
+              runtimeShell = mkDevAllRuntimeShell {
+                inherit pkgs runtimeTools;
+              };
             in
             pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
-              nativeBuildInputs = [ pkgs.gnugrep ];
+              nativeBuildInputs = [ pkgs.gnugrep pkgs.jq ];
             } ''
               test -x ${devctl}/kit/bin/devctl
               test -f ${devctl}/flake.nix
@@ -656,8 +660,27 @@
               test -f ${devctl}/nix/dev-all-runtime-bundle.nix
               test -f ${devctl}/overlays/dev-all/flake.nix
               test -f ${devctl}/overlays/dev-all/runtime.nix
+              test -f ${devctl}/overlays/dev-all/devkit.yaml
               grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
+
+              plan="$TMPDIR/installed-plan.json"
+              env -i \
+                HOME="$TMPDIR/home" \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${devctl}/kit/bin/devctl -p dev-all native plan \
+                  --repo ouroboros-ide --index 1 --format json > "$plan"
+              ${pkgs.jq}/bin/jq -e \
+                --arg devctl '${devctl}' \
+                '.host_worktree_root == "/workspaces/dev/agent-worktrees" and
+                 .host_state_root == "/agent-state" and
+                 .broker_endpoint == "/workspaces/dev/.devkit/native-broker/broker.sock" and
+                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
+                 .agent.host_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"' \
+                "$plan"
               mkdir -p "$out"
+              cp "$plan" "$out/installed-plan.json"
               printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
             '';
 

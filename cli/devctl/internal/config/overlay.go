@@ -94,6 +94,9 @@ func NormalizeReadinessMode(value string) (string, bool) {
 }
 
 type Native struct {
+	// HostRoot is the source-declared mutable workspace root. Installed
+	// runtimes must not derive mutable state from their immutable package path.
+	HostRoot                 string                      `yaml:"host_root"`
 	WorktreeRoot             string                      `yaml:"worktree_root"`
 	StateRoot                string                      `yaml:"state_root"`
 	WorktreeContainerRoot    string                      `yaml:"worktree_container_root"`

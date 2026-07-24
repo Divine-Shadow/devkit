@@ -404,6 +404,9 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if !config.HasRuntimeFlake(cfg) {
 		return fmt.Errorf("native reset requires the source-declared dev-all runtime flake")
 	}
+	if hostRoot := strings.TrimSpace(cfg.Native.HostRoot); hostRoot == "" || !filepath.IsAbs(hostRoot) {
+		return fmt.Errorf("native reset requires an absolute source-declared host root")
+	}
 	declaredRepo := strings.TrimSpace(cfg.Defaults.Repo)
 	if declaredRepo == "" || parsed.repo != declaredRepo {
 		return fmt.Errorf("native reset repository %q must equal the source-declared repository %q", parsed.repo, declaredRepo)
@@ -446,7 +449,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	protectedRoots := []string{
 		ctx.Paths.Root,
 		ctx.Paths.RuntimeAuthorityRoot,
-		filepath.Join(filepath.Dir(filepath.Clean(ctx.Paths.Root)), declaredRepo),
+		filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), declaredRepo),
 	}
 	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
 	resetOptions := wtx.NativeSlotResetOptions{
@@ -573,7 +576,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		return cleanupFailedSlot(err)
 	}
 	worktreeOptions := wtx.NativeOptions{
-		DevkitRoot:       ctx.Paths.Root,
+		DevkitRoot:       filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), "devkit"),
 		Repo:             declaredRepo,
 		Origin:           strings.TrimSpace(cfg.Defaults.Origin),
 		Index:            parsed.index,

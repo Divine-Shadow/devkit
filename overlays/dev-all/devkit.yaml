@@ -185,7 +185,7 @@ readiness:
     - name: core-check
       command: bash scripts/sbt2 "Compile / compile"
 broker:
-  socket: ../.devkit/native-broker/broker.sock
+  socket: .devkit/native-broker/broker.sock
   upstream: unix:///var/run/docker.sock
   allowed_images:
     - postgres:latest
@@ -193,15 +193,18 @@ broker:
   allow_pulls: true
   log_level: info
 native:
-  worktree_root: ../agent-worktrees
-  state_root: ../.devkit/native-agents
+  # Mutable geometry is explicit because the installed controller executes
+  # from an immutable /nix/store package, not a writable Devkit checkout.
+  host_root: /workspaces/dev
+  worktree_root: agent-worktrees
+  state_root: /agent-state
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
   isolation_profiles:
     workspace-egress:
       filesystem: workspace-only
-      egress_allowlist: ../../../ouroboros-ide/infra/docker/dev/tinyproxy/allowlist.txt
+      egress_allowlist: ../../kit/proxy/allowlist.txt
 ingress:
   kind: caddy
   routes:
