@@ -1258,7 +1258,8 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		}
 		resolved, resolveErr := filepath.EvalSymlinks(source)
 		expected := filepath.Join("/etc/static", strings.TrimPrefix(filepath.Clean(target), "/etc/"))
-		if resolveErr != nil || filepath.Clean(resolved) != expected {
+		expectedResolved, expectedErr := filepath.EvalSymlinks(expected)
+		if resolveErr != nil || expectedErr != nil || filepath.Clean(resolved) != filepath.Clean(expectedResolved) {
 			return fmt.Errorf("controller inventory %s must resolve only to its immutable /etc/static projection", target)
 		}
 		info, err = os.Stat(source)
