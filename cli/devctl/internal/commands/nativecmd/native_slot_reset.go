@@ -668,7 +668,11 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	report := runReadinessReport(selectedPlan, runtimeChecks, repoChecks)
 	summary := capacity.Build(map[int]readiness.Report{parsed.index: report})
 	if err := lifecycleReadinessError(summary, lifecycleParsed); err != nil {
-		return cleanupFailedSlot(err)
+		data, marshalErr := json.Marshal(summary)
+		if marshalErr != nil {
+			return cleanupFailedSlot(errors.Join(err, fmt.Errorf("encode failed native slot readiness: %w", marshalErr)))
+		}
+		return cleanupFailedSlot(fmt.Errorf("%w: readiness=%s", err, data))
 	}
 	head := ""
 	if !ctx.DryRun {

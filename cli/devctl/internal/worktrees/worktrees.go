@@ -1544,7 +1544,6 @@ func SetupNative(opts NativeOptions) error {
 			}
 		}
 		_ = run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "prune")...)
-		_ = run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "remove", "-f", wt)...)
 		if err := run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
 			if opts.DryRun {
 				return err

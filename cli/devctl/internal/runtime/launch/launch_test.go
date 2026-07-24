@@ -743,6 +743,62 @@ func TestSeedSSHSeedsOnlyCallerIdentityAndNeverCallerKnownHosts(t *testing.T) {
 	}
 }
 
+func TestSeedCodexConfigMaterializesAndRefreshesNixAuthoredSource(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "nix-store", "codex-config.toml")
+	first := "# source = nixos-wsl codex config\nmodel_provider = \"openai\"\n"
+	writeTestFile(t, source, first)
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", source)
+	home := filepath.Join(root, "consumer-home")
+
+	if err := SeedCodexConfig(home); err != nil {
+		t.Fatalf("SeedCodexConfig first materialization: %v", err)
+	}
+	target := filepath.Join(home, ".codex", "config.toml")
+	if got := readTestFile(t, target); got != first {
+		t.Fatalf("materialized Codex config = %q, want %q", got, first)
+	}
+	if info, err := os.Lstat(target); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
+		t.Fatalf("materialized Codex config mode = %v error=%v", info, err)
+	}
+
+	second := first + "[profiles.openai]\nmodel_provider = \"openai\"\n"
+	if err := os.WriteFile(source, []byte(second), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedCodexConfig(home); err != nil {
+		t.Fatalf("SeedCodexConfig refresh: %v", err)
+	}
+	if got := readTestFile(t, target); got != second {
+		t.Fatalf("refreshed Codex config = %q, want %q", got, second)
+	}
+}
+
+func TestSeedCodexConfigRejectsRelativeSymlinkAndNonRegularSources(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "consumer-home")
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", "relative-config.toml")
+	if err := SeedCodexConfig(home); err == nil || !strings.Contains(err.Error(), "must be absolute") {
+		t.Fatalf("relative config source error = %v", err)
+	}
+
+	root := t.TempDir()
+	realSource := filepath.Join(root, "real-config.toml")
+	writeTestFile(t, realSource, "model_provider = \"openai\"\n")
+	symlinkSource := filepath.Join(root, "config-link.toml")
+	if err := os.Symlink(realSource, symlinkSource); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", symlinkSource)
+	if err := SeedCodexConfig(home); err == nil || !strings.Contains(err.Error(), "regular non-symlink") {
+		t.Fatalf("symlink config source error = %v", err)
+	}
+
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", root)
+	if err := SeedCodexConfig(home); err == nil || !strings.Contains(err.Error(), "regular non-symlink") {
+		t.Fatalf("directory config source error = %v", err)
+	}
+}
+
 func TestSeedAWSSyncsConfigAndCaches(t *testing.T) {
 	srcAWS := filepath.Join(t.TempDir(), ".aws")
 	for _, dir := range []string{

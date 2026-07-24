@@ -63,6 +63,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
 		return err
 	}
+	if err := SeedCodexConfig(p.Agent.HostHome); err != nil {
+		return err
+	}
 	if err := ensureCodexShellHook(p); err != nil {
 		return err
 	}
@@ -936,6 +939,89 @@ func SeedCodexAuth(hostHome string, force bool) error {
 	if err := os.WriteFile(target, data, 0o600); err != nil {
 		return fmt.Errorf("write Codex auth %s: %w", target, err)
 	}
+	return nil
+}
+
+// SeedCodexConfig materializes the Nix-authored Codex configuration selected
+// by the controller into a consumer home. The source is runtime authority; a
+// freshly reconstructed home must not depend on a prior activation having
+// happened to populate the same path.
+func SeedCodexConfig(hostHome string) error {
+	hostHome = strings.TrimSpace(hostHome)
+	if hostHome == "" {
+		return nil
+	}
+	src := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
+	if src == "" {
+		return nil
+	}
+	if !filepath.IsAbs(src) {
+		return fmt.Errorf("Codex config source must be absolute: %s", src)
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return fmt.Errorf("inspect Codex config source %s: %w", src, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("Codex config source %s must be a regular non-symlink file", src)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read Codex config source %s: %w", src, err)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("Codex config source %s is empty", src)
+	}
+	targetDir := filepath.Join(hostHome, ".codex")
+	target := filepath.Join(targetDir, "config.toml")
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", targetDir, err)
+	}
+	if current, err := os.Lstat(target); err == nil {
+		if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() {
+			return fmt.Errorf("Codex config target %s must be a regular non-symlink file", target)
+		}
+		existing, readErr := os.ReadFile(target)
+		if readErr != nil {
+			return fmt.Errorf("read Codex config target %s: %w", target, readErr)
+		}
+		if string(existing) == string(data) {
+			if err := os.Chmod(target, 0o600); err != nil {
+				return fmt.Errorf("chmod Codex config target %s: %w", target, err)
+			}
+			return nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect Codex config target %s: %w", target, err)
+	}
+	tmp, err := os.CreateTemp(targetDir, ".config.toml.new-")
+	if err != nil {
+		return fmt.Errorf("create Codex config staging file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod Codex config staging file %s: %w", tmpPath, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write Codex config staging file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync Codex config staging file %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close Codex config staging file %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return fmt.Errorf("install Codex config target %s: %w", target, err)
+	}
+	committed = true
 	return nil
 }
 

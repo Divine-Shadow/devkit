@@ -1466,6 +1466,10 @@ fi
 	}
 	worktreesRoot := filepath.Join(base, "agent-worktrees")
 	wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
+	wantCodexConfig, err := os.ReadFile(filepath.Join(base, ".devkit", "nix-codex-config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for index := 1; index <= 3; index++ {
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
 		gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
@@ -1500,6 +1504,14 @@ fi
 		}
 		if out := runNativeFixtureCommand(t, "git", "-C", worktree, "status", "--porcelain=v1"); strings.TrimSpace(out) != "" {
 			t.Fatalf("agent%d reset worktree is dirty: %s", index, out)
+		}
+		hostHome := filepath.Join(filepath.Dir(worktree), fmt.Sprintf(".devhome-agent%d", index))
+		if index == 1 {
+			hostHome = filepath.Join(worktree, ".devhome-agent1")
+		}
+		gotCodexConfig, err := os.ReadFile(filepath.Join(hostHome, ".codex", "config.toml"))
+		if err != nil || string(gotCodexConfig) != string(wantCodexConfig) {
+			t.Fatalf("agent%d did not materialize the exact Nix-authored Codex config: %q %v", index, gotCodexConfig, err)
 		}
 	}
 	if _, err := os.Lstat(staleMarker); !errors.Is(err, os.ErrNotExist) {
@@ -1725,6 +1737,23 @@ fi
 	}
 	if output, err := runSlotReset(); err != nil {
 		t.Fatalf("selected reset did not recover from total absence: %v\n%s", err, output)
+	}
+	assertNoNativeResetProxyResidue(t, base)
+	if err := os.WriteFile(readinessFail, []byte("fail\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	slotReadinessOutput, slotReadinessErr := runSlotReset()
+	if slotReadinessErr == nil ||
+		!strings.Contains(string(slotReadinessOutput), `readiness={"total":1`) ||
+		!strings.Contains(string(slotReadinessOutput), `"failed_checks"`) ||
+		!strings.Contains(string(slotReadinessOutput), "readiness failure") {
+		t.Fatalf("selected reset readiness failure did not return the exact typed failed-check receipt: %v\n%s", slotReadinessErr, slotReadinessOutput)
+	}
+	if err := os.Remove(readinessFail); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runSlotReset(); err != nil {
+		t.Fatalf("selected reset did not recover after typed readiness failure: %v\n%s", err, output)
 	}
 	assertNoNativeResetProxyResidue(t, base)
 
