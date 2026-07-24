@@ -2395,6 +2395,18 @@ func countFiles(t *testing.T, root string) int {
 	return count
 }
 
+func TestLocalDirectFleetTargetAllowsOnlyCanonicalControllerAlias(t *testing.T) {
+	if target, ok, err := localDirectFleetTarget([]string{"/home/bayesartre/dev/bin/fleet", "app-rpc", "thread-list", "--target", "target-1"}); err != nil || !ok || target != "target-1" {
+		t.Fatalf("canonical controller alias was not accepted: target=%q ok=%v err=%v", target, ok, err)
+	}
+	if _, _, err := localDirectFleetTarget([]string{"/tmp/fleet", "app-rpc", "thread-list", "--target", "target-1"}); err != nil {
+		t.Fatalf("target parsing should defer executable identity validation: %v", err)
+	}
+	if _, _, err := localDirectFleetTarget([]string{"/home/bayesartre/dev/bin/fleet", "app-rpc", "thread-list", "--target", "target-1", "--socket", "/tmp/foreign.sock"}); err == nil {
+		t.Fatal("caller socket override was accepted")
+	}
+}
+
 func runTestCommand(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command(args[0], args[1:]...)

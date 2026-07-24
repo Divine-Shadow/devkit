@@ -685,6 +685,39 @@
 	        };
           };
         };
+      # Public composition seam for the opaque Product runtime package.  The
+      # Product derivation owns one `devkitResources` passthru; Devkit selects
+      # every executable/configuration resource from that object and callers
+      # cannot re-author the legacy adapter argument list independently.
+      mkProductAdapterFromRuntime =
+        {
+          pkgs,
+          productRuntime,
+        }:
+        let
+          resources = productRuntime.devkitResources or (throw "productRuntime.devkitResources is required");
+          required = name:
+            if builtins.hasAttr name resources then builtins.getAttr name resources
+            else throw "productRuntime.devkitResources.${name} is required";
+        in
+        mkProductAdapterPackage {
+          inherit pkgs;
+          bubblewrap = required "bubblewrap";
+          broker = required "broker";
+          egressAllowlist = required "egressAllowlist";
+          codexConfig = required "codexConfig";
+          governanceEnv = required "governanceEnv";
+          governanceRepoConfig = required "governanceRepoConfig";
+          governanceRules = required "governanceRules";
+          shellHook = required "shellHook";
+          codexExecutable = required "codexExecutable";
+          mcpRequirement = required "mcpRequirement";
+          sshExecutable = required "sshExecutable";
+          sshKeygenExecutable = required "sshKeygenExecutable";
+          knownHostsFile = required "knownHostsFile";
+          gitSSHExecutable = required "gitSSHExecutable";
+          rootlessWrapperCheck = false;
+        };
       mkProductMCPFixture =
         pkgs:
         pkgs.buildGoModule {
@@ -987,6 +1020,7 @@
           mkFleetSourceLayer
           mkPinnedCodex
           mkProductAdapterPackage
+          mkProductAdapterFromRuntime
           mkProductRuntimeProjection
           mkProductSourceAcquirer
           mkSourceTransportPackage

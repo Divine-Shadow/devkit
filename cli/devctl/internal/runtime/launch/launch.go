@@ -2596,8 +2596,20 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		if err != nil {
 			return Command{}, err
 		}
-		if filepath.Clean(command[0]) != filepath.Clean(manifest.ControllerSourceLayer.ControllerFleet) {
-			return Command{}, fmt.Errorf("Fleet app-rpc executable is not the manifest-selected controller")
+		controllerPath := filepath.Clean(manifest.ControllerSourceLayer.ControllerFleet)
+		requestedPath := filepath.Clean(command[0])
+		if requestedPath != controllerPath {
+			// The pinned GUI goal-control tool historically invokes the stable
+			// controller name below.  It is not an authority: in the namespace
+			// this path is always replaced with the manifest-selected immutable
+			// executable.  No other caller path is accepted.
+			const canonicalControllerAlias = "/home/bayesartre/dev/bin/fleet"
+			if requestedPath != canonicalControllerAlias {
+				return Command{}, fmt.Errorf("Fleet app-rpc executable is not the manifest-selected controller")
+			}
+			if err := addBind("ro", controllerPath, canonicalControllerAlias, true); err != nil {
+				return Command{}, fmt.Errorf("project manifest-selected Fleet controller alias: %w", err)
+			}
 		}
 		if err := verifyNestedSourceLayerBinding(manifest); err != nil {
 			return Command{}, err
