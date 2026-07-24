@@ -242,6 +242,7 @@
             "-X=devkit/cli/devctl/internal/worktrees.packageGitExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${envExecutable}"
             "-X=devkit/cli/devctl/internal/runtime/launch.packageGitExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/runtime/launch.packageSourceAcquisitionBubblewrap=${pkgs.bubblewrap}/bin/bwrap"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"

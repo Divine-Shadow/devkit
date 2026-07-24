@@ -717,6 +717,23 @@ func TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables(t *testing.T) {
 	}
 }
 
+func TestSourceAcquireRejectsEverySurfaceBeyondOneImmutableExecutable(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ctx  *cmdregistry.Context
+	}{
+		{name: "missing", ctx: &cmdregistry.Context{Args: []string{"source-acquire"}}},
+		{name: "extra", ctx: &cmdregistry.Context{Args: []string{"source-acquire", "/nix/store/acquirer/bin/devkit-product-source-acquire", "--proxy", "http://127.0.0.1:18888"}}},
+		{name: "dry-run", ctx: &cmdregistry.Context{Args: []string{"source-acquire", "/nix/store/acquirer/bin/devkit-product-source-acquire"}, DryRun: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := handleSourceAcquire(test.ctx); err == nil {
+				t.Fatal("source acquisition accepted a non-canonical invocation")
+			}
+		})
+	}
+}
+
 func TestLifecycleBrokerConfigDerivesStateRootForExplicitSocket(t *testing.T) {
 	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	got := lifecycleBrokerConfig(ctx, config.OverlayConfig{}, lifecycleArgs{

@@ -39,6 +39,45 @@ func loadManifest(path string) (Manifest, string, error) {
 	return manifest, hex.EncodeToString(digest[:]), nil
 }
 
+// LoadPackageForLaunch accepts only the immutable, package-owned acquisition
+// executable. Every runtime path and network decision is then derived from its
+// adjacent manifest; callers cannot supply them independently.
+func LoadPackageForLaunch(executablePath string) (Manifest, error) {
+	if !immutableStorePath(executablePath) || filepath.Base(executablePath) != "devkit-product-source-acquire" {
+		return Manifest{}, fmt.Errorf("source acquisition executable is not one immutable package entrypoint")
+	}
+	packagePath := filepath.Dir(filepath.Dir(executablePath))
+	manifestPath := filepath.Join(packagePath, "share", "devkit-product-source-acquisition", "manifest.json")
+	manifest, _, err := loadManifest(manifestPath)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("load adjacent source acquisition manifest: %w", err)
+	}
+	if manifest.PackagePath != packagePath || manifest.ExecutablePath != executablePath {
+		return Manifest{}, fmt.Errorf("source acquisition executable and adjacent manifest do not share package ownership")
+	}
+	if err := immutableRegularFile(executablePath, true); err != nil {
+		return Manifest{}, fmt.Errorf("validate source acquisition executable: %w", err)
+	}
+	if err := immutableRegularFile(manifestPath, false); err != nil {
+		return Manifest{}, fmt.Errorf("validate adjacent source acquisition manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+func immutableRegularFile(path string, executable bool) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("immutable package path is not one non-writable regular file")
+	}
+	if executable && info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("immutable package executable has no execute bit")
+	}
+	return nil
+}
+
 func validateManifest(manifest Manifest) error {
 	if manifest.SchemaVersion != ManifestSchema {
 		return fmt.Errorf("unsupported manifest schema")

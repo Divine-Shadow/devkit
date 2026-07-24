@@ -112,6 +112,16 @@ func TestManifestBindsExactLifecycleAndImmutableTools(t *testing.T) {
 	if err := validateManifest(manifest); err != nil {
 		t.Fatal(err)
 	}
+	manifest.Transport.ManagedConnectProxy = "http://127.0.0.1:18888"
+	if err := validateManifest(manifest); err == nil {
+		t.Fatal("source acquisition accepted an upstream proxy dependency")
+	}
+	manifest.Transport.ManagedConnectProxy = ""
+	manifest.Transport.NetworkMode = "managed-loopback-connect"
+	if err := validateManifest(manifest); err == nil {
+		t.Fatal("source acquisition accepted the generic workspace network mode")
+	}
+	manifest.Transport.NetworkMode = "package-owned-direct-connect"
 	manifest.Product.CheckoutPath = "/tmp/caller-selected"
 	if err := validateManifest(manifest); err == nil {
 		t.Fatal("caller-selected checkout escaped the fixed lifecycle geometry")

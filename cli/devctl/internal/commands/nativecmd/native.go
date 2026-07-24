@@ -60,6 +60,8 @@ func handle(ctx *cmdregistry.Context) error {
 		return handlePlan(ctx)
 	case "prepare":
 		return handlePrepare(ctx)
+	case "source-acquire":
+		return handleSourceAcquire(ctx)
 	case "down":
 		if err := RejectLegacyProductConstruction(ctx.Project, "", "native down"); err != nil {
 			return err
@@ -78,6 +80,25 @@ func handle(ctx *cmdregistry.Context) error {
 	default:
 		return fmt.Errorf("unknown native command %s", ctx.Args[0])
 	}
+}
+
+func handleSourceAcquire(ctx *cmdregistry.Context) error {
+	if ctx.DryRun {
+		return fmt.Errorf("native source-acquire does not support dry-run")
+	}
+	if len(ctx.Args) != 2 {
+		return fmt.Errorf("usage: native source-acquire IMMUTABLE_ACQUIRER_EXECUTABLE")
+	}
+	command, err := launch.BuildProductSourceAcquisitionBubblewrap(ctx.Args[1])
+	if err != nil {
+		return err
+	}
+	process := exec.Command(command.Path, command.Args...)
+	process.Dir = command.Dir
+	process.Stdin = os.Stdin
+	process.Stdout = os.Stdout
+	process.Stderr = os.Stderr
+	return runCommandPreservingExit(process)
 }
 
 type planArgs struct {

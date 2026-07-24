@@ -409,6 +409,7 @@ Commands:
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   native plan --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--launcher bubblewrap|systemd-run] [--format text|json]
   native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX]  (legacy non-Product only; Product uses the installed product-adapter)
+  native source-acquire IMMUTABLE_ACQUIRER_EXECUTABLE  (manifest-bound Product source acquisition only)
   native governance-env --repo REPO [--format text|json] [--dry-run]
   native exec --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
