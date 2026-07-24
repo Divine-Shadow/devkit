@@ -91,6 +91,8 @@
             mkdir -p "$out/kit/bin"
             mv "$out/bin/devctl" "$out/kit/bin/devctl"
             rmdir "$out/bin"
+            mkdir -p "$out/kit/proxy"
+            cp "$src/kit/proxy/allowlist.txt" "$out/kit/proxy/allowlist.txt"
             cp "$src/flake.nix" "$src/flake.lock" "$out/"
             cp -R "$src/nix" "$src/overlays" "$out/"
           '';
@@ -661,6 +663,8 @@
               test -f ${devctl}/overlays/dev-all/flake.nix
               test -f ${devctl}/overlays/dev-all/runtime.nix
               test -f ${devctl}/overlays/dev-all/devkit.yaml
+              test -r ${devctl}/kit/proxy/allowlist.txt
+              grep -Fx 'ssh.github.com' ${devctl}/kit/proxy/allowlist.txt
               grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
 
               plan="$TMPDIR/installed-plan.json"
@@ -679,9 +683,13 @@
                  .sandbox_state_root == "/agent-state" and
                  .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
                  .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"' \
+                .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
+                .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"' \
                 "$plan"
+              allowlist="$(${pkgs.jq}/bin/jq -r '.proxy.allowlist_path' "$plan")"
+              test "$allowlist" = '${devctl}/kit/proxy/allowlist.txt'
+              test -r "$allowlist"
+              grep -Fx 'ssh.github.com' "$allowlist"
               mkdir -p "$out"
               cp "$plan" "$out/installed-plan.json"
               printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
