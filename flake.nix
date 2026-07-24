@@ -437,6 +437,70 @@
         import ./nix/source-transport-git-ssh-check.nix {
           inherit mkSourceTransportPackage pkgs;
         };
+      mkProductSourceAcquirer =
+        args:
+        import ./nix/product-source-acquirer.nix (
+          args
+          // {
+            inherit mkSourceTransportPackage;
+          }
+        );
+      mkProductSourceAcquirerConstructionCheck =
+        pkgs:
+        let
+          package = mkProductSourceAcquirer {
+            inherit pkgs;
+            productOrigin = "git@github.com:Divine-Shadow/ouroboros-ide.git";
+            productRevision = "0123456789abcdef0123456789abcdef01234567";
+            lifecycleRoot = "/var/lib/devkit-product-lifecycle";
+            identityPath = "/run/credentials/devkit-product-git-identity";
+          };
+          interface = package.productSourceAcquisition;
+          closure = pkgs.closureInfo { rootPaths = [ package ]; };
+        in
+        pkgs.runCommand "devkit-product-source-acquirer-construction-prerequisite"
+          {
+            nativeBuildInputs = [
+              pkgs.jq
+              pkgs.gnugrep
+            ];
+          }
+          ''
+            set -eu
+            test -x '${interface.executablePath}'
+            test -r '${interface.manifestPath}'
+            test -r '${interface.manifestSha256Path}'
+            test "$(sha256sum '${interface.manifestPath}' | cut -d' ' -f1)" = \
+              "$(cat '${interface.manifestSha256Path}')"
+            jq -e \
+              --arg package '${interface.packagePath}' \
+              --arg executable '${interface.executablePath}' \
+              --arg root '${interface.lifecycleRoot}' \
+              --arg checkout '${interface.checkoutPath}' \
+              --arg receipt '${interface.receiptPath}' \
+              '
+                .schemaVersion == "devkit/product-source-acquisition-manifest/v1" and
+                .packagePath == $package and
+                .executablePath == $executable and
+                .product.lifecycleRoot == $root and
+                .product.checkoutPath == $checkout and
+                .product.receiptPath == $receipt and
+                .transport.schemaVersion == "devkit/source-transport/v4" and
+                .transport.managedConnectProxy == "http://127.0.0.1:18888" and
+                (.runtime.gitExecutablePath | startswith("/nix/store/")) and
+                (.runtime.openSSHExecutablePath | startswith("/nix/store/"))
+              ' '${interface.manifestPath}' >/dev/null
+            grep -qFx '${pkgs.git}' '${closure}/store-paths'
+            grep -qFx '${pkgs.openssh}' '${closure}/store-paths'
+            grep -qFx '${package}' '${closure}/store-paths'
+            if grep -E 'ouroboros-ide|product-runtime|governance-control-plane' '${closure}/store-paths'; then
+              echo 'source acquirer closure unexpectedly contains a downstream Product authority' >&2
+              exit 1
+            fi
+            mkdir -p "$out"
+            cp '${interface.manifestPath}' "$out/manifest.json"
+            cp '${closure}/store-paths' "$out/store-paths"
+          '';
       mkProductAdapterPackage =
         {
           pkgs,
@@ -919,6 +983,7 @@
           mkPinnedCodex
           mkProductAdapterPackage
           mkProductRuntimeProjection
+          mkProductSourceAcquirer
           mkSourceTransportPackage
           ;
       };
@@ -1294,6 +1359,8 @@
           source-transport = mkSourceTransportPackage { inherit pkgs; };
           source-transport-interface = mkSourceTransportInterfaceCheck pkgs;
           source-transport-git-ssh-lifecycle = mkSourceTransportGitSSHCheck pkgs;
+          product-source-acquirer-construction-prerequisite =
+            mkProductSourceAcquirerConstructionCheck pkgs;
           dev-all-runtime-bundle-public-constructor = mkDevAllRuntimeBundleConstructorContract pkgs;
           management-inspection-cli = mkProductionDevctl pkgs;
           native-bootstrap-stdio-cleanup = mkNativeBootstrapStdioCleanupCheck pkgs;
