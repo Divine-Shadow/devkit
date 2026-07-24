@@ -15,8 +15,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"devkit/cli/devctl/internal/testsupport"
 )
 
 func TestAllowlistAllowsExactAndSubdomains(t *testing.T) {
@@ -118,7 +116,7 @@ func TestServeChainsConnectThroughConfiguredUpstreamProxy(t *testing.T) {
 		}
 	}()
 
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("example.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -180,7 +178,7 @@ func TestServeChainsConnectThroughConfiguredUpstreamProxy(t *testing.T) {
 }
 
 func TestConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes(t *testing.T) {
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -241,7 +239,7 @@ func TestConnectNeverTouchesHostileFixedLoopbackBridge(t *testing.T) {
 		hostileAccepted <- acceptErr
 	}()
 
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	managed, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -269,7 +267,7 @@ func TestConnectNeverTouchesHostileFixedLoopbackBridge(t *testing.T) {
 func TestConnectFailsClosedOnProxyRejection(t *testing.T) {
 	for _, status := range []string{"403 Forbidden", "502 Bad Gateway"} {
 		t.Run(status, func(t *testing.T) {
-			tmp := testsupport.UnixSocketDir(t)
+			tmp := t.TempDir()
 			socketPath := filepath.Join(tmp, "consumer.sock")
 			listener, err := net.Listen("unix", socketPath)
 			if err != nil {
@@ -302,7 +300,7 @@ func TestConnectFailsClosedWhenExactUnixSocketIsMissing(t *testing.T) {
 	var output bytes.Buffer
 	err := Connect(
 		context.Background(),
-		testsupport.UnixSocketPath(t, "missing.sock"),
+		filepath.Join(t.TempDir(), "missing.sock"),
 		"ssh.github.com:443",
 		strings.NewReader("payload"),
 		&output,
@@ -316,7 +314,7 @@ func TestConnectFailsClosedWhenExactUnixSocketIsMissing(t *testing.T) {
 }
 
 func TestConnectCancellationClosesTunnelWithoutWaitingForOpenInput(t *testing.T) {
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -394,7 +392,7 @@ func TestDialConnectTargetPreservesBannerBufferedWithUpstreamResponse(t *testing
 }
 
 func TestServeRefusesExistingSocketAuthority(t *testing.T) {
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -408,38 +406,6 @@ func TestServeRefusesExistingSocketAuthority(t *testing.T) {
 	err = Serve(context.Background(), Config{SocketPath: socketPath, AllowlistPath: allowlistPath})
 	if err == nil || !strings.Contains(err.Error(), "refusing existing proxy socket path") {
 		t.Fatalf("Serve error = %v, want existing authority rejection", err)
-	}
-}
-
-func TestRemoveOwnedSocketNeverRemovesReplacement(t *testing.T) {
-	path := testsupport.UnixSocketPath(t, "consumer.sock")
-	if err := os.WriteFile(path, []byte("owned"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	owned, err := os.Lstat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ownedFile, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ownedFile.Close()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	removeOwnedSocket(path, owned)
-
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("replacement was removed: %v", err)
-	}
-	if string(content) != "replacement" {
-		t.Fatalf("replacement content = %q", content)
 	}
 }
 
@@ -504,7 +470,7 @@ func TestServeDrainsFullPackAfterClientHalfClose(t *testing.T) {
 		upstreamErr <- nil
 	}()
 
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
@@ -585,7 +551,7 @@ func TestRelayFullDuplexPropagatesPeerWriteFailure(t *testing.T) {
 }
 
 func TestServeAndConnectCarryCompleteGitSmartProtocolFetch(t *testing.T) {
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	sourceRepo := filepath.Join(tmp, "source")
 	remoteRepo := filepath.Join(tmp, "remote.git")
 	consumerRepo := filepath.Join(tmp, "consumer")

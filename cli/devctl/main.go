@@ -32,7 +32,6 @@ import (
 	"devkit/cli/devctl/internal/layout"
 	"devkit/cli/devctl/internal/netutil"
 	pth "devkit/cli/devctl/internal/paths"
-	"devkit/cli/devctl/internal/productadapter"
 	runner "devkit/cli/devctl/internal/runner"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativelaunch "devkit/cli/devctl/internal/runtime/launch"
@@ -408,9 +407,7 @@ Commands:
   tmux-bell-install [--session NAME] [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   native plan --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--launcher bubblewrap|systemd-run] [--format text|json]
-  native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX]  (legacy non-Product only; Product uses the installed product-adapter)
-  native source-acquire IMMUTABLE_ACQUIRER_EXECUTABLE  (manifest-bound Product source acquisition only)
-  native governance-env --repo REPO [--format text|json] [--dry-run]
+  native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX] [--format text|json]
   native exec --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
   native capacity --repo REPO [--count N] [--flake REF] [--runtime-only|--repo-readiness] [--format text|json]
@@ -427,7 +424,7 @@ Commands:
   worktrees-status <repo> [--all|--index N]  (flake-backed overlays)
   worktrees-sync <repo> (--pull|--push) [--all|--index N]  (flake-backed overlays)
   worktrees-tmux <repo> <count> [--plain]    (flake-backed overlays)
-  reset [N]                                  reset a legacy non-Product native prefix
+  reset [N]                                  destructively reconstruct the exact owned native prefix
   bootstrap <repo> <count>                   (flake-backed overlays)
   runtime-matrix [--check] [--all] [--repo NAME|--overlay NAME] (repo to runtime pairing report)
   management-inspect refresh --repo PATH --revision REF [--name NAME] [--state-root PATH]
@@ -542,27 +539,13 @@ func main() {
 	if cfgDir == "" {
 		cfgDir = overlayDir
 	}
-	cmd := args[0]
-	sub := args[1:]
-	if productadapter.InvocationSelectsProduct(
-		project,
-		cmd,
-		sub,
-		overlayCfg.Defaults.Repo,
-		overlayCfg.Defaults.Origin,
-		overlayCfg.Workspace,
-		overlayCfg.Native.WorktreeRoot,
-		overlayCfg.Native.StateRoot,
-		overlayCfg.Runtime.Flake,
-	) {
-		die("raw devctl refuses Product; use the manifest-bound WSL/Nix product-adapter")
-	} else {
-		applyOverlayEnv(overlayCfg, cfgDir, paths.Root)
-	}
+	applyOverlayEnv(overlayCfg, cfgDir, paths.Root)
 	tmuxForceOverride = forceTmux
 	if forceTmux {
 		_ = os.Unsetenv("DEVKIT_NO_TMUX")
 	}
+	cmd := args[0]
+	sub := args[1:]
 	isNativeRuntime := strings.TrimSpace(project) == "dev-all" || nativeRuntimeConfigured(project, overlayCfg)
 
 	// Preflight: choose a non-overlapping internal subnet and DNS IP if not explicitly set
@@ -623,9 +606,6 @@ func main() {
 	case "scale", "ensure-ready":
 		die("native lifecycle command was not registered")
 	case "layout-apply":
-		if err := nativecmd.RejectLegacyProductConstruction(project, "", "layout-apply"); err != nil {
-			die(err.Error())
-		}
 		layoutPath := ""
 		doAttach := false
 		skipBroker := false
@@ -931,9 +911,6 @@ func main() {
 			die("doctor-runtime requires runtime.flake")
 		}
 		repo := readDefaultRepo(project, paths)
-		if err := nativecmd.RejectLegacyProductConstruction(project, repo, "doctor-runtime"); err != nil {
-			die(err.Error())
-		}
 		count := nativeDefaultAgentCount(paths, project, 1)
 		runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count), "--runtime-only")
 	case "verify":
@@ -942,9 +919,6 @@ func main() {
 			die("verify requires runtime.flake")
 		}
 		repo := readDefaultRepo(project, paths)
-		if err := nativecmd.RejectLegacyProductConstruction(project, repo, "verify"); err != nil {
-			die(err.Error())
-		}
 		count := nativeDefaultAgentCount(paths, project, 1)
 		runner.Host(dryRun, exe, "-p", project, "ensure-ready", "--repo", repo, "--count", fmt.Sprintf("%d", count), "--repo-readiness")
 		fmt.Println("verify completed")
@@ -1120,9 +1094,6 @@ exit 0`
 			n = mustAtoi(arg)
 		}
 		repo := readDefaultRepo(project, paths)
-		if err := nativecmd.RejectLegacyProductConstruction(project, repo, "fresh-open"); err != nil {
-			die(err.Error())
-		}
 		nativeLifecycleCommand(dryRun, exe, project, "down", repo, n)
 		if !skipTmux() {
 			killNativeAgentSessions(dryRun)
@@ -1301,9 +1272,6 @@ exit 0`
 			die("Usage: worktrees-setup <repo> <count> [--base agent] [--branch main]")
 		}
 		repo := sub[0]
-		if err := nativecmd.RejectLegacyProductConstruction(project, repo, "worktrees-setup"); err != nil {
-			die(err.Error())
-		}
 		n := mustAtoi(sub[1])
 		branchPrefix := "agent"
 		baseBranch := "main"

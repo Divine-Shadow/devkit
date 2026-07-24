@@ -1,19 +1,12 @@
 # Native Readiness Contract
 
-Native readiness is the readiness path for ordinary non-Product overlays. It
-is diagnostic support for Product package composition, not Product lifecycle
-authority or promotion evidence.
-
-Product consumers use only the adapter and launcher from the installed
-`fleet-runtime-authority/v1` manifest. A Devkit readiness or consumer-boundary
-check can establish a prerequisite, but only the governed Product-owned
-promotion app may promote Product after completing the full lifecycle on two
-fresh absent consumers.
+Native readiness is the authoritative readiness path for every supported
+overlay.
 
 ## Contract
 
-- `kit/scripts/devkit` remains the supported entrypoint for ordinary
-  non-Product overlays; it execs `kit/bin/devctl`.
+- `kit/scripts/devkit` remains the supported entrypoint; it execs
+  `kit/bin/devctl`.
 - `verify`, `doctor-runtime`, and `ensure-ready` route flake-backed overlays
   through native lifecycle/readiness.
 - Native readiness runs inside the Nix sandbox through bubblewrap.
@@ -76,7 +69,7 @@ visible and named.
 | --- | --- | --- |
 | `_template` | common agent tools, container API client, Codex version | placeholder `core-check` for new overlays to replace |
 | `codex` | SBT/JVM, Go, container API client, Spago, Netlify, Deno, Playwright | warm hook plus `scripts/sbt2 "Compile / compile"` |
-| `dev-all` | Historical/general overlay capability metadata only; it is not the Product construction or promotion interface | diagnostic repo checks only; Product uses the manifest-bound adapter and Product-owned promotion app |
+| `dev-all` | SBT/JVM, Go, container API client, AWS, Pokeemerald tools, Spago, Netlify, Deno, Playwright browser launch | git remote, frontend warm/build/typecheck/test/browser/server checks, SBT core check |
 | `dumb-onion-hax` | SBT/JVM, AWS CLI, container API client | warm hook plus `sbt compile` |
 | `ouro-integration` | Terraform, Packer, AWS CLI, SBT/JVM, container API client | AWS config plus Terraform plan/backend assembly |
 | `ouroboros-static-front-end` | Node/npm, PureScript, Spago, Netlify, Deno, Playwright, container API client | warm hook plus `npm run build` |

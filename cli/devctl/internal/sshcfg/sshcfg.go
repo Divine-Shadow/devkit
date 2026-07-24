@@ -1,5 +1,5 @@
 // Package sshcfg contains retired Compose-era emitters retained for archived
-// callers. Product native bootstrap does not import this package; keep its
+// callers. Ordinary native checkout creation does not import this package; keep its
 // emitted policy fail-closed so it cannot reintroduce accept-new if reused.
 package sshcfg
 

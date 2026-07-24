@@ -1,6 +1,6 @@
 # Devkit
 
-Devkit runs project agents through Nix flakes and the native devkit sandbox. For ordinary non-Product overlays, the supported entrypoint is `kit/scripts/devkit`, which execs the compiled CLI at `kit/bin/devctl`.
+Devkit runs project agents through Nix flakes and the native devkit sandbox. The supported entrypoint is `kit/scripts/devkit`, which execs the compiled CLI at `kit/bin/devctl`.
 
 ## Requirements
 
@@ -18,41 +18,27 @@ make -C cli/devctl build
 Run commands through the wrapper:
 
 ```bash
-kit/scripts/devkit -p ouroboros-static-front-end up --repo ouroboros-static-front-end --count 2
-kit/scripts/devkit -p ouroboros-static-front-end status --repo ouroboros-static-front-end --ready
-kit/scripts/devkit -p ouroboros-static-front-end exec 1 --repo ouroboros-static-front-end -- bash -lc 'codex --version'
-kit/scripts/devkit -p ouroboros-static-front-end ensure-ready --repo ouroboros-static-front-end --runtime-only
-kit/scripts/devkit -p ouroboros-static-front-end down --repo ouroboros-static-front-end --count 2
+kit/scripts/devkit -p dev-all up --repo ouroboros-ide --count 2
+kit/scripts/devkit -p dev-all status --repo ouroboros-ide --ready
+kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'codex --version'
+kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --runtime-only
+kit/scripts/devkit -p dev-all down --repo ouroboros-ide --count 2
 ```
 
 If `kit/bin/devctl` is missing or not executable, the wrapper fails loudly and prints the build command. It does not silently choose another implementation.
-
-## Product Authority Boundary
-
-Product (`ouroboros-ide`) is not constructed or launched through the raw
-wrapper examples above. The authoritative Nix derivation emits one immutable
-`fleet-runtime-authority/v1` manifest. Product consumers must use only the
-adapter and launcher paths named by that installed manifest; those consumers
-may verify the manifest but may not select source, rebuild a runtime, or
-reinterpret identity. Devkit does not export a fixture consumer or diagnostic
-VM as Product readiness. Product acceptance requires the governed
-Fleet/Colmena path to complete the real lifecycle on two fresh consumers,
-including package-owned Git/SSH, the real app-server and governance server,
-governed LLM computation and Git effects, and clean destruction of each
-consumer.
-
-The root-owned `/var/lib/product-runtime/authority-selector.json` is an
-immutable routing record, not a credential. It contains only the Nix-store
-manifest path and digest, is installed atomically beneath a protected
-root-owned directory, and is read-only to every user. This lets the declared
-unprivileged Product services consume the one authority while leaving
-replacement authority exclusively with the root installer.
 
 ## Runtime Model
 
 Each supported overlay declares an overlay-local `runtime.flake` in `overlays/<project>/devkit.yaml`, for example `./overlays/dev-all#default`. The root flake still exposes compatible shells for direct Nix use, but devkit runtime metadata is one flake ref per overlay.
 
 Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes OCI API access only through configured broker sockets.
+
+`packages.<system>.dev-all-runtime-bundle` is deliberately Product-agnostic.
+It contains the compiled Devkit controller and generic `dev-all` tools,
+including Codex, Git/OpenSSH, Java/SBT, bubblewrap, and the proxy clients. The
+authoritative WSL/Nix system composes that package with artifacts derived from
+one accepted Product revision. Devkit does not select Product source, build
+Product JARs, or emit a second Product runtime manifest.
 
 For day-to-day operations, see the native runbook:
 `kit/docs/native-operator-runbook.md`.
@@ -83,7 +69,6 @@ make native-overlay-matrix
 make native-e2e-lifecycle
 make native-overlay-e2e-matrix
 make native-runtime-smoke
-make native-readiness-audit
 make postgres-broker-container-smoke
 make retired-runtime-guard
 make nix-overlay-runtime-guard

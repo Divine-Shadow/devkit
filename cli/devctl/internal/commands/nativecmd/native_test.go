@@ -10,10 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
@@ -22,7 +20,6 @@ import (
 	"devkit/cli/devctl/internal/runtime/capacity"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/runtime/readiness"
-	"devkit/cli/devctl/internal/testsupport"
 )
 
 func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
@@ -74,105 +71,6 @@ func TestBuildSandboxReadinessScriptPreservesImmutableRuntimePath(t *testing.T) 
 	}
 	if strings.Contains(script, `bash -lc "$command"`) {
 		t.Fatalf("readiness command retained a login-shell PATH reinterpretation:\n%s", script)
-	}
-}
-
-func TestReadinessBatchDeadlineReturnsTypedResultsAndTerminatesDescendants(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	pidPath := filepath.Join(root, "descendant.pid")
-	markerPath := filepath.Join(root, "second-check-ran")
-	checks := []sandboxReadinessCheck{
-		{
-			Phase: readiness.PhaseRepo,
-			Name:  "stalled-fetch",
-			Command: "sleep 30 & child=$!; printf '%s\\n' \"$child\" > " +
-				nativeShellQuote(pidPath) + "; wait \"$child\"",
-		},
-		{
-			Phase:   readiness.PhaseRepo,
-			Name:    "after-deadline",
-			Command: "touch " + nativeShellQuote(markerPath),
-		},
-	}
-	started := time.Now()
-	cmd := exec.Command(bash, "-c", buildSandboxReadinessScriptWithTimeout(checks, time.Second))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("bounded readiness script failed structurally: %v\n%s", err, output)
-	}
-	if elapsed := time.Since(started); elapsed > 8*time.Second {
-		t.Fatalf("bounded readiness script took %s", elapsed)
-	}
-	results, err := parseSandboxReadinessResults(string(output))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 2 ||
-		results[0].Name != "stalled-fetch" || results[0].OK ||
-		!strings.Contains(results[0].Detail, "deadline expired") ||
-		results[1].Name != "after-deadline" || results[1].OK ||
-		!strings.Contains(results[1].Detail, "deadline exhausted") {
-		t.Fatalf("bounded readiness results = %#v\n%s", results, output)
-	}
-	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
-		t.Fatalf("post-deadline check executed: %v", err)
-	}
-	pidText, err := os.ReadFile(pidPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidText)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	terminatedDeadline := time.Now().Add(2 * time.Second)
-	for {
-		stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
-		if errors.Is(err, os.ErrNotExist) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("inspect readiness descendant %d: %v", pid, err)
-		}
-		closeParen := strings.LastIndexByte(string(stat), ')')
-		if closeParen < 0 || closeParen+2 >= len(stat) {
-			t.Fatalf("readiness descendant %d has malformed stat: %q", pid, stat)
-		}
-		fields := strings.Fields(string(stat[closeParen+2:]))
-		if len(fields) > 0 && fields[0] == "Z" {
-			break
-		}
-		if time.Now().After(terminatedDeadline) {
-			t.Fatalf("readiness descendant %d remained non-zombie: %q", pid, stat)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-func TestGovernanceEnvHostDevRootPrefersWorkspaceBind(t *testing.T) {
-	plan := nativeplan.Plan{
-		DevkitHostRoot: "/tmp/devkit-worktree/devkit",
-		Binds: []nativeplan.Bind{{
-			Source:   "/workspaces/dev",
-			Target:   "/workspaces/dev",
-			Required: true,
-		}},
-	}
-
-	if got := governanceEnvHostDevRoot(plan); got != "/workspaces/dev" {
-		t.Fatalf("host dev root = %q, want /workspaces/dev", got)
-	}
-}
-
-func TestGovernanceEnvHostDevRootFallsBackToDevkitParent(t *testing.T) {
-	plan := nativeplan.Plan{DevkitHostRoot: "/workspaces/dev/devkit"}
-
-	if got := governanceEnvHostDevRoot(plan); got != "/workspaces/dev" {
-		t.Fatalf("host dev root = %q, want /workspaces/dev", got)
 	}
 }
 
@@ -717,23 +615,6 @@ func TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables(t *testing.T) {
 	}
 }
 
-func TestSourceAcquireRejectsEverySurfaceBeyondOneImmutableExecutable(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		ctx  *cmdregistry.Context
-	}{
-		{name: "missing", ctx: &cmdregistry.Context{Args: []string{"source-acquire"}}},
-		{name: "extra", ctx: &cmdregistry.Context{Args: []string{"source-acquire", "/nix/store/acquirer/bin/devkit-product-source-acquire", "--proxy", "http://127.0.0.1:18888"}}},
-		{name: "dry-run", ctx: &cmdregistry.Context{Args: []string{"source-acquire", "/nix/store/acquirer/bin/devkit-product-source-acquire"}, DryRun: true}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if err := handleSourceAcquire(test.ctx); err == nil {
-				t.Fatal("source acquisition accepted a non-canonical invocation")
-			}
-		})
-	}
-}
-
 func TestLifecycleBrokerConfigDerivesStateRootForExplicitSocket(t *testing.T) {
 	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	got := lifecycleBrokerConfig(ctx, config.OverlayConfig{}, lifecycleArgs{
@@ -1066,7 +947,7 @@ func TestWithManagedEgressProxyEstablishesSocketBeforeBootstrapAndCleansUp(t *te
 
 func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) {
 	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1098,7 +979,7 @@ func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) 
 
 func TestEnsureManagedEgressProxyRefusesArbitraryExistingListener(t *testing.T) {
 	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
-	tmp := testsupport.UnixSocketDir(t)
+	tmp := t.TempDir()
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1116,8 +997,8 @@ func TestEnsureManagedEgressProxyRefusesArbitraryExistingListener(t *testing.T) 
 		},
 	}
 	_, err = ensureManagedEgressProxy(p, false)
-	if err == nil || !strings.Contains(err.Error(), "refuses preexisting path") {
-		t.Fatalf("ensureManagedEgressProxy error = %v, want preexisting path rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "refuses an existing listener") {
+		t.Fatalf("ensureManagedEgressProxy error = %v, want existing listener rejection", err)
 	}
 	if !unixSocketAccepts(socketPath) {
 		t.Fatal("existing listener was mutated while being refused")

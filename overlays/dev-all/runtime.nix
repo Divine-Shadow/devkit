@@ -9,9 +9,7 @@ mkShell "dev-all" toolsets.ouroborosAgentTools ''
   esac
   export NODE_PATH=${pkgsPlaywright.playwright-test}/lib/node_modules:${packages.pinnedNpmTools}/lib/devkit-npm-tools/node_modules''${NODE_PATH:+:$NODE_PATH}
   export PATH=${pkgs.jdk21}/bin:$PATH
-  # This shell is a local diagnostic consumer. Production Fleet composition
-  # supplies its own Product-derived bundle through Devkit's public constructor.
-  set -a
-  source ${packages.diagnosticRuntimeBundle}/share/dev-all-runtime-bundle/identity.env
-  set +a
+  export SBT2_CLIENT_MODE=force
+  export SBT2_JAVA_XMX=6g
+  export OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE=off
 ''

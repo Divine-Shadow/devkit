@@ -1,98 +1,52 @@
 ---
 name: fleet-devkit-readiness
-description: Verify and converge Product fleet consumers through the installed sole runtime-authority manifest, package-owned adapter, and governed Product promotion path.
+description: Maintain and verify the generic Devkit agent runtime substrate, including its Nix toolchain, compiled devctl entrypoint, Git/OpenSSH, bwrap/proxy, Codex auth/config hydration, worktrees, process supervision, and real readiness checks. Use when a fleet consumer cannot launch or run reliably through the canonical packaged Devkit path.
 ---
 
 # Fleet Devkit Readiness
 
-Use this skill for Product fleet readiness and consumer lifecycle work. The
-canonical source-derived convergence process establishes a trustworthy starting
-state; the governed Product-owned promotion path establishes acceptance. Local
-task, run, station, home, worktree, socket, candidate, and partial-artifact
-state is disposable computation, not business-objective custody.
+Read `AGENTS.md` and maintain the applicable ExecPlan from `.agent/PLANS.md`.
 
-## Authority Model
+## Boundary
 
-- The authoritative Nix derivation selects pinned sources and artifacts once
-  and emits the sole immutable `fleet-runtime-authority/v1` manifest.
-- Product source acquisition, stopped-volume credential seeding, consumer
-  construction, app-server lifecycle, and GUI-task launch consume only the
-  exact adapter and launcher named by that installed manifest.
-- Devkit, launchers, supervisors, and consumers verify the manifest; they do
-  not select source, compile a revision identity, rebuild Product, rewrite a
-  selector, or infer authority from a checkout, host path, environment, or
-  ambient executable.
-- Only the governed Product-owned promotion application may promote a runtime.
-  Devkit package checks and VM diagnostics are prerequisite evidence, never
-  publication, deployment, or promotion evidence.
+Keep Devkit Product-agnostic. Devkit supplies generic tools and lifecycle
+mechanics; it does not select or acquire Product source to derive a runtime,
+build Product JARs, publish Product identity, or choose among Product artifacts.
+The authoritative Nix composition consumes one accepted Product revision and
+combines its outputs with the generic Devkit package.
 
-## Disposable Computation
+Devkit may use package-owned Git/OpenSSH to create the writable checkout for an
+already-composed writer. That checkout is disposable computation, not the
+source of the runtime that launches it.
 
-- Preserve operator conversation, business objective, acceptance criteria,
-  granted authority, accepted published history, active external transactions,
-  protected data, and deployed durable effects.
-- Reuse a healthy immutable closure, home, auth state, runtime, or app-server
-  only after cheap identity and invariant checks pass.
-- After a failed, contaminated, colliding, or provenance-unclear attempt, use
-  at most one bounded diagnostic probe, record the durable failure evidence,
-  and reconstruct the implicated disposable layer through the canonical path.
-- Do not require recovery, copying, stashing, transfer, or continued ownership
-  of a failed task/run/tree/station/home/worktree/candidate before continuing
-  the objective. One active writer is a collision-control lease, not lifetime
-  custody.
-- A fresh consumer that repeats a defect proves a shared convergence defect.
-  Repair the source-controlled package/convergence component and rerun; never
-  perform station-local surgery or advertise a fallback result.
+## Workflow
 
-## Required Flow
+1. Reproduce the failure through `kit/scripts/devkit`, which must execute the
+   packaged `kit/bin/devctl`.
+2. Identify the generic source invariant that failed: immutable executable
+   selection, Git/SSH, proxy, sandbox, credential hydration, worktree
+   construction, process supervision, or readiness.
+3. Repair that invariant in Devkit source and verify it through the same real
+   code path. Do not add a fallback, caller-selected executable, ambient-PATH
+   dependency, or Product-specific compatibility layer.
+4. Rebuild and converge the canonical package. Discard the failed consumer and
+   validate on a fresh consumer when the repair changes its closure or runtime
+   assumptions. Reuse unrelated healthy consumers after cheap identity checks.
+5. Report the source repair and executable result. Do not substitute status,
+   documentation, package membership, or a synthetic fixture for a working
+   consumer.
 
-1. Read the repository `AGENTS.md`, current ExecPlan, and the installed
-   authority manifest identity before effects.
-2. Verify the installed selector resolves one immutable manifest and that its
-   adapter, launchers, source evidence, mount policy, Codex executable,
-   governance artifacts, and consumer geometry match the package contract.
-3. If the source or package invariant is defective, repair it in source and
-   pass its focused sabotage tests plus the full flake gate. Freeze only an
-   immutable candidate; do not treat that candidate as promoted.
-4. Compose and deploy through the sole authoritative Nix/controller path.
-   There is no manual closure copy, local activation, alternate launcher,
-   ambient Git/SSH/Python helper, or raw native Product lifecycle path.
-5. Run the governed Product promotion application from absent controller and
-   consumer state. It must construct a fresh consumer, acquire and verify the
-   exact Product revision, seed only guest-local credentials, launch the exact
-   pinned app-server, create a governed GUI Product task, and reach first
-   admission.
-6. Destroy the disposable consumer and repeat the entire lifecycle on a second
-   fresh consumer. Independent business lanes may continue while a shared
-   pipeline repair is underway.
+Protect accepted published history, external data, and active external
+transactions. Tasks, processes, homes, worktrees, sockets, and failed partial
+attempts are replaceable. Never preserve them merely to avoid reconstruction.
 
 ## Verification
 
-Promotion requires all of the following, twice from absent consumer state:
-
-- One installed `fleet-runtime-authority/v1` identity and exact source map.
-- Package-owned Git, OpenSSH, proxy, credential seed, adapter, supervisor,
-  Codex, mount policy, and launcher paths; hostile or empty `PATH` cannot alter
-  selection.
-- Exact revision acquisition, relative writable Git metadata, and temporary
-  reference create/read/delete without host checkout aliases.
-- No writable host share, credential export, station-local mutation, second
-  identity authority, duplicate/listener lookalike, or residue after teardown.
-- The exact pinned Codex PID owns the declared listening Unix socket and passes
-  initialize, ephemeral thread start/read, declared governance MCP inventory,
-  GUI task creation, and first governed admission.
-- A second newly absent consumer proves the same lifecycle independently.
-
-Focused checks, closure membership, help/version commands, config-file
-presence, process existence, and a single consumer are diagnostic observations
-only. They cannot promote the fleet.
-
-## Authority
-
-You may inspect source and installed immutable identities; discard and recreate
-disposable consumer computation; implement source-controlled Devkit, Fleet,
-Nix, launcher, adapter, supervisor, and readiness repairs; add adversarial
-tests; and invoke the sole declared convergence and governed Product promotion
-paths. Do not mutate protected external state, bypass governance, update a
-production branch before its declared gate, create an alternate deployment
-path, or accept station-local repair as convergence.
+- `nix flake check --show-trace` passes for Devkit.
+- The generic `dev-all-runtime-bundle` exposes `bin/dev-all-runtime-tools` and
+  `kit/bin/devctl` and contains no Product artifact or source-selection
+  authority.
+- Relevant real Git/SSH, proxy, bwrap, auth, worktree, process, and readiness
+  paths execute successfully for the consumer being repaired.
+- A Product-environment deliverable is credited only by its owning lifecycle
+  gate, not by Devkit checks alone.

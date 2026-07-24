@@ -133,14 +133,10 @@ func Serve(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("listen %s: %w", socketPath, err)
 	}
 	defer listener.Close()
+	defer os.Remove(socketPath)
 	if err := os.Chmod(socketPath, 0o600); err != nil {
 		return fmt.Errorf("chmod %s: %w", socketPath, err)
 	}
-	ownedSocket, err := os.Lstat(socketPath)
-	if err != nil {
-		return fmt.Errorf("inspect owned proxy socket %s: %w", socketPath, err)
-	}
-	defer removeOwnedSocket(socketPath, ownedSocket)
 	go func() {
 		<-ctx.Done()
 		listener.Close()
@@ -155,14 +151,6 @@ func Serve(ctx context.Context, cfg Config) error {
 		}
 		go handleConn(conn, allowlist, upstreamProxy)
 	}
-}
-
-func removeOwnedSocket(path string, owned os.FileInfo) {
-	current, err := os.Lstat(path)
-	if err != nil || !os.SameFile(owned, current) {
-		return
-	}
-	_ = os.Remove(path)
 }
 
 // Connect opens one fail-closed stdio CONNECT tunnel through the exact

@@ -3,8 +3,6 @@ package seed
 import (
 	"fmt"
 	"strings"
-
-	"devkit/cli/devctl/internal/governanceentrypoint"
 )
 
 // WaitForHostMountsScript returns a script that waits (up to ~10s) for
@@ -121,7 +119,6 @@ func BuildAnchorScripts(cfg AnchorConfig) []string {
 			"'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' " +
 			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
 			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
-			"'export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=\"" + governanceentrypoint.SHA256() + "\"' " +
 			"'unalias codex 2>/dev/null || true' " +
 			"'devkit_codex_tui_log_guard() {' " +
 			"'  local log=\"$HOME/.codex/log/codex-tui.log\"' " +
@@ -205,7 +202,6 @@ func BuildDirectHomeScripts(home string, seedCodex bool) []string {
 			"'typeset -g POWERLEVEL9K_INSTANT_PROMPT=off' " +
 			"'[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme' " +
 			"'[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' " +
-			"'export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256=\"" + governanceentrypoint.SHA256() + "\"' " +
 			"'unalias codex 2>/dev/null || true' " +
 			"'devkit_codex_tui_log_guard() {' " +
 			"'  local log=\"$HOME/.codex/log/codex-tui.log\"' " +

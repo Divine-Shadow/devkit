@@ -16,7 +16,8 @@ type WriteStep struct {
 
 // BuildIdentityWriteSteps constructs WriteSteps for caller-held identity keys
 // and a source-defined config. Host keys are intentionally not accepted here:
-// native Product bootstrap installs them only through sshauthority.Authority.
+// ordinary writable-checkout creation installs them only through
+// sshauthority.Authority.
 func BuildIdentityWriteSteps(home string, key, pub []byte, cfg string) []WriteStep {
 	steps := make([]WriteStep, 0, 3)
 	if len(key) > 0 {

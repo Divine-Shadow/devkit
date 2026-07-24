@@ -155,7 +155,7 @@ func actionFor(phase Phase, name string, ok bool) string {
 	}
 	switch name {
 	case "prepare-state":
-		return "construct the native worktree and agent state through the declared lifecycle, then rerun the validation"
+		return "prepare or repair the native worktree and agent state, then rerun up or ensure-ready"
 	case "broker-socket", "docker-client":
 		return "start or inspect the devkit broker and verify the configured broker socket"
 	case "sandbox-command":

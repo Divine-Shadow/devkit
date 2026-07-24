@@ -156,12 +156,14 @@ func checkRelativeNativeMetadata(t *testing.T, worktree, wantCommonDir, forbidde
 	return gitdir
 }
 
+// This test performs a real host-side worktree setup across two repos with two agents each
+// (agent1 in-place, agent2 as worktree), verifying branch names and upstreams.
 func TestSetup_TwoRepos_TwoAgents(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
 
-	// Host layout: <root>/dev/{devkit, dumb-onion-hax, fixture-repo}, plus bare remotes under <root>/remotes
+	// Host layout: <root>/dev/{devkit, dumb-onion-hax, ouroboros-ide}, plus bare remotes under <root>/remotes
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
 	if err := os.MkdirAll(filepath.Join(devRoot, "devkit"), 0o755); err != nil {
@@ -170,22 +172,22 @@ func TestSetup_TwoRepos_TwoAgents(t *testing.T) {
 	devkitRoot := filepath.Join(devRoot, "devkit")
 
 	makeRepoWithBare(t, root, devRoot, "dumb-onion-hax")
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
 	// Run setup for each repo with two agents
 	if err := Setup(devkitRoot, "dumb-onion-hax", 2, "main", "agent", false); err != nil {
 		t.Fatalf("setup doh failed: %v", err)
 	}
-	if err := Setup(devkitRoot, "fixture-repo", 2, "main", "agent", false); err != nil {
+	if err := Setup(devkitRoot, "ouroboros-ide", 2, "main", "agent", false); err != nil {
 		t.Fatalf("setup ouro failed: %v", err)
 	}
 
 	// Validate branches and upstreams
 	checkBranchAndUpstream(t, filepath.Join(devRoot, "dumb-onion-hax"), "agent1")
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "dumb-onion-hax"), "agent2")
-	checkBranchAndUpstream(t, filepath.Join(devRoot, "fixture-repo"), "agent1")
-	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo"), "agent2")
-	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo"), false)
+	checkBranchAndUpstream(t, filepath.Join(devRoot, "ouroboros-ide"), "agent1")
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), false)
 }
 
 func TestSetup_RemovesStaleWorktreeDirectories(t *testing.T) {
@@ -201,26 +203,26 @@ func TestSetup_RemovesStaleWorktreeDirectories(t *testing.T) {
 	devkitRoot := filepath.Join(devRoot, "devkit")
 
 	makeRepoWithBare(t, root, devRoot, "dumb-onion-hax")
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
 	if err := Setup(devkitRoot, "dumb-onion-hax", 2, "main", "agent", false); err != nil {
 		t.Fatalf("setup doh failed: %v", err)
 	}
-	if err := Setup(devkitRoot, "fixture-repo", 2, "main", "agent", false); err != nil {
+	if err := Setup(devkitRoot, "ouroboros-ide", 2, "main", "agent", false); err != nil {
 		t.Fatalf("initial ouro setup failed: %v", err)
 	}
 
-	staleWt := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo")
+	staleWt := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide")
 	foreignGitdir := filepath.Join(devRoot, "dumb-onion-hax", ".git", "worktrees", "agent2")
 	if err := os.WriteFile(filepath.Join(staleWt, ".git"), []byte("gitdir: "+foreignGitdir+"\n"), 0o644); err != nil {
 		t.Fatalf("prepare stale gitdir: %v", err)
 	}
 
-	if err := Setup(devkitRoot, "fixture-repo", 2, "main", "agent", false); err != nil {
+	if err := Setup(devkitRoot, "ouroboros-ide", 2, "main", "agent", false); err != nil {
 		t.Fatalf("ouro setup with stale dir failed: %v", err)
 	}
 
-	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo"), "agent2")
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
 }
 
 func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
@@ -234,11 +236,11 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	devkitRoot := filepath.Join(devRoot, "devkit")
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        2,
 		BaseBranch:   "main",
 		BranchPrefix: "agent",
@@ -246,37 +248,12 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 		t.Fatalf("native setup failed: %v", err)
 	}
 
-	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "fixture-repo"), "agent1")
-	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo"), "agent2")
-	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "fixture-repo"), false)
-	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo"), false)
-	if got := readTrim(t, "git", "-C", filepath.Join(devRoot, "fixture-repo"), "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), "agent2")
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), false)
+	checkGitdirForm(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide"), false)
+	if got := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 		t.Fatalf("primary checkout branch changed to %s", got)
-	}
-}
-
-func TestLegacySetupNativeRejectsCanonicalProductIdentityBeforeEffects(t *testing.T) {
-	root := t.TempDir()
-	devkitRoot := filepath.Join(root, "dev", "devkit")
-	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, options := range []NativeOptions{
-		{DevkitRoot: devkitRoot, Repo: "ouroboros-ide", Origin: "ssh://git@github.com/ouroboros-ai/ouroboros-ide.git", Count: 1},
-		{DevkitRoot: devkitRoot, Repo: "product-alias", Origin: "ssh://git@ssh.github.com:443/ouroboros-ai/ouroboros-ide.git", Count: 1},
-		{DevkitRoot: devkitRoot, Repo: "product-alias", Origin: "https://github.com/ouroboros-ai/ouroboros-ide.git", Count: 1},
-	} {
-		err := SetupNative(options)
-		if err == nil || !strings.Contains(err.Error(), "legacy native setup has no Product authority") {
-			t.Fatalf("SetupNative(%+v) = %v, want Product authority refusal", options, err)
-		}
-	}
-	entries, err := os.ReadDir(filepath.Join(root, "dev"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "devkit" {
-		t.Fatalf("legacy Product refusal mutated the candidate root: %v", entries)
 	}
 }
 
@@ -291,11 +268,11 @@ func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        2,
 		BaseBranch:   "main",
 		BranchPrefix: "agent",
@@ -303,7 +280,7 @@ func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 		t.Fatalf("native setup failed: %v", err)
 	}
 
-	outer := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "fixture-repo")
+	outer := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide")
 	legacyGitDir := readTrim(t, "git", "-C", outer, "rev-parse", "--git-dir")
 	if !filepath.IsAbs(legacyGitDir) {
 		legacyGitDir = filepath.Join(outer, legacyGitDir)
@@ -314,7 +291,7 @@ func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 	mustRun(t, "git", "-C", outer, "config", "worktree.useRelativePaths", "false")
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        2,
 		BaseBranch:   "main",
 		BranchPrefix: "agent",
@@ -326,7 +303,7 @@ func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 		t.Fatalf("worktree.useRelativePaths = %q, want true", got)
 	}
 
-	nested := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", ".devhome-agent2", ".codex", "worktrees", "3293", "fixture-repo")
+	nested := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", ".devhome-agent2", ".codex", "worktrees", "3293", "ouroboros-ide")
 	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +321,7 @@ func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 	if err := os.Rename(devRoot, projectedDevRoot); err != nil {
 		t.Fatalf("project dev root: %v", err)
 	}
-	projectedNested := filepath.Join(projectedDevRoot, paths.AgentWorktreesDir, "agent2", ".devhome-agent2", ".codex", "worktrees", "3293", "fixture-repo")
+	projectedNested := filepath.Join(projectedDevRoot, paths.AgentWorktreesDir, "agent2", ".devhome-agent2", ".codex", "worktrees", "3293", "ouroboros-ide")
 	if got := readTrim(t, "git", "-C", projectedNested, "rev-parse", "--show-toplevel"); got != projectedNested {
 		t.Fatalf("projected nested worktree top = %s, want %s", got, projectedNested)
 	}
@@ -364,10 +341,10 @@ func TestSetupNativeSSHOriginUsesExplicitBootstrapCommand(t *testing.T) {
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
-	bare := filepath.Join(root, "remotes", "fixture-repo.git")
-	repo := filepath.Join(devRoot, "fixture-repo")
+	bare := filepath.Join(root, "remotes", "ouroboros-ide.git")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
 
 	logPath := filepath.Join(root, "ssh.log")
@@ -391,7 +368,7 @@ func TestSetupNativeSSHOriginUsesExplicitBootstrapCommand(t *testing.T) {
 
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:    devkitRoot,
-		Repo:          "fixture-repo",
+		Repo:          "ouroboros-ide",
 		Count:         1,
 		BaseBranch:    "main",
 		BranchPrefix:  "agent",
@@ -413,7 +390,7 @@ func TestSetupNativeSSHOriginUsesExplicitBootstrapCommand(t *testing.T) {
 	if strings.Contains(logText, "/dev/null") {
 		t.Fatalf("SSH invocation selected the prohibited /dev/null transport:\n%s", logText)
 	}
-	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "fixture-repo"), "agent1")
+	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")
 }
 
 func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T) {
@@ -428,10 +405,10 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
-	bare := filepath.Join(root, "remotes", "fixture-repo.git")
-	repo := filepath.Join(devRoot, "fixture-repo")
+	bare := filepath.Join(root, "remotes", "ouroboros-ide.git")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
 	logPath := filepath.Join(root, "isolated-ssh.log")
 	sshPath := filepath.Join(root, "package-owned-isolated-ssh")
@@ -461,7 +438,7 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 		branchPrefix := fmt.Sprintf("isolated%d-agent", index+1)
 		if err := SetupNative(NativeOptions{
 			DevkitRoot:       devkitRoot,
-			Repo:             "fixture-repo",
+			Repo:             "ouroboros-ide",
 			Origin:           "ssh://git@fixture.invalid" + bare,
 			Count:            1,
 			BaseBranch:       "main",
@@ -472,8 +449,8 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 		}); err != nil {
 			t.Fatalf("isolated native setup %d failed: %v", index+1, err)
 		}
-		worktree := filepath.Join(worktreeRoot, "agent1", "fixture-repo")
-		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+		worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -492,7 +469,7 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 	}
 	commonDirs := make([]string, 0, len(worktreeRoots))
 	for _, worktreeRoot := range worktreeRoots {
-		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -528,7 +505,7 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 		if err := os.Rename(worktreeRoot, projectedRoot); err != nil {
 			t.Fatalf("project isolated topology %s -> %s: %v", worktreeRoot, projectedRoot, err)
 		}
-		worktree := filepath.Join(projectedRoot, "agent1", "fixture-repo")
+		worktree := filepath.Join(projectedRoot, "agent1", "ouroboros-ide")
 		if got := readTrim(t, "git", "-C", worktree, "rev-parse", "--show-toplevel"); filepath.Clean(got) != worktree {
 			t.Fatalf("projected worktree top = %s, want %s", got, worktree)
 		}
@@ -547,11 +524,11 @@ func TestRewriteNativeGitdirRejectsForeignCommondirTraversal(t *testing.T) {
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 	worktreeRoot := filepath.Join(root, "isolated-product")
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        1,
 		BaseBranch:   "main",
 		BranchPrefix: "isolated-agent",
@@ -559,8 +536,8 @@ func TestRewriteNativeGitdirRejectsForeignCommondirTraversal(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("prepare isolated native worktree: %v", err)
 	}
-	worktree := filepath.Join(worktreeRoot, "agent1", "fixture-repo")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+	worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,9 +584,9 @@ func TestSetupNativeRejectsStaleCommonRepositoryWithoutOwnershipMarker(t *testin
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 	worktreeRoot := filepath.Join(root, "isolated-product")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,11 +594,11 @@ func TestSetupNativeRejectsStaleCommonRepositoryWithoutOwnershipMarker(t *testin
 		t.Fatal(err)
 	}
 	mustRun(t, "git", "init", "--bare", commonDir)
-	mustRun(t, "git", "--git-dir", commonDir, "remote", "add", "origin", filepath.Join(root, "remotes", "fixture-repo.git"))
+	mustRun(t, "git", "--git-dir", commonDir, "remote", "add", "origin", filepath.Join(root, "remotes", "ouroboros-ide.git"))
 
 	err = SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        1,
 		BaseBranch:   "main",
 		BranchPrefix: "isolated-agent",
@@ -630,7 +607,7 @@ func TestSetupNativeRejectsStaleCommonRepositoryWithoutOwnershipMarker(t *testin
 	if err == nil || !strings.Contains(err.Error(), "marker") {
 		t.Fatalf("SetupNative error = %v, want stale ownership-marker rejection", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(worktreeRoot, "agent1", "fixture-repo")); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("stale common repository created a worktree: %v", statErr)
 	}
 }
@@ -642,9 +619,9 @@ func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
-	bare := filepath.Join(root, "remotes", "fixture-repo.git")
-	repo := filepath.Join(devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	bare := filepath.Join(root, "remotes", "ouroboros-ide.git")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid"+bare)
 	sshPath := filepath.Join(root, "package-owned-failing-ssh")
 	if err := os.WriteFile(sshPath, []byte("#!/bin/sh\nexit 71\n"), 0o755); err != nil {
@@ -655,13 +632,13 @@ func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktreeRoot := filepath.Join(root, "isolated-product")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
-		Repo:             "fixture-repo",
+		Repo:             "ouroboros-ide",
 		Origin:           "ssh://git@fixture.invalid" + bare,
 		Count:            1,
 		BaseBranch:       "main",
@@ -676,113 +653,15 @@ func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 	if _, statErr := os.Stat(commonDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed fetch retained common repository %s: %v", commonDir, statErr)
 	}
-	staging, globErr := filepath.Glob(filepath.Join(filepath.Dir(commonDir), ".fixture-repo.bootstrap-*"))
+	staging, globErr := filepath.Glob(filepath.Join(filepath.Dir(commonDir), ".ouroboros-ide.bootstrap-*"))
 	if globErr != nil {
 		t.Fatal(globErr)
 	}
 	if len(staging) != 0 {
 		t.Fatalf("failed fetch retained staging repositories: %v", staging)
 	}
-	if _, statErr := os.Stat(filepath.Join(worktreeRoot, "agent1", "fixture-repo")); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed fetch created a worktree: %v", statErr)
-	}
-}
-
-func TestSetupNativeSlotPublishesOneCompleteGenerationAndCleansFailedStaging(t *testing.T) {
-	git, err := exec.LookPath("git")
-	if err != nil {
-		t.Skip("git not available")
-	}
-	env, err := exec.LookPath("env")
-	if err != nil {
-		t.Skip("env not available")
-	}
-	uploadPack, err := exec.LookPath("git-upload-pack")
-	if err != nil {
-		t.Skip("git-upload-pack not available")
-	}
-	previousGit, previousEnv := packageGitExecutable, packageEnvExecutable
-	packageGitExecutable, packageEnvExecutable = git, env
-	t.Cleanup(func() {
-		packageGitExecutable, packageEnvExecutable = previousGit, previousEnv
-	})
-
-	root := t.TempDir()
-	source := filepath.Join(root, "source")
-	bare := filepath.Join(root, "source.git")
-	if err := os.Mkdir(source, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	mustRun(t, git, "init", "--initial-branch=main", source)
-	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("fixture\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mustRun(t, git, "-C", source, "add", "README.md")
-	mustRun(t, git, "-C", source, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture")
-	revision := readTrim(t, git, "-C", source, "rev-parse", "HEAD")
-	mustRun(t, git, "clone", "--bare", source, bare)
-
-	ssh := filepath.Join(root, "package-ssh")
-	if err := os.WriteFile(
-		ssh,
-		[]byte("#!/bin/sh\nexec '"+uploadPack+"' '"+bare+"'\n"),
-		0o700,
-	); err != nil {
-		t.Fatal(err)
-	}
-	candidate := filepath.Join(root, "candidate")
-	home := filepath.Join(candidate, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	options := NativeSlotOptions{
-		Repo:             "fixture-repo",
-		Origin:           "ssh://git@fixture.invalid/fixture-repo.git",
-		Count:            1,
-		Index:            1,
-		BaseBranch:       "main",
-		SourceRevision:   revision,
-		BranchPrefix:     "agent",
-		WorktreeRoot:     candidate,
-		BootstrapHome:    home,
-		GitSSHExecutable: ssh,
-		SourceIdentity:   ssh,
-		TransportSocket:  bare,
-		RequireSSHOrigin: true,
-	}
-	if err := SetupNativeSlot(options); err != nil {
-		t.Fatal(err)
-	}
-	worktree := filepath.Join(candidate, "agent1", "fixture-repo")
-	if got := readTrim(t, git, "-C", worktree, "rev-parse", "HEAD"); got != revision {
-		t.Fatalf("published revision = %s, want %s", got, revision)
-	}
-	staging, err := filepath.Glob(filepath.Join(candidate, ".agent1.construction-*"))
-	if err != nil || len(staging) != 0 {
-		t.Fatalf("successful construction left staging %v: %v", staging, err)
-	}
-
-	failedCandidate := filepath.Join(root, "failed-candidate")
-	failedHome := filepath.Join(failedCandidate, "home")
-	if err := os.MkdirAll(failedHome, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	failingSSH := filepath.Join(root, "failing-ssh")
-	if err := os.WriteFile(failingSSH, []byte("#!/bin/sh\nexit 71\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	options.WorktreeRoot = failedCandidate
-	options.BootstrapHome = failedHome
-	options.GitSSHExecutable = failingSSH
-	if err := SetupNativeSlot(options); err == nil {
-		t.Fatal("failed source acquisition was accepted")
-	}
-	if _, err := os.Lstat(filepath.Join(failedCandidate, "agent1")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("failed construction published an agent root: %v", err)
-	}
-	staging, err = filepath.Glob(filepath.Join(failedCandidate, ".agent1.construction-*"))
-	if err != nil || len(staging) != 0 {
-		t.Fatalf("failed construction left staging %v: %v", staging, err)
 	}
 }
 
@@ -810,9 +689,9 @@ func TestSetupNativeRejectsAndPreservesPartialWorktreeBeforeBootstrap(t *testing
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 	worktreeRoot := filepath.Join(root, "isolated-product")
-	partialWorktree := filepath.Join(worktreeRoot, "agent1", "fixture-repo")
+	partialWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
 	if err := os.MkdirAll(partialWorktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -823,7 +702,7 @@ func TestSetupNativeRejectsAndPreservesPartialWorktreeBeforeBootstrap(t *testing
 
 	err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        1,
 		BaseBranch:   "main",
 		BranchPrefix: "isolated-agent",
@@ -835,12 +714,235 @@ func TestSetupNativeRejectsAndPreservesPartialWorktreeBeforeBootstrap(t *testing
 	if got, readErr := os.ReadFile(sentinel); readErr != nil || string(got) != "caller-owned partial state\n" {
 		t.Fatalf("partial worktree was mutated: data=%q error=%v", got, readErr)
 	}
-	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 	if pathErr != nil {
 		t.Fatal(pathErr)
 	}
 	if _, statErr := os.Stat(commonDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("partial worktree preflight created common repository %s: %v", commonDir, statErr)
+	}
+}
+
+func TestNativeResetDisposesOpaqueInPrefixPayloadWithoutForeignCustody(t *testing.T) {
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	foreignRoot := filepath.Join(root, "foreign-common.git", "worktrees", "legacy")
+	if err := os.MkdirAll(foreignRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreignSentinel := filepath.Join(foreignRoot, "accepted-business-data")
+	if err := os.WriteFile(foreignSentinel, []byte("outside reset custody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	if err := os.MkdirAll(staleWorktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleWorktree, ".git"), []byte("gitdir: "+foreignRoot+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleWorktree, "dirty-payload"), []byte("disposable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(stateRoot, "dev-all-agent1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateRoot, "dev-all-agent1", "stale"), []byte("disposable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanNativeReset(NativeResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Count:        1,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatalf("plan native reset: %v", err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatalf("apply native reset: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(worktreeRoot, "agent1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned stale worktree survived reset: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(stateRoot, "dev-all-agent1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned stale state survived reset: %v", err)
+	}
+	if got, err := os.ReadFile(foreignSentinel); err != nil || string(got) != "outside reset custody\n" {
+		t.Fatalf("foreign Git metadata acquired reset custody: data=%q error=%v", got, err)
+	}
+}
+
+func TestNativeResetRejectsOwnershipEscapesBeforeDisposal(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	newOptions := func(root string) NativeResetOptions {
+		return NativeResetOptions{
+			Project:      "dev-all",
+			Repo:         "ouroboros-ide",
+			Count:        1,
+			WorktreeRoot: filepath.Join(root, "owned-worktrees"),
+			StateRoot:    filepath.Join(root, "owned-state"),
+		}
+	}
+	t.Run("mismatched prefix", func(t *testing.T) {
+		opts := newOptions(t.TempDir())
+		sentinel := filepath.Join(opts.WorktreeRoot, "agent1", "preserve")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts.Project = "other"
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "exact dev-all prefix") {
+			t.Fatalf("mismatched prefix error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("mismatched prefix changed owned payload before rejection: %v", err)
+		}
+	})
+	t.Run("repository traversal", func(t *testing.T) {
+		opts := newOptions(t.TempDir())
+		sentinel := filepath.Join(opts.WorktreeRoot, "agent1", "preserve")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts.Repo = "../outside"
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "cannot select a package-owned common repository path") {
+			t.Fatalf("repository traversal error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("repository traversal changed payload before rejection: %v", err)
+		}
+	})
+	t.Run("symlink escape", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		outside := filepath.Join(root, "outside")
+		if err := os.MkdirAll(outside, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(opts.WorktreeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(opts.WorktreeRoot, "agent1")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "symlink or junction") {
+			t.Fatalf("symlink escape error = %v", err)
+		}
+		if _, err := os.Stat(outside); err != nil {
+			t.Fatalf("symlink escape changed outside target before rejection: %v", err)
+		}
+	})
+	t.Run("common repository parent escape", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		outside := filepath.Join(root, "outside-git")
+		if err := os.MkdirAll(outside, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(opts.WorktreeRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(opts.WorktreeRoot, ".devkit")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "symlink or junction") {
+			t.Fatalf("common repository escape error = %v", err)
+		}
+		if _, err := os.Stat(outside); err != nil {
+			t.Fatalf("common repository escape changed outside target before rejection: %v", err)
+		}
+	})
+	t.Run("protected root overlap", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		protected := filepath.Join(opts.WorktreeRoot, "agent1", "ouroboros-ide")
+		if err := os.MkdirAll(protected, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		sentinel := filepath.Join(protected, "preserve")
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		opts.ProtectedRoots = []string{protected}
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "overlaps protected root") {
+			t.Fatalf("protected overlap error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("protected overlap changed payload before rejection: %v", err)
+		}
+	})
+	t.Run("mount overlap", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		sentinel := filepath.Join(opts.WorktreeRoot, "agent1", "preserve")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("preserve\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		nativeResetMountPoints = func() ([]string, error) {
+			return []string{filepath.Join(opts.WorktreeRoot, "agent1", "mounted")}, nil
+		}
+		defer func() { nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil } }()
+		if _, err := PlanNativeReset(opts); err == nil || !strings.Contains(err.Error(), "contains mount point") {
+			t.Fatalf("mount overlap error = %v", err)
+		}
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("mount overlap changed payload before rejection: %v", err)
+		}
+	})
+}
+
+func TestNativeResetRevalidatesCompleteBoundaryBeforeDisposal(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	agentTwoSentinel := filepath.Join(worktreeRoot, "agent2", "preserve")
+	if err := os.MkdirAll(filepath.Dir(agentTwoSentinel), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentTwoSentinel, []byte("preserve\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanNativeReset(NativeResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Count:        2,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(worktreeRoot, "agent1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "revalidate native reset boundary") {
+		t.Fatalf("apply error = %v, want full boundary revalidation", err)
+	}
+	if got, err := os.ReadFile(agentTwoSentinel); err != nil || string(got) != "preserve\n" {
+		t.Fatalf("boundary revalidation disposed another slot before rejecting escape: data=%q error=%v", got, err)
 	}
 }
 
@@ -851,13 +953,13 @@ func TestSetupNativeSSHOriginRejectsMissingBootstrapCommand(t *testing.T) {
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
-	repo := filepath.Join(devRoot, "fixture-repo")
-	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "git@fixture.invalid:fixture-repo.git")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "git@fixture.invalid:ouroboros-ide.git")
 
 	err := SetupNative(NativeOptions{
 		DevkitRoot: devkitRoot,
-		Repo:       "fixture-repo",
+		Repo:       "ouroboros-ide",
 		Count:      1,
 		DryRun:     true,
 	})
@@ -866,21 +968,21 @@ func TestSetupNativeSSHOriginRejectsMissingBootstrapCommand(t *testing.T) {
 	}
 }
 
-func TestSetupNativeProductBootstrapRejectsHTTPSFallback(t *testing.T) {
+func TestSetupNativeProductCheckoutRejectsHTTPSFallback(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
-	repo := filepath.Join(devRoot, "fixture-repo")
-	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "https://github.com/Divine-Shadow/fixture-repo.git")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "https://github.com/Divine-Shadow/ouroboros-ide.git")
 
 	err := SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
-		Repo:             "fixture-repo",
-		Origin:           "https://github.com/Divine-Shadow/fixture-repo.git",
+		Repo:             "ouroboros-ide",
+		Origin:           "https://github.com/Divine-Shadow/ouroboros-ide.git",
 		Count:            1,
 		GitSSHCommand:    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openssh/bin/ssh -F /nix/store/package-owned/config",
 		RequireSSHOrigin: true,
@@ -891,20 +993,20 @@ func TestSetupNativeProductBootstrapRejectsHTTPSFallback(t *testing.T) {
 	}
 }
 
-func TestSetupNativeProductBootstrapRejectsAmbientCheckoutOriginAuthority(t *testing.T) {
+func TestSetupNativeProductCheckoutRejectsAmbientCheckoutOriginAuthority(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
-	repo := filepath.Join(devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", "ssh://git@fixture.invalid/ambient.git")
 
 	err := SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
-		Repo:             "fixture-repo",
+		Repo:             "ouroboros-ide",
 		Count:            1,
 		GitSSHCommand:    "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openssh/bin/ssh -F /nix/store/package-owned/config",
 		RequireSSHOrigin: true,
@@ -915,25 +1017,25 @@ func TestSetupNativeProductBootstrapRejectsAmbientCheckoutOriginAuthority(t *tes
 	}
 }
 
-func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *testing.T) {
+func TestSetupNativeProductCheckoutDoesNotReuseWorktreeAfterFetchFailure(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 	if err := SetupNative(NativeOptions{
 		DevkitRoot: devkitRoot,
-		Repo:       "fixture-repo",
+		Repo:       "ouroboros-ide",
 		Count:      1,
 	}); err != nil {
 		t.Fatalf("prepare existing worktree: %v", err)
 	}
-	repo := filepath.Join(devRoot, "fixture-repo")
-	worktree := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "fixture-repo")
+	repo := filepath.Join(devRoot, "ouroboros-ide")
+	worktree := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide")
 	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
-	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "fixture-repo")
+	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
 	if pathErr != nil {
 		t.Fatal(pathErr)
 	}
@@ -941,7 +1043,7 @@ func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *tes
 	missingOrigin := "ssh://git@fixture.invalid/missing.git"
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", missingOrigin)
 	mustRun(t, "git", "--git-dir", commonDir, "remote", "set-url", "origin", missingOrigin)
-	marker, markerErr := nativeOwnedCommonRepositoryMarker("fixture-repo", missingOrigin)
+	marker, markerErr := nativeOwnedCommonRepositoryMarker("ouroboros-ide", missingOrigin)
 	if markerErr != nil {
 		t.Fatal(markerErr)
 	}
@@ -951,7 +1053,7 @@ func TestSetupNativeProductBootstrapDoesNotReuseWorktreeAfterFetchFailure(t *tes
 
 	err := SetupNative(NativeOptions{
 		DevkitRoot:       devkitRoot,
-		Repo:             "fixture-repo",
+		Repo:             "ouroboros-ide",
 		Origin:           missingOrigin,
 		Count:            1,
 		GitSSHCommand:    "/bin/false",
@@ -969,7 +1071,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func TestSetupNative_ConstructsMissingRepoBesidePartialAgentHome(t *testing.T) {
+func TestSetupNative_ReconstructsMissingRepoBesidePartialAgentHome(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -980,27 +1082,27 @@ func TestSetupNative_ConstructsMissingRepoBesidePartialAgentHome(t *testing.T) {
 	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
 	agentParent := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2")
 	if err := os.MkdirAll(filepath.Join(agentParent, ".devhome-agent2", ".codex"), 0o700); err != nil {
 		t.Fatalf("prepare partial agent home: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(agentParent, "fixture-repo"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(agentParent, "ouroboros-ide"), 0o755); err != nil {
 		t.Fatalf("prepare plain repo directory: %v", err)
 	}
 
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        2,
 		BaseBranch:   "main",
 		BranchPrefix: "agent",
 	}); err != nil {
-		t.Fatalf("native legacy setup failed: %v", err)
+		t.Fatalf("native reconstruction failed: %v", err)
 	}
 
-	worktree := filepath.Join(agentParent, "fixture-repo")
+	worktree := filepath.Join(agentParent, "ouroboros-ide")
 	checkBranchAndUpstream(t, worktree, "agent2")
 	if got, want := readTrim(t, "git", "-C", worktree, "rev-parse", "HEAD"), readTrim(t, "git", "-C", worktree, "rev-parse", "origin/main"); got != want {
 		t.Fatalf("fresh worktree HEAD = %s, origin/main = %s", got, want)
@@ -1028,14 +1130,14 @@ func TestSetupNative_FromLinkedSourceWorktreeUsesOwnedPortableCommonRepository(t
 		t.Fatal(err)
 	}
 	devkitRoot := filepath.Join(sourceDevRoot, "devkit")
-	makeRepoWithBare(t, root, primaryDevRoot, "fixture-repo")
+	makeRepoWithBare(t, root, primaryDevRoot, "ouroboros-ide")
 
-	sourceRepo := filepath.Join(sourceDevRoot, "fixture-repo-nix-readiness")
-	mustRun(t, "git", "-C", filepath.Join(primaryDevRoot, "fixture-repo"), "worktree", "add", "--detach", sourceRepo, "origin/main")
+	sourceRepo := filepath.Join(sourceDevRoot, "ouroboros-ide-nix-readiness")
+	mustRun(t, "git", "-C", filepath.Join(primaryDevRoot, "ouroboros-ide"), "worktree", "add", "--detach", sourceRepo, "origin/main")
 
 	if err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo-nix-readiness",
+		Repo:         "ouroboros-ide-nix-readiness",
 		Count:        1,
 		BaseBranch:   "main",
 		BranchPrefix: "nixready-agent",
@@ -1043,13 +1145,13 @@ func TestSetupNative_FromLinkedSourceWorktreeUsesOwnedPortableCommonRepository(t
 		t.Fatalf("native setup from source worktree failed: %v", err)
 	}
 
-	agentWorktree := filepath.Join(sourceDevRoot, paths.AgentWorktreesDir, "agent1", "fixture-repo-nix-readiness")
+	agentWorktree := filepath.Join(sourceDevRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide-nix-readiness")
 	checkBranchAndUpstream(t, agentWorktree, "nixready-agent1")
 	checkGitdirForm(t, agentWorktree, false)
 	checkGitdirForm(t, sourceRepo, true)
 	commonDir, err := nativeOwnedCommonRepositoryPath(
 		filepath.Join(sourceDevRoot, paths.AgentWorktreesDir),
-		"fixture-repo-nix-readiness",
+		"ouroboros-ide-nix-readiness",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1068,18 +1170,18 @@ func TestSetupNative_RejectsStandaloneAgentCheckoutAsForeignAuthority(t *testing
 		t.Fatal(err)
 	}
 	devkitRoot := filepath.Join(devRoot, "devkit")
-	makeRepoWithBare(t, root, devRoot, "fixture-repo")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
-	standalone := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "fixture-repo")
+	standalone := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide")
 	if err := os.MkdirAll(filepath.Dir(standalone), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustRun(t, "git", "clone", filepath.Join(root, "remotes", "fixture-repo.git"), standalone)
+	mustRun(t, "git", "clone", filepath.Join(root, "remotes", "ouroboros-ide.git"), standalone)
 	mustRun(t, "git", "-C", standalone, "checkout", "main")
 
 	err := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
-		Repo:         "fixture-repo",
+		Repo:         "ouroboros-ide",
 		Count:        1,
 		BaseBranch:   "main",
 		BranchPrefix: "agent",
@@ -1089,7 +1191,7 @@ func TestSetupNative_RejectsStandaloneAgentCheckoutAsForeignAuthority(t *testing
 	}
 	commonDir, pathErr := nativeOwnedCommonRepositoryPath(
 		filepath.Join(devRoot, paths.AgentWorktreesDir),
-		"fixture-repo",
+		"ouroboros-ide",
 	)
 	if pathErr != nil {
 		t.Fatal(pathErr)

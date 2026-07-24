@@ -1,8 +1,6 @@
 # Repo Runtime Pairings
 
-Status: Active operator guidance for package/runtime metadata and ordinary
-non-Product overlays. Product lifecycle authority is the installed
-`fleet-runtime-authority/v1` manifest, not this matrix.
+Status: Active operator guidance.
 
 Devkit treats Codex as a tool inside repo-specific runtimes, not as the runtime
 identity of a project. Session names must not be used to decide which runtime
@@ -19,7 +17,7 @@ flake boundary.
 
 | Repo | Canonical overlay | Service | Runtime | Core build check |
 | --- | --- | --- | --- | --- |
-| `ouroboros-ide` | `dev-all` (package-composition metadata only) | `dev-agent` | `./overlays/dev-all#default` | `bash scripts/sbt2 "Compile / compile"` (diagnostic only) |
+| `ouroboros-ide` | `dev-all` | `dev-agent` | `./overlays/dev-all#default` | `bash scripts/sbt2 "Compile / compile"` |
 | `dumb-onion-hax` | `dumb-onion-hax` | `dev-agent` | `./overlays/dumb-onion-hax#default` | `sbt compile` |
 | `ouroboros-static-front-end` | `ouroboros-static-front-end` | `frontend` | `./overlays/ouroboros-static-front-end#default` | `npm run build` |
 | `ouroboros-terraform` | `ouroboros-terraform` | `dev-agent` | `./overlays/ouroboros-terraform#default` | `terraform fmt -check -recursive` |
@@ -33,8 +31,8 @@ Verify local runtimes with:
 devkit/kit/scripts/devkit runtime-matrix --all --check
 ```
 
-For a focused check while unrelated overlays are under active custody, filter by
-repo or overlay:
+For a focused check while unrelated overlays are running, filter by repo or
+overlay:
 
 ```bash
 devkit/kit/scripts/devkit runtime-matrix --repo ouroboros-terraform --check
@@ -46,21 +44,18 @@ overlay is not a second runtime pairing for `ouroboros-ide`.
 
 ## Refresh Rule
 
-Refresh ordinary non-Product native runtimes by updating the overlay
-`runtime.nix` or root flake inputs/packages and rebuilding the CLI. Validate
-both the overlay-local Nix shell and native lifecycle matrix:
+Refresh native runtimes by updating the overlay `runtime.nix` or root flake
+inputs/packages and rebuilding the CLI. Validate both the overlay-local Nix
+shell and the native lifecycle matrix:
 
 ```bash
 make -C devkit/cli/devctl build
-devkit/kit/scripts/devkit -p ouroboros-static-front-end ensure-ready --repo ouroboros-static-front-end --count 1 --flake ./overlays/ouroboros-static-front-end#default
-nix --extra-experimental-features 'nix-command flakes' develop ./overlays/ouroboros-static-front-end --output-lock-file /dev/null --command true
+devkit/kit/scripts/devkit -p dev-all ensure-ready --repo ouroboros-ide --count 1 --flake ./overlays/dev-all#default
+nix --extra-experimental-features 'nix-command flakes' develop ./overlays/dev-all --output-lock-file /dev/null --command true
 make -C devkit native-overlay-matrix
 ```
 
-`runtime.flake` is ordinary overlay pairing metadata. For Product it is only a
-package-composition input: the sole authoritative Nix derivation emits the
-installed manifest, Product consumers use its exact adapter/launcher, and the
-Product-owned twice-fresh app alone decides promotion.
+`runtime.flake` is the authoritative runtime pairing metadata.
 
 ## Build Evidence
 

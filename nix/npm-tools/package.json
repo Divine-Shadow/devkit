@@ -6,8 +6,5 @@
     "netlify-cli": "26.0.1",
     "spago": "0.93.45",
     "vite": "7.3.0"
-  },
-  "devDependencies": {
-    "node-gyp": "12.1.0"
   }
 }

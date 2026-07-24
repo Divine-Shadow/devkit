@@ -52,7 +52,7 @@ func TestTMUXBellIntegration(t *testing.T) {
 		_, _ = kill.CombinedOutput()
 	})
 
-	install := exec.Command(bin, "-p", "devkit", "tmux-bell-install", "--session", session, "--backend", "file", "--file", eventFile, "--debounce-ms", "0")
+	install := exec.Command(bin, "-p", "dev-all", "tmux-bell-install", "--session", session, "--backend", "file", "--file", eventFile, "--debounce-ms", "0")
 	install.Env = env
 	if out, err := install.CombinedOutput(); err != nil {
 		wrapperLog, _ := os.ReadFile(tmuxLog)

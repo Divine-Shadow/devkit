@@ -1,9 +1,6 @@
 package launch
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,53 +11,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
-	"devkit/cli/devctl/internal/governanceentrypoint"
-	"devkit/cli/devctl/internal/productadapter"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
 
 type Command struct {
-	Path       string
-	Args       []string
-	Dir        string
-	ExtraFiles []*os.File
-}
-
-// packageGitExecutable is injected by the immutable Devkit package build.
-// Launch preparation must never rediscover Git from the caller's PATH.
-var packageGitExecutable string
-
-func resolvedPackageGitExecutable() (string, error) {
-	path := filepath.Clean(strings.TrimSpace(packageGitExecutable))
-	if path == "" || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("native launch preparation requires the package-owned absolute Git executable")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("inspect package-owned Git executable %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("package-owned Git executable is not executable: %s", path)
-	}
-	return path, nil
-}
-
-func packageGitCommand(args ...string) (*exec.Cmd, error) {
-	gitExecutable, err := resolvedPackageGitExecutable()
-	if err != nil {
-		return nil, err
-	}
-	cmd := exec.Command(gitExecutable, args...)
-	cmd.Env = []string{
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-	}
-	return cmd, nil
+	Path string
+	Args []string
+	Dir  string
 }
 
 func Prepare(p nativeplan.Plan) error {
@@ -105,16 +65,6 @@ func Prepare(p nativeplan.Plan) error {
 	if err := ensureCodexShellHook(p); err != nil {
 		return err
 	}
-	runtimeIdentity, err := ensureOuroGovernanceEnv(p)
-	if err != nil {
-		return err
-	}
-	if err := ensureCodexGovernanceConfig(p, runtimeIdentity.RuntimeBundlePath); err != nil {
-		return err
-	}
-	if err := installProjectCodexRules(p); err != nil {
-		return err
-	}
 	if err := ensureWorkspaceSkillLinks(p); err != nil {
 		return err
 	}
@@ -124,27 +74,14 @@ func Prepare(p nativeplan.Plan) error {
 	if err := capCodexTUILog(p.Agent.HostHome); err != nil {
 		return err
 	}
-	if p.ProductComposed {
-		if err := seedExactCredential(
-			p.CodexAuthSource,
-			filepath.Join(p.Agent.HostHome, ".codex", "auth.json"),
-			0o600,
-		); err != nil {
-			return err
-		}
-		if err := seedProductSSHIdentity(p); err != nil {
-			return err
-		}
-	} else {
-		if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
-			return err
-		}
-		if err := SeedSSH(p.Agent.HostHome, false); err != nil {
-			return err
-		}
-		if err := SeedAWS(p.Agent.HostHome, false); err != nil {
-			return err
-		}
+	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
+		return err
+	}
+	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
+		return err
+	}
+	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
+		return err
 	}
 	if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
 		return err
@@ -164,10 +101,7 @@ func Prepare(p nativeplan.Plan) error {
 }
 
 func requireGitWorktree(worktree string) error {
-	cmd, err := packageGitCommand("-C", worktree, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return err
-	}
+	cmd := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("host worktree %s is not a Git worktree: %w: %s", worktree, err, strings.TrimSpace(string(out)))
@@ -186,56 +120,11 @@ func requireGitWorktree(worktree string) error {
 	return nil
 }
 
-type OuroGovernanceEnvPaths struct {
-	EnvPath        string
-	RepoConfigPath string
-}
-
-func PrepareOuroGovernanceEnv(p nativeplan.Plan) (OuroGovernanceEnvPaths, error) {
-	if !isOuroGovernedPlan(p) {
-		return OuroGovernanceEnvPaths{}, fmt.Errorf("native governance-env only supports ouroboros-ide and ouroboros-terraform plans")
-	}
-	hostDevRoot := hostDevRootForPlan(p)
-	if hostDevRoot == "" {
-		return OuroGovernanceEnvPaths{}, fmt.Errorf("native governance-env could not resolve host dev root")
-	}
-	paths := OuroGovernanceEnvPaths{
-		EnvPath:        filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh"),
-		RepoConfigPath: filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json"),
-	}
-	if _, err := ensureOuroGovernanceEnv(p); err != nil {
-		return paths, err
-	}
-	return paths, nil
-}
-
 const (
 	gitSSHManagedBegin = "# BEGIN DEVKIT NATIVE GIT SSH"
 	gitSSHManagedEnd   = "# END DEVKIT NATIVE GIT SSH"
 )
 
-const (
-	codexGovernanceManagedBegin = "# BEGIN DEVKIT NATIVE GOVERNANCE MCP"
-	codexGovernanceManagedEnd   = "# END DEVKIT NATIVE GOVERNANCE MCP"
-)
-
-const (
-	codexNixManagedConfigMarker    = "# source = nixos-wsl codex config"
-	codexOpenAIProfileTable        = "profiles.openai"
-	codexDevkitConfigSourceRelPath = ".devkit/nix-codex-config.toml"
-)
-
-const (
-	sandboxDevRoot                             = "/workspaces/dev"
-	ouroGovernanceExternalStateRoot            = sandboxDevRoot + "/.devkit/governance-control-plane"
-	ouroGovernanceLegacyLogRoot                = sandboxDevRoot + "/ouroboros-ide/logs/subagent-governance"
-	ouroGovernanceExecutionGraphDecisionLog    = ouroGovernanceExternalStateRoot + "/execution-graph-decisions.jsonl"
-	ouroGovernanceExecutionGraphClosureLog     = ouroGovernanceExternalStateRoot + "/execution-graph-closure-decisions.jsonl"
-	ouroGovernanceHistoricalAuthorityLog       = ouroGovernanceExternalStateRoot + "/historical-terminal-authority.jsonl"
-	ouroGovernanceLegacyExecutionGraphDecision = ouroGovernanceLegacyLogRoot + "/execution-graph-decisions.jsonl"
-)
-
-var codexSystemConfigPath = "/etc/codex/config.toml"
 var resolvePackageSSHAuthority = sshauthority.Package
 
 func ensureGitSSHConfig(p nativeplan.Plan, sshAuthority sshauthority.Authority) error {
@@ -307,14 +196,8 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if p.ProductComposed {
-		if err := seedProductSSHIdentity(p); err != nil {
-			return "", err
-		}
-	} else {
-		if err := SeedSSH(hostHome, false); err != nil {
-			return "", err
-		}
+	if err := SeedSSH(hostHome, false); err != nil {
+		return "", err
 	}
 	if err := sshAuthority.InstallKnownHosts(filepath.Join(hostHome, ".ssh", "known_hosts")); err != nil {
 		return "", err
@@ -342,22 +225,29 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 }
 
 func gitBootstrapProxyCommand(p nativeplan.Plan) (string, error) {
-	if p.Agent.ID.Project == productadapter.ProductProject &&
-		p.Agent.ID.Repo == productadapter.ProductRepo {
-		if p.ProductCount < 1 || p.Agent.ID.Index < 1 || p.Agent.ID.Index > p.ProductCount {
-			return "", fmt.Errorf("Product proxy helper requires exact count and index")
-		}
-		helper := filepath.Clean(strings.TrimSpace(p.ProductProxyHelper))
-		if helper == "." || !filepath.IsAbs(helper) {
-			return "", fmt.Errorf("Product proxy helper requires the manifest-selected absolute executable")
-		}
-		return strings.Join([]string{
-			shellQuote(helper),
-			"--count", strconv.Itoa(p.ProductCount),
-			"--index", strconv.Itoa(p.Agent.ID.Index),
-		}, " "), nil
+	runtimeRoot := strings.TrimSpace(p.RuntimeAuthorityRoot)
+	if runtimeRoot == "" {
+		return "", fmt.Errorf("native Git bootstrap requires a source-derived runtime authority root")
 	}
-	return "", fmt.Errorf("raw Devkit exposes no public managed Git proxy helper")
+	project := strings.TrimSpace(p.Agent.ID.Project)
+	if project == "" {
+		return "", fmt.Errorf("native Git bootstrap requires a project identity")
+	}
+	socketPath := strings.TrimSpace(p.Proxy.UnixSocket)
+	if socketPath == "" {
+		return "", fmt.Errorf("native Git bootstrap requires a managed egress proxy socket")
+	}
+	devctlPath := filepath.Join(filepath.Clean(runtimeRoot), "kit", "bin", "devctl")
+	if !isExecutable(devctlPath) {
+		return "", fmt.Errorf("native Git bootstrap requires package-owned proxy helper %s", devctlPath)
+	}
+	return strings.Join([]string{
+		shellQuote(devctlPath),
+		"-p", shellQuote(project),
+		"native", "proxy-connect",
+		"--socket", shellQuote(socketPath),
+		"--target", "%h:%p",
+	}, " "), nil
 }
 
 func existingSSHIdentities(sshDir string) []string {
@@ -540,11 +430,7 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 	} else if err != nil {
 		return fmt.Errorf("inspect Git metadata marker %s: %w", gitMarker, err)
 	}
-	cmd, err := packageGitCommand("-C", worktree, "rev-parse", "--git-dir")
-	if err != nil {
-		return err
-	}
-	out, err := cmd.CombinedOutput()
+	out, err := exec.Command("git", "-C", worktree, "rev-parse", "--git-dir").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("resolve Git metadata for %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
@@ -569,22 +455,14 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 }
 
 func runGitConfigWithLockRetry(args ...string) ([]byte, error) {
-	command, resolveErr := packageGitCommand(args...)
-	if resolveErr != nil {
-		return nil, resolveErr
-	}
 	var out []byte
 	var err error
 	for attempt := 0; attempt < 6; attempt++ {
-		out, err = command.CombinedOutput()
+		out, err = exec.Command("git", args...).CombinedOutput()
 		if err == nil || !isGitConfigLockError(out) {
 			return out, err
 		}
 		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
-		command, resolveErr = packageGitCommand(args...)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
 	}
 	return out, err
 }
@@ -682,118 +560,8 @@ func capCodexTUILog(hostHome string) error {
 	return nil
 }
 
-func installProjectCodexRules(p nativeplan.Plan) error {
-	if !isOuroGovernedPlan(p) {
-		return nil
-	}
-	if strings.TrimSpace(p.Agent.HostHome) == "" || strings.TrimSpace(p.DevkitHostRoot) == "" {
-		return nil
-	}
-	source := filepath.Join(p.DevkitHostRoot, "overlays", "dev-all", "codex-governed-search-policy.rules")
-	data, err := os.ReadFile(source)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read governed search policy %s: %w", source, err)
-	}
-	target := filepath.Join(p.Agent.HostHome, ".codex", "rules", "governed-search-policy.rules")
-	if existing, err := os.ReadFile(target); err == nil && string(existing) == string(data) {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
-	}
-	if err := os.WriteFile(target, data, 0o600); err != nil {
-		return fmt.Errorf("write governed search policy %s: %w", target, err)
-	}
-	return nil
-}
-
 func ensureCodexShellHook(p nativeplan.Plan) error {
-	if isOuroGovernedPlan(p) {
-		return writeOuroCodexShellHook(p.Agent.HostHome)
-	}
 	return repairRetiredCodexShellHook(p.Agent.HostHome)
-}
-
-func ensureOuroGovernanceEnv(p nativeplan.Plan) (ouroGovernanceRuntimeIdentity, error) {
-	if !isOuroGovernedPlan(p) {
-		return ouroGovernanceRuntimeIdentity{}, nil
-	}
-	hostDevRoot := hostDevRootForPlan(p)
-	if hostDevRoot == "" {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("prepare governance runtime bundle: unable to resolve host dev root")
-	}
-	if strings.TrimSpace(p.RuntimeAuthorityRoot) == "" {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("prepare governance runtime bundle: executable-derived runtime authority root is required")
-	}
-	if err := migrateOuroGovernanceExternalState(hostDevRoot); err != nil {
-		return ouroGovernanceRuntimeIdentity{}, err
-	}
-	envPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-env.sh")
-	repoConfigPath := filepath.Join(hostDevRoot, ".devkit", "ouro8-governance-repo-env.json")
-	sandboxRepoConfigPath := "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"
-	repoConfig, err := buildOuroGovernanceRepoConfig(hostDevRoot)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, err
-	}
-	repoConfigSha256 := fmt.Sprintf("%x", sha256.Sum256(repoConfig))
-	runtimeIdentity, err := resolveOuroGovernanceRuntimeIdentityForPlan(p.RuntimeAuthorityRoot)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, err
-	}
-	entrypointSHA256 := governanceentrypoint.SHA256ForRuntimeBundle(runtimeIdentity.RuntimeBundlePath)
-	content := buildOuroGovernanceEnv(hostDevRoot, sandboxRepoConfigPath, repoConfigSha256, entrypointSHA256)
-	if data, err := os.ReadFile(envPath); err == nil && string(data) == content {
-		// Keep checking the paired repo config below; it may have been generated
-		// by an older devkit and carry a stale workspace catalog.
-	} else if err != nil && !os.IsNotExist(err) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("read governance env %s: %w", envPath, err)
-	} else {
-		if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("mkdir %s: %w", filepath.Dir(envPath), err)
-		}
-		if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("write governance env %s: %w", envPath, err)
-		}
-	}
-	if err := os.Chmod(envPath, 0o600); err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("chmod governance env %s: %w", envPath, err)
-	}
-	if data, err := os.ReadFile(repoConfigPath); err == nil && string(data) == string(repoConfig) {
-		if err := os.Chmod(repoConfigPath, 0o600); err != nil {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("chmod governance repo config %s: %w", repoConfigPath, err)
-		}
-		return runtimeIdentity, nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("read governance repo config %s: %w", repoConfigPath, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(repoConfigPath), 0o700); err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("mkdir %s: %w", filepath.Dir(repoConfigPath), err)
-	}
-	if err := os.WriteFile(repoConfigPath, repoConfig, 0o600); err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("write governance repo config %s: %w", repoConfigPath, err)
-	}
-	if err := os.Chmod(repoConfigPath, 0o600); err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("chmod governance repo config %s: %w", repoConfigPath, err)
-	}
-	return runtimeIdentity, nil
-}
-
-func isOuroGovernedPlan(p nativeplan.Plan) bool {
-	project := strings.TrimSpace(p.Agent.ID.Project)
-	repo := strings.TrimSpace(p.Agent.ID.Repo)
-	switch repo {
-	case "ouroboros-ide", "ouroboros-terraform":
-		return true
-	}
-	switch project {
-	case "dev-workspace", "ouro-integration", "ouroboros-terraform":
-		return true
-	default:
-		return false
-	}
 }
 
 func isDevWorkspacePlan(p nativeplan.Plan) bool {
@@ -885,1090 +653,6 @@ func hostDevRootForPlan(p nativeplan.Plan) string {
 	return filepath.Dir(devkitRoot)
 }
 
-func hostPathForSandboxDevPath(hostDevRoot string, sandboxPath string) (string, error) {
-	hostDevRoot = filepath.Clean(strings.TrimSpace(hostDevRoot))
-	sandboxPath = filepath.Clean(strings.TrimSpace(sandboxPath))
-	if hostDevRoot == "" {
-		return "", fmt.Errorf("host dev root is empty")
-	}
-	if sandboxPath == sandboxDevRoot {
-		return hostDevRoot, nil
-	}
-	prefix := sandboxDevRoot + string(os.PathSeparator)
-	if !strings.HasPrefix(sandboxPath, prefix) {
-		return "", fmt.Errorf("sandbox path %s is outside %s", sandboxPath, sandboxDevRoot)
-	}
-	rel := strings.TrimPrefix(sandboxPath, prefix)
-	return filepath.Join(hostDevRoot, rel), nil
-}
-
-func migrateOuroGovernanceExternalState(hostDevRoot string) error {
-	newRoot, err := hostPathForSandboxDevPath(hostDevRoot, ouroGovernanceExternalStateRoot)
-	if err != nil {
-		return fmt.Errorf("resolve governance external state root: %w", err)
-	}
-	legacyRoot, err := hostPathForSandboxDevPath(hostDevRoot, ouroGovernanceLegacyLogRoot)
-	if err != nil {
-		return fmt.Errorf("resolve governance legacy state root: %w", err)
-	}
-	if sameFilesystemPath(newRoot, legacyRoot) {
-		return fmt.Errorf("governance external state root %s must not equal legacy Product log root", newRoot)
-	}
-	if err := os.MkdirAll(newRoot, 0o700); err != nil {
-		return fmt.Errorf("mkdir governance external state root %s: %w", newRoot, err)
-	}
-	legacyControlPlane := filepath.Join(legacyRoot, "control-plane")
-	if err := migrateGovernanceStateDirContents(legacyControlPlane, newRoot); err != nil {
-		return err
-	}
-	for _, rel := range []string{
-		"execution-graph-decisions.jsonl",
-		"execution-graph-closure-decisions.jsonl",
-		"historical-terminal-authority.jsonl",
-		"override-audit.log",
-		"submit-to-ci-hot-swap-probe.log",
-		"history",
-		"probes",
-	} {
-		if err := migrateGovernanceStateEntry(filepath.Join(legacyRoot, rel), filepath.Join(newRoot, rel)); err != nil {
-			return err
-		}
-	}
-	if st, err := os.Stat(newRoot); err != nil {
-		return fmt.Errorf("stat governance external state root %s: %w", newRoot, err)
-	} else if !st.IsDir() {
-		return fmt.Errorf("governance external state root %s is not a directory", newRoot)
-	}
-	return nil
-}
-
-func migrateGovernanceStateDirContents(srcRoot string, dstRoot string) error {
-	entries, err := os.ReadDir(srcRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read legacy governance state dir %s: %w", srcRoot, err)
-	}
-	for _, entry := range entries {
-		src := filepath.Join(srcRoot, entry.Name())
-		dst := filepath.Join(dstRoot, entry.Name())
-		if err := migrateGovernanceStateEntry(src, dst); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func migrateGovernanceStateEntry(src string, dst string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("stat legacy governance state %s: %w", src, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to migrate symlinked governance state %s", src)
-	}
-	if _, err := os.Lstat(dst); err == nil {
-		return fmt.Errorf("governance state migration conflict: legacy %s and external %s both exist", src, dst)
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("stat external governance state %s: %w", dst, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return fmt.Errorf("mkdir external governance state parent %s: %w", filepath.Dir(dst), err)
-	}
-	if err := os.Rename(src, dst); err != nil {
-		return fmt.Errorf("move governance state %s -> %s: %w", src, dst, err)
-	}
-	return nil
-}
-
-type ouroGovernanceRuntimeIdentity struct {
-	SchemaVersion                   string
-	RuntimeBundlePath               string
-	GovernanceSourceRev             string
-	SubmitToCiSourceRev             string
-	ArtifactColumnRuntimeSourceRev  string
-	SbtControlPlaneRuntimeSourceRev string
-	LatestJarPath                   string
-	ControlPlaneJar                 string
-	ExpectedJarPath                 string
-	ExpectedJarSHA256               string
-	SubagentExpectedJarSHA256       string
-	SubmitToCiJarPath               string
-	SubmitToCiHashPath              string
-	SubmitToCiExpectedJarPath       string
-	SubmitToCiExpectedSHA256        string
-	SubmitSbt2ClientMode            string
-	SubmitSbt2JavaXmx               string
-	LintInvarianceSbt2Mode          string
-	ArtifactColumnRepositoryPath    string
-	ArtifactColumnMetadataEnv       string
-	ArtifactColumnVersion           string
-	ArtifactColumnSourceRev         string
-	ArtifactColumnSourceShortRev    string
-	ArtifactColumnIvyPath           string
-	ArtifactColumnJarSHA256         string
-	ArtifactColumnPinnedArtifact    string
-	ArtifactColumnFlakeArtifact     string
-	SbtControlPlaneRuntimeJarPath   string
-	SbtControlPlaneRuntimeJarSHA256 string
-	SbtControlPlanePinnedArtifact   string
-	SbtControlPlaneFlakeArtifact    string
-	JavaHome                        string
-	ControllerFleetPath             string
-	ControllerSourceInventoryPath   string
-	ControllerSourceInventorySHA256 string
-	ControllerGUIInventoryPath      string
-	ControllerGUIInventorySHA256    string
-}
-
-const ouroGovernanceRuntimeIdentityMarker = "__FLEET_RUNTIME_AUTHORITY__"
-
-func (identity ouroGovernanceRuntimeIdentity) Complete() bool {
-	return strings.TrimSpace(identity.SchemaVersion) != "" &&
-		strings.TrimSpace(identity.RuntimeBundlePath) != "" &&
-		strings.TrimSpace(identity.GovernanceSourceRev) != "" &&
-		strings.TrimSpace(identity.SubmitToCiSourceRev) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnRuntimeSourceRev) != "" &&
-		strings.TrimSpace(identity.SbtControlPlaneRuntimeSourceRev) != "" &&
-		strings.TrimSpace(identity.LatestJarPath) != "" &&
-		strings.TrimSpace(identity.ControlPlaneJar) != "" &&
-		strings.TrimSpace(identity.ExpectedJarPath) != "" &&
-		strings.TrimSpace(identity.ExpectedJarSHA256) != "" &&
-		strings.TrimSpace(identity.SubagentExpectedJarSHA256) != "" &&
-		strings.TrimSpace(identity.SubmitToCiJarPath) != "" &&
-		strings.TrimSpace(identity.SubmitToCiHashPath) != "" &&
-		strings.TrimSpace(identity.SubmitToCiExpectedJarPath) != "" &&
-		strings.TrimSpace(identity.SubmitToCiExpectedSHA256) != "" &&
-		strings.TrimSpace(identity.SubmitSbt2ClientMode) != "" &&
-		strings.TrimSpace(identity.SubmitSbt2JavaXmx) != "" &&
-		strings.TrimSpace(identity.LintInvarianceSbt2Mode) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnRepositoryPath) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnMetadataEnv) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnVersion) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnSourceRev) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnSourceShortRev) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnIvyPath) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnJarSHA256) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnPinnedArtifact) != "" &&
-		strings.TrimSpace(identity.ArtifactColumnFlakeArtifact) != "" &&
-		strings.TrimSpace(identity.SbtControlPlaneRuntimeJarPath) != "" &&
-		strings.TrimSpace(identity.SbtControlPlaneRuntimeJarSHA256) != "" &&
-		strings.TrimSpace(identity.SbtControlPlanePinnedArtifact) != "" &&
-		strings.TrimSpace(identity.SbtControlPlaneFlakeArtifact) != "" &&
-		strings.TrimSpace(identity.JavaHome) != ""
-}
-
-func validOuroGovernanceSbtClientMode(value string) bool {
-	switch strings.TrimSpace(value) {
-	case "force", "off":
-		return true
-	default:
-		return false
-	}
-}
-
-func validOuroGovernanceJavaXmx(value string) bool {
-	value = strings.TrimSpace(value)
-	if len(value) < 2 {
-		return false
-	}
-	unit := value[len(value)-1]
-	if unit != 'm' && unit != 'M' && unit != 'g' && unit != 'G' {
-		return false
-	}
-	for _, ch := range value[:len(value)-1] {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-const ouroGovernanceRuntimeIdentitySchema = "fleet-runtime-authority/v1"
-
-var ouroGovernanceSystemRuntimeLauncherPath = ""
-
-func selectOuroGovernanceSystemRuntimeLauncher() (string, bool, error) {
-	if strings.TrimSpace(os.Getenv("DEVKIT_GOVERNANCE_AUTHORITATIVE_ENV")) != "1" {
-		return "", false, nil
-	}
-	launcherPath := filepath.Clean(strings.TrimSpace(os.Getenv("FLEET_RUNTIME_AUTHORITY_LAUNCHER")))
-	if launcherPath == "." || launcherPath == "" {
-		return "", false, fmt.Errorf("authoritative governance runtime launcher projection is missing")
-	}
-	if !strings.HasPrefix(launcherPath, "/nix/store/") {
-		return "", false, fmt.Errorf("authoritative governance runtime launcher is not immutable: %s", launcherPath)
-	}
-	manifestPath := filepath.Clean(strings.TrimSpace(os.Getenv("FLEET_RUNTIME_AUTHORITY_MANIFEST")))
-	declaredSHA := strings.TrimSpace(os.Getenv("FLEET_RUNTIME_AUTHORITY_SHA256"))
-	if manifestPath == "." || manifestPath == "" || !strings.HasPrefix(manifestPath, "/nix/store/") || declaredSHA == "" {
-		return "", false, fmt.Errorf("authoritative governance runtime manifest projection is incomplete")
-	}
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", false, fmt.Errorf("read authoritative governance runtime manifest: %w", err)
-	}
-	actualSHA := fmt.Sprintf("%x", sha256.Sum256(manifestData))
-	if declaredSHA != actualSHA {
-		return "", false, fmt.Errorf("authoritative governance runtime manifest digest mismatch")
-	}
-	if !isExecutable(launcherPath) {
-		return "", false, fmt.Errorf("authoritative system governance runtime launcher is missing or not executable: %s", launcherPath)
-	}
-	return launcherPath, true, nil
-}
-
-func isExactRuntimeSourceRevision(value string) bool {
-	if len(value) != 40 {
-		return false
-	}
-	for _, character := range value {
-		if (character < '0' || character > '9') &&
-			(character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func resolveOuroGovernanceRuntimeIdentity(_ string) (ouroGovernanceRuntimeIdentity, error) {
-	launcherPath, selected, err := selectOuroGovernanceSystemRuntimeLauncher()
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, err
-	}
-	if !selected {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf(
-			"resolve governance runtime bundle: installed authoritative system launcher is required",
-		)
-	}
-	runtimeAuthority := launcherPath
-	if !isExecutable(launcherPath) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: missing executable launcher %s", runtimeAuthority, launcherPath)
-	}
-	launcher := exec.Command(launcherPath, "identity-nul")
-	identityOutput, err := launcher.CombinedOutput()
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime bundle from %s: launcher identity failed: %w: %s", runtimeAuthority, err, strings.TrimSpace(string(identityOutput)))
-	}
-	identity, err := parseOuroGovernanceRuntimeIdentityOutput(identityOutput, runtimeAuthority)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, err
-	}
-	runtimeFlake := runtimeAuthority
-	if !identity.Complete() {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: incomplete pinned governance/submit-to-ci/SBT control-plane runtime jar, artifact-column plugin repository, Java, or submit runtime authority identity", runtimeFlake)
-	}
-	if identity.SchemaVersion != ouroGovernanceRuntimeIdentitySchema {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: identity schema mismatch: got %q", runtimeFlake, identity.SchemaVersion)
-	}
-	if !strings.HasPrefix(identity.RuntimeBundlePath, "/nix/store/") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: runtime bundle is not in /nix/store: %s", runtimeFlake, identity.RuntimeBundlePath)
-	}
-	authoritativeProductRevision := identity.GovernanceSourceRev
-	if !isExactRuntimeSourceRevision(authoritativeProductRevision) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Product source revision is not exact", runtimeFlake)
-	}
-	for label, revision := range map[string]string{
-		"submit-to-ci":      identity.SubmitToCiSourceRev,
-		"Artifact Column":   identity.ArtifactColumnRuntimeSourceRev,
-		"SBT control-plane": identity.SbtControlPlaneRuntimeSourceRev,
-		"plugin metadata":   identity.ArtifactColumnSourceRev,
-	} {
-		if revision != authoritativeProductRevision {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf(
-				"resolve governance runtime env from %s: %s source revision does not match authoritative Product revision",
-				runtimeFlake,
-				label,
-			)
-		}
-	}
-	if identity.ArtifactColumnSourceShortRev != authoritativeProductRevision[:7] {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column short source revision mismatch", runtimeFlake)
-	}
-	expectedArtifactColumnIvyPath := "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/" + identity.ArtifactColumnVersion
-	if identity.ArtifactColumnIvyPath != expectedArtifactColumnIvyPath {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: Artifact Column Ivy path mismatch", runtimeFlake)
-	}
-	if !validOuroGovernanceSbtClientMode(identity.SubmitSbt2ClientMode) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT2_CLIENT_MODE must be force or off, got %q", runtimeFlake, identity.SubmitSbt2ClientMode)
-	}
-	if !validOuroGovernanceJavaXmx(identity.SubmitSbt2JavaXmx) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT2_JAVA_XMX must match scripts/sbt2 heap syntax, got %q", runtimeFlake, identity.SubmitSbt2JavaXmx)
-	}
-	if !validOuroGovernanceSbtClientMode(identity.LintInvarianceSbt2Mode) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: OURO_LINT_INVARIANCE_SCRIPTED_SBT2_CLIENT_MODE must be force or off, got %q", runtimeFlake, identity.LintInvarianceSbt2Mode)
-	}
-	for label, path := range map[string]string{
-		"runtime bundle":                    identity.RuntimeBundlePath,
-		"latest governance jar":             identity.LatestJarPath,
-		"control-plane governance jar":      identity.ControlPlaneJar,
-		"expected governance jar":           identity.ExpectedJarPath,
-		"submit-to-ci jar":                  identity.SubmitToCiJarPath,
-		"submit-to-ci jar hash":             identity.SubmitToCiHashPath,
-		"artifact-column plugin repository": identity.ArtifactColumnRepositoryPath,
-		"artifact-column plugin metadata":   identity.ArtifactColumnMetadataEnv,
-		"SBT control-plane runtime jar":     identity.SbtControlPlaneRuntimeJarPath,
-		"JAVA_HOME":                         identity.JavaHome,
-	} {
-		if !pathExists(path) {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: missing %s %s", runtimeFlake, label, path)
-		}
-	}
-	if identity.LatestJarPath != identity.ControlPlaneJar || identity.LatestJarPath != identity.ExpectedJarPath {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned jar path mismatch", runtimeFlake)
-	}
-	if identity.ExpectedJarSHA256 != identity.SubagentExpectedJarSHA256 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected jar sha mismatch", runtimeFlake)
-	}
-	if !strings.HasPrefix(identity.LatestJarPath, "/nix/store/") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned jar is not in /nix/store: %s", runtimeFlake, identity.LatestJarPath)
-	}
-	if identity.SubmitToCiJarPath != identity.SubmitToCiExpectedJarPath {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned submit-to-ci jar path mismatch", runtimeFlake)
-	}
-	if identity.SubmitToCiHashPath != identity.SubmitToCiJarPath+".sha256" {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci hash path mismatch", runtimeFlake)
-	}
-	if !strings.HasPrefix(identity.SubmitToCiJarPath, "/nix/store/") || !strings.HasSuffix(identity.SubmitToCiJarPath, "/share/submit-to-ci/submit-to-ci.jar") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned submit-to-ci jar is not a Nix-store submit jar: %s", runtimeFlake, identity.SubmitToCiJarPath)
-	}
-	submitJarData, err := os.ReadFile(identity.SubmitToCiJarPath)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read submit-to-ci jar %s: %w", runtimeFlake, identity.SubmitToCiJarPath, err)
-	}
-	submitJarSHA := fmt.Sprintf("%x", sha256.Sum256(submitJarData))
-	if !strings.EqualFold(submitJarSHA, identity.SubmitToCiExpectedSHA256) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci jar sha mismatch", runtimeFlake)
-	}
-	submitHashData, err := os.ReadFile(identity.SubmitToCiHashPath)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read submit-to-ci hash %s: %w", runtimeFlake, identity.SubmitToCiHashPath, err)
-	}
-	if strings.TrimSpace(string(submitHashData)) != identity.SubmitToCiExpectedSHA256 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: submit-to-ci hash file mismatch", runtimeFlake)
-	}
-	if !strings.HasPrefix(identity.ArtifactColumnRepositoryPath, "/nix/store/") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin repository is not in /nix/store: %s", runtimeFlake, identity.ArtifactColumnRepositoryPath)
-	}
-	artifactMetadataPath := filepath.Join(identity.ArtifactColumnRepositoryPath, "share", "artifact-column-plugin", "metadata.env")
-	if identity.ArtifactColumnMetadataEnv != artifactMetadataPath {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin metadata path drift: expected %s got %s", runtimeFlake, artifactMetadataPath, identity.ArtifactColumnMetadataEnv)
-	}
-	if strings.Contains(strings.ToUpper(identity.ArtifactColumnVersion), "SNAPSHOT") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin version must be a pinned non-SNAPSHOT version, got %q", runtimeFlake, identity.ArtifactColumnVersion)
-	}
-	if !strings.HasPrefix(identity.ArtifactColumnIvyPath, "ivy2/local/com.crib.bills.ouroboros/artifact-column-plugin_sbt2_3/") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin Ivy path is not canonical: %s", runtimeFlake, identity.ArtifactColumnIvyPath)
-	}
-	if identity.ArtifactColumnPinnedArtifact != "1" || identity.ArtifactColumnFlakeArtifact != "0" {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin must be pinned artifact=1 flake artifact=0", runtimeFlake)
-	}
-	artifactMetadataData, err := os.ReadFile(identity.ArtifactColumnMetadataEnv)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read artifact-column plugin metadata %s: %w", runtimeFlake, identity.ArtifactColumnMetadataEnv, err)
-	}
-	for key, want := range map[string]string{
-		"ARTIFACT_COLUMN_PLUGIN_VERSION":          identity.ArtifactColumnVersion,
-		"ARTIFACT_COLUMN_PLUGIN_SOURCE_REV":       identity.ArtifactColumnSourceRev,
-		"ARTIFACT_COLUMN_PLUGIN_SOURCE_SHORT_REV": identity.ArtifactColumnSourceShortRev,
-		"ARTIFACT_COLUMN_PLUGIN_REPOSITORY_PATH":  identity.ArtifactColumnRepositoryPath,
-		"ARTIFACT_COLUMN_PLUGIN_IVY_PATH":         identity.ArtifactColumnIvyPath,
-		"ARTIFACT_COLUMN_PLUGIN_JAR_SHA256":       identity.ArtifactColumnJarSHA256,
-	} {
-		if got := metadataEnvValue(string(artifactMetadataData), key); got != want {
-			return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin metadata %s mismatch: expected %q got %q", runtimeFlake, key, want, got)
-		}
-	}
-	artifactHashPath := filepath.Join(identity.ArtifactColumnRepositoryPath, "share", "artifact-column-plugin", "artifact-column-plugin.jar.sha256")
-	artifactHashData, err := os.ReadFile(artifactHashPath)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read artifact-column plugin hash %s: %w", runtimeFlake, artifactHashPath, err)
-	}
-	if strings.TrimSpace(string(artifactHashData)) != identity.ArtifactColumnJarSHA256 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin hash file mismatch", runtimeFlake)
-	}
-	artifactJarPath := filepath.Join(
-		identity.ArtifactColumnRepositoryPath,
-		identity.ArtifactColumnIvyPath,
-		"jars",
-		"artifact-column-plugin_sbt2_3.jar",
-	)
-	artifactJarData, err := os.ReadFile(artifactJarPath)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read artifact-column plugin jar %s: %w", runtimeFlake, artifactJarPath, err)
-	}
-	artifactJarSHA := fmt.Sprintf("%x", sha256.Sum256(artifactJarData))
-	if !strings.EqualFold(artifactJarSHA, identity.ArtifactColumnJarSHA256) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: artifact-column plugin jar sha mismatch", runtimeFlake)
-	}
-	if !strings.HasPrefix(identity.SbtControlPlaneRuntimeJarPath, "/nix/store/") ||
-		!strings.HasSuffix(identity.SbtControlPlaneRuntimeJarPath, "/share/sbt-control-plane-runtime/sbt-control-plane-runtime.jar") {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: pinned SBT control-plane runtime jar is not canonical: %s", runtimeFlake, identity.SbtControlPlaneRuntimeJarPath)
-	}
-	if identity.SbtControlPlanePinnedArtifact != "1" || identity.SbtControlPlaneFlakeArtifact != "0" {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT control-plane runtime must be pinned artifact=1 flake artifact=0", runtimeFlake)
-	}
-	sbtControlPlaneJarData, err := os.ReadFile(identity.SbtControlPlaneRuntimeJarPath)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read SBT control-plane runtime jar %s: %w", runtimeFlake, identity.SbtControlPlaneRuntimeJarPath, err)
-	}
-	sbtControlPlaneJarSHA := fmt.Sprintf("%x", sha256.Sum256(sbtControlPlaneJarData))
-	if !strings.EqualFold(sbtControlPlaneJarSHA, identity.SbtControlPlaneRuntimeJarSHA256) {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT control-plane runtime jar sha mismatch", runtimeFlake)
-	}
-	sbtControlPlaneHashPath := identity.SbtControlPlaneRuntimeJarPath + ".sha256"
-	sbtControlPlaneHashData, err := os.ReadFile(sbtControlPlaneHashPath)
-	if err != nil {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: read SBT control-plane runtime hash %s: %w", runtimeFlake, sbtControlPlaneHashPath, err)
-	}
-	if strings.TrimSpace(string(sbtControlPlaneHashData)) != identity.SbtControlPlaneRuntimeJarSHA256 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: SBT control-plane runtime hash file mismatch", runtimeFlake)
-	}
-	return identity, nil
-}
-
-var resolveOuroGovernanceRuntimeIdentityForPlan = resolveOuroGovernanceRuntimeIdentity
-
-func metadataEnvValue(text string, key string) string {
-	prefix := key + "="
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		}
-	}
-	return ""
-}
-
-func parseOuroGovernanceRuntimeIdentityOutput(out []byte, runtimeFlake string) (ouroGovernanceRuntimeIdentity, error) {
-	marker := ouroGovernanceRuntimeIdentityMarker + "\x00"
-	text := string(out)
-	index := strings.LastIndex(text, marker)
-	if index < 0 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: missing identity marker", runtimeFlake)
-	}
-	payload := text[index+len(marker):]
-	parts := strings.Split(strings.TrimSuffix(payload, "\x00"), "\x00")
-	if len(parts) != 32 {
-		return ouroGovernanceRuntimeIdentity{}, fmt.Errorf("resolve governance runtime env from %s: expected 32 fields, got %d", runtimeFlake, len(parts))
-	}
-	return ouroGovernanceRuntimeIdentity{
-		SchemaVersion:                   parts[0],
-		RuntimeBundlePath:               parts[1],
-		GovernanceSourceRev:             parts[2],
-		SubmitToCiSourceRev:             parts[3],
-		ArtifactColumnRuntimeSourceRev:  parts[4],
-		SbtControlPlaneRuntimeSourceRev: parts[5],
-		LatestJarPath:                   parts[6],
-		ControlPlaneJar:                 parts[7],
-		ExpectedJarPath:                 parts[8],
-		ExpectedJarSHA256:               parts[9],
-		SubagentExpectedJarSHA256:       parts[10],
-		SubmitToCiJarPath:               parts[11],
-		SubmitToCiHashPath:              parts[12],
-		SubmitToCiExpectedJarPath:       parts[13],
-		SubmitToCiExpectedSHA256:        parts[14],
-		SubmitSbt2ClientMode:            parts[15],
-		SubmitSbt2JavaXmx:               parts[16],
-		LintInvarianceSbt2Mode:          parts[17],
-		ArtifactColumnRepositoryPath:    parts[18],
-		ArtifactColumnMetadataEnv:       parts[19],
-		ArtifactColumnVersion:           parts[20],
-		ArtifactColumnSourceRev:         parts[21],
-		ArtifactColumnSourceShortRev:    parts[22],
-		ArtifactColumnIvyPath:           parts[23],
-		ArtifactColumnJarSHA256:         parts[24],
-		ArtifactColumnPinnedArtifact:    parts[25],
-		ArtifactColumnFlakeArtifact:     parts[26],
-		SbtControlPlaneRuntimeJarPath:   parts[27],
-		SbtControlPlaneRuntimeJarSHA256: parts[28],
-		SbtControlPlanePinnedArtifact:   parts[29],
-		SbtControlPlaneFlakeArtifact:    parts[30],
-		JavaHome:                        parts[31],
-	}, nil
-}
-
-func buildOuroGovernanceEnv(hostDevRoot string, repoConfigPath string, repoConfigSha256 string, entrypointSHA256 string) string {
-	hostDevRoot = filepath.Clean(hostDevRoot)
-	repoConfigPath = filepath.Clean(repoConfigPath)
-	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
-	schemaRoot := filepath.Join(sandboxDevRoot, "ouroboros-ide", "tools", "subagent-governance", "schemas")
-	lines := []string{
-		"# Shared governance MCP/control-plane routing for native Ouroboros GUI agents.",
-		"# Runtime artifact identity is applied afterward by the immutable bundle launcher.",
-		"# The entrypoint expectation binds this generated routing env to that exact immutable bundle.",
-		"# Do not set SUBAGENT_GOVERNANCE_WORKSPACE_ID here; each agent wrapper derives it from PWD.",
-		"export DEVKIT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
-		"export SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH=" + shellQuote(repoConfigPath),
-		"export DEVKIT_GOVERNANCE_REPO_CONFIG_SHA256=" + shellQuote(repoConfigSha256),
-		"export DEVKIT_GOVERNANCE_EXPECTED_MCP_ENTRYPOINT_SHA256=" + shellQuote(entrypointSHA256),
-		"export SUBAGENT_GOVERNANCE_KNOWN_WORKSPACE_IDS=" + strings.Join(catalog.ids, ","),
-		"export SUBAGENT_GOVERNANCE_WORKSPACE_ROOTS=" + strings.Join(catalog.rootBindings, ","),
-	}
-	if hostDevRootAlias := ouroGovernanceHostDevRootAlias(hostDevRoot); hostDevRootAlias != "" {
-		lines = append(lines, "export SUBAGENT_GOVERNANCE_HOST_DEV_ROOT_ALIAS="+shellQuote(hostDevRootAlias))
-	}
-	lines = append(lines,
-		"export SUBAGENT_GOVERNANCE_SCHEMA_ROOT="+schemaRoot,
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_URL=http://127.0.0.1:7778",
-		"export SUBAGENT_GOVERNANCE_FORWARD_SERVER_URL=http://127.0.0.1:7778",
-		"export SUBAGENT_GOVERNANCE_WARM_HOOK_CMD='scripts/devops/governance-control-plane warm'",
-		"export SUBAGENT_GOVERNANCE_CONTROL_PLANE_STATE_DIR="+ouroGovernanceExternalStateRoot,
-		"export SUBAGENT_GOVERNANCE_EXECUTION_GRAPH_DECISION_LOG_PATH="+ouroGovernanceExecutionGraphDecisionLog,
-		"",
-	)
-	return strings.Join(lines, "\n")
-}
-
-func ouroGovernanceHostDevRootAlias(hostDevRoot string) string {
-	root := filepath.Clean(strings.TrimSpace(hostDevRoot))
-	if !filepath.IsAbs(root) {
-		return ""
-	}
-	within := func(candidate string, parent string) bool {
-		rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(candidate))
-		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-	}
-	canonicalRoot := filepath.Clean(sandboxDevRoot)
-	if within(root, canonicalRoot) || within(canonicalRoot, root) || within(root, "/tmp") {
-		return ""
-	}
-	return root
-}
-
-type ouroGovernanceCatalog struct {
-	ids          []string
-	rootBindings []string
-	rootMap      map[string]string
-}
-
-func buildOuroGovernanceCatalog() ouroGovernanceCatalog {
-	return buildOuroGovernanceCatalogForRoot("")
-}
-
-func buildOuroGovernanceCatalogForRoot(hostDevRoot string) ouroGovernanceCatalog {
-	ids := []string{"dev-workspace", "ouroboros-ide", "ouroboros-terraform"}
-	roots := map[string]string{
-		"dev-workspace":       "/workspaces/dev",
-		"ouroboros-ide":       "/workspaces/dev/ouroboros-ide",
-		"ouroboros-terraform": "/workspaces/dev/ouroboros-terraform",
-	}
-	rootBindings := []string{
-		"dev-workspace=/workspaces/dev",
-		"ouroboros-ide=/workspaces/dev/ouroboros-ide",
-		"ouroboros-terraform=/workspaces/dev/ouroboros-terraform",
-	}
-	add := func(id, root string) {
-		if id == "" || root == "" {
-			return
-		}
-		if _, exists := roots[id]; exists {
-			return
-		}
-		ids = append(ids, id)
-		roots[id] = root
-		rootBindings = append(rootBindings, fmt.Sprintf("%s=%s", id, root))
-	}
-	add("fleet-runtime-workspace", canonicalOuroGovernanceRuntimeWorkspaceRoot(hostDevRoot))
-	for i := 1; i <= 9; i++ {
-		agent := fmt.Sprintf("agent%d", i)
-		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-ide", agent)
-		add(agent, root)
-	}
-	for i := 1; i <= 9; i++ {
-		agent := fmt.Sprintf("agent%d", i)
-		id := fmt.Sprintf("%s-ouroboros-terraform", agent)
-		root := fmt.Sprintf("/workspaces/dev/agent-worktrees/%s/ouroboros-terraform", agent)
-		add(id, root)
-	}
-	add("email-policy-mcp-app", "/workspaces/dev/agent-worktrees/email-policy-mcp-app/ouroboros-ide")
-	add("shadow1-workbook-patch-mcp-localcontext", "/workspaces/dev/agent-worktrees/shadow1-workbook-patch-mcp-localcontext/ouroboros-ide")
-	// Keep the shared catalog source-derived and predictable. Ad-hoc worktrees
-	// need explicit launch identity instead of being broadcast to every
-	// governed app-server, especially Terraform lanes.
-	return ouroGovernanceCatalog{ids: ids, rootBindings: rootBindings, rootMap: roots}
-}
-
-func canonicalOuroGovernanceRuntimeWorkspaceRoot(hostDevRoot string) string {
-	root := strings.TrimSpace(hostDevRoot)
-	if root == "" {
-		root = sandboxDevRoot
-	}
-	candidate := filepath.Join(filepath.Clean(root), ".devkit", "governance-control-plane", "runtime-workspace")
-	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
-		return filepath.Clean(resolved)
-	}
-	return filepath.Clean(candidate)
-}
-
-func buildOuroGovernanceRepoConfig(hostDevRoot string) ([]byte, error) {
-	hostDevRoot = filepath.Clean(hostDevRoot)
-	catalog := buildOuroGovernanceCatalogForRoot(hostDevRoot)
-	type governanceAdapter struct {
-		KnownWorkspaceIDs             []string          `json:"knownWorkspaceIds"`
-		WorkspaceRoots                map[string]string `json:"workspaceRoots"`
-		SchemaRoot                    string            `json:"schemaRoot"`
-		ControlPlaneURL               string            `json:"controlPlaneUrl"`
-		WarmHookCommand               string            `json:"warmHookCommand"`
-		ControlPlaneStateDir          string            `json:"controlPlaneStateDir"`
-		ExecutionGraphDecisionLogPath string            `json:"executionGraphDecisionLogPath"`
-	}
-	type repoConfig struct {
-		WorkspaceRoot     string            `json:"workspaceRoot"`
-		SkillCatalogPath  string            `json:"skillCatalogPath"`
-		PolicyCatalogPath string            `json:"policyCatalogPath"`
-		PromptBundleRoot  string            `json:"promptBundleRoot"`
-		GovernanceAdapter governanceAdapter `json:"governanceAdapter"`
-	}
-	const governanceSourceRoot = "/workspaces/dev/ouroboros-ide/tools/subagent-governance"
-	cfg := repoConfig{
-		WorkspaceRoot:     "/workspaces/dev/ouroboros-ide",
-		SkillCatalogPath:  governanceSourceRoot + "/catalog/skills.json",
-		PolicyCatalogPath: governanceSourceRoot + "/catalog/policies.json",
-		PromptBundleRoot:  governanceSourceRoot + "/skills",
-		GovernanceAdapter: governanceAdapter{
-			KnownWorkspaceIDs:             catalog.ids,
-			WorkspaceRoots:                catalog.rootMap,
-			SchemaRoot:                    governanceSourceRoot + "/schemas",
-			ControlPlaneURL:               "http://127.0.0.1:7778",
-			WarmHookCommand:               "scripts/devops/governance-control-plane warm",
-			ControlPlaneStateDir:          ouroGovernanceExternalStateRoot,
-			ExecutionGraphDecisionLogPath: ouroGovernanceExecutionGraphDecisionLog,
-		},
-	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("render governance repo config: %w", err)
-	}
-	return append(data, '\n'), nil
-}
-
-func ensureCodexGovernanceConfig(p nativeplan.Plan, runtimeBundlePath string) error {
-	if !isOuroGovernedPlan(p) {
-		return nil
-	}
-	if strings.TrimSpace(runtimeBundlePath) == "" {
-		return fmt.Errorf("prepare governed Codex config: immutable runtime bundle path is required")
-	}
-	hostHome := strings.TrimSpace(p.Agent.HostHome)
-	if hostHome == "" {
-		return fmt.Errorf("prepare governed Codex config: agent host home is required")
-	}
-	if worktree := strings.TrimSpace(p.Agent.HostWorktree); worktree != "" {
-		if err := cleanCodexGovernanceConfigAt(filepath.Join(worktree, ".codex", "config.toml")); err != nil {
-			return err
-		}
-	}
-	return ensureCodexGovernanceConfigAt(filepath.Join(hostHome, ".codex", "config.toml"), p, runtimeBundlePath)
-}
-
-func cleanCodexGovernanceConfigAt(configPath string) error {
-	var original string
-	if data, err := os.ReadFile(configPath); err == nil {
-		original = string(data)
-	} else if os.IsNotExist(err) {
-		return nil
-	} else {
-		return fmt.Errorf("read Codex config %s: %w", configPath, err)
-	}
-	next := removeManagedCodexGovernanceBlock(original)
-	next = removeTomlTable(next, "mcp_servers.governance")
-	next = removeTomlTablesWithPrefix(next, "mcp_servers.governance.")
-	next = removeTomlTablesWithPrefix(next, "projects.")
-	next = strings.TrimRight(next, "\r\n")
-	if strings.TrimSpace(next) != "" {
-		next += "\n"
-	}
-	if next == original {
-		return nil
-	}
-	if err := os.WriteFile(configPath, []byte(next), 0o600); err != nil {
-		return fmt.Errorf("write Codex config %s: %w", configPath, err)
-	}
-	return nil
-}
-
-func ensureCodexGovernanceConfigAt(configPath string, p nativeplan.Plan, runtimeBundlePath string) error {
-	original, source, err := authoritativeCodexConfig(configPath, p)
-	if err != nil {
-		return err
-	}
-	if err := requireNixCodexConfig(original, source); err != nil {
-		return err
-	}
-	next := removeManagedCodexGovernanceBlock(original)
-	next = removeTomlTable(next, "mcp_servers.governance")
-	next = removeTomlTablesWithPrefix(next, "mcp_servers.governance.")
-	next = removeTomlTablesWithPrefix(next, "projects.")
-	next = strings.TrimRight(next, "\r\n")
-	if strings.TrimSpace(next) != "" {
-		next += "\n\n"
-	}
-	next += codexGovernanceConfigBlock(p, runtimeBundlePath)
-	if next == original {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(configPath), err)
-	}
-	if err := os.WriteFile(configPath, []byte(next), 0o600); err != nil {
-		return fmt.Errorf("write Codex config %s: %w", configPath, err)
-	}
-	return nil
-}
-
-func authoritativeCodexConfig(configPath string, p nativeplan.Plan) (string, string, error) {
-	explicitSource := strings.TrimSpace(p.CodexConfigSource)
-	if explicitSource == "" && !isOuroGovernedPlan(p) {
-		explicitSource = strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
-	}
-	if explicitSource != "" {
-		config, err := readRequiredNixCodexConfig(explicitSource)
-		if err != nil {
-			return "", "", err
-		}
-		return config, filepath.Clean(explicitSource), nil
-	}
-
-	cachePath := codexConfigCachePath(p)
-	checked := []string{codexSystemConfigPath}
-	if cachePath != "" {
-		checked = append(checked, cachePath)
-	}
-	if config, err := readRequiredNixCodexConfig(codexSystemConfigPath); err == nil {
-		if cachePath != "" {
-			if err := syncCodexConfigCache(cachePath, config); err != nil {
-				return "", "", err
-			}
-		}
-		return config, codexSystemConfigPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", "", err
-	}
-
-	if cachePath != "" {
-		if config, err := readRequiredNixCodexConfig(cachePath); err == nil {
-			return config, cachePath, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", "", err
-		}
-	}
-	return "", "", fmt.Errorf("missing Nix-authored Codex config for governed launch; checked %s and %s; refusing to synthesize a base-only config.toml",
-		strings.Join(checked, ", "), configPath)
-}
-
-func readRequiredNixCodexConfig(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("read authoritative Codex config %s: %w", path, os.ErrNotExist)
-		}
-		return "", fmt.Errorf("read authoritative Codex config %s: %w", path, err)
-	}
-	config := string(data)
-	if err := requireNixCodexConfig(config, path); err != nil {
-		return "", err
-	}
-	return config, nil
-}
-
-func codexConfigCachePath(p nativeplan.Plan) string {
-	if hostDevRoot := hostDevRootForPlan(p); hostDevRoot != "" {
-		return filepath.Join(hostDevRoot, codexDevkitConfigSourceRelPath)
-	}
-	return ""
-}
-
-func syncCodexConfigCache(cachePath, config string) error {
-	current, err := os.ReadFile(cachePath)
-	if err == nil && string(current) == config {
-		return nil
-	}
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read Codex config cache %s: %w", cachePath, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
-		return fmt.Errorf("mkdir Codex config cache dir %s: %w", filepath.Dir(cachePath), err)
-	}
-	if err := os.WriteFile(cachePath, []byte(config), 0o644); err != nil {
-		return fmt.Errorf("sync Codex config cache %s: %w", cachePath, err)
-	}
-	return nil
-}
-
-func requireNixCodexConfig(config, source string) error {
-	var missing []string
-	if !strings.Contains(config, codexNixManagedConfigMarker) {
-		missing = append(missing, codexNixManagedConfigMarker)
-	}
-	provider, ok := topLevelTomlString(config, "model_provider")
-	if !ok {
-		missing = append(missing, "top-level model_provider")
-	} else if provider != "openai" {
-		missing = append(missing, fmt.Sprintf(`model_provider = "openai" (got %q)`, provider))
-	} else if !hasTomlTable(config, codexOpenAIProfileTable) {
-		missing = append(missing, "["+codexOpenAIProfileTable+"]")
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	if strings.TrimSpace(source) == "" {
-		source = "<missing>"
-	}
-	return fmt.Errorf("authoritative Codex config %s missing %s; Nix must provide the source-derived config.toml options, refusing to synthesize a base-only config.toml",
-		source, strings.Join(missing, ", "))
-}
-
-func topLevelTomlString(config, key string) (string, bool) {
-	for _, line := range strings.Split(config, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "[") {
-			return "", false
-		}
-		name, raw, ok := strings.Cut(trimmed, "=")
-		if !ok || strings.TrimSpace(name) != key {
-			continue
-		}
-		value := strings.TrimSpace(raw)
-		value = strings.Trim(value, `"`)
-		return value, true
-	}
-	return "", false
-}
-
-func hasTomlTable(config, table string) bool {
-	for _, line := range strings.Split(config, "\n") {
-		if header, ok := tomlTableHeader(line); ok && header == table {
-			return true
-		}
-	}
-	return false
-}
-
-func codexGovernanceConfigBlock(p nativeplan.Plan, runtimeBundlePath string) string {
-	cwd := strings.TrimSpace(p.Agent.SandboxWorktree)
-	if cwd == "" {
-		cwd = strings.TrimSpace(p.DevkitSandboxRoot)
-	}
-	envPath := "/workspaces/dev/.devkit/ouro8-governance-env.sh"
-	repoConfigPath := "/workspaces/dev/.devkit/ouro8-governance-repo-env.json"
-	entrypoint := governanceentrypoint.ZshForRuntimeBundle(runtimeBundlePath)
-	fingerprint := governanceentrypoint.SHA256ForRuntimeBundle(runtimeBundlePath)
-	tools := []string{
-		"run",
-		"run_lint_migration",
-		"submit_to_ci",
-		"governance.workspace_topology",
-		"governance.graph_status",
-		"get_run_status",
-		"cancel_run",
-		"governance.search",
-		"governance.write_yaml",
-		"governance.operator_attention_opt_in",
-		"governance.operator_attention_opt_out",
-		"governance.operator_attention_status",
-		"governance.operator_attention_inbox",
-		"governance.operator_attention_record_blocker",
-	}
-	var b strings.Builder
-	b.WriteString(codexGovernanceManagedBegin)
-	b.WriteString("\n")
-	b.WriteString("# source = devkit native launch generator\n")
-	fmt.Fprintf(&b, "# governance_mcp_entrypoint_sha256 = %s\n", tomlQuote(fingerprint))
-	b.WriteString("[mcp_servers.governance]\n")
-	b.WriteString("command = \"/bin/bash\"\n")
-	fmt.Fprintf(&b, "cwd = %s\n", tomlQuote(cwd))
-	fmt.Fprintf(&b, "args = [\"-lc\", %s]\n", tomlQuote(entrypoint))
-	b.WriteString("startup_timeout_sec = 240\n")
-	b.WriteString("tool_timeout_sec = 10800\n")
-	b.WriteString("default_tools_approval_mode = \"approve\"\n")
-	b.WriteString("enabled_tools = [")
-	for i, tool := range tools {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(tomlQuote(tool))
-	}
-	b.WriteString("]\n\n")
-	b.WriteString("[mcp_servers.governance.env]\n")
-	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_ENV = %s\n", tomlQuote(envPath))
-	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_REPO_CONFIG_PATH = %s\n", tomlQuote(repoConfigPath))
-	fmt.Fprintf(&b, "SUBAGENT_GOVERNANCE_REPO_CONFIG_PATH = %s\n", tomlQuote(repoConfigPath))
-	fmt.Fprintf(&b, "DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256 = %s\n", tomlQuote(fingerprint))
-	for _, projectPath := range codexGovernanceProjectTrustPaths(p, cwd) {
-		b.WriteString("\n")
-		fmt.Fprintf(&b, "[projects.%s]\n", tomlQuote(projectPath))
-		b.WriteString("trust_level = \"trusted\"\n")
-	}
-	b.WriteString(codexGovernanceManagedEnd)
-	b.WriteString("\n")
-	return b.String()
-}
-
-func codexGovernanceProjectTrustPaths(p nativeplan.Plan, cwd string) []string {
-	hostDevRoot := hostDevRootForPlan(p)
-	repo := strings.TrimSpace(p.Agent.ID.Repo)
-	candidates := []string{
-		cwd,
-		strings.TrimSpace(p.Agent.SandboxWorktree),
-		strings.TrimSpace(p.Agent.HostWorktree),
-	}
-	if hostDevRoot != "" && repo != "" {
-		candidates = append(candidates,
-			filepath.Join(hostDevRoot, repo),
-			filepath.Join("/workspaces/dev", repo),
-		)
-	}
-	var out []string
-	seen := map[string]bool{}
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		value = filepath.Clean(value)
-		if !strings.HasPrefix(value, "/") || seen[value] {
-			return
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	for _, candidate := range candidates {
-		add(candidate)
-		if hostDevRoot == "" {
-			continue
-		}
-		candidate = filepath.Clean(strings.TrimSpace(candidate))
-		switch {
-		case candidate == "/workspaces/dev":
-			add(hostDevRoot)
-		case strings.HasPrefix(candidate, "/workspaces/dev/"):
-			add(filepath.Join(hostDevRoot, strings.TrimPrefix(candidate, "/workspaces/dev/")))
-		case candidate == hostDevRoot:
-			add("/workspaces/dev")
-		case strings.HasPrefix(candidate, hostDevRoot+string(filepath.Separator)):
-			if rel, err := filepath.Rel(hostDevRoot, candidate); err == nil && rel != "." {
-				add(filepath.Join("/workspaces/dev", filepath.ToSlash(rel)))
-			}
-		}
-	}
-	return out
-}
-
-func tomlQuote(value string) string {
-	return fmt.Sprintf("%q", value)
-}
-func removeManagedCodexGovernanceBlock(config string) string {
-	for {
-		start := strings.Index(config, codexGovernanceManagedBegin)
-		if start < 0 {
-			return config
-		}
-		endRel := strings.Index(config[start:], codexGovernanceManagedEnd)
-		if endRel < 0 {
-			return strings.TrimRight(config[:start], "\r\n")
-		}
-		end := start + endRel + len(codexGovernanceManagedEnd)
-		config = strings.TrimRight(config[:start], "\r\n") + "\n" + strings.TrimLeft(config[end:], "\r\n")
-	}
-}
-
-func removeTomlTable(config, table string) string {
-	lines := strings.SplitAfter(config, "\n")
-	var kept []string
-	skip := false
-	for _, line := range lines {
-		if header, ok := tomlTableHeader(line); ok {
-			skip = header == table
-		}
-		if skip {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.Join(kept, "")
-}
-
-func removeTomlTablesWithPrefix(config, prefix string) string {
-	lines := strings.SplitAfter(config, "\n")
-	var kept []string
-	skip := false
-	for _, line := range lines {
-		if header, ok := tomlTableHeader(line); ok {
-			skip = strings.HasPrefix(header, prefix)
-		}
-		if skip {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.Join(kept, "")
-}
-
-func tomlTableHeader(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if strings.HasPrefix(trimmed, "[[") || !strings.HasPrefix(trimmed, "[") || !strings.Contains(trimmed, "]") {
-		return "", false
-	}
-	end := strings.Index(trimmed, "]")
-	if end < 0 {
-		return "", false
-	}
-	return strings.TrimSpace(trimmed[1:end]), true
-}
-
-func writeOuroCodexShellHook(hostHome string) error {
-	hostHome = strings.TrimSpace(hostHome)
-	if hostHome == "" {
-		return nil
-	}
-	zshrc := filepath.Join(hostHome, ".zshrc")
-	content := ouroCodexShellHookZsh()
-	if data, err := os.ReadFile(zshrc); err == nil && string(data) == content {
-		return nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read %s: %w", zshrc, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(zshrc), 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(zshrc), err)
-	}
-	if err := os.WriteFile(zshrc, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", zshrc, err)
-	}
-	return nil
-}
-
-func ouroCodexShellHookZsh() string {
-	lines := []string{
-		"export POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true",
-		"typeset -g POWERLEVEL9K_INSTANT_PROMPT=off",
-		"[[ -r /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme ]] && source /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme",
-		"[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh",
-		`export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"`,
-		`export CODEX_ROLLOUT_DIR="${CODEX_ROLLOUT_DIR:-$HOME/.codex/rollouts}"`,
-		`export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"`,
-		`export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"`,
-		`export DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256="` + governanceentrypoint.SHA256() + `"`,
-		"unalias codex 2>/dev/null || true",
-		codexTUILogGuardZsh,
-		codexConfigGuardZsh,
-		"codex() {",
-		"  devkit_codex_tui_log_guard",
-		"  devkit_codex_require_config || return",
-		`  HOME="$HOME" CODEX_HOME="$CODEX_HOME" CODEX_ROLLOUT_DIR="$CODEX_ROLLOUT_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" command codex "$@"`,
-		"}",
-		"(( $+commands[claudew] )) && alias claude=claudew",
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
 func repairRetiredCodexShellHook(hostHome string) error {
 	hostHome = strings.TrimSpace(hostHome)
 	if hostHome == "" {
@@ -2034,26 +718,6 @@ const codexTUILogGuardZsh = `devkit_codex_tui_log_guard() {
   tmp="${log}.tmp.$$"
   tail -c "$max" "$log" > "$tmp" 2>/dev/null && cat "$tmp" > "$log"
   rm -f "$tmp"
-}`
-
-const codexConfigGuardZsh = `devkit_codex_require_config() {
-  local config="${CODEX_HOME:-$HOME/.codex}/config.toml"
-  if [[ ! -r "$config" ]]; then
-    echo "[devkit-codex] required Nix-authored Codex config missing: $config" >&2
-    return 1
-  fi
-  grep -Fqx '# source = nixos-wsl codex config' "$config" || {
-    echo "[devkit-codex] Codex config is not Nix-authored: $config" >&2
-    return 1
-  }
-  grep -Fqx 'model_provider = "openai"' "$config" || {
-    echo "[devkit-codex] Codex config must use model_provider = \"openai\": $config" >&2
-    return 1
-  }
-  grep -Fqx '[profiles.openai]' "$config" || {
-    echo "[devkit-codex] Codex config missing [profiles.openai]: $config" >&2
-    return 1
-  }
 }`
 
 func migrateMissingCodexState(dstHome, srcHome string) error {
@@ -2225,53 +889,6 @@ func SeedSSH(hostHome string, force bool) error {
 		if err := os.WriteFile(target, data, mode); err != nil {
 			return fmt.Errorf("write SSH seed %s: %w", target, err)
 		}
-	}
-	return nil
-}
-
-func seedProductSSHIdentity(p nativeplan.Plan) error {
-	if !p.ProductComposed {
-		return fmt.Errorf("package-owned Product SSH identity requires the composed adapter")
-	}
-	sshDir := filepath.Join(p.Agent.HostHome, ".ssh")
-	if err := seedExactCredential(p.SSHIdentitySource, filepath.Join(sshDir, "id_ed25519"), 0o600); err != nil {
-		return err
-	}
-	return seedExactCredential(p.SSHPublicKeySource, filepath.Join(sshDir, "id_ed25519.pub"), 0o644)
-}
-
-func seedExactCredential(source, target string, mode os.FileMode) error {
-	source = filepath.Clean(strings.TrimSpace(source))
-	target = filepath.Clean(strings.TrimSpace(target))
-	if !filepath.IsAbs(source) || !filepath.IsAbs(target) {
-		return fmt.Errorf("composed credential source and destination must be exact absolute paths")
-	}
-	sourceInfo, err := os.Lstat(source)
-	if err != nil {
-		return fmt.Errorf("inspect composed credential source %s: %w", source, err)
-	}
-	if !sourceInfo.Mode().IsRegular() || sourceInfo.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("composed credential source %s must be a non-symlink regular file", source)
-	}
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return fmt.Errorf("read composed credential source %s: %w", source, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return err
-	}
-	if existing, err := os.ReadFile(target); err == nil {
-		info, statErr := os.Lstat(target)
-		if statErr != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-			info.Mode().Perm() != mode || !bytes.Equal(existing, data) {
-			return fmt.Errorf("composed credential destination %s does not match the manifest-selected source", target)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.WriteFile(target, data, mode); err != nil {
-		return fmt.Errorf("write composed credential destination %s: %w", target, err)
 	}
 	return nil
 }
@@ -2480,10 +1097,6 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 	}
-	localDirectTarget, localDirect, err := localDirectFleetTarget(command)
-	if err != nil {
-		return Command{}, err
-	}
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
 		args = append(args, "--unshare-net")
 	} else {
@@ -2545,9 +1158,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	if err := addBind("ro", "/nix/var/nix", "/nix/var/nix", true); err != nil {
 		return Command{}, err
 	}
-	if !localDirect {
-		_ = addBind("ro", "/run/current-system", "/run/current-system", false)
-	}
+	_ = addBind("ro", "/run/current-system", "/run/current-system", false)
 	_ = addBind("ro", "/etc/nix", "/etc/nix", false)
 	_ = addBind("ro", "/etc/static", "/etc/static", false)
 	_ = addBind("ro", "/etc/ssl", "/etc/ssl", false)
@@ -2570,75 +1181,10 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	} else {
 		_ = addBind("ro", "/etc/resolv.conf", "/etc/resolv.conf", false)
 	}
-	if !localDirect {
-		addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
-		addSymlink("/run/current-system/sw/bin/bash", "/usr/bin/bash")
-		addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
-		addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
-	} else {
-		packageBash, err := sourceLayerRuntimeBashPath(p.RuntimeAuthorityRoot)
-		if err != nil {
-			return Command{}, err
-		}
-		addSymlink(packageBash, "/usr/bin/bash")
-		addSymlink(packageBash, "/bin/bash")
-	}
-
-	var projectedSocket *os.File
-	var projectedManifestPath, projectedManifestSHA string
-	if localDirect {
-		targetID := localDirectTarget
-		identity, err := resolveOuroGovernanceRuntimeIdentityForPlan(p.RuntimeAuthorityRoot)
-		if err != nil {
-			return Command{}, fmt.Errorf("resolve runtime authority for Fleet app-rpc: %w", err)
-		}
-		manifest, err := loadFleetRuntimeAuthorityManifest(identity.RuntimeBundlePath)
-		if err != nil {
-			return Command{}, err
-		}
-		controllerPath := filepath.Clean(manifest.ControllerSourceLayer.ControllerFleet)
-		requestedPath := filepath.Clean(command[0])
-		if requestedPath != controllerPath {
-			// The pinned GUI goal-control tool historically invokes the stable
-			// controller name below.  It is not an authority: in the namespace
-			// this path is always replaced with the manifest-selected immutable
-			// executable.  No other caller path is accepted.
-			const canonicalControllerAlias = "/home/bayesartre/dev/bin/fleet"
-			if requestedPath != canonicalControllerAlias {
-				return Command{}, fmt.Errorf("Fleet app-rpc executable is not the manifest-selected controller")
-			}
-			if err := addBind("ro", controllerPath, canonicalControllerAlias, true); err != nil {
-				return Command{}, fmt.Errorf("project manifest-selected Fleet controller alias: %w", err)
-			}
-		}
-		if err := verifyNestedSourceLayerBinding(manifest); err != nil {
-			return Command{}, err
-		}
-		projection, err := resolveFleetLocalDirectSocket(manifest, targetID)
-		if err != nil {
-			return Command{}, err
-		}
-		const oPath = 0x200000 // Linux O_PATH; syscall.O_PATH is not exposed by all Go toolchains.
-		fd, err := syscall.Open(projection.SocketPath, oPath|syscall.O_NOFOLLOW, 0)
-		if err != nil {
-			return Command{}, fmt.Errorf("open Fleet local-direct socket without following links: %w", err)
-		}
-		projectedSocket = os.NewFile(uintptr(fd), projection.SocketPath)
-		projectedManifestPath, projectedManifestSHA = manifest.IdentityJSONPath, manifest.ManifestSHA256
-		var stat syscall.Stat_t
-		if err := syscall.Fstat(fd, &stat); err != nil {
-			projectedSocket.Close()
-			return Command{}, fmt.Errorf("stat pinned Fleet local-direct socket: %w", err)
-		}
-		const sIFMT = 0o170000
-		const sIFSOCK = 0o140000
-		if uint32(stat.Mode)&sIFMT != sIFSOCK || uint64(stat.Ino) != projection.SocketInode || uint64(stat.Dev) != projection.SocketDevice || uint32(stat.Uid) != projection.SocketUID || projection.SocketMode&0o077 != 0 || uint32(stat.Mode&0o777) != projection.SocketMode {
-			projectedSocket.Close()
-			return Command{}, fmt.Errorf("Fleet local-direct socket changed between resolve and bind")
-		}
-		addDir(filepath.Dir(projection.SocketPath))
-		bindArgs = append(bindArgs, "--ro-bind", "/proc/self/fd/3", projection.SocketPath)
-	}
+	addSymlink("/run/current-system/sw/bin/env", "/usr/bin/env")
+	addSymlink("/run/current-system/sw/bin/bash", "/usr/bin/bash")
+	addSymlink("/run/current-system/sw/bin/bash", "/bin/bash")
+	addSymlink("/run/current-system/sw/bin/sh", "/bin/sh")
 
 	args = append(args, dirArgs...)
 	args = append(args, bindArgs...)
@@ -2651,12 +1197,6 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		args = append(args, "--setenv", key, p.Env[key])
-	}
-	if projectedManifestPath != "" {
-		args = append(args,
-			"--setenv", "FLEET_RUNTIME_AUTHORITY_MANIFEST", projectedManifestPath,
-			"--setenv", "FLEET_RUNTIME_AUTHORITY_SHA256", projectedManifestSHA,
-		)
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
@@ -2683,204 +1223,11 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	runtimeArgs := []string{runtimeLauncher}
 	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
-		proxyBash := "/run/current-system/sw/bin/bash"
-		if localDirect {
-			proxyBash, err = sourceLayerRuntimeBashPath(p.RuntimeAuthorityRoot)
-			if err != nil {
-				return Command{}, err
-			}
-		}
-		args = append(args, proxyBash, "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
+		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
 	} else {
 		args = append(args, runtimeArgs...)
 	}
-	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot, ExtraFiles: filesOrNil(projectedSocket)}, nil
-}
-
-type fleetRuntimeAuthorityManifest struct {
-	SchemaVersion         string                     `json:"schemaVersion"`
-	BundlePath            string                     `json:"bundlePath"`
-	LauncherPath          string                     `json:"launcherPath"`
-	IdentityEnvPath       string                     `json:"identityEnvPath"`
-	IdentityJSONPath      string                     `json:"identityJsonPath"`
-	ArtifactDigests       map[string]json.RawMessage `json:"artifactDigests"`
-	CodexAuthorization    json.RawMessage            `json:"codexAuthorization"`
-	DevkitProductAdapter  json.RawMessage            `json:"devkitProductAdapter"`
-	RuntimeIdentity       json.RawMessage            `json:"runtimeIdentity"`
-	Sources               map[string]json.RawMessage `json:"sources"`
-	ControllerSourceLayer struct {
-		PackagePath      string `json:"packagePath"`
-		PackageSHA256    string `json:"packageSha256"`
-		ManifestPath     string `json:"manifestPath"`
-		ManifestSHA256   string `json:"manifestSha256"`
-		LauncherPath     string `json:"launcherPath"`
-		ControllerFleet  string `json:"controllerFleetPath"`
-		ControllerDevctl string `json:"controllerDevctlPath"`
-		SourceInventory  struct {
-			Path   string `json:"path"`
-			SHA256 string `json:"sha256"`
-		} `json:"controllerSourceInventory"`
-		GUIInventory struct {
-			Path   string `json:"path"`
-			SHA256 string `json:"sha256"`
-		} `json:"controllerGUIInventory"`
-	} `json:"controllerSourceLayer"`
-	ManifestSHA256 string `json:"-"`
-}
-
-type fleetLocalDirectSocketProjection struct {
-	SchemaVersion   string `json:"schemaVersion"`
-	TargetID        string `json:"targetId"`
-	Route           string `json:"route"`
-	SocketPath      string `json:"socketPath"`
-	SocketUID       uint32 `json:"socketUid"`
-	SocketMode      uint32 `json:"socketMode"`
-	SocketDevice    uint64 `json:"socketDevice"`
-	SocketInode     uint64 `json:"socketInode"`
-	SourceInventory struct {
-		Path   string `json:"path"`
-		SHA256 string `json:"sha256"`
-	} `json:"sourceInventory"`
-	GUIInventory struct {
-		Path   string `json:"path"`
-		SHA256 string `json:"sha256"`
-	} `json:"guiInventory"`
-}
-
-func filesOrNil(file *os.File) []*os.File {
-	if file == nil {
-		return nil
-	}
-	return []*os.File{file}
-}
-
-func loadFleetRuntimeAuthorityManifest(bundlePath string) (fleetRuntimeAuthorityManifest, error) {
-	path := filepath.Join(bundlePath, "share/dev-all-runtime-bundle/identity.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("read Fleet runtime authority manifest: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var manifest fleetRuntimeAuthorityManifest
-	if err := decoder.Decode(&manifest); err != nil {
-		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("parse Fleet runtime authority manifest: %w", err)
-	}
-	manifest.ManifestSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
-	if manifest.SchemaVersion != "fleet-runtime-authority/v1" || manifest.IdentityJSONPath != path || !filepath.IsAbs(manifest.ControllerSourceLayer.ControllerFleet) || !strings.HasPrefix(manifest.ControllerSourceLayer.ControllerFleet, "/nix/store/") || !filepath.IsAbs(manifest.ControllerSourceLayer.ControllerDevctl) || !strings.HasPrefix(manifest.ControllerSourceLayer.ControllerDevctl, "/nix/store/") {
-		return fleetRuntimeAuthorityManifest{}, fmt.Errorf("Fleet runtime authority manifest self/identity shape rejected")
-	}
-	return manifest, nil
-}
-
-func sourceLayerRuntimeBashPath(runtimeRoot string) (string, error) {
-	manifestPath := filepath.Join(runtimeRoot, "share/dev-all-runtime-bundle/identity.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return "", fmt.Errorf("read runtime authority for package shell: %w", err)
-	}
-	var manifest struct {
-		ControllerSourceLayer struct {
-			ManifestPath string `json:"manifestPath"`
-		} `json:"controllerSourceLayer"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return "", fmt.Errorf("parse runtime authority for package shell: %w", err)
-	}
-	sourceData, err := os.ReadFile(manifest.ControllerSourceLayer.ManifestPath)
-	if err != nil {
-		return "", fmt.Errorf("read source-layer runtime projection: %w", err)
-	}
-	var source struct {
-		Runtime struct {
-			BashExecutablePath string `json:"bashExecutablePath"`
-		} `json:"runtime"`
-	}
-	if err := json.Unmarshal(sourceData, &source); err != nil || !strings.HasPrefix(source.Runtime.BashExecutablePath, "/nix/store/") || !isExecutable(source.Runtime.BashExecutablePath) {
-		return "", fmt.Errorf("source-layer package shell projection is invalid")
-	}
-	return source.Runtime.BashExecutablePath, nil
-}
-
-func verifyNestedSourceLayerBinding(manifest fleetRuntimeAuthorityManifest) error {
-	data, err := os.ReadFile(manifest.ControllerSourceLayer.ManifestPath)
-	if err != nil {
-		return fmt.Errorf("read nested Fleet source-layer manifest: %w", err)
-	}
-	if fmt.Sprintf("%x", sha256.Sum256(data)) != manifest.ControllerSourceLayer.ManifestSHA256 {
-		return fmt.Errorf("nested Fleet source-layer manifest digest mismatch")
-	}
-	var source struct {
-		PackagePath               string `json:"packagePath"`
-		LauncherPath              string `json:"launcherPath"`
-		ControllerFleetPath       string `json:"controllerFleetPath"`
-		ControllerDevctlPath      string `json:"controllerDevctlPath"`
-		ControllerSourceInventory struct {
-			Path   string `json:"path"`
-			SHA256 string `json:"sha256"`
-		} `json:"controllerSourceInventory"`
-		ControllerGUIInventory struct {
-			Path   string `json:"path"`
-			SHA256 string `json:"sha256"`
-		} `json:"controllerGUIInventory"`
-	}
-	if err := json.Unmarshal(data, &source); err != nil {
-		return fmt.Errorf("parse nested Fleet source-layer manifest: %w", err)
-	}
-	packageRoot := filepath.Dir(filepath.Dir(manifest.ControllerSourceLayer.LauncherPath))
-	if source.PackagePath != manifest.ControllerSourceLayer.PackagePath || source.LauncherPath != manifest.ControllerSourceLayer.LauncherPath || source.ControllerFleetPath != manifest.ControllerSourceLayer.ControllerFleet || source.ControllerDevctlPath != manifest.ControllerSourceLayer.ControllerDevctl || source.ControllerSourceInventory.Path != manifest.ControllerSourceLayer.SourceInventory.Path || source.ControllerSourceInventory.SHA256 != manifest.ControllerSourceLayer.SourceInventory.SHA256 || source.ControllerGUIInventory.Path != manifest.ControllerSourceLayer.GUIInventory.Path || source.ControllerGUIInventory.SHA256 != manifest.ControllerSourceLayer.GUIInventory.SHA256 || packageRoot != manifest.ControllerSourceLayer.PackagePath {
-		return fmt.Errorf("nested Fleet source-layer binding disagrees with final runtime authority")
-	}
-	return nil
-}
-
-func resolveFleetLocalDirectSocket(manifest fleetRuntimeAuthorityManifest, targetID string) (fleetLocalDirectSocketProjection, error) {
-	if strings.TrimSpace(targetID) == "" || strings.ContainsAny(targetID, " \t\r\n") {
-		return fleetLocalDirectSocketProjection{}, fmt.Errorf("Fleet app-rpc target id is not exact")
-	}
-	cmd := exec.Command(manifest.ControllerSourceLayer.ControllerFleet, "app-rpc", "resolve-target", "--target", targetID)
-	cmd.Env = []string{"HOME=/nonexistent", "PATH=", "FLEET_RUNTIME_AUTHORITY_MANIFEST=" + manifest.IdentityJSONPath, "FLEET_RUNTIME_AUTHORITY_SHA256=" + manifest.ManifestSHA256}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fleetLocalDirectSocketProjection{}, fmt.Errorf("Fleet local-direct resolver failed: %w: %s", err, strings.TrimSpace(stderr.String()))
-	}
-	decoder := json.NewDecoder(&stdout)
-	decoder.DisallowUnknownFields()
-	var projection fleetLocalDirectSocketProjection
-	if err := decoder.Decode(&projection); err != nil {
-		return fleetLocalDirectSocketProjection{}, fmt.Errorf("parse Fleet local-direct projection: %w", err)
-	}
-	if projection.SchemaVersion != "fleet/local-direct-socket/v1" || projection.TargetID != targetID || projection.Route != "local-direct" || projection.SocketPath == "" || projection.SocketUID == 0 || projection.SocketInode == 0 || projection.SourceInventory.Path != manifest.ControllerSourceLayer.SourceInventory.Path || projection.SourceInventory.SHA256 != manifest.ControllerSourceLayer.SourceInventory.SHA256 || projection.GUIInventory.Path != manifest.ControllerSourceLayer.GUIInventory.Path || projection.GUIInventory.SHA256 != manifest.ControllerSourceLayer.GUIInventory.SHA256 {
-		return fleetLocalDirectSocketProjection{}, fmt.Errorf("Fleet local-direct projection failed closed")
-	}
-	return projection, nil
-}
-
-func localDirectFleetTarget(command []string) (string, bool, error) {
-	if len(command) < 2 || command[1] != "app-rpc" {
-		return "", false, nil
-	}
-	if len(command) < 3 || command[2] == "resolve-target" {
-		return "", false, nil
-	}
-	target := ""
-	for i := 3; i < len(command); i++ {
-		if command[i] == "--target" {
-			if i+1 >= len(command) || target != "" {
-				return "", false, fmt.Errorf("Fleet app-rpc requires exactly one --target")
-			}
-			target = command[i+1]
-			i++
-		} else if command[i] == "--socket" || command[i] == "--inventory" || command[i] == "--gui-inventory" || command[i] == "--route" {
-			return "", false, fmt.Errorf("Fleet app-rpc caller override %s is rejected", command[i])
-		}
-	}
-	if target == "" {
-		return "", false, nil
-	}
-	return target, true, nil
+	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
 }
 
 func ShellString(cmd Command) string {

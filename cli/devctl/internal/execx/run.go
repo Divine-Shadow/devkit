@@ -49,20 +49,6 @@ func (w activityWriter) Write(payload []byte) (int, error) {
 // expiry terminate the complete descendant group, wait for it to unwind, and
 // then force-kill any orphan that outlives the declared grace period.
 func RunManaged(ctx context.Context, policy ManagedPolicy, name string, args ...string) Result {
-	return RunManagedWithWriters(ctx, policy, os.Stdout, os.Stderr, name, args...)
-}
-
-// RunManagedWithWriters preserves the managed process-group lifecycle while
-// allowing structured callers to keep subprocess output off their stdout
-// protocol. Nil writers select io.Discard.
-func RunManagedWithWriters(
-	ctx context.Context,
-	policy ManagedPolicy,
-	stdout io.Writer,
-	stderr io.Writer,
-	name string,
-	args ...string,
-) Result {
 	if os.Getenv("DEVKIT_DEBUG") == "1" {
 		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(append([]string{name}, args...), " "))
 	}
@@ -77,17 +63,11 @@ func RunManagedWithWriters(
 	}
 
 	activity := make(chan struct{}, 1)
-	if stdout == nil {
-		stdout = io.Discard
-	}
-	if stderr == nil {
-		stderr = io.Discard
-	}
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = activityWriter{writer: stdout, activity: activity}
-	cmd.Stderr = activityWriter{writer: stderr, activity: activity}
+	cmd.Stdout = activityWriter{writer: os.Stdout, activity: activity}
+	cmd.Stderr = activityWriter{writer: os.Stderr, activity: activity}
 	if err := cmd.Start(); err != nil {
 		return Result{Code: 1, Err: err}
 	}

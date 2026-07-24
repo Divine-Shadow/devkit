@@ -1,6 +1,8 @@
 # Compose Runtime Retirement
 
-This ExecPlan is a living document. It is maintained according to `.agent/PLANS.md`.
+This is a completed historical record, not current lifecycle or promotion
+guidance. The deleted `native-readiness-audit` and its historical evidence must
+not be used as proof that a governed Product environment works.
 
 ## Purpose / Big Picture
 
@@ -178,7 +180,9 @@ Verification evidence:
     Result: exited 0 with `native-runtime-smoke: ok`; output proved retired namespace rejection, native up/status/logs/scale/down, `_template` overlay-local native exec, dev-all Spago/Netlify/Playwright, egress proxy, and broker policy.
 
     nix --extra-experimental-features 'nix-command flakes' develop --command make native-readiness-audit
-    Result: exited 0 with `native-readiness-audit: ok`; output proved two-agent native launch/status, egress allowlist enforcement, governance warm, exact Codex command on both agents, backend jar assembly, backend launch, and native down.
+    Historical result only: the now-deleted `native-readiness-audit` exited 0.
+    This does not prove a governed Product environment or a disposable VM
+    lifecycle and is not an operative acceptance gate.
 
     kit/scripts/devkit -p dev-all up/status/exec/down with isolated broker socket/state root
     Result: exited 0; `up` and `status` returned `"runtime": "native"`, `exec` printed `native-manual-ok`, and `down` stopped the isolated broker.

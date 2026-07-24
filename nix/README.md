@@ -21,51 +21,17 @@ Current shell targets:
 - `runtime-test-agent`: lightweight integration-test shell.
 - `tinyproxy`: host-service shell for proxy experiments.
 
+The root flake also exports a Product-agnostic `dev-all-runtime-bundle` for
+system compositions. It contains the generic development tools and compiled
+Devkit controller only. Product source and Product artifacts belong to the
+authoritative consumer flake and are not selected or derived here.
+
 Source-derived operator apps:
 
 - `management-inspection`: explicitly snapshots one Git commit into the Nix
   store and exposes it through a read-only Management inspection profile with
   separate revision-specific writable state. See
   `kit/docs/management-readonly-inspection-profile.md`.
-
-Fleet composition uses the revision-neutral public constructor:
-
-```nix
-devkit.lib.mkDevAllRuntimeBundle {
-  inherit
-    artifactDigests
-    codexAuthorization
-    controllerFleetPath
-    devctlLauncherPath
-    devkitProductAdapter
-    pkgs
-    runtimeIdentity
-    sources
-    ;
-}
-```
-
-The authoritative WSL derivation supplies the exact pinned source map and all
-derived artifacts once. Devkit only serializes that input as the sole
-`fleet-runtime-authority/v1` manifest, its digest and environment projection,
-and the package-owned launcher. Devkit does not select or evaluate Product
-source, deploy a controller, write a runtime selector, or promote a lifecycle.
-Devkit exposes no standalone fixture runtime bundle, shell, or consumer VM as
-a promotion or readiness output. Constructor fixtures are confined to narrow
-unit/serialization checks and may never appear in a lifecycle receipt.
-
-The WSL-derived manifest declares the exact
-`devkit/workspace-egress/v3` mount-policy identity. The compiled Product
-consumer validates that declaration against its immutable package contract;
-it does not infer policy from a launcher, Python adapter, ambient `PATH`, or
-mutable station state. `/run/current-system` comparisons are fail-closed
-same-executable checks against the already selected manifest generation, not
-an identity-selection or derivation mechanism. Only the complete
-Fleet/Colmena lifecycle can promote two fresh consumer runs. That promotion
-begins from absent controller and consumer state, uses only the
-manifest-declared Fleet/Devkit executables under an empty or hostile `PATH`,
-and reaches governed Product task creation and first admission twice.
-There is no Devkit-only lifecycle substitute for that proof.
 
 Use explicit experimental feature flags on hosts that do not enable flakes by
 default:

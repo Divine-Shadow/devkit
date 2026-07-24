@@ -4,10 +4,6 @@ An ExecPlan is a self-contained implementation plan that a future agent or
 human can use without relying on chat history. Keep each plan as a living
 document: update `Progress`, `Surprises & Discoveries`, `Decision Log`, and
 `Outcomes & Retrospective` whenever work advances or the design changes.
-Active plans must identify the current source-controlled path. Historical plans
-remain audit evidence only; mark them superseded when their procedure no longer
-governs current work, and never let an older plan override current repository
-guidance.
 
 Every ExecPlan must explain the user-visible purpose, name the concrete files
 and commands involved, and define acceptance with observable evidence. Prefer
@@ -35,11 +31,8 @@ Place supporting material according to its lifecycle:
   ExecPlan only when they affect acceptance, a decision, a blocker, or the next
   action.
 - Put stable specifications and reusable operating guidance in durable docs.
-- Put accepted durable effects and audit history in their durable evidence
-  records. Use a transfer or lease record only as an active collision-control
-  lease for one writer. Tasks, runs, trees, stations, homes, worktrees,
-  candidates, and partial computation are replaceable; they do not acquire
-  continuity custody over the business objective.
+- Put cross-owner custody, acceptance, and lifecycle state in the applicable
+  transfer or lease record.
 
 An active ExecPlan has a hard limit of 32,000 Unicode scalar values, not bytes
 or tokens. The writer must count the complete proposed document before every
@@ -54,8 +47,11 @@ Unicode scalar values. Supplemental context may be linked separately, but it
 must not redefine or substitute for the OCVA's objective, constraints,
 verification, or authority.
 
+Tasks, runs, trees, stations, homes, worktrees, candidates, and partial
+computation are replaceable. Keep one active writer per source lane to avoid
+collisions, but preserve the business objective and accepted durable effects,
+not the lifetime of a particular execution.
+
 ## Active ExecPlans
 
-- [Manifest-bound Product Codex auth seeding](execplans/manifest-bound-product-codex-auth-seeding-20260723.md): replace direct fixture file creation with compiled, fixed-slot, create-only stdin seeding under the sole Product authority.
-- [Reliable Disposable AI-Agent Environment](execplans/reliable-disposable-ai-agent-environment-20260723.md): replace the fixture-only VM-first diagnostic with a production-path compiled/hermetic lifecycle regression, then prove the unchanged source through two fresh VM lifecycles and Shadow.
-- [Runtime Authority Projection And Selector](execplans/runtime-authority-projection-selector-20260722.md): derive the Product runtime projection once, share it between adapter and final bundle, and install only a verified root-owned final selector.
+- [Prune recursive Product bootstrap authority](execplans/prune-recursive-product-bootstrap-authority-20260724.md): return Devkit to a generic, source-derived agent runtime which WSL can compose with one Product revision.

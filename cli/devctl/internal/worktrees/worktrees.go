@@ -2,17 +2,15 @@ package worktrees
 
 import (
 	"context"
+	"devkit/cli/devctl/internal/execx"
+	"devkit/cli/devctl/internal/paths"
+	runtimeagent "devkit/cli/devctl/internal/runtime/agent"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
-
-	"devkit/cli/devctl/internal/execx"
-	"devkit/cli/devctl/internal/paths"
-	runtimeagent "devkit/cli/devctl/internal/runtime/agent"
 )
 
 const (
@@ -24,41 +22,6 @@ const (
 	nativeFetchIdleLimit   = 2 * time.Minute
 	nativeTerminationGrace = 2 * time.Second
 )
-
-var (
-	packageGitExecutable string
-	packageEnvExecutable string
-)
-
-func resolvedPackageGitExecutable() (string, error) {
-	path := filepath.Clean(strings.TrimSpace(packageGitExecutable))
-	if path == "" || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("native lifecycle requires the package-owned absolute Git executable")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("inspect package-owned Git executable %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("package-owned Git executable %s is not executable", path)
-	}
-	return path, nil
-}
-
-func resolvedPackageEnvExecutable() (string, error) {
-	path := filepath.Clean(strings.TrimSpace(packageEnvExecutable))
-	if path == "" || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("native lifecycle requires the package-owned absolute env executable")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", fmt.Errorf("inspect package-owned env executable %s: %w", path, err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("package-owned env executable %s is not executable", path)
-	}
-	return path, nil
-}
 
 func runWithPolicy(dry bool, fixedLimit, idleLimit time.Duration, name string, args ...string) error {
 	if dry {
@@ -94,30 +57,6 @@ func run(dry bool, name string, args ...string) error {
 // ProxyCommand, so cancellation cannot leave a transport descendant behind.
 func runFetch(dry bool, name string, args ...string) error {
 	return runWithPolicy(dry, 0, nativeFetchIdleLimit, name, args...)
-}
-
-func runSlotWithPolicy(dry bool, fixedLimit, idleLimit time.Duration, name string, args ...string) error {
-	if dry {
-		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(append([]string{name}, args...), " "))
-		return nil
-	}
-	ctx := context.Background()
-	cancel := func() {}
-	if fixedLimit > 0 {
-		ctx, cancel = context.WithTimeout(ctx, fixedLimit)
-	}
-	defer cancel()
-	res := execx.RunManagedWithWriters(ctx, execx.ManagedPolicy{
-		IdleTimeout:      idleLimit,
-		TerminationGrace: nativeTerminationGrace,
-	}, os.Stderr, os.Stderr, name, args...)
-	if res.Code != 0 {
-		if res.Err != nil {
-			return fmt.Errorf("%s %v: exit %d: %w", name, args, res.Code, res.Err)
-		}
-		return fmt.Errorf("%s %v: exit %d", name, args, res.Code)
-	}
-	return nil
 }
 
 // rewriteGitdir writes a .git file pointing to a gitdir form suitable for the
@@ -418,7 +357,7 @@ func verifyFreshNativeWorktree(wt, baseRef string) error {
 		return fmt.Errorf("read fresh native worktree base %s at %s: exit %d", baseRef, wt, result.Code)
 	}
 	if strings.TrimSpace(head) != strings.TrimSpace(base) {
-		return fmt.Errorf("fresh native worktree %s HEAD does not match %s", wt, baseRef)
+		return fmt.Errorf("fresh native worktree %s HEAD %s does not match %s %s", wt, strings.TrimSpace(head), baseRef, strings.TrimSpace(base))
 	}
 	status, result := execx.Capture(context.Background(), "git", "-C", wt, "status", "--porcelain=v1")
 	if result.Code != 0 {
@@ -438,9 +377,6 @@ func verifyFreshNativeWorktree(wt, baseRef string) error {
 // branchPrefix: e.g., "agent"
 // dry: log only without changing state
 func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry bool) error {
-	if isCanonicalProductIdentity(repo, "") {
-		return fmt.Errorf("legacy worktree setup has no Product authority; use the manifest-bound product-adapter")
-	}
 	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
 	repoPath := filepath.Join(devRoot, repo)
 	// Legacy local worktree setup must not invent an SSH executable or config.
@@ -817,452 +753,295 @@ type NativeOptions struct {
 	DryRun           bool
 }
 
-type NativeSlotOptions struct {
-	DevkitRoot       string
-	Repo             string
-	Origin           string
-	Count            int
-	Index            int
-	BaseBranch       string
-	SourceRevision   string
-	BranchPrefix     string
-	WorktreeRoot     string
-	BootstrapHome    string
-	GitSSHExecutable string
-	SourceIdentity   string
-	TransportSocket  string
-	RequireSSHOrigin bool
-	DryRun           bool
-}
-
-type NativeSlotValidationOptions struct {
+// NativeResetOptions describes the one destructive native lifecycle boundary.
+// Reset authority comes from the explicit dev-all reset command plus the
+// source-declared roots; callers cannot opt arbitrary paths into disposal.
+type NativeResetOptions struct {
+	Project        string
 	Repo           string
-	Origin         string
-	Index          int
+	Count          int
 	WorktreeRoot   string
-	BoundaryRoot   string
-	HostHome       string
 	StateRoot      string
-	SourceRevision string
+	ProtectedRoots []string
+	DryRun         bool
 }
 
-func packageGitCommand(
-	envExecutable string,
-	gitExecutable string,
-	sshCommand string,
-	args ...string,
-) []string {
-	command := make([]string, 0, 8+len(args))
-	if filepath.Base(envExecutable) == "coreutils" {
-		command = append(command, "--coreutils-prog=env")
-	}
-	command = append(command,
-		"-i",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
+type nativeResetCandidate struct {
+	path     string
+	boundary string
+}
+
+// NativeResetPlan is an opaque, preflighted disposal plan. The paths are
+// deliberately not exported so a caller cannot turn validation into an
+// arbitrary recursive-delete facility.
+type NativeResetPlan struct {
+	dryRun         bool
+	candidates     []nativeResetCandidate
+	protectedRoots []string
+	mountPoints    []string
+}
+
+var nativeResetMountPoints = readNativeResetMountPoints
+
+func decodeMountInfoPath(value string) string {
+	replacer := strings.NewReplacer(
+		`\040`, " ",
+		`\011`, "\t",
+		`\012`, "\n",
+		`\134`, `\`,
 	)
-	if sshCommand = strings.TrimSpace(sshCommand); sshCommand != "" {
-		command = append(command, "GIT_SSH_COMMAND="+sshCommand)
-	}
-	command = append(command, gitExecutable)
-	return append(command, args...)
+	return replacer.Replace(value)
 }
 
-func packageSlotGitCommand(
-	envExecutable string,
-	gitExecutable string,
-	gitSSHExecutable string,
-	identityPath string,
-	socketPath string,
-	args ...string,
-) []string {
-	command := make([]string, 0, 12+len(args))
-	if filepath.Base(envExecutable) == "coreutils" {
-		command = append(command, "--coreutils-prog=env")
+func readNativeResetMountPoints() ([]string, error) {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return nil, fmt.Errorf("read native reset mount inventory: %w", err)
 	}
-	command = append(
-		command,
-		"-i",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_SSH="+gitSSHExecutable,
-		"GIT_SSH_VARIANT=ssh",
-		"DEVKIT_SOURCE_TRANSPORT_IDENTITY="+identityPath,
-		"DEVKIT_SOURCE_TRANSPORT_SOCKET="+socketPath,
-		gitExecutable,
-	)
-	return append(command, args...)
+	var result []string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		result = append(result, filepath.Clean(decodeMountInfoPath(fields[4])))
+	}
+	return result, nil
 }
 
-// SetupNativeSlot creates a new independent common repository and linked
-// worktree wholly beneath one selected disposable agent leaf. It never opens
-// or mutates the legacy shared common repository or any sibling registration.
-func SetupNativeSlot(opts NativeSlotOptions) error {
-	if opts.Index < 1 || opts.Index > opts.Count {
-		return fmt.Errorf("native absent-slot construction requires a selected index")
+func validateNativeResetPathComponents(path string) error {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("native reset path %s must be absolute", path)
 	}
-	revision := strings.TrimSpace(opts.SourceRevision)
-	if !isExactGitRevision(revision) {
-		return fmt.Errorf("native absent-slot construction requires an exact Product source revision")
+	current := string(filepath.Separator)
+	volume := filepath.VolumeName(path)
+	if volume != "" {
+		current = volume + string(filepath.Separator)
 	}
-	remoteURL := strings.TrimSpace(opts.Origin)
-	if !gitRemoteRequiresSSH(remoteURL) {
-		return fmt.Errorf("native absent-slot construction requires the source-declared SSH origin")
-	}
-	for label, raw := range map[string]string{
-		"Git SSH executable": opts.GitSSHExecutable,
-		"source identity":    opts.SourceIdentity,
-		"transport socket":   opts.TransportSocket,
-	} {
-		if raw == "" || strings.TrimSpace(raw) != raw ||
-			filepath.Clean(raw) != raw || !filepath.IsAbs(raw) {
-			return fmt.Errorf("native absent-slot construction requires an exact package-owned %s", label)
+	relative := strings.TrimPrefix(path, current)
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect native reset path %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("native reset path %s traverses a symlink or junction", current)
 		}
 	}
-	gitSSHExecutable := opts.GitSSHExecutable
-	identityPath := opts.SourceIdentity
-	socketPath := opts.TransportSocket
-	gitExecutable, err := resolvedPackageGitExecutable()
-	if err != nil {
+	return nil
+}
+
+func nativeResetPathsOverlap(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	return pathWithinRoot(left, right) || pathWithinRoot(right, left)
+}
+
+func validateNativeResetCandidate(candidate nativeResetCandidate, protectedRoots, mountPoints []string) error {
+	if !pathWithinRoot(candidate.boundary, candidate.path) || candidate.path == candidate.boundary {
+		return fmt.Errorf("native reset target %s escapes its declared ownership boundary %s", candidate.path, candidate.boundary)
+	}
+	if err := validateNativeResetPathComponents(candidate.path); err != nil {
 		return err
 	}
-	envExecutable, err := resolvedPackageEnvExecutable()
+	for _, protected := range protectedRoots {
+		protected = strings.TrimSpace(protected)
+		if protected == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(filepath.Clean(protected))
+		if err != nil {
+			return fmt.Errorf("resolve native reset protected root %s: %w", protected, err)
+		}
+		if nativeResetPathsOverlap(candidate.path, absolute) {
+			return fmt.Errorf("native reset target %s overlaps protected root %s", candidate.path, absolute)
+		}
+	}
+	for _, mountPoint := range mountPoints {
+		mountPoint = filepath.Clean(strings.TrimSpace(mountPoint))
+		if mountPoint == "" {
+			continue
+		}
+		if candidate.path == mountPoint || pathWithinRoot(candidate.path, mountPoint) {
+			return fmt.Errorf("native reset target %s contains mount point %s", candidate.path, mountPoint)
+		}
+	}
+	return nil
+}
+
+// PlanNativeReset validates the complete destructive boundary before any
+// broker, session, workspace, home, or bootstrap effect occurs. Existing
+// payload beneath an exact owned target is intentionally opaque: a foreign
+// .git pointer is inert data to unlink, never a source of expanded custody.
+func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
+	if strings.TrimSpace(opts.Project) != "dev-all" {
+		return nil, fmt.Errorf("native destructive reset requires the exact dev-all prefix")
+	}
+	repo := strings.TrimSpace(opts.Repo)
+	if strings.TrimSpace(opts.WorktreeRoot) == "" {
+		return nil, fmt.Errorf("native reset worktree root is required")
+	}
+	worktreeRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(opts.WorktreeRoot)))
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("resolve native reset worktree root %s: %w", opts.WorktreeRoot, err)
 	}
-	worktreesRoot := filepath.Clean(strings.TrimSpace(opts.WorktreeRoot))
-	finalAgentRoot := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", opts.Index))
-	bootstrapHome := filepath.Clean(strings.TrimSpace(opts.BootstrapHome))
-	if bootstrapHome == "." || !filepath.IsAbs(bootstrapHome) {
-		return fmt.Errorf("selected native slot bootstrap home must be an exact absolute path")
+	if strings.TrimSpace(opts.StateRoot) == "" {
+		return nil, fmt.Errorf("native reset state root is required")
 	}
-	if opts.DryRun {
-		fmt.Fprintf(
-			os.Stderr,
-			"+ construct-native-absent-slot index=%d common=%s worktree=%s revision=%s\n",
-			opts.Index,
-			filepath.Join(finalAgentRoot, ".devkit", "git", opts.Repo+".git"),
-			filepath.Join(finalAgentRoot, opts.Repo),
-			revision,
+	stateRoot, err := filepath.Abs(filepath.Clean(strings.TrimSpace(opts.StateRoot)))
+	if err != nil {
+		return nil, fmt.Errorf("resolve native reset state root %s: %w", opts.StateRoot, err)
+	}
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo)
+	if err != nil {
+		return nil, err
+	}
+	count := opts.Count
+	if count < 1 {
+		return nil, fmt.Errorf("native destructive reset count must be positive")
+	}
+	if err := validateNativeResetPathComponents(worktreeRoot); err != nil {
+		return nil, err
+	}
+	if err := validateNativeResetPathComponents(stateRoot); err != nil {
+		return nil, err
+	}
+
+	candidates := make([]nativeResetCandidate, 0, count*2+2)
+	for index := 1; index <= count; index++ {
+		candidates = append(candidates,
+			nativeResetCandidate{
+				path:     filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index)),
+				boundary: worktreeRoot,
+			},
+			nativeResetCandidate{
+				path:     filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, index)),
+				boundary: stateRoot,
+			},
 		)
+	}
+	candidates = append(candidates,
+		nativeResetCandidate{path: commonDir, boundary: worktreeRoot},
+		nativeResetCandidate{
+			path:     runtimeagent.ManifestPath(stateRoot, opts.Project),
+			boundary: stateRoot,
+		},
+	)
+	staging, err := filepath.Glob(filepath.Join(filepath.Dir(commonDir), "."+repo+".bootstrap-*"))
+	if err != nil {
+		return nil, fmt.Errorf("enumerate native reset bootstrap staging paths: %w", err)
+	}
+	for _, path := range staging {
+		candidates = append(candidates, nativeResetCandidate{path: path, boundary: worktreeRoot})
+	}
+
+	mountPoints, err := nativeResetMountPoints()
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range candidates {
+		if err := validateNativeResetCandidate(candidate, opts.ProtectedRoots, mountPoints); err != nil {
+			return nil, err
+		}
+	}
+	return &NativeResetPlan{
+		dryRun:         opts.DryRun,
+		candidates:     candidates,
+		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
+		mountPoints:    append([]string(nil), mountPoints...),
+	}, nil
+}
+
+type stagedNativeResetPath struct {
+	source string
+	target string
+}
+
+func rollbackNativeResetStaging(staged []stagedNativeResetPath) error {
+	var result error
+	for index := len(staged) - 1; index >= 0; index-- {
+		item := staged[index]
+		if err := os.Rename(item.target, item.source); err != nil {
+			result = errors.Join(result, fmt.Errorf("restore native reset target %s: %w", item.source, err))
+		}
+	}
+	return result
+}
+
+// Apply atomically removes the validated active names before discarding their
+// contents. A staging failure restores every name already moved.
+func (plan *NativeResetPlan) Apply() error {
+	if plan == nil {
+		return fmt.Errorf("native reset plan is required")
+	}
+	for _, candidate := range plan.candidates {
+		if err := validateNativeResetCandidate(candidate, plan.protectedRoots, plan.mountPoints); err != nil {
+			return fmt.Errorf("revalidate native reset boundary before disposal: %w", err)
+		}
+	}
+	if plan.dryRun {
+		for _, candidate := range plan.candidates {
+			fmt.Fprintf(os.Stderr, "+ reset-owned %s\n", candidate.path)
+		}
 		return nil
 	}
-	if _, err := os.Lstat(finalAgentRoot); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			return fmt.Errorf("selected native slot agent root %s must be absent", finalAgentRoot)
+	quarantines := map[string]string{}
+	var staged []stagedNativeResetPath
+	cleanupEmptyQuarantines := func() {
+		for _, quarantine := range quarantines {
+			_ = os.Remove(quarantine)
 		}
-		return err
 	}
-	agentRoot, err := os.MkdirTemp(
-		worktreesRoot,
-		fmt.Sprintf(".agent%d.construction-", opts.Index),
-	)
-	if err != nil {
-		return fmt.Errorf("create staged native slot generation: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.RemoveAll(agentRoot)
+	for _, candidate := range plan.candidates {
+		info, err := os.Lstat(candidate.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-	}()
-	worktree := filepath.Join(agentRoot, opts.Repo)
-	commonDir := filepath.Join(agentRoot, ".devkit", "git", opts.Repo+".git")
-	if _, err := os.Lstat(commonDir); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			return fmt.Errorf("selected native slot common repository %s must be absent", commonDir)
-		}
-		return err
-	}
-	envLocalGit := func(args ...string) []string {
-		return packageGitCommand(envExecutable, gitExecutable, "", args...)
-	}
-	envRemoteGit := func(args ...string) []string {
-		return packageSlotGitCommand(
-			envExecutable,
-			gitExecutable,
-			gitSSHExecutable,
-			identityPath,
-			socketPath,
-			args...,
-		)
-	}
-	if err := os.MkdirAll(filepath.Dir(commonDir), 0o700); err != nil {
-		return fmt.Errorf("create selected native slot Git root: %w", err)
-	}
-	if err := runSlotWithPolicy(opts.DryRun, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("init", "--bare", "--initial-branch=main", commonDir)...); err != nil {
-		return err
-	}
-	if err := runSlotWithPolicy(opts.DryRun, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("--git-dir", commonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
-		return err
-	}
-	if err := runSlotWithPolicy(opts.DryRun, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("--git-dir", commonDir, "config", "extensions.worktreeConfig", "true")...); err != nil {
-		return err
-	}
-	if err := runSlotWithPolicy(opts.DryRun, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("--git-dir", commonDir, "remote", "add", "origin", remoteURL)...); err != nil {
-		return err
-	}
-	if err := runSlotWithPolicy(opts.DryRun, 0, nativeFetchIdleLimit, envExecutable, envRemoteGit(
-		"--git-dir", commonDir,
-		"fetch", "--no-tags", "--progress", "origin", revision,
-	)...); err != nil {
-		return fmt.Errorf("fetch exact authoritative Product source %s: %w", revision, err)
-	}
-	out, result := execx.Capture(context.Background(), envExecutable, envLocalGit("--git-dir", commonDir, "rev-parse", "FETCH_HEAD^{commit}")...)
-	object := strings.TrimSpace(out)
-	err = nil
-	if result.Code != 0 {
-		err = fmt.Errorf("%s exited %d", envExecutable, result.Code)
-	}
-	if err != nil || object != revision {
-		return fmt.Errorf("selected native slot fetched Product object %s, expected %s", object, revision)
-	}
-	marker, err := nativeOwnedCommonRepositoryMarker(opts.Repo, remoteURL)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(commonDir, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
-		return fmt.Errorf("write selected native slot common repository marker: %w", err)
-	}
-	if err := runSlotWithPolicy(false, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("--git-dir", commonDir, "worktree", "add", "--detach", worktree, revision)...); err != nil {
-		return err
-	}
-	registration := filepath.Join(commonDir, "worktrees", filepath.Base(opts.Repo))
-	if err := runSlotWithPolicy(false, nativeMetadataOperationLimit, 0, envExecutable, envLocalGit("--git-dir", registration, "config", "--worktree", "core.bare", "false")...); err != nil {
-		return fmt.Errorf("mark selected native slot registration as a worktree: %w", err)
-	}
-	if err := rewriteNativeGitdir(worktree, agentRoot, commonDir); err != nil {
-		return err
-	}
-	slotGit := func(args ...string) (string, error) {
-		out, result := execx.Capture(context.Background(), envExecutable, envLocalGit(args...)...)
-		if result.Code != 0 {
-			return "", fmt.Errorf("%s %v: exit %d", envExecutable, args, result.Code)
-		}
-		return strings.TrimSpace(out), nil
-	}
-	top, err := slotGit("-C", worktree, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return fmt.Errorf("resolve selected native slot worktree: %w", err)
-	}
-	canonicalTop, err := canonicalExistingPath(top)
-	if err != nil {
-		return err
-	}
-	canonicalWorktree, err := canonicalExistingPath(worktree)
-	if err != nil {
-		return err
-	}
-	if canonicalTop != canonicalWorktree {
-		return fmt.Errorf("selected native slot top-level %s does not match worktree %s", canonicalTop, canonicalWorktree)
-	}
-	head, err := slotGit("-C", worktree, "rev-parse", "HEAD")
-	if err != nil {
-		return fmt.Errorf("resolve selected native slot revision: %w", err)
-	}
-	if head != revision {
-		return fmt.Errorf("selected native slot HEAD %s does not match authoritative source revision %s", head, revision)
-	}
-	status, err := slotGit("-C", worktree, "status", "--porcelain=v1")
-	if err != nil {
-		return fmt.Errorf("inspect selected native slot status: %w", err)
-	}
-	if status != "" {
-		return fmt.Errorf("selected native slot materialization is dirty")
-	}
-	if err := os.Rename(agentRoot, finalAgentRoot); err != nil {
-		return fmt.Errorf("atomically publish selected native slot generation: %w", err)
-	}
-	agentRoot = finalAgentRoot
-	finalWorktree := filepath.Join(finalAgentRoot, opts.Repo)
-	finalHead, err := slotGit("-C", finalWorktree, "rev-parse", "HEAD")
-	if err != nil || finalHead != revision {
-		return fmt.Errorf(
-			"published native slot revision %s does not match authoritative source revision %s: %w",
-			finalHead,
-			revision,
-			err,
-		)
-	}
-	finalStatus, err := slotGit("-C", finalWorktree, "status", "--porcelain=v1")
-	if err != nil || finalStatus != "" {
-		return fmt.Errorf("published native slot is not a clean Git worktree: %w", err)
-	}
-	committed = true
-	return nil
-}
-
-// ValidateNativeSlot proves that an already-constructed selected slot is the
-// exact manifest-pinned, portable, writable package-owned checkout expected by
-// the source-derived plan. It is read-only and never materializes or changes state.
-func ValidateNativeSlot(opts NativeSlotValidationOptions) error {
-	repo := strings.TrimSpace(opts.Repo)
-	if repo == "" || opts.Index < 1 {
-		return fmt.Errorf("native slot validation requires repo and selected index")
-	}
-	revision := strings.TrimSpace(opts.SourceRevision)
-	if !isExactGitRevision(revision) {
-		return fmt.Errorf("native slot validation requires the exact Product source revision")
-	}
-	worktreeRoot := filepath.Clean(strings.TrimSpace(opts.WorktreeRoot))
-	agentRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", opts.Index))
-	worktree := filepath.Join(agentRoot, repo)
-	commonDir := filepath.Join(agentRoot, ".devkit", "git", repo+".git")
-	hostHome := filepath.Clean(strings.TrimSpace(opts.HostHome))
-	stateRoot := filepath.Clean(strings.TrimSpace(opts.StateRoot))
-	paths := map[string]string{
-		"selected agent root":  agentRoot,
-		"selected worktree":    worktree,
-		"selected common repo": commonDir,
-		"selected home":        hostHome,
-		"selected state":       stateRoot,
-	}
-	boundaryRoot := strings.TrimSpace(opts.BoundaryRoot)
-	if boundaryRoot != "" {
-		boundaryRoot = filepath.Clean(boundaryRoot)
-		paths["selected disposable boundary"] = boundaryRoot
-	}
-	for label, path := range paths {
-		if path == "." || !filepath.IsAbs(path) {
-			return fmt.Errorf("%s must be an exact absolute path", label)
-		}
-		resolved, err := canonicalExistingPath(path)
 		if err != nil {
-			return fmt.Errorf("validate %s %s: %w", label, path, err)
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("inspect native reset target %s: %w", candidate.path, err), rollbackErr)
 		}
-		if resolved != path {
-			return fmt.Errorf("%s %s resolves through unexpected alias %s", label, path, resolved)
+		if info.Mode()&os.ModeSymlink != 0 {
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("native reset target %s became a symlink or junction", candidate.path), rollbackErr)
 		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return fmt.Errorf("inspect %s %s: %w", label, path, err)
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s %s must be a plain directory", label, path)
-		}
-	}
-	if boundaryRoot == "" {
-		if hostHome != agentRoot && !pathWithinRoot(agentRoot, hostHome) {
-			return fmt.Errorf("selected home %s escapes agent root %s", hostHome, agentRoot)
-		}
-	} else {
-		for label, path := range map[string]string{
-			"agent root": agentRoot,
-			"home":       hostHome,
-			"state":      stateRoot,
-		} {
-			if path != boundaryRoot && !pathWithinRoot(boundaryRoot, path) {
-				return fmt.Errorf("selected %s %s escapes disposable boundary %s", label, path, boundaryRoot)
+		quarantine := quarantines[candidate.boundary]
+		if quarantine == "" {
+			quarantine, err = os.MkdirTemp(candidate.boundary, ".devkit-reset-")
+			if err != nil {
+				rollbackErr := rollbackNativeResetStaging(staged)
+				cleanupEmptyQuarantines()
+				return errors.Join(fmt.Errorf("create native reset quarantine under %s: %w", candidate.boundary, err), rollbackErr)
 			}
+			quarantines[candidate.boundary] = quarantine
 		}
-	}
-	gitFile := filepath.Join(worktree, ".git")
-	gitInfo, err := os.Lstat(gitFile)
-	if err != nil {
-		return fmt.Errorf("inspect selected worktree metadata %s: %w", gitFile, err)
-	}
-	if gitInfo.Mode()&os.ModeSymlink != 0 || !gitInfo.Mode().IsRegular() {
-		return fmt.Errorf("selected worktree metadata %s must be a plain file", gitFile)
-	}
-	gitdirValue, err := readGitdirPointer(gitFile)
-	if err != nil {
-		return err
-	}
-	if filepath.IsAbs(gitdirValue) {
-		return fmt.Errorf("selected worktree gitdir must be relative")
-	}
-	gitdir := filepath.Clean(filepath.Join(worktree, gitdirValue))
-	worktreesDir := filepath.Join(commonDir, "worktrees")
-	if !pathWithinRoot(worktreesDir, gitdir) {
-		return fmt.Errorf("selected worktree gitdir %s escapes package-owned common repository %s", gitdir, commonDir)
-	}
-	for name, expected := range map[string]string{
-		"commondir": commonDir,
-		"gitdir":    gitFile,
-	} {
-		data, err := os.ReadFile(filepath.Join(gitdir, name))
-		if err != nil {
-			return fmt.Errorf("read selected worktree %s metadata: %w", name, err)
+		target := filepath.Join(quarantine, fmt.Sprintf("%03d", len(staged)))
+		if err := os.Rename(candidate.path, target); err != nil {
+			rollbackErr := rollbackNativeResetStaging(staged)
+			cleanupEmptyQuarantines()
+			return errors.Join(fmt.Errorf("stage native reset target %s: %w", candidate.path, err), rollbackErr)
 		}
-		value := strings.TrimSpace(string(data))
-		if value == "" || filepath.IsAbs(value) {
-			return fmt.Errorf("selected worktree %s metadata must be relative", name)
-		}
-		if resolved := filepath.Clean(filepath.Join(gitdir, value)); resolved != expected {
-			return fmt.Errorf("selected worktree %s resolves to %s, expected %s", name, resolved, expected)
-		}
+		staged = append(staged, stagedNativeResetPath{source: candidate.path, target: target})
 	}
-	marker, err := nativeOwnedCommonRepositoryMarker(repo, strings.TrimSpace(opts.Origin))
-	if err != nil {
-		return err
-	}
-	markerData, err := os.ReadFile(filepath.Join(commonDir, "devkit-owned-common"))
-	if err != nil {
-		return fmt.Errorf("read selected common repository authority marker: %w", err)
-	}
-	if string(markerData) != marker {
-		return fmt.Errorf("selected common repository authority marker does not match source-declared origin")
-	}
-	gitExecutable, err := resolvedPackageGitExecutable()
-	if err != nil {
-		return err
-	}
-	envExecutable, err := resolvedPackageEnvExecutable()
-	if err != nil {
-		return err
-	}
-	git := func(args ...string) (string, error) {
-		args = append([]string{"--no-optional-locks"}, args...)
-		out, result := execx.Capture(
-			context.Background(),
-			envExecutable,
-			packageGitCommand(envExecutable, gitExecutable, "", args...)...,
-		)
-		if result.Code != 0 {
-			return "", fmt.Errorf("package Git %v exited %d", args, result.Code)
-		}
-		return strings.TrimSpace(out), nil
-	}
-	top, err := git("-C", worktree, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return fmt.Errorf("resolve selected worktree top-level: %w", err)
-	}
-	if filepath.Clean(top) != worktree {
-		return fmt.Errorf("selected worktree top-level %s does not match %s", top, worktree)
-	}
-	head, err := git("-C", worktree, "rev-parse", "HEAD")
-	if err != nil {
-		return fmt.Errorf("resolve selected Product HEAD: %w", err)
-	}
-	if head != revision {
-		return fmt.Errorf("selected Product HEAD %s does not match manifest revision %s", head, revision)
-	}
-	origin, err := git("-C", worktree, "remote", "get-url", "origin")
-	if err != nil {
-		return fmt.Errorf("resolve selected Product origin: %w", err)
-	}
-	if origin != strings.TrimSpace(opts.Origin) {
-		return fmt.Errorf("selected Product origin %s does not match source declaration %s", origin, strings.TrimSpace(opts.Origin))
-	}
-	status, err := git("-C", worktree, "status", "--porcelain=v1")
-	if err != nil {
-		return fmt.Errorf("inspect selected Product status: %w", err)
-	}
-	if status != "" {
-		return fmt.Errorf("selected Product worktree is not clean")
-	}
-	const writeAccess = 0x2
-	for _, path := range []string{worktree, commonDir, gitdir} {
-		if err := syscall.Access(path, writeAccess); err != nil {
-			return fmt.Errorf("selected Product Git path %s is not writable: %w", path, err)
+	for _, quarantine := range quarantines {
+		if err := os.RemoveAll(quarantine); err != nil {
+			return fmt.Errorf("discard native reset quarantine %s: %w", quarantine, err)
 		}
 	}
 	return nil
 }
 
-// PreflightNative validates every target in a legacy multi-slot setup before
+// PreflightNative validates every target in a multi-slot reconstruction before
 // bootstrap identity or transport state is materialized. Existing
 // package-owned worktrees and their exact per-agent homes are accepted;
 // foreign, standalone, partial, and traversing targets fail closed.
@@ -1294,9 +1073,6 @@ func PreflightNative(opts NativeOptions) error {
 // SetupNative creates dedicated worktrees for every native agent, including
 // agent1, without changing the primary checkout's current branch.
 func SetupNative(opts NativeOptions) error {
-	if isCanonicalProductIdentity(opts.Repo, opts.Origin) {
-		return fmt.Errorf("legacy native setup has no Product authority; use the manifest-bound product-adapter")
-	}
 	devkitRoot := filepath.Clean(opts.DevkitRoot)
 	devRoot := filepath.Clean(filepath.Join(devkitRoot, ".."))
 	repo := strings.TrimSpace(opts.Repo)
@@ -1455,42 +1231,9 @@ func SetupNative(opts NativeOptions) error {
 	return nil
 }
 
-func isExactGitRevision(value string) bool {
-	if len(value) != 40 || strings.ToLower(value) != value {
-		return false
-	}
-	for _, char := range value {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
-			return false
-		}
-	}
-	return true
-}
-
 func gitRemoteRequiresSSH(remoteURL string) bool {
 	remoteURL = strings.TrimSpace(remoteURL)
 	return strings.HasPrefix(remoteURL, "ssh://") ||
 		(strings.Contains(remoteURL, "@") && strings.Contains(remoteURL, ":") &&
 			!strings.Contains(remoteURL, "://"))
-}
-
-func isCanonicalProductIdentity(repo, remoteURL string) bool {
-	if strings.EqualFold(strings.TrimSpace(repo), "ouroboros-ide") {
-		return true
-	}
-	remote := strings.ToLower(strings.TrimSpace(remoteURL))
-	remote = strings.TrimSuffix(strings.TrimSuffix(remote, "/"), ".git")
-	if strings.HasPrefix(remote, "git@github.com:") {
-		return filepath.Base(strings.TrimPrefix(remote, "git@github.com:")) == "ouroboros-ide"
-	}
-	for _, prefix := range []string{
-		"ssh://git@github.com/",
-		"ssh://git@ssh.github.com:443/",
-		"https://github.com/",
-	} {
-		if strings.HasPrefix(remote, prefix) {
-			return filepath.Base(strings.TrimPrefix(remote, prefix)) == "ouroboros-ide"
-		}
-	}
-	return false
 }

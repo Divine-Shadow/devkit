@@ -1,12 +1,5 @@
 # Native Runtime Review Handoff
 
-> **Historical status.** This document records an earlier native-runtime
-> review and is not operative Product guidance. Product now consumes only the
-> adapter and launcher emitted by the sole installed
-> `fleet-runtime-authority/v1` manifest. Raw wrapper/native lifecycle examples
-> cannot construct or promote Product; promotion requires the governed
-> Product-owned twice-fresh lifecycle.
-
 ## Summary
 
 Flake-backed overlays now have Nix-native top-level lifecycle and exec paths.
