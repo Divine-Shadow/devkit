@@ -1590,6 +1590,21 @@ fi
 	if err := os.WriteFile(filepath.Join(agent1Worktree, "README.md"), []byte("dirty selected slot\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	readOnlyModuleCache := filepath.Join(
+		agent1Worktree,
+		".devhome-agent1", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1",
+	)
+	if err := os.MkdirAll(readOnlyModuleCache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(readOnlyModuleCache, "ftoa_test.go"), []byte("disposable readonly module cache\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{readOnlyModuleCache, filepath.Dir(readOnlyModuleCache), filepath.Dir(filepath.Dir(readOnlyModuleCache))} {
+		if err := os.Chmod(path, 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(filepath.Join(sourceRepo, "VERSION"), []byte("current source\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1640,6 +1655,9 @@ fi
 	}
 	if _, err := os.Lstat(filepath.Join(agent1Worktree, "dirty-selected")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("selected dirty payload survived: %v", err)
+	}
+	if _, err := os.Lstat(readOnlyModuleCache); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected readonly module cache survived: %v", err)
 	}
 	if err := selectedProcess.Wait(); err == nil {
 		t.Fatal("selected slot process exited successfully instead of being terminated")

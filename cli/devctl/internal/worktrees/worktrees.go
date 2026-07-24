@@ -827,6 +827,7 @@ type NativeResetPlan struct {
 	candidates     []nativeResetCandidate
 	protectedRoots []string
 	mountPoints    []string
+	quarantineName string
 	gitCommonDir   string
 	gitRef         string
 	gitRefOld      string
@@ -928,6 +929,53 @@ func validateNativeResetCandidate(candidate nativeResetCandidate, protectedRoots
 	return nil
 }
 
+func nativeResetLegacyQuarantineName(name string) bool {
+	const prefix = ".devkit-reset-"
+	suffix := strings.TrimPrefix(name, prefix)
+	if suffix == name || suffix == "" {
+		return false
+	}
+	for _, char := range suffix {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func appendNativeResetQuarantineResidue(
+	candidates []nativeResetCandidate,
+	boundaries []string,
+	quarantineName string,
+) ([]nativeResetCandidate, error) {
+	seen := map[string]bool{}
+	for _, boundary := range boundaries {
+		boundary = filepath.Clean(strings.TrimSpace(boundary))
+		if boundary == "" || boundary == "." || seen[boundary] {
+			continue
+		}
+		seen[boundary] = true
+		entries, err := os.ReadDir(boundary)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("enumerate native reset quarantine residue under %s: %w", boundary, err)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasPrefix(name, quarantineName) && !nativeResetLegacyQuarantineName(name) {
+				continue
+			}
+			candidates = append(candidates, nativeResetCandidate{
+				path:     filepath.Join(boundary, name),
+				boundary: boundary,
+			})
+		}
+	}
+	return candidates, nil
+}
+
 // PlanNativeReset validates the complete destructive boundary before any
 // broker, session, workspace, home, or bootstrap effect occurs. Existing
 // payload beneath an exact owned target is intentionally opaque: a foreign
@@ -987,6 +1035,15 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 			boundary: stateRoot,
 		},
 	)
+	quarantineName := fmt.Sprintf(".devkit-reset-%s-all-", opts.Project)
+	candidates, err = appendNativeResetQuarantineResidue(
+		candidates,
+		[]string{worktreeRoot, stateRoot},
+		quarantineName,
+	)
+	if err != nil {
+		return nil, err
+	}
 	staging, err := filepath.Glob(filepath.Join(filepath.Dir(commonDir), "."+repo+".bootstrap-*"))
 	if err != nil {
 		return nil, fmt.Errorf("enumerate native reset bootstrap staging paths: %w", err)
@@ -1009,6 +1066,7 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 		candidates:     candidates,
 		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
 		mountPoints:    append([]string(nil), mountPoints...),
+		quarantineName: quarantineName,
 	}, nil
 }
 
@@ -1102,6 +1160,8 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			boundary: stateRoot,
 		},
 	}
+	quarantineName := fmt.Sprintf(".devkit-reset-%s-agent%d-", opts.Project, opts.Index)
+	quarantineBoundaries := []string{agentRoot, stateRoot}
 	// Agent 1's home is inside its worktree. Later slots keep the home beside
 	// the worktree, so select that exact directory without deleting the shared
 	// agent root or any other repository beneath it.
@@ -1134,9 +1194,11 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			return nil, err
 		}
 		if metadata != "" {
+			metadataBoundary := filepath.Join(commonDir, "worktrees")
 			candidates = append(candidates, nativeResetCandidate{
-				path: metadata, boundary: filepath.Join(commonDir, "worktrees"),
+				path: metadata, boundary: metadataBoundary,
 			})
+			quarantineBoundaries = append(quarantineBoundaries, metadataBoundary)
 		}
 		branchPrefix := strings.TrimSpace(opts.BranchPrefix)
 		if branchPrefix == "" {
@@ -1154,6 +1216,10 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect package-owned common repository %s: %w", commonDir, statErr)
 	}
+	candidates, err = appendNativeResetQuarantineResidue(candidates, quarantineBoundaries, quarantineName)
+	if err != nil {
+		return nil, err
+	}
 
 	mountPoints, err := nativeResetMountPoints()
 	if err != nil {
@@ -1169,10 +1235,46 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 		candidates:     candidates,
 		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
 		mountPoints:    append([]string(nil), mountPoints...),
+		quarantineName: quarantineName,
 		gitCommonDir:   gitCommonDir,
 		gitRef:         gitRef,
 		gitRefOld:      gitRefOld,
 	}, nil
+}
+
+func removeNativeResetQuarantine(path string) error {
+	// Go and SBT caches intentionally make package directories read-only. They
+	// remain disposable state, so restore owner traversal/write permission on
+	// real directories without following payload symlinks before unlinking the
+	// already-quarantined tree.
+	if err := filepath.WalkDir(path, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil
+		}
+		mode := info.Mode().Perm()
+		if mode&0o700 != 0o700 {
+			if err := os.Chmod(current, mode|0o700); err != nil {
+				return fmt.Errorf("make native reset directory removable %s: %w", current, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("native reset quarantine still exists after removal: %s", path)
+	}
+	return nil
 }
 
 type stagedNativeResetPath struct {
@@ -1235,7 +1337,11 @@ func (plan *NativeResetPlan) Apply() error {
 		}
 		quarantine := quarantines[candidate.boundary]
 		if quarantine == "" {
-			quarantine, err = os.MkdirTemp(candidate.boundary, ".devkit-reset-")
+			quarantineName := plan.quarantineName
+			if quarantineName == "" {
+				quarantineName = ".devkit-reset-"
+			}
+			quarantine, err = os.MkdirTemp(candidate.boundary, quarantineName)
 			if err != nil {
 				rollbackErr := rollbackNativeResetStaging(staged)
 				cleanupEmptyQuarantines()
@@ -1261,7 +1367,7 @@ func (plan *NativeResetPlan) Apply() error {
 		}
 	}
 	for _, quarantine := range quarantines {
-		if err := os.RemoveAll(quarantine); err != nil {
+		if err := removeNativeResetQuarantine(quarantine); err != nil {
 			return fmt.Errorf("discard native reset quarantine %s: %w", quarantine, err)
 		}
 	}

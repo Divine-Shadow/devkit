@@ -351,6 +351,61 @@ type nativeSlotResetStatus struct {
 	Capacity     capacity.Summary `json:"capacity"`
 }
 
+type nativeSlotResetLock struct {
+	file *os.File
+	path string
+}
+
+func acquireNativeSlotResetLock(stateRoot, project string) (*nativeSlotResetLock, error) {
+	stateRoot = filepath.Clean(strings.TrimSpace(stateRoot))
+	if stateRoot == "" || !filepath.IsAbs(stateRoot) {
+		return nil, fmt.Errorf("native reset lock requires an absolute source-declared state root")
+	}
+	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create native reset state root %s: %w", stateRoot, err)
+	}
+	info, err := os.Lstat(stateRoot)
+	if err != nil {
+		return nil, fmt.Errorf("inspect native reset state root %s: %w", stateRoot, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("native reset state root %s must be a real directory", stateRoot)
+	}
+	lockPath := filepath.Join(stateRoot, "."+project+"-native-reset.lock")
+	fd, err := syscall.Open(
+		lockPath,
+		syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
+		0o600,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open package-owned native reset lock %s: %w", lockPath, err)
+	}
+	file := os.NewFile(uintptr(fd), lockPath)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("open package-owned native reset lock %s", lockPath)
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("another package-owned native reset is active")
+		}
+		return nil, fmt.Errorf("lock package-owned native reset %s: %w", lockPath, err)
+	}
+	return &nativeSlotResetLock{file: file, path: lockPath}, nil
+}
+
+func (lock *nativeSlotResetLock) release() error {
+	if lock == nil || lock.file == nil {
+		return nil
+	}
+	fd := int(lock.file.Fd())
+	unlockErr := syscall.Flock(fd, syscall.LOCK_UN)
+	closeErr := lock.file.Close()
+	lock.file = nil
+	return errors.Join(unlockErr, closeErr)
+}
+
 func printNativeSlotResetStatus(status nativeSlotResetStatus, format string) error {
 	if format == "json" {
 		data, err := json.MarshalIndent(status, "", "  ")
@@ -465,6 +520,19 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		DryRun:         ctx.DryRun,
 	}
 	resetPlan, err := wtx.PlanNativeSlotReset(resetOptions)
+	if err != nil {
+		return err
+	}
+	resetLock, err := acquireNativeSlotResetLock(resetOptions.StateRoot, ctx.Project)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, resetLock.release())
+	}()
+	// Re-plan after acquiring the lifecycle lock so stale quarantine residue
+	// cannot appear between discovery and the destructive boundary.
+	resetPlan, err = wtx.PlanNativeSlotReset(resetOptions)
 	if err != nil {
 		return err
 	}

@@ -1104,6 +1104,31 @@ func TestRunCommandPreservingExitProjectsStdoutByteExactly(t *testing.T) {
 	}
 }
 
+func TestNativeSlotResetLockSerializesPackageOwnedDisposal(t *testing.T) {
+	stateRoot := filepath.Join(t.TempDir(), "native-state")
+	first, err := acquireNativeSlotResetLock(stateRoot, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := acquireNativeSlotResetLock(stateRoot, "dev-all")
+	if err == nil || !strings.Contains(err.Error(), "another package-owned native reset is active") {
+		if second != nil {
+			_ = second.release()
+		}
+		t.Fatalf("second reset lock error = %v", err)
+	}
+	if err := first.release(); err != nil {
+		t.Fatal(err)
+	}
+	reacquired, err := acquireNativeSlotResetLock(stateRoot, "dev-all")
+	if err != nil {
+		t.Fatalf("reacquire native reset lock: %v", err)
+	}
+	if err := reacquired.release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTailLines(t *testing.T) {
 	got := tailLines("a\nb\nc", 2)
 	if len(got) != 2 || got[0] != "b" || got[1] != "c" {

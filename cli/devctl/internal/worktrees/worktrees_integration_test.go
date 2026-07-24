@@ -994,6 +994,102 @@ func TestNativeSlotResetDisposesOnlySelectedSlot(t *testing.T) {
 	}
 }
 
+func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	agentRoot := filepath.Join(worktreeRoot, "agent1")
+	selectedWorktree := filepath.Join(agentRoot, "ouroboros-ide")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	siblingState := filepath.Join(stateRoot, "dev-all-agent2")
+	legacyAgentQuarantine := filepath.Join(agentRoot, ".devkit-reset-12345")
+	legacyStateQuarantine := filepath.Join(stateRoot, ".devkit-reset-67890")
+	ownedAgentQuarantine := filepath.Join(agentRoot, ".devkit-reset-dev-all-agent1-stale")
+	outside := filepath.Join(root, "outside")
+
+	for _, path := range []string{
+		filepath.Join(selectedWorktree, ".devhome-agent1", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1"),
+		selectedState,
+		siblingState,
+		filepath.Join(legacyAgentQuarantine, "readonly"),
+		filepath.Join(legacyStateQuarantine, "readonly"),
+		filepath.Join(ownedAgentQuarantine, "readonly"),
+		outside,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readOnlyCache := filepath.Join(selectedWorktree, ".devhome-agent1", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1")
+	if err := os.WriteFile(filepath.Join(readOnlyCache, "ftoa_test.go"), []byte("disposable cache\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	outsideSentinel := filepath.Join(outside, "preserve")
+	if err := os.WriteFile(outsideSentinel, []byte("outside reset boundary\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(readOnlyCache, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{readOnlyCache, filepath.Dir(readOnlyCache), filepath.Dir(filepath.Dir(readOnlyCache))} {
+		if err := os.Chmod(path, 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(legacyAgentQuarantine, "readonly"),
+		filepath.Join(legacyStateQuarantine, "readonly"),
+		filepath.Join(ownedAgentQuarantine, "readonly"),
+	} {
+		if err := os.WriteFile(filepath.Join(path, "payload"), []byte("discard\n"), 0o400); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	siblingSentinel := filepath.Join(siblingState, "preserve")
+	if err := os.WriteFile(siblingSentinel, []byte("sibling remains exact\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Index:        1,
+		Count:        2,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		selectedWorktree,
+		selectedState,
+		legacyAgentQuarantine,
+		legacyStateQuarantine,
+		ownedAgentQuarantine,
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("reset-owned path survived %s: %v", path, err)
+		}
+	}
+	if got, err := os.ReadFile(siblingSentinel); err != nil || string(got) != "sibling remains exact\n" {
+		t.Fatalf("sibling state changed: %q %v", got, err)
+	}
+	if got, err := os.ReadFile(outsideSentinel); err != nil || string(got) != "outside reset boundary\n" {
+		t.Fatalf("payload symlink acquired outside custody: %q %v", got, err)
+	}
+}
+
 func TestNativeSlotResetRejectsInvalidIndexAndSelectedEscapesBeforeDisposal(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
