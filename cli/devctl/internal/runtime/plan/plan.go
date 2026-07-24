@@ -94,6 +94,12 @@ type BuildOptions struct {
 const (
 	IsolationProfileWorkspaceEgress = "workspace-egress"
 	workspaceEgressNSCDSocket       = "/var/run/nscd/socket"
+	// These fixed projection points are package-owned controller capabilities
+	// for the Management dev-workspace. Callers cannot select inventories,
+	// identities, routes, or source paths through native arguments or env.
+	workspaceControllerSourceInventory = "/etc/fleet/source/fleet-inventory.json"
+	workspaceControllerGUIInventory    = "/etc/fleet/source/fleet-codex-gui-inventory.json"
+	workspaceControllerSSHIdentity     = "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"
 )
 
 var workspaceEgressNSCDSource = workspaceEgressNSCDSocket
@@ -472,6 +478,14 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 	add(workspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
+	if strings.TrimSpace(project) == "dev-workspace" {
+		// Bind individual files only; never expose the parent directory or a
+		// mutable checkout. Required=true makes absence fail closed rather than
+		// falling back to ambient inventories or SSH configuration.
+		add(workspaceControllerSourceInventory, workspaceControllerSourceInventory, "ro", true)
+		add(workspaceControllerGUIInventory, workspaceControllerGUIInventory, "ro", true)
+		add(workspaceControllerSSHIdentity, workspaceControllerSSHIdentity, "ro", true)
+	}
 	return binds
 }
 

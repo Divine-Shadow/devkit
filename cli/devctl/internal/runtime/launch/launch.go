@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
@@ -1128,6 +1129,11 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 			}
 			return nil
 		}
+		if required && isWorkspaceControllerCapabilityTarget(target) {
+			if err := validateWorkspaceControllerCapabilityBinding(source, target, mode); err != nil {
+				return err
+			}
+		}
 		if _, err := os.Stat(source); err != nil {
 			if required {
 				addDir(filepath.Dir(target))
@@ -1228,6 +1234,61 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		args = append(args, runtimeArgs...)
 	}
 	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
+}
+
+func isWorkspaceControllerCapabilityTarget(target string) bool {
+	switch filepath.Clean(strings.TrimSpace(target)) {
+	case "/etc/fleet/source/fleet-inventory.json",
+		"/etc/fleet/source/fleet-codex-gui-inventory.json",
+		"/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateWorkspaceControllerCapability(source, target string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect package-owned controller capability %s: %w", target, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if target == "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519" {
+			return fmt.Errorf("controller capability %s must be a non-symlink regular file", target)
+		}
+		resolved, resolveErr := filepath.EvalSymlinks(source)
+		expected := filepath.Join("/etc/static", filepath.Base(target))
+		if resolveErr != nil || filepath.Clean(resolved) != expected {
+			return fmt.Errorf("controller inventory %s must resolve only to its immutable /etc/static projection", target)
+		}
+		info, err = os.Stat(source)
+		if err != nil {
+			return fmt.Errorf("inspect resolved controller inventory %s: %w", target, err)
+		}
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("controller capability %s must resolve to a regular file", target)
+	}
+	if target == "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519" {
+		if info.Mode().Perm() != 0o600 {
+			return fmt.Errorf("controller identity must be mode 0600: %s", source)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || uint32(stat.Uid) != uint32(os.Getuid()) {
+			return fmt.Errorf("controller identity owner does not match launching user: %s", source)
+		}
+	}
+	return nil
+}
+
+func validateWorkspaceControllerCapabilityBinding(source, target, mode string) error {
+	if filepath.Clean(source) != filepath.Clean(target) {
+		return fmt.Errorf("controller capability source override rejected for %s", target)
+	}
+	if mode != "ro" {
+		return fmt.Errorf("controller capability %s must be projected read-only", target)
+	}
+	return validateWorkspaceControllerCapability(source, target)
 }
 
 func ShellString(cmd Command) string {

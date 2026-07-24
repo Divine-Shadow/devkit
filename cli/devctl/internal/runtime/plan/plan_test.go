@@ -161,6 +161,56 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 	}
 }
 
+func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	if err := os.MkdirAll(filepath.Join(devRoot, "devkit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: filepath.Join(devRoot, "devkit")},
+		Project:          "dev-workspace",
+		Index:            2,
+		Repo:             "shadow-throne-management",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, path := range []string{workspaceControllerSourceInventory, workspaceControllerGUIInventory, workspaceControllerSSHIdentity} {
+		if !hasBind(p.Binds, path, path) {
+			t.Fatalf("controller capability %s not projected: %#v", path, p.Binds)
+		}
+		for _, bind := range p.Binds {
+			if bind.Source == path && (bind.Mode != "ro" || !bind.Required) {
+				t.Fatalf("controller capability %s must be required read-only: %#v", path, bind)
+			}
+		}
+	}
+	for _, bind := range p.Binds {
+		if bind.Source == "/etc/fleet/source" || bind.Target == "/etc/fleet/source" || bind.Source == "/home/bayesartre/.ssh/fleet-station-controller" {
+			t.Fatalf("controller projection must not expose parent directories: %#v", bind)
+		}
+	}
+	devAll, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: filepath.Join(devRoot, "devkit")},
+		Project:          "dev-all",
+		Index:            2,
+		Repo:             "ouroboros-ide",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Build dev-all: %v", err)
+	}
+	for _, path := range []string{workspaceControllerSourceInventory, workspaceControllerGUIInventory, workspaceControllerSSHIdentity} {
+		if hasBind(devAll.Binds, path, path) {
+			t.Fatalf("non-controller workspace must not receive %s", path)
+		}
+	}
+}
+
 func TestWorkspaceEgressRewritesRepoFlakeOverrideToSandboxWorktree(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")

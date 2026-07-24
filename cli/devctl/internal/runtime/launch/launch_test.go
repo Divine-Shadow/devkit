@@ -40,6 +40,60 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestWorkspaceControllerCapabilityValidationRejectsSymlinkAndWrongIdentityMode(t *testing.T) {
+	root := t.TempDir()
+	identity := filepath.Join(root, "identity")
+	if err := os.WriteFile(identity, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(identity, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapability(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"); err != nil {
+		// The owner check is expected to pass for the test user; preserve a
+		// typed failure if the fixture cannot represent that identity.
+		t.Fatalf("valid owner-only identity rejected: %v", err)
+	}
+	if err := os.Chmod(identity, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapability(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"); err == nil {
+		t.Fatal("wrong identity mode must fail closed")
+	}
+	symlink := filepath.Join(root, "identity-link")
+	if err := os.Symlink(identity, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapability(symlink, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"); err == nil {
+		t.Fatal("symlink identity must fail closed")
+	}
+}
+
+func TestWorkspaceControllerCapabilityValidationRequiresRegularInventory(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "inventory")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapability(dir, "/etc/fleet/source/fleet-inventory.json"); err == nil {
+		t.Fatal("directory inventory must fail closed")
+	}
+}
+
+func TestWorkspaceControllerCapabilityBindingRejectsOverridesAndWritableMode(t *testing.T) {
+	root := t.TempDir()
+	identity := filepath.Join(root, "identity")
+	if err := os.WriteFile(identity, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapabilityBinding(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519", "rw"); err == nil {
+		t.Fatal("writable controller capability must fail closed")
+	}
+	if err := validateWorkspaceControllerCapabilityBinding(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519", "ro"); err == nil {
+		t.Fatal("caller source override must fail closed")
+	}
+}
+
 func testPackageSSHCommand(t *testing.T, configPath string) string {
 	t.Helper()
 	authority, err := resolvePackageSSHAuthority()
