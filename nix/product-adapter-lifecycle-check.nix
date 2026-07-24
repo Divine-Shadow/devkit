@@ -699,8 +699,13 @@ let
               echo "divergent canonical selector was accepted" >&2
               exit 1
             fi
-            ${pkgs.gnugrep}/bin/grep -F \
-              "selected Product authority manifest digest does not match" \
+            ${pkgs.jq}/bin/jq -e \
+              ".schema_version == \"devkit/product-codex-auth-seed-failure/v1\" and
+               .status == \"failed\" and .consumer_index == 1 and
+               .code == \"authority_selector_digest_mismatch\" and
+               .outcome == \"not-attempted\" and .phase == \"authority-load\" and
+               .reconciliation == \"target-not-created\" and
+               (keys == [\"code\", \"consumer_index\", \"outcome\", \"phase\", \"reconciliation\", \"schema_version\", \"status\"])" \
               /tmp/divergent-selector.stderr >/dev/null
             test ! -e "$auth_1"
             ${pkgs.coreutils}/bin/rm "$selector"
@@ -720,8 +725,13 @@ let
               echo "divergent current-system generation was accepted" >&2
               exit 1
             fi
-            ${pkgs.gnugrep}/bin/grep -F \
-              "authority locator and current-system executable belong to different generations" \
+            ${pkgs.jq}/bin/jq -e \
+              ".schema_version == \"devkit/product-codex-auth-seed-failure/v1\" and
+               .status == \"failed\" and .consumer_index == 1 and
+               .code == \"current_generation_mismatch\" and
+               .outcome == \"not-attempted\" and .phase == \"authority-load\" and
+               .reconciliation == \"target-not-created\" and
+               (keys == [\"code\", \"consumer_index\", \"outcome\", \"phase\", \"reconciliation\", \"schema_version\", \"status\"])" \
               /tmp/divergent-generation.stderr >/dev/null
             test ! -e "$auth_1"
             ${pkgs.coreutils}/bin/rm "$current_seed_1"

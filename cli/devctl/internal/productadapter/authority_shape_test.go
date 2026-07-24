@@ -88,13 +88,20 @@ func exactManifestEnvelopeFixture(t *testing.T) map[string]any {
 			"systemPath":   "/etc/codex/config.toml",
 		},
 		"controllerSourceLayer": map[string]any{
+			"controllerDevctlPath": "/nix/store/fixture/bin/devctl",
+			"controllerFleetPath":  "/nix/store/fixture/bin/controller-fleet",
+			"controllerGUIInventory": map[string]any{
+				"path": "/nix/store/gui-inventory.json", "sha256": strings.Repeat("3", 64),
+			},
+			"controllerSourceInventory": map[string]any{
+				"path": "/nix/store/source-inventory.json", "sha256": strings.Repeat("4", 64),
+			},
 			"launcherPath":   "/nix/store/fixture/bin/fleet-source-layer",
 			"manifestPath":   "/nix/store/fixture/share/fleet-controller-source-layer/manifest.json",
 			"manifestSha256": strings.Repeat("1", 64),
 			"packagePath":    "/nix/store/fixture",
 			"packageSha256":  strings.Repeat("2", 64),
 		},
-		"devctlLauncherPath":   "/nix/store/fixture/bin/devctl",
 		"devkitProductAdapter": exactAdapterEnvelopeFixture(),
 		"identityEnvPath":      "/nix/store/fixture/identity.env",
 		"identityJsonPath":     "/nix/store/fixture/identity.json",

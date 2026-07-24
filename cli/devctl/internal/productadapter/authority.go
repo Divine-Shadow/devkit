@@ -27,13 +27,16 @@ const (
 var (
 	manifestTopLevelKeys = []string{
 		"artifactDigests", "bundlePath", "codexAuthorization", "controllerSourceLayer",
-		"devctlLauncherPath", "devkitProductAdapter", "identityEnvPath", "identityJsonPath",
+		"devkitProductAdapter", "identityEnvPath", "identityJsonPath",
 		"launcherPath", "runtimeIdentity", "schemaVersion", "sources",
 	}
 	manifestSourceLayerKeys = []string{
-		"launcherPath", "manifestPath", "manifestSha256", "packagePath", "packageSha256",
+		"controllerDevctlPath", "controllerFleetPath", "controllerGUIInventory",
+		"controllerSourceInventory", "launcherPath", "manifestPath", "manifestSha256",
+		"packagePath", "packageSha256",
 	}
-	manifestSourceKeys = []string{
+	manifestInventoryIdentityKeys = []string{"path", "sha256"}
+	manifestSourceKeys            = []string{
 		"dev-workspace", "devkit", "fleet-control", "microvm", "nixos-wsl",
 		"nixpkgs", "ouroboros-ide", "wsl",
 	}
@@ -72,6 +75,29 @@ var (
 		"ivyPath", "jarSha256", "metadataEnv", "repositoryPath", "smokeEvidence", "version",
 	}
 )
+
+type AuthorityFailure struct {
+	Code  string
+	cause error
+}
+
+func (failure *AuthorityFailure) Error() string { return failure.cause.Error() }
+func (failure *AuthorityFailure) Unwrap() error { return failure.cause }
+
+func typedAuthorityFailure(code string, cause error) error {
+	if AuthorityFailureCode(cause) != "" {
+		return cause
+	}
+	return &AuthorityFailure{Code: code, cause: cause}
+}
+
+func AuthorityFailureCode(err error) string {
+	var failure *AuthorityFailure
+	if errors.As(err, &failure) {
+		return failure.Code
+	}
+	return ""
+}
 
 // These values are package-linker inputs. Product mode is disabled in the
 // general Devkit package. The WSL constructor enables it and binds subordinate
@@ -270,34 +296,49 @@ func Load(role Role, consumerIndex int, attestation Attestation) (Authority, err
 	}
 	manifestFile, manifestPath, err := openAuthorityManifest(locator)
 	if err != nil {
-		return Authority{}, err
+		return Authority{}, typedAuthorityFailure("authority_manifest_open_failed", err)
 	}
 	data, err := io.ReadAll(manifestFile)
 	if err != nil {
 		_ = manifestFile.Close()
-		return Authority{}, fmt.Errorf("read Product authority manifest: %w", err)
+		return Authority{}, typedAuthorityFailure(
+			"authority_manifest_read_failed",
+			fmt.Errorf("read Product authority manifest: %w", err),
+		)
 	}
 	if err := validateManifestEnvelope(data); err != nil {
 		_ = manifestFile.Close()
-		return Authority{}, err
+		return Authority{}, typedAuthorityFailure("authority_manifest_invalid", err)
 	}
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		_ = manifestFile.Close()
-		return Authority{}, fmt.Errorf("parse Product authority manifest: %w", err)
+		return Authority{}, typedAuthorityFailure(
+			"authority_manifest_invalid",
+			fmt.Errorf("parse Product authority manifest: %w", err),
+		)
 	}
 	if manifest.SchemaVersion != ManifestSchema {
 		_ = manifestFile.Close()
-		return Authority{}, fmt.Errorf("Product authority manifest schema is %q", manifest.SchemaVersion)
+		return Authority{}, typedAuthorityFailure(
+			"authority_manifest_invalid",
+			fmt.Errorf("Product authority manifest schema is %q", manifest.SchemaVersion),
+		)
 	}
 	if manifest.ProductAdapter.SchemaVersion != AdapterSchema {
 		_ = manifestFile.Close()
-		return Authority{}, fmt.Errorf("Product adapter manifest schema is %q", manifest.ProductAdapter.SchemaVersion)
+		return Authority{}, typedAuthorityFailure(
+			"authority_manifest_invalid",
+			fmt.Errorf("Product adapter manifest schema is %q", manifest.ProductAdapter.SchemaVersion),
+		)
 	}
 	revision := strings.TrimSpace(manifest.Sources.OuroborosIDE.Rev)
 	if !isExactRevision(revision) {
 		_ = manifestFile.Close()
-		return Authority{}, fmt.Errorf("Product authority manifest has invalid Product revision")
+		return Authority{}, typedAuthorityFailure(
+			"authority_manifest_invalid",
+			fmt.Errorf("Product authority manifest has invalid Product revision"),
+		)
 	}
 	authority := Authority{
 		ManifestPath:   manifestPath,
@@ -308,40 +349,43 @@ func Load(role Role, consumerIndex int, attestation Attestation) (Authority, err
 	}
 	if fixedIndex, fixed := FixedConsumerIndex(role); fixed && consumerIndex != fixedIndex {
 		authority.Close()
-		return Authority{}, fmt.Errorf("fixed-slot Product role does not match consumer index")
+		return Authority{}, typedAuthorityFailure(
+			"fixed_slot_mismatch",
+			fmt.Errorf("fixed-slot Product role does not match consumer index"),
+		)
 	}
 	if err := authority.validate(role); err != nil {
 		authority.Close()
-		return Authority{}, err
+		return Authority{}, typedAuthorityFailure("authority_validation_failed", err)
 	}
 	consumer, err := authority.Consumer(consumerIndex)
 	if err != nil {
 		authority.Close()
-		return Authority{}, err
+		return Authority{}, typedAuthorityFailure("consumer_resolution_failed", err)
 	}
 	if isControllerSeedRole(role) {
 		if err := validateControllerEffectIdentity(); err != nil {
 			authority.Close()
-			return Authority{}, err
+			return Authority{}, typedAuthorityFailure("controller_identity_invalid", err)
 		}
 		if err := attestation.validateController(authority.Adapter.ControllerCredentialOwnerUID); err != nil {
 			authority.Close()
-			return Authority{}, err
+			return Authority{}, typedAuthorityFailure("controller_attestation_invalid", err)
 		}
 	} else if err := validateConsumerProcessIdentity(consumer.UID, consumer.GID); err != nil {
 		authority.Close()
-		return Authority{}, err
+		return Authority{}, typedAuthorityFailure("consumer_identity_invalid", err)
 	}
 	if roleRequiresSelectedCredentialHandlesAtLoad(role) {
 		if err := validateSelectedCredentialHandles(consumer); err != nil {
 			authority.Close()
-			return Authority{}, err
+			return Authority{}, typedAuthorityFailure("credential_handles_invalid", err)
 		}
 	}
 	held, err := holdCurrentGeneration(role, authority.Adapter, attestation)
 	if err != nil {
 		authority.Close()
-		return Authority{}, err
+		return Authority{}, typedAuthorityFailure("current_generation_validation_failed", err)
 	}
 	authority.held = append(authority.held, held...)
 	return authority, nil
@@ -362,18 +406,37 @@ func validateManifestEnvelope(data []byte) error {
 	if err := requireExactJSONKeys("Product authority controller source layer", sourceLayer, manifestSourceLayerKeys); err != nil {
 		return err
 	}
-	for _, key := range manifestSourceLayerKeys {
+	for _, key := range []string{
+		"controllerDevctlPath", "controllerFleetPath", "launcherPath", "manifestPath", "packagePath",
+	} {
 		var value string
 		if err := json.Unmarshal(sourceLayer[key], &value); err != nil || value == "" {
 			return fmt.Errorf("Product authority controller source layer %s is invalid", key)
 		}
+		if filepath.Clean(value) != value || !strings.HasPrefix(value, "/nix/store/") {
+			return fmt.Errorf("Product authority controller source layer %s is not an immutable store path", key)
+		}
 	}
-	var packagePath, manifestPath, launcherPath string
-	_ = json.Unmarshal(sourceLayer["packagePath"], &packagePath)
-	_ = json.Unmarshal(sourceLayer["manifestPath"], &manifestPath)
-	_ = json.Unmarshal(sourceLayer["launcherPath"], &launcherPath)
-	if !strings.HasPrefix(packagePath, "/nix/store/") || !strings.HasPrefix(manifestPath, "/nix/store/") || !strings.HasPrefix(launcherPath, "/nix/store/") {
-		return fmt.Errorf("Product authority controller source layer paths are not immutable store paths")
+	for _, key := range []string{"controllerGUIInventory", "controllerSourceInventory"} {
+		var identity map[string]json.RawMessage
+		if err := json.Unmarshal(sourceLayer[key], &identity); err != nil {
+			return fmt.Errorf("parse Product authority controller source layer %s: %w", key, err)
+		}
+		if err := requireExactJSONKeys(
+			"Product authority controller source layer "+key,
+			identity,
+			manifestInventoryIdentityKeys,
+		); err != nil {
+			return err
+		}
+		var path, digest string
+		if err := json.Unmarshal(identity["path"], &path); err != nil ||
+			filepath.Clean(path) != path || !strings.HasPrefix(path, "/nix/store/") {
+			return fmt.Errorf("Product authority controller source layer %s path is invalid", key)
+		}
+		if err := json.Unmarshal(identity["sha256"], &digest); err != nil || !isExactSHA256(digest) {
+			return fmt.Errorf("Product authority controller source layer %s digest is invalid", key)
+		}
 	}
 	var packageSha256, manifestSha256 string
 	_ = json.Unmarshal(sourceLayer["packageSha256"], &packageSha256)

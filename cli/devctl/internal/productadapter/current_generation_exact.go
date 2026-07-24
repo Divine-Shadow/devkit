@@ -82,7 +82,10 @@ func holdCurrentGeneration(role Role, adapter AdapterManifest, attestation Attes
 	}
 	if !os.SameFile(currentInfo, expectedInfo) {
 		closeOnError(running, expectedFile, currentFile)
-		return nil, fmt.Errorf("Product authority locator and current-system executable belong to different generations")
+		return nil, typedAuthorityFailure(
+			"current_generation_mismatch",
+			fmt.Errorf("Product authority locator and current-system executable belong to different generations"),
+		)
 	}
 	return []*os.File{running, expectedFile, currentFile}, nil
 }

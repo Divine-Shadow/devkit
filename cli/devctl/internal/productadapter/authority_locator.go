@@ -63,7 +63,10 @@ func openAuthorityManifest(locator string) (*os.File, string, error) {
 	sum := sha256.Sum256(manifest)
 	if hex.EncodeToString(sum[:]) != selector.ManifestSHA256 {
 		_ = file.Close()
-		return nil, "", fmt.Errorf("selected Product authority manifest digest does not match")
+		return nil, "", typedAuthorityFailure(
+			"authority_selector_digest_mismatch",
+			fmt.Errorf("selected Product authority manifest digest does not match"),
+		)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		_ = file.Close()

@@ -16,8 +16,8 @@ func main() {
 		os.Stdin,
 		os.Stdout,
 	); err != nil {
-		if !productauthseedcmd.WriteTypedFailure(os.Stderr, err) {
-			_, _ = fmt.Fprintln(os.Stderr, "product-codex-auth-seed-1:", err)
+		if !productauthseedcmd.WriteTypedFailure(os.Stderr, 1, err) {
+			_, _ = fmt.Fprintln(os.Stderr, "product-codex-auth-seed-1: typed failure output failed")
 		}
 		os.Exit(2)
 	}
