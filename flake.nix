@@ -673,11 +673,14 @@
                   --repo ouroboros-ide --index 1 --format json > "$plan"
               ${pkgs.jq}/bin/jq -e \
                 --arg devctl '${devctl}' \
-                '.host_worktree_root == "/workspaces/dev/agent-worktrees" and
-                 .host_state_root == "/agent-state" and
-                 .broker_endpoint == "/workspaces/dev/.devkit/native-broker/broker.sock" and
+                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
+                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
+                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
+                 .sandbox_state_root == "/agent-state" and
+                 .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
                  .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"' \
+                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"' \
                 "$plan"
               mkdir -p "$out"
               cp "$plan" "$out/installed-plan.json"
