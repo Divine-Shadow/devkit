@@ -438,6 +438,70 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 	}
 }
 
+func TestBuildBubblewrapManagementFleetSharesOnlyHostNetwork(t *testing.T) {
+	tmp := t.TempDir()
+	devRoot := filepath.Join(tmp, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktree := filepath.Join(devRoot, "control-plane-worktrees", "shadow-throne-management")
+	for _, dir := range []string{devkitRoot, worktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proxySocket := filepath.Join(tmp, "egress.sock")
+	if err := os.WriteFile(proxySocket, []byte("socket placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := nativeplan.Build(nativeplan.BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		Project:          "dev-workspace",
+		Index:            2,
+		Repo:             "shadow-throne-management",
+		Flake:            ".#dev-workspace",
+		RuntimeLauncher:  runtimeLauncherFixture(t),
+		BubblewrapBinary: runtimeLauncherFixture(t),
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devRoot, "allowlist.txt"),
+		ProxySocket:      proxySocket,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// The host-side test environment intentionally has no controller
+	// inventory projection; projection itself is covered by plan tests. Keep
+	// this test focused on the network capability decision.
+	filtered := p.Binds[:0]
+	for _, bind := range p.Binds {
+		if isWorkspaceControllerCapabilityTarget(bind.Target) {
+			continue
+		}
+		filtered = append(filtered, bind)
+	}
+	p.Binds = filtered
+	fleetCommand := []string{"/run/current-system/sw/bin/fleet-control", "pressure", "--inventory", "/etc/fleet/source/fleet-inventory.json", "--json", "derpinator"}
+	cmd, err := BuildBubblewrap(p, fleetCommand)
+	if err != nil {
+		t.Fatalf("BuildBubblewrap Fleet: %v", err)
+	}
+	joined := ShellString(cmd)
+	if !strings.Contains(joined, "'--share-net'") {
+		t.Fatalf("Management Fleet command must share host network: %s", joined)
+	}
+	if strings.Contains(joined, "'--unshare-net'") || strings.Contains(joined, "proxy-bridge") {
+		t.Fatalf("Management Fleet command must not use proxy namespace bridge: %s", joined)
+	}
+	for _, nonFleet := range [][]string{{"/bin/bash", "-lc", "curl https://example.invalid"}, {"/run/current-system/sw/bin/fleet", "pressure"}} {
+		other, err := BuildBubblewrap(p, nonFleet)
+		if err != nil {
+			t.Fatalf("BuildBubblewrap non-Fleet: %v", err)
+		}
+		otherText := ShellString(other)
+		if !strings.Contains(otherText, "'--unshare-net'") || strings.Contains(otherText, "'--share-net'") {
+			t.Fatalf("non-authorized command received host network: %s", otherText)
+		}
+	}
+}
+
 func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")

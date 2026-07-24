@@ -1098,7 +1098,8 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 	}
-	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
+	managementController := isManagementControllerCommand(p, command)
+	if strings.TrimSpace(p.Proxy.UnixSocket) != "" && !managementController {
 		args = append(args, "--unshare-net")
 	} else {
 		args = append(args, "--share-net")
@@ -1228,12 +1229,24 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 	runtimeArgs := []string{runtimeLauncher}
 	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
-	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
+	if strings.TrimSpace(p.Proxy.UnixSocket) != "" && !managementController {
 		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
 	} else {
 		args = append(args, runtimeArgs...)
 	}
 	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
+}
+
+// Management Fleet is the sole network-capable command in workspace-egress.
+// The profile, repository, and immutable executable path are all compiled
+// authority; callers cannot request a network mode or substitute argv[0].
+func isManagementControllerCommand(p nativeplan.Plan, command []string) bool {
+	if strings.TrimSpace(p.Agent.ID.Project) != "dev-workspace" ||
+		strings.TrimSpace(p.Agent.ID.Repo) != "shadow-throne-management" ||
+		len(command) == 0 {
+		return false
+	}
+	return filepath.Clean(strings.TrimSpace(command[0])) == "/run/current-system/sw/bin/fleet-control"
 }
 
 func isWorkspaceControllerCapabilityTarget(target string) bool {
