@@ -1257,7 +1257,7 @@ func validateWorkspaceControllerCapability(source, target string) error {
 			return fmt.Errorf("controller capability %s must be a non-symlink regular file", target)
 		}
 		resolved, resolveErr := filepath.EvalSymlinks(source)
-		expected := filepath.Join("/etc/static", filepath.Base(target))
+		expected := filepath.Join("/etc/static", strings.TrimPrefix(filepath.Clean(target), "/etc/"))
 		if resolveErr != nil || filepath.Clean(resolved) != expected {
 			return fmt.Errorf("controller inventory %s must resolve only to its immutable /etc/static projection", target)
 		}
