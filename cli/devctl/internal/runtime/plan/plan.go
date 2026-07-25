@@ -496,14 +496,18 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 	add(workspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
-	if strings.TrimSpace(project) == "dev-workspace" &&
-		strings.TrimSpace(repo) == "shadow-throne-management" {
+	controllerConsumer := strings.TrimSpace(project) == "dev-workspace" &&
+		(strings.TrimSpace(repo) == "shadow-throne-management" ||
+			(strings.TrimSpace(repo) == "ti4-calculator" && filepath.Clean(paths.HostWorktree) == filepath.Clean(canonicalTI4)))
+	if controllerConsumer {
 		// Bind individual files only; never expose the parent directory or a
 		// mutable checkout. The protected exec handle keeps Tailnet and SSH
 		// credentials outside the sandbox. Its presence is source-defined by
 		// the Nix controller; when present it is required for this consumer.
-		add(workspaceControllerSourceInventory, workspaceControllerSourceInventory, "ro", true)
-		add(workspaceControllerGUIInventory, workspaceControllerGUIInventory, "ro", true)
+		if strings.TrimSpace(repo) == "shadow-throne-management" {
+			add(workspaceControllerSourceInventory, workspaceControllerSourceInventory, "ro", true)
+			add(workspaceControllerGUIInventory, workspaceControllerGUIInventory, "ro", true)
+		}
 		if _, err := os.Lstat(WorkspaceControllerExecSocket); err == nil {
 			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
 		}

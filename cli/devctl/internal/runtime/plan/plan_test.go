@@ -230,6 +230,48 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 	}
 }
 
+func TestTI4CanonicalWorkspaceProjectsControllerHandleOnly(t *testing.T) {
+	root := t.TempDir()
+	execSocket := filepath.Join(root, "run", "fleet-controller-exec", "control.sock")
+	if err := os.MkdirAll(filepath.Dir(execSocket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execSocket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousExecSocket := WorkspaceControllerExecSocket
+	WorkspaceControllerExecSocket = execSocket
+	t.Cleanup(func() { WorkspaceControllerExecSocket = previousExecSocket })
+	devRoot := filepath.Join(root, "dev")
+	hostWorktreeRoot := filepath.Join(devRoot, "control-plane-worktrees")
+	hostWorktree := filepath.Join(hostWorktreeRoot, "agent1", "ti4-calculator")
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: filepath.Join(devRoot, "devkit"), RuntimeAuthorityRoot: filepath.Join(devRoot, "devkit")},
+		HostRoot:         devRoot,
+		WorktreeRoot:     hostWorktreeRoot,
+		StateRoot:        filepath.Join(devRoot, ".devkit", "native-agents"),
+		Project:          "dev-workspace",
+		Index:            1,
+		Repo:             "ti4-calculator",
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !hasBind(p.Binds, hostWorktree, "/workspaces/dev/ti4-calculator") {
+		t.Fatalf("canonical TI4 alias missing: %#v", p.Binds)
+	}
+	if !hasBind(p.Binds, execSocket, execSocket) || p.Env["FLEET_EXEC_TRANSPORT_HANDLE"] != "required" {
+		t.Fatalf("TI4 controller handle missing: binds=%#v env=%#v", p.Binds, p.Env)
+	}
+	for _, bind := range p.Binds {
+		if strings.Contains(bind.Source, "fleet-inventory.json") || strings.Contains(bind.Source, "fleet-codex-gui-inventory.json") {
+			t.Fatalf("TI4 must not receive controller inventories: %#v", bind)
+		}
+	}
+}
+
 func TestWorkspaceEgressRewritesRepoFlakeOverrideToSandboxWorktree(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
