@@ -448,6 +448,11 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 	}
 	add(paths.HostWorktree, "/workspace", "rw", true)
 	add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
+	// TI4 stable project alias is opt-in and exact.
+	canonicalTI4 := filepath.Join(paths.HostWorktreeRoot, "agent1", "ti4-calculator")
+	if repo == "ti4-calculator" && filepath.Clean(paths.HostWorktree) == filepath.Clean(canonicalTI4) {
+		add(paths.HostWorktree, "/workspaces/dev/ti4-calculator", "rw", true)
+	}
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
 	runtimeRoot := filepath.Clean(strings.TrimSpace(runtimeAuthorityRoot))
 	if runtimeRoot == "" || runtimeRoot == "." {
