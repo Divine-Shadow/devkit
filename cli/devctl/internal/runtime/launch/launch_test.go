@@ -1,10 +1,14 @@
 package launch
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -138,6 +142,254 @@ func initTestGitWorktree(t *testing.T, path string) {
 		t.Fatalf("mkdir worktree parent: %v", err)
 	}
 	runTestCommand(t, "", "git", "init", path)
+}
+
+type managementSkillsFixture struct {
+	PackagePath string
+	SkillsRoot  string
+	SourceRev   string
+	PrimarySHA  string
+}
+
+func writeManagementSkillsFixture(t *testing.T, storeRoot, packageName, sourceRev string, files map[string]string) managementSkillsFixture {
+	t.Helper()
+	packagePath := filepath.Join(storeRoot, packageName)
+	skillsRoot := filepath.Join(packagePath, "share", "management-runtime-skills", "skills")
+	manifest := make([]managementRuntimeSkillFile, 0, len(files))
+	for rel, content := range files {
+		writeTestFile(t, filepath.Join(skillsRoot, filepath.FromSlash(rel)), content)
+		digest := sha256.Sum256([]byte(content))
+		manifest = append(manifest, managementRuntimeSkillFile{Path: rel, SHA256: hex.EncodeToString(digest[:])})
+	}
+	sort.Slice(manifest, func(i, j int) bool { return manifest[i].Path < manifest[j].Path })
+	primaryPath := "fleet-health-hypervisor/SKILL.md"
+	primarySHA := ""
+	for _, file := range manifest {
+		if file.Path == primaryPath {
+			primarySHA = file.SHA256
+			break
+		}
+	}
+	if primarySHA == "" {
+		t.Fatalf("fixture requires %s", primaryPath)
+	}
+	identity := managementRuntimeSkillsIdentity{
+		SchemaVersion:       managementRuntimeSkillsIdentitySchema,
+		ManagementSourceRev: sourceRev,
+		PackagePath:         packagePath,
+		SkillsRoot:          skillsRoot,
+		SkillPath:           primaryPath,
+		SkillSHA256:         primarySHA,
+		Files:               manifest,
+	}
+	data, err := json.MarshalIndent(identity, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(filepath.Dir(skillsRoot), "identity.json"), string(data)+"\n")
+	return managementSkillsFixture{
+		PackagePath: packagePath,
+		SkillsRoot:  skillsRoot,
+		SourceRev:   sourceRev,
+		PrimarySHA:  primarySHA,
+	}
+}
+
+func prepareManagementSkillsFixture(t *testing.T, fixture managementSkillsFixture, devRoot, hostHome string) nativeplan.Plan {
+	t.Helper()
+	t.Setenv("DEVKIT_MANAGEMENT_SKILLS_ROOT", fixture.SkillsRoot)
+	t.Setenv("DEVKIT_MANAGEMENT_SOURCE_REV", fixture.SourceRev)
+	t.Setenv("DEVKIT_MANAGEMENT_SKILL_SHA256", fixture.PrimarySHA)
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", "")
+	t.Setenv("CODEX_AUTH_JSON", filepath.Join(t.TempDir(), "missing-auth.json"))
+	t.Setenv("DEVKIT_AWS_HOME", filepath.Join(t.TempDir(), "missing-aws"))
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "empty-home"))
+	worktree := filepath.Join(devRoot, "control-plane-worktrees", "agent2", "shadow-throne-management")
+	initTestGitWorktree(t, worktree)
+	return nativeplan.Plan{
+		Agent: agent.Spec{
+			ID:              agent.ID{Project: "dev-workspace", Index: 2, Repo: "shadow-throne-management"},
+			HostWorktree:    worktree,
+			SandboxWorktree: "/workspace",
+			HostHome:        hostHome,
+			SandboxHome:     "/agent-state/dev-workspace-agent2/home",
+			StateRoot:       filepath.Join(devRoot, ".devkit", "native-agents", "dev-workspace-agent2"),
+		},
+		DevkitHostRoot: filepath.Join(devRoot, "devkit"),
+		Binds: []nativeplan.Bind{
+			{Source: devRoot, Target: "/workspaces/dev", Mode: "rw"},
+		},
+		Env: map[string]string{},
+	}
+}
+
+func withManagementSkillsStoreRoot(t *testing.T) string {
+	t.Helper()
+	storeRoot := filepath.Join(t.TempDir(), "nix", "store")
+	if err := os.MkdirAll(storeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previous := managementRuntimeSkillsStoreRoot
+	managementRuntimeSkillsStoreRoot = storeRoot
+	t.Cleanup(func() { managementRuntimeSkillsStoreRoot = previous })
+	return storeRoot
+}
+
+func TestPrepareLinksImmutableManagementSkillsBeforeProductSkills(t *testing.T) {
+	storeRoot := withManagementSkillsStoreRoot(t)
+	fixture := writeManagementSkillsFixture(t, storeRoot, "aaaaaaaa-management-skills", strings.Repeat("a", 40), map[string]string{
+		"fleet-health-hypervisor/SKILL.md": "immutable management\n",
+		"shared-name/SKILL.md":             "immutable shared\n",
+	})
+	devRoot := filepath.Join(t.TempDir(), "dev")
+	writeTestFile(t, filepath.Join(devRoot, ".codex", "skills", "shared-name", "SKILL.md"), "mutable management\n")
+	writeTestFile(t, filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "shared-name", "SKILL.md"), "mutable Product collision\n")
+	writeTestFile(t, filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "product-only", "SKILL.md"), "Product only\n")
+	hostHome := filepath.Join(t.TempDir(), "agent-home")
+	p := prepareManagementSkillsFixture(t, fixture, devRoot, hostHome)
+
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	for name, want := range map[string]string{
+		"fleet-health-hypervisor": filepath.Join(fixture.SkillsRoot, "fleet-health-hypervisor"),
+		"shared-name":             filepath.Join(fixture.SkillsRoot, "shared-name"),
+		"product-only":            filepath.Join(devRoot, "ouroboros-ide", ".codex", "skills", "product-only"),
+	} {
+		got, err := os.Readlink(filepath.Join(hostHome, ".codex", "skills", name))
+		if err != nil {
+			t.Fatalf("read %s link: %v", name, err)
+		}
+		if got != want {
+			t.Fatalf("%s link = %q, want %q", name, got, want)
+		}
+	}
+	var receipt managementRuntimeSkillsReceipt
+	if err := json.Unmarshal([]byte(readTestFile(t, filepath.Join(hostHome, ".codex", "management-runtime-skills.json"))), &receipt); err != nil {
+		t.Fatalf("decode receipt: %v", err)
+	}
+	if receipt.SchemaVersion != managementRuntimeSkillsReceiptSchema ||
+		receipt.ManagementSourceRev != fixture.SourceRev ||
+		receipt.SkillsRoot != fixture.SkillsRoot ||
+		strings.TrimSpace(receipt.IdentitySHA256) == "" {
+		t.Fatalf("unexpected receipt: %+v", receipt)
+	}
+}
+
+func TestPrepareTransitionsImmutableManagementSkillsAndRemovesStaleOwnedLinks(t *testing.T) {
+	storeRoot := withManagementSkillsStoreRoot(t)
+	first := writeManagementSkillsFixture(t, storeRoot, "aaaaaaaa-management-skills", strings.Repeat("a", 40), map[string]string{
+		"fleet-health-hypervisor/SKILL.md": "first\n",
+		"removed-skill/SKILL.md":           "removed\n",
+	})
+	devRoot := filepath.Join(t.TempDir(), "dev")
+	hostHome := filepath.Join(t.TempDir(), "agent-home")
+	p := prepareManagementSkillsFixture(t, first, devRoot, hostHome)
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare first package: %v", err)
+	}
+
+	second := writeManagementSkillsFixture(t, storeRoot, "bbbbbbbb-management-skills", strings.Repeat("b", 40), map[string]string{
+		"fleet-health-hypervisor/SKILL.md": "second\n",
+		"new-skill/SKILL.md":               "new\n",
+	})
+	t.Setenv("DEVKIT_MANAGEMENT_SKILLS_ROOT", second.SkillsRoot)
+	t.Setenv("DEVKIT_MANAGEMENT_SOURCE_REV", second.SourceRev)
+	t.Setenv("DEVKIT_MANAGEMENT_SKILL_SHA256", second.PrimarySHA)
+	if err := Prepare(p); err != nil {
+		t.Fatalf("Prepare transitioned package: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(hostHome, ".codex", "skills", "removed-skill")); !os.IsNotExist(err) {
+		t.Fatalf("stale owned skill link remains: %v", err)
+	}
+	for _, name := range []string{"fleet-health-hypervisor", "new-skill"} {
+		got, err := os.Readlink(filepath.Join(hostHome, ".codex", "skills", name))
+		if err != nil {
+			t.Fatalf("read transitioned %s link: %v", name, err)
+		}
+		if want := filepath.Join(second.SkillsRoot, name); got != want {
+			t.Fatalf("transitioned %s link = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestPrepareRejectsMissingOrMismatchedImmutableManagementSkills(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, fixture managementSkillsFixture)
+		want   string
+	}{
+		{
+			name: "missing input",
+			mutate: func(t *testing.T, fixture managementSkillsFixture) {
+				t.Setenv("DEVKIT_MANAGEMENT_SKILLS_ROOT", "")
+			},
+			want: "requires DEVKIT_MANAGEMENT_SKILLS_ROOT",
+		},
+		{
+			name: "environment primary hash mismatch",
+			mutate: func(t *testing.T, fixture managementSkillsFixture) {
+				t.Setenv("DEVKIT_MANAGEMENT_SKILL_SHA256", strings.Repeat("0", 64))
+			},
+			want: "primary skill SHA-256",
+		},
+		{
+			name: "content manifest mismatch",
+			mutate: func(t *testing.T, fixture managementSkillsFixture) {
+				writeTestFile(t, filepath.Join(fixture.SkillsRoot, "fleet-health-hypervisor", "SKILL.md"), "corrupt\n")
+			},
+			want: "manifest SHA-256",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			storeRoot := withManagementSkillsStoreRoot(t)
+			fixture := writeManagementSkillsFixture(t, storeRoot, "aaaaaaaa-management-skills", strings.Repeat("a", 40), map[string]string{
+				"fleet-health-hypervisor/SKILL.md": "immutable\n",
+			})
+			devRoot := filepath.Join(t.TempDir(), "dev")
+			p := prepareManagementSkillsFixture(t, fixture, devRoot, filepath.Join(t.TempDir(), "agent-home"))
+			test.mutate(t, fixture)
+			err := Prepare(p)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Prepare error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPrepareRefusesForeignManagementSkillPaths(t *testing.T) {
+	for _, kind := range []string{"regular file", "directory", "foreign symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			storeRoot := withManagementSkillsStoreRoot(t)
+			fixture := writeManagementSkillsFixture(t, storeRoot, "aaaaaaaa-management-skills", strings.Repeat("a", 40), map[string]string{
+				"fleet-health-hypervisor/SKILL.md": "immutable\n",
+			})
+			devRoot := filepath.Join(t.TempDir(), "dev")
+			hostHome := filepath.Join(t.TempDir(), "agent-home")
+			p := prepareManagementSkillsFixture(t, fixture, devRoot, hostHome)
+			target := filepath.Join(hostHome, ".codex", "skills", "fleet-health-hypervisor")
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "regular file":
+				writeTestFile(t, target, "foreign\n")
+			case "directory":
+				if err := os.Mkdir(target, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign symlink":
+				if err := os.Symlink(filepath.Join(t.TempDir(), "foreign"), target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := Prepare(p)
+			if err == nil || !strings.Contains(err.Error(), "foreign") {
+				t.Fatalf("Prepare error = %v, want foreign path refusal", err)
+			}
+		})
+	}
 }
 
 func TestDevWorkspaceRuntimeExportsNestedCodexConfigSource(t *testing.T) {

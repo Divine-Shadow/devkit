@@ -1,6 +1,9 @@
 package launch
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +41,9 @@ func Prepare(p nativeplan.Plan) error {
 		return fmt.Errorf("host worktree %s is not a directory", p.Agent.HostWorktree)
 	}
 	if err := requireGitWorktree(p.Agent.HostWorktree); err != nil {
+		return err
+	}
+	if err := validateManagementControllerProfilePlan(p); err != nil {
 		return err
 	}
 	for _, dir := range []string{p.Agent.HostHome, p.Agent.StateRoot} {
@@ -572,6 +578,37 @@ func isDevWorkspacePlan(p nativeplan.Plan) bool {
 	return strings.TrimSpace(p.Agent.ID.Project) == "dev-workspace"
 }
 
+const (
+	managementRuntimeSkillsIdentitySchema = "wsl-nix-management-runtime-skills/v2"
+	managementRuntimeSkillsReceiptSchema  = "devkit-management-runtime-skills/v1"
+)
+
+var managementRuntimeSkillsStoreRoot = "/nix/store"
+
+type managementRuntimeSkillFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type managementRuntimeSkillsIdentity struct {
+	SchemaVersion       string                       `json:"schemaVersion"`
+	ManagementSourceRev string                       `json:"managementSourceRev"`
+	PackagePath         string                       `json:"packagePath"`
+	SkillsRoot          string                       `json:"skillsRoot"`
+	SkillPath           string                       `json:"skillPath"`
+	SkillSHA256         string                       `json:"skillSha256"`
+	Files               []managementRuntimeSkillFile `json:"files"`
+}
+
+type managementRuntimeSkillsReceipt struct {
+	SchemaVersion       string   `json:"schemaVersion"`
+	ManagementSourceRev string   `json:"managementSourceRev"`
+	PackagePath         string   `json:"packagePath"`
+	SkillsRoot          string   `json:"skillsRoot"`
+	IdentitySHA256      string   `json:"identitySha256"`
+	Links               []string `json:"links"`
+}
+
 func ensureWorkspaceSkillLinks(p nativeplan.Plan) error {
 	if !isDevWorkspacePlan(p) {
 		return nil
@@ -579,36 +616,436 @@ func ensureWorkspaceSkillLinks(p nativeplan.Plan) error {
 	hostHome := strings.TrimSpace(p.Agent.HostHome)
 	hostDevRoot := hostDevRootForPlan(p)
 	if hostHome == "" || hostDevRoot == "" {
-		return nil
+		return fmt.Errorf("Management runtime skill preparation requires host home and workspace root")
 	}
 	targetRoot := filepath.Join(hostHome, ".codex", "skills")
 	if err := os.MkdirAll(targetRoot, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", targetRoot, err)
 	}
-	seen := map[string]bool{}
-	for _, sourceRoot := range []string{
+	identity, identitySHA256, skillNames, err := loadManagementRuntimeSkillsIdentity()
+	if err != nil {
+		return err
+	}
+	receiptPath := filepath.Join(hostHome, ".codex", "management-runtime-skills.json")
+	previous, err := readManagementRuntimeSkillsReceipt(receiptPath)
+	if err != nil {
+		return err
+	}
+	legacyRoots := []string{
 		filepath.Join(hostDevRoot, ".codex", "skills"),
 		filepath.Join(hostDevRoot, "ouroboros-ide", ".codex", "skills"),
-	} {
-		entries, err := os.ReadDir(sourceRoot)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("read skills %s: %w", sourceRoot, err)
+	}
+	if err := reconcileManagementRuntimeSkillLinks(targetRoot, identity.SkillsRoot, skillNames, previous, legacyRoots); err != nil {
+		return err
+	}
+	receipt := managementRuntimeSkillsReceipt{
+		SchemaVersion:       managementRuntimeSkillsReceiptSchema,
+		ManagementSourceRev: identity.ManagementSourceRev,
+		PackagePath:         identity.PackagePath,
+		SkillsRoot:          identity.SkillsRoot,
+		IdentitySHA256:      identitySHA256,
+		Links:               append([]string(nil), skillNames...),
+	}
+	if err := writeManagementRuntimeSkillsReceipt(receiptPath, receipt); err != nil {
+		return err
+	}
+
+	seen := make(map[string]bool, len(skillNames))
+	for _, name := range skillNames {
+		seen[name] = true
+	}
+	productSkillsRoot := filepath.Join(hostDevRoot, "ouroboros-ide", ".codex", "skills")
+	entries, err := os.ReadDir(productSkillsRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() || entry.Name() == ".system" || seen[entry.Name()] {
+		return fmt.Errorf("read Product skills %s: %w", productSkillsRoot, err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == ".system" || seen[entry.Name()] {
+			continue
+		}
+		seen[entry.Name()] = true
+		source := filepath.Join(productSkillsRoot, entry.Name())
+		target := filepath.Join(targetRoot, entry.Name())
+		if err := ensureSkillSymlink(target, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadManagementRuntimeSkillsIdentity() (managementRuntimeSkillsIdentity, string, []string, error) {
+	var identity managementRuntimeSkillsIdentity
+	skillsRoot := filepath.Clean(strings.TrimSpace(os.Getenv("DEVKIT_MANAGEMENT_SKILLS_ROOT")))
+	sourceRev := strings.TrimSpace(os.Getenv("DEVKIT_MANAGEMENT_SOURCE_REV"))
+	expectedSkillSHA256 := strings.ToLower(strings.TrimSpace(os.Getenv("DEVKIT_MANAGEMENT_SKILL_SHA256")))
+	if skillsRoot == "." || sourceRev == "" || expectedSkillSHA256 == "" {
+		return identity, "", nil, fmt.Errorf("Management fresh-consumer readiness requires DEVKIT_MANAGEMENT_SKILLS_ROOT, DEVKIT_MANAGEMENT_SOURCE_REV, and DEVKIT_MANAGEMENT_SKILL_SHA256")
+	}
+	if !validSHA256(expectedSkillSHA256) {
+		return identity, "", nil, fmt.Errorf("DEVKIT_MANAGEMENT_SKILL_SHA256 must be a lowercase SHA-256 digest")
+	}
+	packagePath, err := validateManagementRuntimeSkillsRoot(skillsRoot)
+	if err != nil {
+		return identity, "", nil, err
+	}
+	identityPath := filepath.Join(filepath.Dir(skillsRoot), "identity.json")
+	identityInfo, err := os.Lstat(identityPath)
+	if err != nil {
+		return identity, "", nil, fmt.Errorf("inspect Management runtime skill identity %s: %w", identityPath, err)
+	}
+	if identityInfo.Mode()&os.ModeSymlink != 0 || !identityInfo.Mode().IsRegular() {
+		return identity, "", nil, fmt.Errorf("Management runtime skill identity %s must be a regular non-symlink file", identityPath)
+	}
+	identityBytes, err := os.ReadFile(identityPath)
+	if err != nil {
+		return identity, "", nil, fmt.Errorf("read Management runtime skill identity %s: %w", identityPath, err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(identityBytes)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&identity); err != nil {
+		return identity, "", nil, fmt.Errorf("decode Management runtime skill identity %s: %w", identityPath, err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return identity, "", nil, fmt.Errorf("decode Management runtime skill identity %s: %w", identityPath, err)
+	}
+	if identity.SchemaVersion != managementRuntimeSkillsIdentitySchema {
+		return identity, "", nil, fmt.Errorf("Management runtime skill identity schema = %q, want %q", identity.SchemaVersion, managementRuntimeSkillsIdentitySchema)
+	}
+	if identity.ManagementSourceRev != sourceRev {
+		return identity, "", nil, fmt.Errorf("Management runtime skill revision = %q, want %q", identity.ManagementSourceRev, sourceRev)
+	}
+	if filepath.Clean(identity.PackagePath) != packagePath {
+		return identity, "", nil, fmt.Errorf("Management runtime skill package path = %q, want %q", identity.PackagePath, packagePath)
+	}
+	if filepath.Clean(identity.SkillsRoot) != skillsRoot {
+		return identity, "", nil, fmt.Errorf("Management runtime skills root = %q, want %q", identity.SkillsRoot, skillsRoot)
+	}
+	if strings.ToLower(identity.SkillSHA256) != expectedSkillSHA256 {
+		return identity, "", nil, fmt.Errorf("Management runtime primary skill SHA-256 = %q, want %q", identity.SkillSHA256, expectedSkillSHA256)
+	}
+	if !validRelativeManifestPath(identity.SkillPath) {
+		return identity, "", nil, fmt.Errorf("Management runtime primary skill path %q is not a canonical relative path", identity.SkillPath)
+	}
+	actualFiles, skillNames, err := hashManagementRuntimeSkills(skillsRoot)
+	if err != nil {
+		return identity, "", nil, err
+	}
+	if err := validateManagementRuntimeSkillsManifest(identity.Files, actualFiles); err != nil {
+		return identity, "", nil, err
+	}
+	primarySHA256, ok := actualFiles[identity.SkillPath]
+	if !ok {
+		return identity, "", nil, fmt.Errorf("Management runtime primary skill %q is absent from the complete manifest", identity.SkillPath)
+	}
+	if primarySHA256 != expectedSkillSHA256 {
+		return identity, "", nil, fmt.Errorf("Management runtime primary skill %q SHA-256 = %q, want %q", identity.SkillPath, primarySHA256, expectedSkillSHA256)
+	}
+	identityDigest := sha256.Sum256(identityBytes)
+	return identity, hex.EncodeToString(identityDigest[:]), skillNames, nil
+}
+
+func validateManagementRuntimeSkillsRoot(skillsRoot string) (string, error) {
+	if !filepath.IsAbs(skillsRoot) {
+		return "", fmt.Errorf("Management runtime skills root must be absolute: %s", skillsRoot)
+	}
+	storeRoot := filepath.Clean(managementRuntimeSkillsStoreRoot)
+	rel, err := filepath.Rel(storeRoot, skillsRoot)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("Management runtime skills root %s must be beneath %s", skillsRoot, storeRoot)
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 4 || parts[0] == "" || parts[1] != "share" || parts[2] != "management-runtime-skills" || parts[3] != "skills" {
+		return "", fmt.Errorf("Management runtime skills root %s must match %s/<package>/share/management-runtime-skills/skills", skillsRoot, storeRoot)
+	}
+	info, err := os.Lstat(skillsRoot)
+	if err != nil {
+		return "", fmt.Errorf("inspect Management runtime skills root %s: %w", skillsRoot, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("Management runtime skills root %s must be a real non-symlink directory", skillsRoot)
+	}
+	resolved, err := filepath.EvalSymlinks(skillsRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve Management runtime skills root %s: %w", skillsRoot, err)
+	}
+	if filepath.Clean(resolved) != skillsRoot {
+		return "", fmt.Errorf("Management runtime skills root %s resolves through a symlink to %s", skillsRoot, resolved)
+	}
+	return filepath.Join(storeRoot, parts[0]), nil
+}
+
+func hashManagementRuntimeSkills(skillsRoot string) (map[string]string, []string, error) {
+	files := map[string]string{}
+	skillSet := map[string]bool{}
+	err := filepath.WalkDir(skillsRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(skillsRoot, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("Management runtime skills contain symlink %s", path)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect Management runtime skill path %s: %w", path, err)
+		}
+		if info.IsDir() {
+			if !strings.Contains(filepath.ToSlash(rel), "/") && entry.Name() != ".system" {
+				skillSet[entry.Name()] = true
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("Management runtime skill path %s must be a regular file or directory", path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read Management runtime skill file %s: %w", path, err)
+		}
+		digest := sha256.Sum256(data)
+		files[filepath.ToSlash(rel)] = hex.EncodeToString(digest[:])
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(files) == 0 || len(skillSet) == 0 {
+		return nil, nil, fmt.Errorf("Management runtime skills root %s contains no skills", skillsRoot)
+	}
+	skillNames := make([]string, 0, len(skillSet))
+	for name := range skillSet {
+		hasManifestedFile := false
+		prefix := name + "/"
+		for path := range files {
+			if strings.HasPrefix(path, prefix) {
+				hasManifestedFile = true
+				break
+			}
+		}
+		if !hasManifestedFile {
+			return nil, nil, fmt.Errorf("Management runtime skill %s contains no manifested files", name)
+		}
+		skillNames = append(skillNames, name)
+	}
+	sort.Strings(skillNames)
+	return files, skillNames, nil
+}
+
+func validateManagementRuntimeSkillsManifest(declared []managementRuntimeSkillFile, actual map[string]string) error {
+	if len(declared) != len(actual) {
+		return fmt.Errorf("Management runtime skill manifest contains %d files, filesystem contains %d", len(declared), len(actual))
+	}
+	previous := ""
+	for _, file := range declared {
+		if !validRelativeManifestPath(file.Path) {
+			return fmt.Errorf("Management runtime skill manifest path %q is not a canonical relative path", file.Path)
+		}
+		if previous != "" && file.Path <= previous {
+			return fmt.Errorf("Management runtime skill manifest is not strictly lexicographically sorted at %q", file.Path)
+		}
+		previous = file.Path
+		declaredSHA256 := strings.ToLower(file.SHA256)
+		if !validSHA256(declaredSHA256) {
+			return fmt.Errorf("Management runtime skill manifest SHA-256 for %q is invalid", file.Path)
+		}
+		actualSHA256, ok := actual[file.Path]
+		if !ok {
+			return fmt.Errorf("Management runtime skill manifest declares absent file %q", file.Path)
+		}
+		if declaredSHA256 != actualSHA256 {
+			return fmt.Errorf("Management runtime skill manifest SHA-256 for %q = %q, want %q", file.Path, declaredSHA256, actualSHA256)
+		}
+	}
+	return nil
+}
+
+func validRelativeManifestPath(path string) bool {
+	if path == "" || filepath.IsAbs(path) || filepath.ToSlash(path) != path {
+		return false
+	}
+	clean := filepath.Clean(path)
+	return clean != "." && clean == path && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func readManagementRuntimeSkillsReceipt(path string) (*managementRuntimeSkillsReceipt, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inspect Management runtime skill receipt %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("Management runtime skill receipt %s must be a regular non-symlink file", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read Management runtime skill receipt %s: %w", path, err)
+	}
+	var receipt managementRuntimeSkillsReceipt
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return nil, fmt.Errorf("decode Management runtime skill receipt %s: %w", path, err)
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return nil, fmt.Errorf("decode Management runtime skill receipt %s: %w", path, err)
+	}
+	if receipt.SchemaVersion != managementRuntimeSkillsReceiptSchema {
+		return nil, fmt.Errorf("Management runtime skill receipt schema = %q, want %q", receipt.SchemaVersion, managementRuntimeSkillsReceiptSchema)
+	}
+	if filepath.Clean(receipt.SkillsRoot) != receipt.SkillsRoot || !filepath.IsAbs(receipt.SkillsRoot) {
+		return nil, fmt.Errorf("Management runtime skill receipt has invalid skills root %q", receipt.SkillsRoot)
+	}
+	seen := map[string]bool{}
+	for _, name := range receipt.Links {
+		if !validSkillName(name) || seen[name] {
+			return nil, fmt.Errorf("Management runtime skill receipt has invalid or duplicate link %q", name)
+		}
+		seen[name] = true
+	}
+	return &receipt, nil
+}
+
+func requireJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("trailing JSON value")
+		}
+		return fmt.Errorf("trailing JSON content: %w", err)
+	}
+	return nil
+}
+
+func reconcileManagementRuntimeSkillLinks(targetRoot, currentRoot string, currentNames []string, previous *managementRuntimeSkillsReceipt, legacyRoots []string) error {
+	current := make(map[string]bool, len(currentNames))
+	for _, name := range currentNames {
+		if !validSkillName(name) {
+			return fmt.Errorf("Management runtime skill directory has invalid top-level name %q", name)
+		}
+		current[name] = true
+	}
+	if previous != nil {
+		for _, name := range previous.Links {
+			if current[name] {
 				continue
 			}
-			seen[entry.Name()] = true
-			source := filepath.Join(sourceRoot, entry.Name())
-			target := filepath.Join(targetRoot, entry.Name())
-			if err := ensureSkillSymlink(target, source); err != nil {
+			target := filepath.Join(targetRoot, name)
+			if err := requireOwnedSkillSymlink(target, []string{filepath.Join(previous.SkillsRoot, name)}, true); err != nil {
 				return err
 			}
 		}
 	}
+	for _, name := range currentNames {
+		target := filepath.Join(targetRoot, name)
+		source := filepath.Join(currentRoot, name)
+		ownedSources := make([]string, 0, len(legacyRoots)+1)
+		if previous != nil {
+			ownedSources = append(ownedSources, filepath.Join(previous.SkillsRoot, name))
+		}
+		for _, root := range legacyRoots {
+			ownedSources = append(ownedSources, filepath.Join(root, name))
+		}
+		if err := requireOwnedSkillSymlink(target, ownedSources, false); err != nil {
+			return err
+		}
+		if err := ensureSkillSymlink(target, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireOwnedSkillSymlink(target string, ownedSources []string, remove bool) error {
+	info, err := os.Lstat(target)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect Management runtime skill target %s: %w", target, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("Management runtime skill target %s is a foreign non-symlink path", target)
+	}
+	existing, err := os.Readlink(target)
+	if err != nil {
+		return fmt.Errorf("read Management runtime skill link %s: %w", target, err)
+	}
+	existing = filepath.Clean(existing)
+	for _, owned := range ownedSources {
+		if existing == filepath.Clean(owned) {
+			if remove {
+				if err := os.Remove(target); err != nil {
+					return fmt.Errorf("remove stale Management runtime skill link %s: %w", target, err)
+				}
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("Management runtime skill target %s is a foreign symlink to %s", target, existing)
+}
+
+func validSkillName(name string) bool {
+	return name != "" && name != "." && name != ".." && filepath.Base(name) == name && !strings.ContainsAny(name, `/\`)
+}
+
+func writeManagementRuntimeSkillsReceipt(path string, receipt managementRuntimeSkillsReceipt) error {
+	sort.Strings(receipt.Links)
+	data, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Management runtime skill receipt: %w", err)
+	}
+	data = append(data, '\n')
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	staged, err := os.CreateTemp(dir, ".management-runtime-skills.json.new-")
+	if err != nil {
+		return fmt.Errorf("create Management runtime skill receipt: %w", err)
+	}
+	stagedPath := staged.Name()
+	committed := false
+	defer func() {
+		_ = staged.Close()
+		if !committed {
+			_ = os.Remove(stagedPath)
+		}
+	}()
+	if err := staged.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod Management runtime skill receipt %s: %w", stagedPath, err)
+	}
+	if _, err := staged.Write(data); err != nil {
+		return fmt.Errorf("write Management runtime skill receipt %s: %w", stagedPath, err)
+	}
+	if err := staged.Sync(); err != nil {
+		return fmt.Errorf("sync Management runtime skill receipt %s: %w", stagedPath, err)
+	}
+	if err := staged.Close(); err != nil {
+		return fmt.Errorf("close Management runtime skill receipt %s: %w", stagedPath, err)
+	}
+	if err := os.Rename(stagedPath, path); err != nil {
+		return fmt.Errorf("install Management runtime skill receipt %s: %w", path, err)
+	}
+	committed = true
 	return nil
 }
 
@@ -893,6 +1330,9 @@ func SeedSSH(hostHome string, force bool) error {
 		if err := os.WriteFile(target, data, mode); err != nil {
 			return fmt.Errorf("write SSH seed %s: %w", target, err)
 		}
+		if err := os.Chmod(target, mode); err != nil {
+			return fmt.Errorf("chmod SSH seed %s: %w", target, err)
+		}
 	}
 	return nil
 }
@@ -1175,6 +1615,9 @@ func copyAWSDir(src, dst string, force bool) error {
 }
 
 func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
+	if err := validateManagementControllerProfilePlan(p); err != nil {
+		return Command{}, err
+	}
 	if strings.TrimSpace(p.DevkitSandboxRoot) == "" {
 		return Command{}, fmt.Errorf("devkit sandbox root is empty")
 	}
@@ -1324,7 +1767,10 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 
 func isWorkspaceControllerCapabilityTarget(target string) bool {
 	clean := filepath.Clean(strings.TrimSpace(target))
-	if clean == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) {
+	if clean == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) ||
+		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket) ||
+		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationIdentity) ||
+		clean == filepath.Clean(nativeplan.ManagementControllerProfileManifestPath) {
 		return true
 	}
 	switch clean {
@@ -1337,13 +1783,14 @@ func isWorkspaceControllerCapabilityTarget(target string) bool {
 }
 
 func validateWorkspaceControllerCapability(source, target string) error {
+	target = filepath.Clean(target)
 	info, err := os.Lstat(source)
 	if err != nil {
 		return fmt.Errorf("inspect package-owned controller capability %s: %w", target, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		if target == nativeplan.WorkspaceControllerExecSocket {
-			return fmt.Errorf("controller exec capability must be a non-symlink Unix socket")
+		if isControllerSocketTarget(target) || target == nativeplan.WorkspaceControllerOperationIdentity {
+			return fmt.Errorf("controller runtime capability %s must be non-symlink", target)
 		}
 		resolved, resolveErr := filepath.EvalSymlinks(source)
 		expected := filepath.Join("/etc/static", strings.TrimPrefix(filepath.Clean(target), "/etc/"))
@@ -1356,9 +1803,9 @@ func validateWorkspaceControllerCapability(source, target string) error {
 			return fmt.Errorf("inspect resolved controller inventory %s: %w", target, err)
 		}
 	}
-	if target == nativeplan.WorkspaceControllerExecSocket {
+	if isControllerSocketTarget(target) {
 		if info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
-			return fmt.Errorf("controller exec capability must be a mode 0600 Unix socket: %s", source)
+			return fmt.Errorf("controller socket capability must be a mode 0600 Unix socket: %s", source)
 		}
 		parentInfo, parentErr := os.Lstat(filepath.Dir(source))
 		if parentErr != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 ||
@@ -1375,10 +1822,26 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		}
 		return nil
 	}
+	if target == nativeplan.WorkspaceControllerOperationIdentity {
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o400 {
+			return fmt.Errorf("controller operation identity must be a mode 0400 regular file: %s", source)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || uint32(stat.Uid) != uint32(os.Getuid()) {
+			return fmt.Errorf("controller operation identity owner does not match launching user: %s", source)
+		}
+		return nil
+	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("controller capability %s must resolve to a regular file", target)
 	}
 	return nil
+}
+
+func isControllerSocketTarget(target string) bool {
+	target = filepath.Clean(strings.TrimSpace(target))
+	return target == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) ||
+		target == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket)
 }
 
 func validateWorkspaceControllerCapabilityBinding(source, target, mode string) error {

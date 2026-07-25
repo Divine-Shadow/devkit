@@ -13,10 +13,14 @@ const (
 	workspaceEgressBindSourceCanonicalTI4
 )
 
-const (
-	workspaceEgressCanonicalTI4Source = "/home/bayesartre/dev/control-plane-worktrees/agent1/ti4-calculator"
-	workspaceEgressCanonicalTI4Target = "/workspaces/dev/ti4-calculator"
-)
+const workspaceEgressCanonicalTI4Target = "/workspaces/dev/ti4-calculator"
+
+// WorkspaceEgressCanonicalTI4Source is the compiled source for the one
+// registered additional projection. It is a variable only so cross-package
+// hermetic tests can reproduce the complete production bind set without
+// depending on a particular host filesystem; no CLI or environment input can
+// change it in a running devctl process.
+var WorkspaceEgressCanonicalTI4Source = "/home/bayesartre/dev/control-plane-worktrees/agent1/ti4-calculator"
 
 // workspaceEgressAdditionalBindContract is deliberately private and
 // registry-backed. Native callers cannot supply an arbitrary host source or
@@ -131,7 +135,7 @@ func resolveWorkspaceEgressBindSource(sourceID workspaceEgressBindSource) (strin
 	if sourceID != workspaceEgressBindSourceCanonicalTI4 {
 		return "", fmt.Errorf("unregistered workspace-egress additional bind source %d", sourceID)
 	}
-	return workspaceEgressCanonicalTI4Source, nil
+	return WorkspaceEgressCanonicalTI4Source, nil
 }
 
 func validateResolvedWorkspaceEgressAdditionalBind(bind Bind) error {
@@ -145,7 +149,7 @@ func validateResolvedWorkspaceEgressAdditionalBind(bind Bind) error {
 		source == "/home/bayesartre/dev" {
 		return fmt.Errorf("workspace-egress additional bind rejects broad source: %s", source)
 	}
-	if source != workspaceEgressCanonicalTI4Source {
+	if source != WorkspaceEgressCanonicalTI4Source {
 		return fmt.Errorf("unregistered workspace-egress additional bind source: %s", source)
 	}
 	if bind.Target != workspaceEgressCanonicalTI4Target ||

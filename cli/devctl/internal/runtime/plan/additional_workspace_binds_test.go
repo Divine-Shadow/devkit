@@ -27,7 +27,7 @@ func TestDevWorkspaceTwoReceivesOnlyRegisteredTI4AdditionalBind(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	want := Bind{
-		Source:   workspaceEgressCanonicalTI4Source,
+		Source:   WorkspaceEgressCanonicalTI4Source,
 		Target:   workspaceEgressCanonicalTI4Target,
 		Mode:     "rw",
 		Required: true,
@@ -39,7 +39,7 @@ func TestDevWorkspaceTwoReceivesOnlyRegisteredTI4AdditionalBind(t *testing.T) {
 		t.Fatalf("existing Management /workspace bind changed: %#v", p.Binds)
 	}
 	rendered := strings.Join(p.LauncherArgs, "\x00")
-	for _, part := range []string{"--bind", workspaceEgressCanonicalTI4Source, workspaceEgressCanonicalTI4Target} {
+	for _, part := range []string{"--bind", WorkspaceEgressCanonicalTI4Source, workspaceEgressCanonicalTI4Target} {
 		if !strings.Contains(rendered, part) {
 			t.Fatalf("launcher args missing %q: %#v", part, p.LauncherArgs)
 		}
@@ -82,7 +82,7 @@ func TestWorkspaceEgressAdditionalBindDoesNotChangeExistingTargets(t *testing.T)
 			if err != nil {
 				t.Fatalf("Build: %v", err)
 			}
-			if hasBind(p.Binds, workspaceEgressCanonicalTI4Source, workspaceEgressCanonicalTI4Target) {
+			if hasBind(p.Binds, WorkspaceEgressCanonicalTI4Source, workspaceEgressCanonicalTI4Target) {
 				t.Fatalf("non-target consumer received the registered Management bind: %#v", p.Binds)
 			}
 			if testCase.dedicatedTI4 {

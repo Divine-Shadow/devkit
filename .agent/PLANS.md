@@ -60,3 +60,6 @@ not the lifetime of a particular execution.
 - [Management Fleet Exec Handle](execplans/management-fleet-exec-handle.md):
   keep workspace-egress network-isolated while projecting only the
   source-derived Nix-owned handle for the existing exact-station Fleet effect.
+- [Immutable Management Runtime Skills](execplans/immutable-management-runtime-skills.md):
+  make fresh Management consumers validate and link the manifest-bound
+  immutable Management skill package instead of mutable workspace copies.

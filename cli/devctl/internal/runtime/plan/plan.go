@@ -56,6 +56,8 @@ type Plan struct {
 	IsolationProfile     string            `json:"isolation_profile,omitempty"`
 	MountPolicyIdentity  string            `json:"mount_policy_identity"`
 	WindowsMountsVisible bool              `json:"windows_mounts_visible"`
+	ControllerProfile    string            `json:"controller_profile,omitempty"`
+	ControllerManifest   string            `json:"controller_manifest,omitempty"`
 	Binds                []Bind            `json:"binds"`
 	Env                  map[string]string `json:"env"`
 	Proxy                ProxyConfig       `json:"proxy"`
@@ -95,14 +97,20 @@ type BuildOptions struct {
 const (
 	IsolationProfileWorkspaceEgress = "workspace-egress"
 	workspaceEgressNSCDSocket       = "/var/run/nscd/socket"
+)
+
+var (
+	// WorkspaceEgressNSCDSource is the package-owned host endpoint projected
+	// to the fixed consumer socket. It is a variable so integration and
+	// cross-package hermetic tests can supply their isolated listener; callers
+	// cannot select it through native arguments.
+	WorkspaceEgressNSCDSource = workspaceEgressNSCDSocket
 	// These fixed projection points are package-owned controller capabilities
 	// for the Management dev-workspace. Callers cannot select inventories,
 	// routes, credentials, or source paths through native arguments or env.
-	workspaceControllerSourceInventory = "/etc/fleet/source/fleet-inventory.json"
-	workspaceControllerGUIInventory    = "/etc/fleet/source/fleet-codex-gui-inventory.json"
+	WorkspaceControllerSourceInventory = "/etc/fleet/source/fleet-inventory.json"
+	WorkspaceControllerGUIInventory    = "/etc/fleet/source/fleet-codex-gui-inventory.json"
 )
-
-var workspaceEgressNSCDSource = workspaceEgressNSCDSocket
 
 // WorkspaceControllerExecSocket is the sole typed Fleet exec capability
 // projected into the Management workspace. Nix owns the listener and its
@@ -208,6 +216,21 @@ func Build(opts BuildOptions) (Plan, error) {
 	if proxyURL != "" {
 		javaOptions = append(javaOptions, javaProxyOptions(proxyURL)...)
 	}
+	var controllerProfile *ManagementControllerProfile
+	if isolationProfile == IsolationProfileWorkspaceEgress &&
+		project == "dev-workspace" && repo == "shadow-throne-management" {
+		requestedProfile := strings.TrimSpace(os.Getenv(ManagementControllerProfileEnvironment))
+		if requestedProfile != "" {
+			if requestedProfile != ManagementControllerProfileIdentity {
+				return Plan{}, fmt.Errorf("unknown Management controller profile %q", requestedProfile)
+			}
+			loaded, err := LoadManagementControllerProfile(ManagementControllerProfileManifestPath)
+			if err != nil {
+				return Plan{}, err
+			}
+			controllerProfile = &loaded
+		}
+	}
 	javaToolOptions := strings.Join(javaOptions, " ")
 	resolvConf := strings.TrimSpace(opts.DNSResolvConf)
 	if resolvConf == "" {
@@ -297,6 +320,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			runtimeAuthorityRoot,
 			broker,
 			resolvConf,
+			controllerProfile,
 		)
 		if err != nil {
 			return Plan{}, err
@@ -311,6 +335,10 @@ func Build(opts BuildOptions) (Plan, error) {
 				break
 			}
 		}
+		if controllerProfile != nil {
+			env[ManagementControllerProfileEnvironment] = ManagementControllerProfileIdentity
+			env[ControllerOperationHandleEnvironment] = ControllerOperationHandleRequiredValue
+		}
 		notes = append(notes,
 			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
 			"isolation profile workspace-egress: filesystem binds are limited to the worktree, per-agent home, exact Git metadata, runtime support, and capability sockets",
@@ -320,6 +348,9 @@ func Build(opts BuildOptions) (Plan, error) {
 	windowsMountsVisible := true
 	if isolationProfile == IsolationProfileWorkspaceEgress {
 		mountPolicyIdentity = "devkit/workspace-egress/v3"
+		if controllerProfile != nil {
+			mountPolicyIdentity = ManagementControllerMountPolicyIdentity
+		}
 		windowsMountsVisible = false
 		env["DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY"] = mountPolicyIdentity
 		env["DEVKIT_NATIVE_WINDOWS_MOUNTS_VISIBLE"] = "false"
@@ -372,8 +403,20 @@ func Build(opts BuildOptions) (Plan, error) {
 		IsolationProfile:     isolationProfile,
 		MountPolicyIdentity:  mountPolicyIdentity,
 		WindowsMountsVisible: windowsMountsVisible,
-		Binds:                binds,
-		Env:                  env,
+		ControllerProfile: func() string {
+			if controllerProfile == nil {
+				return ""
+			}
+			return ManagementControllerProfileIdentity
+		}(),
+		ControllerManifest: func() string {
+			if controllerProfile == nil {
+				return ""
+			}
+			return ManagementControllerProfileManifestPath
+		}(),
+		Binds: binds,
+		Env:   env,
 		Proxy: ProxyConfig{
 			HTTPProxy:     proxyURL,
 			HTTPSProxy:    proxyURL,
@@ -435,7 +478,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string) ([]Bind, error) {
+func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -510,7 +553,7 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 	// The isolated network namespace cannot reach the host loopback resolver.
 	// nsncd exposes DNS through this narrowly scoped Unix capability; network
 	// egress remains restricted to the managed proxy.
-	add(workspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
+	add(WorkspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	controllerConsumer := strings.TrimSpace(project) == "dev-workspace" &&
@@ -522,10 +565,15 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 		// credentials outside the sandbox. Its presence is source-defined by
 		// the Nix controller; when present it is required for this consumer.
 		if strings.TrimSpace(repo) == "shadow-throne-management" {
-			add(workspaceControllerSourceInventory, workspaceControllerSourceInventory, "ro", true)
-			add(workspaceControllerGUIInventory, workspaceControllerGUIInventory, "ro", true)
+			add(WorkspaceControllerSourceInventory, WorkspaceControllerSourceInventory, "ro", true)
+			add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
 		}
-		if _, err := os.Lstat(WorkspaceControllerExecSocket); err == nil {
+		if controllerProfile != nil {
+			add(controllerProfile.SourceRoots.WSLNix.BackingPath, controllerProfile.SourceRoots.WSLNix.LogicalPath, "rw", true)
+			add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
+			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", true)
+			add(WorkspaceControllerOperationIdentity, WorkspaceControllerOperationIdentity, "ro", true)
+		} else if _, err := os.Lstat(WorkspaceControllerExecSocket); err == nil {
 			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
 		}
 	}
