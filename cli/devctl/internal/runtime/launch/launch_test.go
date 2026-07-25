@@ -457,7 +457,9 @@ func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
-	worktree := filepath.Join(devRoot, "control-plane-worktrees", "shadow-throne-management")
+	worktreeRoot := filepath.Join(devRoot, "control-plane-worktrees")
+	worktree := filepath.Join(worktreeRoot, "agent2", "shadow-throne-management")
+	ti4Worktree := "/home/bayesartre/dev/control-plane-worktrees/agent1/ti4-calculator"
 	for _, dir := range []string{devkitRoot, worktree} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -489,6 +491,8 @@ func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 	t.Cleanup(func() { nativeplan.WorkspaceControllerExecSocket = previousExecSocket })
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
+		HostRoot:         devRoot,
+		WorktreeRoot:     worktreeRoot,
 		Project:          "dev-workspace",
 		Index:            2,
 		Repo:             "shadow-throne-management",
@@ -524,6 +528,15 @@ func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 	if !strings.Contains(joined, "'--ro-bind' '"+execSocket+"' '"+execSocket+"'") ||
 		!strings.Contains(joined, "'--setenv' 'FLEET_EXEC_TRANSPORT_HANDLE' 'required'") {
 		t.Fatalf("Management Fleet command lacks the exact typed exec handle: %s", joined)
+	}
+	if !strings.Contains(
+		joined,
+		"'--bind' '"+ti4Worktree+"' '/workspaces/dev/ti4-calculator'",
+	) {
+		t.Fatalf("Management runtime command lacks the exact registered TI4 bind: %s", joined)
+	}
+	if strings.Contains(joined, "'--bind' '"+devRoot+"' '/workspaces/dev'") {
+		t.Fatalf("Management runtime command exposed the broad dev root: %s", joined)
 	}
 	for _, nonFleet := range [][]string{{"/bin/bash", "-lc", "curl https://example.invalid"}, {"/run/current-system/sw/bin/fleet", "pressure"}} {
 		other, err := BuildBubblewrap(p, nonFleet)

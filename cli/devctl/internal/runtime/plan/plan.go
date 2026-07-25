@@ -288,15 +288,19 @@ func Build(opts BuildOptions) (Plan, error) {
 		"standard agents must use brokered OCI access only",
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		binds = workspaceEgressBinds(
+		binds, err = workspaceEgressBinds(
 			paths,
 			project,
+			index,
 			repo,
 			opts.Paths.Root,
 			runtimeAuthorityRoot,
 			broker,
 			resolvConf,
 		)
+		if err != nil {
+			return Plan{}, err
+		}
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
 		}
@@ -431,7 +435,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string) []Bind {
+func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -452,6 +456,19 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 	canonicalTI4 := filepath.Join(paths.HostWorktreeRoot, "agent1", "ti4-calculator")
 	if repo == "ti4-calculator" && filepath.Clean(paths.HostWorktree) == filepath.Clean(canonicalTI4) {
 		add(paths.HostWorktree, "/workspaces/dev/ti4-calculator", "rw", true)
+	}
+	additionalBinds, err := resolveWorkspaceEgressAdditionalBinds(
+		project,
+		index,
+		repo,
+		binds,
+		workspaceEgressAdditionalBindRegistry,
+	)
+	if err != nil {
+		return nil, err
+	}
+	for _, bind := range additionalBinds {
+		add(bind.Source, bind.Target, bind.Mode, bind.Required)
 	}
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
 	runtimeRoot := filepath.Clean(strings.TrimSpace(runtimeAuthorityRoot))
@@ -512,7 +529,7 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
 		}
 	}
-	return binds
+	return binds, nil
 }
 
 func isGovernedRuntimePlan(project, repo string) bool {
