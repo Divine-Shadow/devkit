@@ -97,13 +97,17 @@ const (
 	workspaceEgressNSCDSocket       = "/var/run/nscd/socket"
 	// These fixed projection points are package-owned controller capabilities
 	// for the Management dev-workspace. Callers cannot select inventories,
-	// identities, routes, or source paths through native arguments or env.
+	// routes, credentials, or source paths through native arguments or env.
 	workspaceControllerSourceInventory = "/etc/fleet/source/fleet-inventory.json"
 	workspaceControllerGUIInventory    = "/etc/fleet/source/fleet-codex-gui-inventory.json"
-	workspaceControllerSSHIdentity     = "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"
 )
 
 var workspaceEgressNSCDSource = workspaceEgressNSCDSocket
+
+// WorkspaceControllerExecSocket is the sole typed Fleet exec capability
+// projected into the Management workspace. Nix owns the listener and its
+// protected SSH/Tailnet effects.
+var WorkspaceControllerExecSocket = "/run/fleet-controller-exec/control.sock"
 
 func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 	const rootedPrefix = "path:.?"
@@ -296,6 +300,13 @@ func Build(opts BuildOptions) (Plan, error) {
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
 		}
+		for _, bind := range binds {
+			if bind.Source == WorkspaceControllerExecSocket &&
+				bind.Target == WorkspaceControllerExecSocket {
+				env["FLEET_EXEC_TRANSPORT_HANDLE"] = "required"
+				break
+			}
+		}
 		notes = append(notes,
 			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
 			"isolation profile workspace-egress: filesystem binds are limited to the worktree, per-agent home, exact Git metadata, runtime support, and capability sockets",
@@ -480,13 +491,17 @@ func workspaceEgressBinds(paths agent.Paths, project, repo, devkitRoot string, r
 	add(workspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
 	add(broker, broker, "rw", false)
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
-	if strings.TrimSpace(project) == "dev-workspace" {
+	if strings.TrimSpace(project) == "dev-workspace" &&
+		strings.TrimSpace(repo) == "shadow-throne-management" {
 		// Bind individual files only; never expose the parent directory or a
-		// mutable checkout. Required=true makes absence fail closed rather than
-		// falling back to ambient inventories or SSH configuration.
+		// mutable checkout. The protected exec handle keeps Tailnet and SSH
+		// credentials outside the sandbox. Its presence is source-defined by
+		// the Nix controller; when present it is required for this consumer.
 		add(workspaceControllerSourceInventory, workspaceControllerSourceInventory, "ro", true)
 		add(workspaceControllerGUIInventory, workspaceControllerGUIInventory, "ro", true)
-		add(workspaceControllerSSHIdentity, workspaceControllerSSHIdentity, "ro", true)
+		if _, err := os.Lstat(WorkspaceControllerExecSocket); err == nil {
+			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
+		}
 	}
 	return binds
 }

@@ -716,11 +716,21 @@
               # complete package-owned geometry without ambient host state.
               controller_source="$TMPDIR/fleet-inventory.json"
               controller_gui="$TMPDIR/fleet-codex-gui-inventory.json"
-              controller_identity="$TMPDIR/codex_tailnet_stations_ed25519"
+              controller_exec_dir="$TMPDIR/fleet-controller-exec"
+              controller_exec="$controller_exec_dir/control.sock"
               printf '%s\n' '{}' > "$controller_source"
               printf '%s\n' '{}' > "$controller_gui"
-              : > "$controller_identity"
-              chmod 0600 "$controller_identity"
+              mkdir -m 0700 "$controller_exec_dir"
+              ${pkgs.socat}/bin/socat \
+                UNIX-LISTEN:"$controller_exec",fork,mode=0600 \
+                EXEC:${pkgs.coreutils}/bin/true &
+              controller_exec_pid=$!
+              trap 'kill "$controller_exec_pid" 2>/dev/null || true' EXIT
+              for _ in $(${pkgs.coreutils}/bin/seq 1 50); do
+                test -S "$controller_exec" && break
+                sleep 0.1
+              done
+              test -S "$controller_exec"
               workspace_plan="$TMPDIR/installed-dev-workspace-plan.json"
               ${pkgs.bubblewrap}/bin/bwrap \
                 --die-with-parent \
@@ -734,11 +744,8 @@
                 --dir /etc/fleet/source \
                 --ro-bind "$controller_source" /etc/fleet/source/fleet-inventory.json \
                 --ro-bind "$controller_gui" /etc/fleet/source/fleet-codex-gui-inventory.json \
-                --dir /home \
-                --dir /home/bayesartre \
-                --dir /home/bayesartre/.ssh \
-                --dir /home/bayesartre/.ssh/fleet-station-controller \
-                --ro-bind "$controller_identity" /home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519 \
+                --dir /run \
+                --ro-bind "$controller_exec_dir" /run/fleet-controller-exec \
                 -- \
                 ${pkgs.coreutils}/bin/env -i \
                   HOME=/tmp/home \
@@ -746,7 +753,7 @@
                   DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
                   DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
                   ${devctl}/kit/bin/devctl -p dev-workspace native plan \
-                    --repo . --index 2 --format json > "$workspace_plan"
+                    --repo shadow-throne-management --index 2 --format json > "$workspace_plan"
               ${pkgs.jq}/bin/jq -e \
                 --arg devctl '${devctl}' \
                 '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
@@ -756,13 +763,22 @@
                  .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
                  .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/dev-workspace-agent2-workspace-egress.sock" and
                  .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev" and
-                 .agent.sandbox_worktree == "/workspaces/dev" and
+                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent2/shadow-throne-management" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent2/shadow-throne-management" and
                  .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/dev-workspace-agent2/home" and
                  .agent.sandbox_home == "/agent-state/dev-workspace-agent2/home" and
+                 .env.FLEET_EXEC_TRANSPORT_HANDLE == "required" and
+                 any(.binds[]; .source == "/run/fleet-controller-exec/control.sock" and
+                               .target == "/run/fleet-controller-exec/control.sock" and
+                               .mode == "ro" and .required == true) and
+                 all(.binds[]; (.source | contains("codex_tailnet_stations_ed25519") | not) and
+                               (.target | contains("codex_tailnet_stations_ed25519") | not)) and
                  all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
                  (tostring | contains("/nix/store/.devkit/") | not)' \
                 "$workspace_plan"
+              kill "$controller_exec_pid"
+              wait "$controller_exec_pid" 2>/dev/null || true
+              trap - EXIT
               mkdir -p "$out"
               cp "$plan" "$out/installed-plan.json"
               cp "$workspace_plan" "$out/installed-dev-workspace-plan.json"

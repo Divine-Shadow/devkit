@@ -1184,8 +1184,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 	}
-	managementController := isManagementControllerCommand(p, command)
-	if strings.TrimSpace(p.Proxy.UnixSocket) != "" && !managementController {
+	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
 		args = append(args, "--unshare-net")
 	} else {
 		args = append(args, "--share-net")
@@ -1315,7 +1314,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	}
 	runtimeArgs := []string{runtimeLauncher}
 	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
-	if strings.TrimSpace(p.Proxy.UnixSocket) != "" && !managementController {
+	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
 		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
 	} else {
 		args = append(args, runtimeArgs...)
@@ -1323,23 +1322,14 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
 }
 
-// Management Fleet is the sole network-capable command in workspace-egress.
-// The profile, repository, and immutable executable path are all compiled
-// authority; callers cannot request a network mode or substitute argv[0].
-func isManagementControllerCommand(p nativeplan.Plan, command []string) bool {
-	if strings.TrimSpace(p.Agent.ID.Project) != "dev-workspace" ||
-		strings.TrimSpace(p.Agent.ID.Repo) != "shadow-throne-management" ||
-		len(command) == 0 {
-		return false
-	}
-	return filepath.Clean(strings.TrimSpace(command[0])) == "/run/current-system/sw/bin/fleet-control"
-}
-
 func isWorkspaceControllerCapabilityTarget(target string) bool {
-	switch filepath.Clean(strings.TrimSpace(target)) {
+	clean := filepath.Clean(strings.TrimSpace(target))
+	if clean == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) {
+		return true
+	}
+	switch clean {
 	case "/etc/fleet/source/fleet-inventory.json",
-		"/etc/fleet/source/fleet-codex-gui-inventory.json",
-		"/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519":
+		"/etc/fleet/source/fleet-codex-gui-inventory.json":
 		return true
 	default:
 		return false
@@ -1352,8 +1342,8 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		return fmt.Errorf("inspect package-owned controller capability %s: %w", target, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		if target == "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519" {
-			return fmt.Errorf("controller capability %s must be a non-symlink regular file", target)
+		if target == nativeplan.WorkspaceControllerExecSocket {
+			return fmt.Errorf("controller exec capability must be a non-symlink Unix socket")
 		}
 		resolved, resolveErr := filepath.EvalSymlinks(source)
 		expected := filepath.Join("/etc/static", strings.TrimPrefix(filepath.Clean(target), "/etc/"))
@@ -1366,17 +1356,27 @@ func validateWorkspaceControllerCapability(source, target string) error {
 			return fmt.Errorf("inspect resolved controller inventory %s: %w", target, err)
 		}
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("controller capability %s must resolve to a regular file", target)
-	}
-	if target == "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519" {
-		if info.Mode().Perm() != 0o600 {
-			return fmt.Errorf("controller identity must be mode 0600: %s", source)
+	if target == nativeplan.WorkspaceControllerExecSocket {
+		if info.Mode()&os.ModeSocket == 0 || info.Mode().Perm() != 0o600 {
+			return fmt.Errorf("controller exec capability must be a mode 0600 Unix socket: %s", source)
+		}
+		parentInfo, parentErr := os.Lstat(filepath.Dir(source))
+		if parentErr != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 ||
+			parentInfo.Mode().Perm() != 0o700 {
+			return fmt.Errorf("controller exec capability parent must be a protected mode 0700 directory: %s", filepath.Dir(source))
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || uint32(stat.Uid) != uint32(os.Getuid()) {
-			return fmt.Errorf("controller identity owner does not match launching user: %s", source)
+			return fmt.Errorf("controller exec capability owner does not match launching user: %s", source)
 		}
+		parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
+		if !ok || uint32(parentStat.Uid) != uint32(os.Getuid()) {
+			return fmt.Errorf("controller exec capability parent owner does not match launching user: %s", filepath.Dir(source))
+		}
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("controller capability %s must resolve to a regular file", target)
 	}
 	return nil
 }

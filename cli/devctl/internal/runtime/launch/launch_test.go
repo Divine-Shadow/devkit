@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,32 +41,43 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestWorkspaceControllerCapabilityValidationRejectsSymlinkAndWrongIdentityMode(t *testing.T) {
-	root := t.TempDir()
-	identity := filepath.Join(root, "identity")
-	if err := os.WriteFile(identity, []byte("private"), 0o600); err != nil {
+func TestWorkspaceControllerCapabilityValidationRejectsSymlinkAndWrongSocketMode(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "devkit-exec-handle-")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(identity, 0o600); err != nil {
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateWorkspaceControllerCapability(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"); err != nil {
-		// The owner check is expected to pass for the test user; preserve a
-		// typed failure if the fixture cannot represent that identity.
-		t.Fatalf("valid owner-only identity rejected: %v", err)
-	}
-	if err := os.Chmod(identity, 0o644); err != nil {
+	socket := filepath.Join(root, "control.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateWorkspaceControllerCapability(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"); err == nil {
-		t.Fatal("wrong identity mode must fail closed")
-	}
-	symlink := filepath.Join(root, "identity-link")
-	if err := os.Symlink(identity, symlink); err != nil {
+	t.Cleanup(func() { _ = listener.Close() })
+	if err := os.Chmod(socket, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateWorkspaceControllerCapability(symlink, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519"); err == nil {
-		t.Fatal("symlink identity must fail closed")
+	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
+	nativeplan.WorkspaceControllerExecSocket = socket
+	t.Cleanup(func() { nativeplan.WorkspaceControllerExecSocket = previousExecSocket })
+	if err := validateWorkspaceControllerCapability(socket, socket); err != nil {
+		t.Fatalf("valid protected exec socket rejected: %v", err)
+	}
+	if err := os.Chmod(socket, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapability(socket, socket); err == nil {
+		t.Fatal("wrong exec socket mode must fail closed")
+	}
+	symlink := filepath.Join(root, "control-link.sock")
+	if err := os.Symlink(socket, symlink); err != nil {
+		t.Fatal(err)
+	}
+	nativeplan.WorkspaceControllerExecSocket = symlink
+	if err := validateWorkspaceControllerCapability(symlink, symlink); err == nil {
+		t.Fatal("symlink exec socket must fail closed")
 	}
 }
 
@@ -82,14 +94,17 @@ func TestWorkspaceControllerCapabilityValidationRequiresRegularInventory(t *test
 
 func TestWorkspaceControllerCapabilityBindingRejectsOverridesAndWritableMode(t *testing.T) {
 	root := t.TempDir()
-	identity := filepath.Join(root, "identity")
-	if err := os.WriteFile(identity, []byte("private"), 0o600); err != nil {
+	socket := filepath.Join(root, "control.sock")
+	if err := os.WriteFile(socket, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateWorkspaceControllerCapabilityBinding(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519", "rw"); err == nil {
+	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
+	nativeplan.WorkspaceControllerExecSocket = socket
+	t.Cleanup(func() { nativeplan.WorkspaceControllerExecSocket = previousExecSocket })
+	if err := validateWorkspaceControllerCapabilityBinding(socket, socket, "rw"); err == nil {
 		t.Fatal("writable controller capability must fail closed")
 	}
-	if err := validateWorkspaceControllerCapabilityBinding(identity, "/home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519", "ro"); err == nil {
+	if err := validateWorkspaceControllerCapabilityBinding(filepath.Join(root, "other"), socket, "ro"); err == nil {
 		t.Fatal("caller source override must fail closed")
 	}
 }
@@ -438,7 +453,7 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 	}
 }
 
-func TestBuildBubblewrapManagementFleetSharesOnlyHostNetwork(t *testing.T) {
+func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -452,6 +467,26 @@ func TestBuildBubblewrapManagementFleetSharesOnlyHostNetwork(t *testing.T) {
 	if err := os.WriteFile(proxySocket, []byte("socket placeholder"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	execRoot, err := os.MkdirTemp("/tmp", "devkit-exec-handle-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(execRoot) })
+	if err := os.Chmod(execRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	execSocket := filepath.Join(execRoot, "control.sock")
+	listener, err := net.Listen("unix", execSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	if err := os.Chmod(execSocket, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
+	nativeplan.WorkspaceControllerExecSocket = execSocket
+	t.Cleanup(func() { nativeplan.WorkspaceControllerExecSocket = previousExecSocket })
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
 		Project:          "dev-workspace",
@@ -467,12 +502,11 @@ func TestBuildBubblewrapManagementFleetSharesOnlyHostNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	// The host-side test environment intentionally has no controller
-	// inventory projection; projection itself is covered by plan tests. Keep
-	// this test focused on the network capability decision.
+	// The test host has no immutable inventory projections. Keep only the
+	// protected exec handle and ordinary workspace capabilities.
 	filtered := p.Binds[:0]
 	for _, bind := range p.Binds {
-		if isWorkspaceControllerCapabilityTarget(bind.Target) {
+		if isWorkspaceControllerCapabilityTarget(bind.Target) && bind.Target != execSocket {
 			continue
 		}
 		filtered = append(filtered, bind)
@@ -484,11 +518,12 @@ func TestBuildBubblewrapManagementFleetSharesOnlyHostNetwork(t *testing.T) {
 		t.Fatalf("BuildBubblewrap Fleet: %v", err)
 	}
 	joined := ShellString(cmd)
-	if !strings.Contains(joined, "'--share-net'") {
-		t.Fatalf("Management Fleet command must share host network: %s", joined)
+	if !strings.Contains(joined, "'--unshare-net'") || strings.Contains(joined, "'--share-net'") {
+		t.Fatalf("Management Fleet command must remain network-isolated: %s", joined)
 	}
-	if strings.Contains(joined, "'--unshare-net'") || strings.Contains(joined, "proxy-bridge") {
-		t.Fatalf("Management Fleet command must not use proxy namespace bridge: %s", joined)
+	if !strings.Contains(joined, "'--ro-bind' '"+execSocket+"' '"+execSocket+"'") ||
+		!strings.Contains(joined, "'--setenv' 'FLEET_EXEC_TRANSPORT_HANDLE' 'required'") {
+		t.Fatalf("Management Fleet command lacks the exact typed exec handle: %s", joined)
 	}
 	for _, nonFleet := range [][]string{{"/bin/bash", "-lc", "curl https://example.invalid"}, {"/run/current-system/sw/bin/fleet", "pressure"}} {
 		other, err := BuildBubblewrap(p, nonFleet)
@@ -497,7 +532,7 @@ func TestBuildBubblewrapManagementFleetSharesOnlyHostNetwork(t *testing.T) {
 		}
 		otherText := ShellString(other)
 		if !strings.Contains(otherText, "'--unshare-net'") || strings.Contains(otherText, "'--share-net'") {
-			t.Fatalf("non-authorized command received host network: %s", otherText)
+			t.Fatalf("Management child received host network: %s", otherText)
 		}
 	}
 }

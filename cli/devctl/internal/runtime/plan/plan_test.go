@@ -164,6 +164,16 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
+	execSocket := filepath.Join(root, "run", "fleet-controller-exec", "control.sock")
+	if err := os.MkdirAll(filepath.Dir(execSocket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(execSocket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousExecSocket := WorkspaceControllerExecSocket
+	WorkspaceControllerExecSocket = execSocket
+	t.Cleanup(func() { WorkspaceControllerExecSocket = previousExecSocket })
 	if err := os.MkdirAll(filepath.Join(devRoot, "devkit"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +188,7 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	for _, path := range []string{workspaceControllerSourceInventory, workspaceControllerGUIInventory, workspaceControllerSSHIdentity} {
+	for _, path := range []string{workspaceControllerSourceInventory, workspaceControllerGUIInventory, execSocket} {
 		if !hasBind(p.Binds, path, path) {
 			t.Fatalf("controller capability %s not projected: %#v", path, p.Binds)
 		}
@@ -193,6 +203,15 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 			t.Fatalf("controller projection must not expose parent directories: %#v", bind)
 		}
 	}
+	if p.Env["FLEET_EXEC_TRANSPORT_HANDLE"] != "required" {
+		t.Fatalf("controller exec handle env = %q", p.Env["FLEET_EXEC_TRANSPORT_HANDLE"])
+	}
+	for _, bind := range p.Binds {
+		if strings.Contains(bind.Source, "codex_tailnet_stations_ed25519") ||
+			strings.Contains(bind.Target, "codex_tailnet_stations_ed25519") {
+			t.Fatalf("raw Fleet SSH identity escaped into the sandbox: %#v", bind)
+		}
+	}
 	devAll, err := Build(BuildOptions{
 		Paths:            devkitpaths.Paths{Root: filepath.Join(devRoot, "devkit")},
 		Project:          "dev-all",
@@ -204,7 +223,7 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 	if err != nil {
 		t.Fatalf("Build dev-all: %v", err)
 	}
-	for _, path := range []string{workspaceControllerSourceInventory, workspaceControllerGUIInventory, workspaceControllerSSHIdentity} {
+	for _, path := range []string{workspaceControllerSourceInventory, workspaceControllerGUIInventory, execSocket} {
 		if hasBind(devAll.Binds, path, path) {
 			t.Fatalf("non-controller workspace must not receive %s", path)
 		}

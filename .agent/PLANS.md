@@ -57,4 +57,6 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
-There are no active ExecPlans.
+- [Management Fleet Exec Handle](execplans/management-fleet-exec-handle.md):
+  keep workspace-egress network-isolated while projecting only the
+  source-derived Nix-owned handle for the existing exact-station Fleet effect.
