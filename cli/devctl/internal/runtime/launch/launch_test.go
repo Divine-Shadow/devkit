@@ -288,6 +288,18 @@ func TestPrepareTransitionsImmutableManagementSkillsAndRemovesStaleOwnedLinks(t 
 	if err := Prepare(p); err != nil {
 		t.Fatalf("Prepare first package: %v", err)
 	}
+	legacyReceipt := map[string]string{
+		"schemaVersion":       managementRuntimeSkillsReceiptSchema,
+		"managementSourceRev": first.SourceRev,
+		"skillsRoot":          first.SkillsRoot,
+		"skillPath":           "fleet-skill-supply-chain/SKILL.md",
+		"skillSha256":         strings.Repeat("a", 64),
+	}
+	legacyReceiptBytes, err := json.MarshalIndent(legacyReceipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(hostHome, ".codex", "management-runtime-skills.json"), string(legacyReceiptBytes)+"\n")
 
 	second := writeManagementSkillsFixture(t, storeRoot, "bbbbbbbb-management-skills", strings.Repeat("b", 40), map[string]string{
 		"fleet-health-hypervisor/SKILL.md": "second\n",
@@ -310,6 +322,10 @@ func TestPrepareTransitionsImmutableManagementSkillsAndRemovesStaleOwnedLinks(t 
 		if want := filepath.Join(second.SkillsRoot, name); got != want {
 			t.Fatalf("transitioned %s link = %q, want %q", name, got, want)
 		}
+	}
+	currentReceipt := readTestFile(t, filepath.Join(hostHome, ".codex", "management-runtime-skills.json"))
+	if strings.Contains(currentReceipt, `"skillPath"`) || strings.Contains(currentReceipt, `"skillSha256"`) {
+		t.Fatalf("legacy receipt fields survived convergence: %s", currentReceipt)
 	}
 }
 

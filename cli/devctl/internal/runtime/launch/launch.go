@@ -607,6 +607,8 @@ type managementRuntimeSkillsReceipt struct {
 	SkillsRoot          string   `json:"skillsRoot"`
 	IdentitySHA256      string   `json:"identitySha256"`
 	Links               []string `json:"links"`
+	LegacySkillPath     string   `json:"skillPath,omitempty"`
+	LegacySkillSHA256   string   `json:"skillSha256,omitempty"`
 }
 
 func ensureWorkspaceSkillLinks(p nativeplan.Plan) error {
@@ -630,6 +632,12 @@ func ensureWorkspaceSkillLinks(p nativeplan.Plan) error {
 	previous, err := readManagementRuntimeSkillsReceipt(receiptPath)
 	if err != nil {
 		return err
+	}
+	if previous != nil && previous.LegacySkillPath != "" {
+		previous.Links, err = discoverLegacyManagementRuntimeSkillLinks(targetRoot, previous.SkillsRoot)
+		if err != nil {
+			return err
+		}
 	}
 	legacyRoots := []string{
 		filepath.Join(hostDevRoot, ".codex", "skills"),
@@ -914,6 +922,17 @@ func readManagementRuntimeSkillsReceipt(path string) (*managementRuntimeSkillsRe
 	if filepath.Clean(receipt.SkillsRoot) != receipt.SkillsRoot || !filepath.IsAbs(receipt.SkillsRoot) {
 		return nil, fmt.Errorf("Management runtime skill receipt has invalid skills root %q", receipt.SkillsRoot)
 	}
+	if (receipt.LegacySkillPath == "") != (receipt.LegacySkillSHA256 == "") {
+		return nil, fmt.Errorf("Management runtime skill receipt has incomplete legacy skill identity")
+	}
+	if receipt.LegacySkillPath != "" {
+		if !validRelativeManifestPath(receipt.LegacySkillPath) || !validSHA256(receipt.LegacySkillSHA256) {
+			return nil, fmt.Errorf("Management runtime skill receipt has invalid legacy skill identity")
+		}
+		if receipt.PackagePath != "" || receipt.IdentitySHA256 != "" || len(receipt.Links) != 0 {
+			return nil, fmt.Errorf("Management runtime skill receipt mixes legacy and current fields")
+		}
+	}
 	seen := map[string]bool{}
 	for _, name := range receipt.Links {
 		if !validSkillName(name) || seen[name] {
@@ -922,6 +941,37 @@ func readManagementRuntimeSkillsReceipt(path string) (*managementRuntimeSkillsRe
 		seen[name] = true
 	}
 	return &receipt, nil
+}
+
+func discoverLegacyManagementRuntimeSkillLinks(targetRoot, skillsRoot string) ([]string, error) {
+	entries, err := os.ReadDir(targetRoot)
+	if err != nil {
+		return nil, fmt.Errorf("read Management runtime skill links %s: %w", targetRoot, err)
+	}
+	links := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if !validSkillName(name) {
+			continue
+		}
+		target := filepath.Join(targetRoot, name)
+		info, err := os.Lstat(target)
+		if err != nil {
+			return nil, fmt.Errorf("inspect Management runtime skill target %s: %w", target, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		existing, err := os.Readlink(target)
+		if err != nil {
+			return nil, fmt.Errorf("read Management runtime skill link %s: %w", target, err)
+		}
+		if filepath.Clean(existing) == filepath.Join(skillsRoot, name) {
+			links = append(links, name)
+		}
+	}
+	sort.Strings(links)
+	return links, nil
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {
