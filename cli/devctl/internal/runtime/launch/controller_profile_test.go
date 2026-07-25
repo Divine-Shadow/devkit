@@ -295,10 +295,12 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV4Profile(t *testing.T)
 		SourceRevision: strings.Repeat("c", 40),
 		StateDirectory: "/var/lib/fleet-controller-operation",
 	}
+	sshConfigPath := filepath.Join(operationStoreRoot, "management-controller-github-ssh-config")
+	writeTestFile(t, sshConfigPath, "Host github.com\n")
 	profile.SourceAcquisition = nativeplan.ControllerProfileSourceAcquisition{
 		GitExecutable: writeExecutable(filepath.Join(operationStoreRoot, "git", "bin", "git")),
 		SSHExecutable: writeExecutable(filepath.Join(operationStoreRoot, "openssh", "bin", "ssh")),
-		SSHConfigPath: "/home/bayesartre/.ssh/config",
+		SSHConfigPath: sshConfigPath,
 	}
 	manifestBytes, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {

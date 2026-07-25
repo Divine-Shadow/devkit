@@ -35,6 +35,15 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 		}
 		return path
 	}
+	writeRegular := func(path string) string {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("Host github.com\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
 	profile := ManagementControllerProfile{
 		SchemaVersion:       ManagementControllerProfileSchema,
 		ProfileIdentity:     ManagementControllerProfileIdentity,
@@ -88,7 +97,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 		SourceAcquisition: ControllerProfileSourceAcquisition{
 			GitExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "git", "bin", "git")),
 			SSHExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "openssh", "bin", "ssh")),
-			SSHConfigPath: controllerSourceAcquisitionSSHConfig,
+			SSHConfigPath: writeRegular(filepath.Join(ControllerProfileStoreRoot, "management-controller-github-ssh-config")),
 		},
 	}
 	data, err := json.MarshalIndent(profile, "", "  ")
@@ -196,6 +205,15 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	}
 	if product.ControllerProfile != "" || product.MountPolicyIdentity != "devkit/workspace-egress/v3" {
 		t.Fatalf("unrelated Product profile was promoted: %+v", product)
+	}
+
+	mutableConfig := filepath.Join(root, "mutable-ssh-config")
+	if err := os.WriteFile(mutableConfig, []byte("Host github.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile.SourceAcquisition.SSHConfigPath = mutableConfig
+	if err := validateManagementControllerProfile(profile); err == nil || !strings.Contains(err.Error(), "SSH config") {
+		t.Fatalf("mutable SSH config path was not rejected: %v", err)
 	}
 }
 

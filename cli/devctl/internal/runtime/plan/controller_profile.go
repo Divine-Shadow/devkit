@@ -31,7 +31,6 @@ const (
 	ManagementControllerGUI                 = "shadow-throne-management-2"
 	ManagementControllerDrTalos             = "drtalos"
 	controllerOperationStateDirectory       = "/var/lib/fleet-controller-operation"
-	controllerSourceAcquisitionSSHConfig    = "/home/bayesartre/.ssh/config"
 )
 
 var (
@@ -226,8 +225,8 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	if err := validateControllerStoreExecutable("SSH", profile.SourceAcquisition.SSHExecutable); err != nil {
 		return err
 	}
-	if profile.SourceAcquisition.SSHConfigPath != controllerSourceAcquisitionSSHConfig {
-		return fmt.Errorf("Management controller source-acquisition SSH config path does not match the compiled host-side contract")
+	if err := validateControllerStoreFile("SSH config", profile.SourceAcquisition.SSHConfigPath); err != nil {
+		return err
 	}
 	return nil
 }
@@ -264,6 +263,27 @@ func validateControllerStoreExecutable(label, path string) error {
 	}
 	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return fmt.Errorf("Management controller %s executable %s is unavailable or non-executable", label, path)
+	}
+	return nil
+}
+
+func validateControllerStoreFile(label, path string) error {
+	path = filepath.Clean(strings.TrimSpace(path))
+	rel, err := filepath.Rel(filepath.Clean(ControllerProfileStoreRoot), path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("Management controller %s %s is outside %s", label, path, ControllerProfileStoreRoot)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("Management controller %s %s is unavailable or not a real regular file", label, path)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve Management controller %s %s: %w", label, path, err)
+	}
+	rel, err = filepath.Rel(filepath.Clean(ControllerProfileStoreRoot), filepath.Clean(resolved))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("Management controller %s %s resolves outside %s", label, path, ControllerProfileStoreRoot)
 	}
 	return nil
 }
