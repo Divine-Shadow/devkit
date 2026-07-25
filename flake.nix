@@ -654,7 +654,7 @@
               };
             in
             pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
-              nativeBuildInputs = [ pkgs.gnugrep pkgs.jq ];
+              nativeBuildInputs = [ pkgs.bubblewrap pkgs.coreutils pkgs.gnugrep pkgs.jq ];
             } ''
               test -x ${devctl}/kit/bin/devctl
               test -f ${devctl}/flake.nix
@@ -663,9 +663,21 @@
               test -f ${devctl}/overlays/dev-all/flake.nix
               test -f ${devctl}/overlays/dev-all/runtime.nix
               test -f ${devctl}/overlays/dev-all/devkit.yaml
+              test -f ${devctl}/overlays/dev-workspace/runtime.nix
+              test -f ${devctl}/overlays/dev-workspace/devkit.yaml
+              test -f ${devctl}/overlays/ouroboros-terraform/flake.nix
+              test -f ${devctl}/overlays/ouroboros-terraform/devkit.yaml
               test -r ${devctl}/kit/proxy/allowlist.txt
               grep -Fx 'ssh.github.com' ${devctl}/kit/proxy/allowlist.txt
               grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
+              for overlay in dev-all dev-workspace ouroboros-terraform; do
+                grep -Fx '  host_root: /home/bayesartre/dev' ${devctl}/overlays/$overlay/devkit.yaml
+                grep -Fx '  worktree_root: /home/bayesartre/dev/agent-worktrees' ${devctl}/overlays/$overlay/devkit.yaml
+                grep -Fx '  state_root: /home/bayesartre/dev/.devkit/native-agents' ${devctl}/overlays/$overlay/devkit.yaml
+                grep -Fx '  worktree_container_root: /workspaces/dev/agent-worktrees' ${devctl}/overlays/$overlay/devkit.yaml
+                grep -Fx '  state_container_root: /agent-state' ${devctl}/overlays/$overlay/devkit.yaml
+                grep -Fx '  required_isolation_profile: workspace-egress' ${devctl}/overlays/$overlay/devkit.yaml
+              done
 
               plan="$TMPDIR/installed-plan.json"
               env -i \
@@ -696,8 +708,64 @@
               test "$allowlist" = '${devctl}/kit/proxy/allowlist.txt'
               test -r "$allowlist"
               grep -Fx 'ssh.github.com' "$allowlist"
+
+              # Exercise the real installed dev-workspace package path from an
+              # empty environment.  The protected controller files are exact
+              # read-only mount capabilities; this nested namespace supplies
+              # only those paths so the production planner can validate its
+              # complete package-owned geometry without ambient host state.
+              controller_source="$TMPDIR/fleet-inventory.json"
+              controller_gui="$TMPDIR/fleet-codex-gui-inventory.json"
+              controller_identity="$TMPDIR/codex_tailnet_stations_ed25519"
+              printf '%s\n' '{}' > "$controller_source"
+              printf '%s\n' '{}' > "$controller_gui"
+              : > "$controller_identity"
+              chmod 0600 "$controller_identity"
+              workspace_plan="$TMPDIR/installed-dev-workspace-plan.json"
+              ${pkgs.bubblewrap}/bin/bwrap \
+                --die-with-parent \
+                --unshare-all \
+                --ro-bind /nix/store /nix/store \
+                --proc /proc \
+                --dev /dev \
+                --tmpfs /tmp \
+                --dir /etc \
+                --dir /etc/fleet \
+                --dir /etc/fleet/source \
+                --ro-bind "$controller_source" /etc/fleet/source/fleet-inventory.json \
+                --ro-bind "$controller_gui" /etc/fleet/source/fleet-codex-gui-inventory.json \
+                --dir /home \
+                --dir /home/bayesartre \
+                --dir /home/bayesartre/.ssh \
+                --dir /home/bayesartre/.ssh/fleet-station-controller \
+                --ro-bind "$controller_identity" /home/bayesartre/.ssh/fleet-station-controller/codex_tailnet_stations_ed25519 \
+                -- \
+                ${pkgs.coreutils}/bin/env -i \
+                  HOME=/tmp/home \
+                  DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                  DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                  DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                  ${devctl}/kit/bin/devctl -p dev-workspace native plan \
+                    --repo . --index 2 --format json > "$workspace_plan"
+              ${pkgs.jq}/bin/jq -e \
+                --arg devctl '${devctl}' \
+                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
+                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
+                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
+                 .sandbox_state_root == "/agent-state" and
+                 .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
+                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/dev-workspace-agent2-workspace-egress.sock" and
+                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
+                 .agent.host_worktree == "/home/bayesartre/dev" and
+                 .agent.sandbox_worktree == "/workspaces/dev" and
+                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/dev-workspace-agent2/home" and
+                 .agent.sandbox_home == "/agent-state/dev-workspace-agent2/home" and
+                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
+                 (tostring | contains("/nix/store/.devkit/") | not)' \
+                "$workspace_plan"
               mkdir -p "$out"
               cp "$plan" "$out/installed-plan.json"
+              cp "$workspace_plan" "$out/installed-dev-workspace-plan.json"
               printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
             '';
 

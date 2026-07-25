@@ -13,6 +13,13 @@ runtime:
   core_check: terraform fmt -check -recursive
   notes: Thin devkit adapter; canonical tool requirements live in ../ouroboros-terraform/flake.nix and devkit.yaml, and devkit must pass the ouroboros-terraform flake input override explicitly.
 native:
+  # This is an admitted package-native overlay.  Immutable package discovery
+  # supplies runtime authority only; mutable consumer geometry stays explicit.
+  host_root: /home/bayesartre/dev
+  worktree_root: /home/bayesartre/dev/agent-worktrees
+  state_root: /home/bayesartre/dev/.devkit/native-agents
+  worktree_container_root: /workspaces/dev/agent-worktrees
+  state_container_root: /agent-state
   required_isolation_profile: workspace-egress
   isolation_profiles:
     workspace-egress:
@@ -91,7 +98,7 @@ readiness:
     - name: core-check
       command: terraform fmt -check -recursive
 broker:
-  socket: ../.devkit/native-broker/broker.sock
+  socket: .devkit/native-broker/broker.sock
   upstream: unix:///var/run/docker.sock
   allowed_images:
     - postgres:latest

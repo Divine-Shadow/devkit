@@ -13,6 +13,14 @@ runtime:
   core_check: git diff --check
   notes: Native runtime for a Codex agent entered at the dev workspace root.
 native:
+  # This overlay is shipped inside the immutable devctl package.  Keep every
+  # mutable host and sandbox path explicit so package discovery can never turn
+  # the /nix/store authority root into writable workspace state.
+  host_root: /home/bayesartre/dev
+  worktree_root: /home/bayesartre/dev/agent-worktrees
+  state_root: /home/bayesartre/dev/.devkit/native-agents
+  worktree_container_root: /workspaces/dev/agent-worktrees
+  state_container_root: /agent-state
   required_isolation_profile: workspace-egress
   isolation_profiles:
     workspace-egress:
@@ -54,7 +62,7 @@ env:
   NODE_ENV: development
   GATSBY_TELEMETRY_DISABLED: "1"
 broker:
-  socket: ../.devkit/native-broker/broker.sock
+  socket: .devkit/native-broker/broker.sock
   upstream: unix:///var/run/docker.sock
   allowed_images:
     - postgres:latest

@@ -135,7 +135,13 @@ type topExecArgs struct {
 }
 
 func handleEgressProxy(ctx *cmdregistry.Context) error {
-	cfg, _, _ := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
+		return err
+	}
 	socketPath := filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), ".devkit", "native-egress", "proxy.sock")
 	allowlistPath := filepath.Join(ctx.Paths.Kit, "proxy", "allowlist.txt")
 	for i := 1; i < len(ctx.Args); i++ {
@@ -988,12 +994,18 @@ func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
 	if !config.HasRuntimeFlake(cfg) {
 		return fmt.Errorf("native lifecycle requires runtime.flake for -p %s; add a flake-backed runtime before using lifecycle commands", project)
 	}
+	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
 func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.OverlayConfig, string, int, string, string, error) {
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 	if err != nil {
+		return cfg, "", 0, "", "", err
+	}
+	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
 		return cfg, "", 0, "", "", err
 	}
 	repo := strings.TrimSpace(parsed.repo)
@@ -1085,6 +1097,9 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 }
 
 func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts *nativeplan.BuildOptions) error {
+	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
+		return err
+	}
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	if strings.TrimSpace(opts.HostRoot) == "" {
 		opts.HostRoot = hostRoot
@@ -1238,6 +1253,45 @@ func resolveNativeHostRoot(devkitRoot string, cfg config.OverlayConfig) string {
 		return filepath.Clean(devkitRoot)
 	}
 	return resolveNativeRoot(devkitRoot, hostRoot)
+}
+
+// validateInstalledPackageNativeGeometry protects the boundary between the
+// executable-derived immutable runtime authority and mutable consumer state.
+// A package-owned overlay is admitted to the protected native path by a
+// required isolation profile.  When that overlay is loaded from an installed
+// Nix package it must declare an absolute host root; silently falling back to
+// the package root would reinterpret /nix/store as writable workspace state.
+func validateInstalledPackageNativeGeometry(ctx *cmdregistry.Context, cfg config.OverlayConfig) error {
+	if ctx == nil {
+		return fmt.Errorf("native geometry validation requires command context")
+	}
+	runtimeRoot := filepath.Clean(strings.TrimSpace(ctx.Paths.RuntimeAuthorityRoot))
+	if runtimeRoot == "." || (runtimeRoot != "/nix/store" && !strings.HasPrefix(runtimeRoot, "/nix/store/")) {
+		return nil
+	}
+	sourceDir := filepath.Clean(strings.TrimSpace(cfg.SourceDir))
+	if sourceDir == "." || !pathWithin(sourceDir, filepath.Join(runtimeRoot, "overlays")) {
+		return nil
+	}
+	if !config.HasRuntimeFlake(cfg) || strings.TrimSpace(cfg.Native.RequiredIsolationProfile) == "" {
+		return nil
+	}
+	hostRoot := strings.TrimSpace(cfg.Native.HostRoot)
+	if hostRoot == "" {
+		return fmt.Errorf("installed package-native overlay %s requires an absolute native.host_root", strings.TrimSpace(ctx.Project))
+	}
+	if !filepath.IsAbs(hostRoot) {
+		return fmt.Errorf("installed package-native overlay %s native.host_root must be absolute: %s", strings.TrimSpace(ctx.Project), hostRoot)
+	}
+	return nil
+}
+
+func pathWithin(path string, root string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func writeNativeManifest(ctx *cmdregistry.Context, opts nativeplan.BuildOptions, count int, dryRun bool) (nativeagent.Manifest, string, error) {

@@ -537,6 +537,153 @@ func TestLifecyclePlanOptionsEnforcesRequiredWorkspaceEgressProfile(t *testing.T
 	}
 }
 
+func devkitSourceRootForNativeTest(t *testing.T) string {
+	t.Helper()
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for {
+		if info, statErr := os.Stat(filepath.Join(root, "flake.nix")); statErr == nil && !info.IsDir() {
+			if overlayInfo, overlayErr := os.Stat(filepath.Join(root, "overlays")); overlayErr == nil && overlayInfo.IsDir() {
+				return root
+			}
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			t.Fatal("unable to locate Devkit source root")
+		}
+		root = parent
+	}
+}
+
+func TestPackagedAdmittedNativeOverlaysDeclareAbsoluteGeometry(t *testing.T) {
+	root := devkitSourceRootForNativeTest(t)
+	overlaysRoot := filepath.Join(root, "overlays")
+	entries, err := os.ReadDir(overlaysRoot)
+	if err != nil {
+		t.Fatalf("read packaged overlays: %v", err)
+	}
+	wantAdmitted := map[string]bool{
+		"dev-all":             true,
+		"dev-workspace":       true,
+		"ouroboros-terraform": true,
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		cfg, _, err := config.ReadAll([]string{overlaysRoot}, name)
+		if err != nil || !config.HasRuntimeFlake(cfg) {
+			continue
+		}
+		if strings.TrimSpace(cfg.Native.RequiredIsolationProfile) == "" {
+			if wantAdmitted[name] {
+				t.Fatalf("packaged native overlay %s lost its admission profile", name)
+			}
+			continue
+		}
+		if !wantAdmitted[name] {
+			t.Fatalf("unexpected packaged native overlay admitted without geometry audit: %s", name)
+		}
+		seen[name] = true
+		for field, value := range map[string]string{
+			"host_root":               cfg.Native.HostRoot,
+			"worktree_root":           cfg.Native.WorktreeRoot,
+			"state_root":              cfg.Native.StateRoot,
+			"worktree_container_root": cfg.Native.WorktreeContainerRoot,
+			"state_container_root":    cfg.Native.StateContainerRoot,
+		} {
+			if !filepath.IsAbs(strings.TrimSpace(value)) {
+				t.Fatalf("packaged native overlay %s %s must be absolute, got %q", name, field, value)
+			}
+		}
+	}
+	for name := range wantAdmitted {
+		if !seen[name] {
+			t.Fatalf("expected packaged native overlay was not audited: %s", name)
+		}
+	}
+}
+
+func TestRealPackagedDevWorkspaceOverlayKeepsMutableGeometryOutsideRuntimeAuthority(t *testing.T) {
+	root := devkitSourceRootForNativeTest(t)
+	cfg, _, err := config.ReadAll([]string{filepath.Join(root, "overlays")}, "dev-workspace")
+	if err != nil {
+		t.Fatalf("read real dev-workspace overlay: %v", err)
+	}
+	packageRoot := "/nix/store/example-devkit-devctl"
+	// Preserve the real parsed production configuration while modeling its
+	// installed package location.
+	cfg.SourceDir = filepath.Join(packageRoot, "overlays", "dev-workspace")
+	ctx := &cmdregistry.Context{
+		Project: "dev-workspace",
+		Paths: devkitpaths.Paths{
+			Root:                 packageRoot,
+			RuntimeAuthorityRoot: packageRoot,
+		},
+	}
+	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
+		t.Fatalf("real packaged dev-workspace geometry rejected: %v", err)
+	}
+	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{})
+	opts := lifecyclePlanOptions(ctx, cfg, lifecycleArgs{}, ".", brokerCfg)
+	p, err := nativeplan.BuildDevAll(opts)
+	if err != nil {
+		t.Fatalf("build real packaged dev-workspace plan: %v", err)
+	}
+	if p.Agent.HostWorktree != "/home/bayesartre/dev" {
+		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
+	}
+	if p.HostWorktreeRoot != "/home/bayesartre/dev/agent-worktrees" {
+		t.Fatalf("host worktree root = %q", p.HostWorktreeRoot)
+	}
+	if p.HostStateRoot != "/home/bayesartre/dev/.devkit/native-agents" {
+		t.Fatalf("host state root = %q", p.HostStateRoot)
+	}
+	if p.Agent.SandboxWorktree != "/workspaces/dev" || p.SandboxStateRoot != "/agent-state" {
+		t.Fatalf("sandbox geometry = worktree %q state %q", p.Agent.SandboxWorktree, p.SandboxStateRoot)
+	}
+	if p.BrokerEndpoint != "/home/bayesartre/dev/.devkit/native-broker/broker.sock" {
+		t.Fatalf("broker endpoint = %q", p.BrokerEndpoint)
+	}
+	for _, bind := range p.Binds {
+		if bind.Mode == "rw" && (bind.Source == "/nix/store" || strings.HasPrefix(bind.Source, "/nix/store/")) {
+			t.Fatalf("real packaged dev-workspace plan exposes writable Nix-store bind: %#v", bind)
+		}
+	}
+}
+
+func TestInstalledPackageNativeGeometryRejectsMissingOrRelativeHostRoot(t *testing.T) {
+	packageRoot := "/nix/store/example-devkit-devctl"
+	ctx := &cmdregistry.Context{
+		Project: "dev-workspace",
+		Paths: devkitpaths.Paths{
+			Root:                 packageRoot,
+			RuntimeAuthorityRoot: packageRoot,
+		},
+	}
+	base := config.OverlayConfig{
+		SourceDir: filepath.Join(packageRoot, "overlays", "dev-workspace"),
+		Runtime:   config.Runtime{Flake: "./overlays/dev-workspace#default"},
+		Native: config.Native{
+			RequiredIsolationProfile: "workspace-egress",
+		},
+	}
+	for name, hostRoot := range map[string]string{"missing": "", "relative": "../dev"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base
+			cfg.Native.HostRoot = hostRoot
+			err := validateInstalledPackageNativeGeometry(ctx, cfg)
+			if err == nil || !strings.Contains(err.Error(), "requires an absolute native.host_root") && !strings.Contains(err.Error(), "native.host_root must be absolute") {
+				t.Fatalf("host root %q produced %v", hostRoot, err)
+			}
+		})
+	}
+}
+
 func TestLifecyclePlanOptionsCLIAllowlistOverridesProfileAllowlist(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "dev-all",

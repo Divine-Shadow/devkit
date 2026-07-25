@@ -196,8 +196,8 @@ native:
   # Mutable geometry is explicit because the installed controller executes
   # from an immutable /nix/store package, not a writable Devkit checkout.
   host_root: /home/bayesartre/dev
-  worktree_root: agent-worktrees
-  state_root: .devkit/native-agents
+  worktree_root: /home/bayesartre/dev/agent-worktrees
+  state_root: /home/bayesartre/dev/.devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
