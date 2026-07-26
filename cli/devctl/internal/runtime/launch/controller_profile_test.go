@@ -104,6 +104,7 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 			Operation:     profile.NixOSDeployment.Operation,
 			RequestSchema: profile.NixOSDeployment.RequestSchema,
 			EventSchema:   profile.NixOSDeployment.EventSchema,
+			ServiceUser:   profile.NixOSDeployment.ServiceUser,
 		},
 		SourceInventories: controllerOperationInventories{
 			Fleet: controllerOperationFileIdentity{
@@ -331,6 +332,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T)
 		Operation:     "nixos.deploy-closure",
 		RequestSchema: "fleet-control/nixos-deploy-local-request/v1",
 		EventSchema:   "fleet-control/nixos-deploy-local-event/v1",
+		ServiceUser:   nativeplan.ManagementControllerIdentityExpectedOwner,
 		Mode:          "0660",
 		Owner:         "root",
 		Group:         "fleet-deployment-operators",

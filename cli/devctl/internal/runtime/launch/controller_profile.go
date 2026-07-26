@@ -74,6 +74,7 @@ type controllerOperationNixOSDeployment struct {
 	Operation     string `json:"operation"`
 	RequestSchema string `json:"requestSchema"`
 	EventSchema   string `json:"eventSchema"`
+	ServiceUser   string `json:"serviceUser"`
 }
 
 type controllerOperationIdentity struct {
@@ -295,6 +296,7 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 		Operation:     profile.NixOSDeployment.Operation,
 		RequestSchema: profile.NixOSDeployment.RequestSchema,
 		EventSchema:   profile.NixOSDeployment.EventSchema,
+		ServiceUser:   profile.NixOSDeployment.ServiceUser,
 	}) {
 		return fmt.Errorf("controller operation identity NixOS deployment effect does not match the profile")
 	}

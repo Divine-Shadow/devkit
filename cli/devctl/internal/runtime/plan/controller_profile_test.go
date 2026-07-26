@@ -115,6 +115,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Operation:     controllerNixOSDeploymentOperation,
 			RequestSchema: controllerNixOSDeploymentRequestSchema,
 			EventSchema:   controllerNixOSDeploymentEventSchema,
+			ServiceUser:   ManagementControllerIdentityExpectedOwner,
 			Mode:          "0660",
 			Owner:         "root",
 			Group:         "fleet-deployment-operators",

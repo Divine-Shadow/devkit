@@ -129,6 +129,7 @@ type ControllerProfileNixOSDeployment struct {
 	Operation     string `json:"operation"`
 	RequestSchema string `json:"requestSchema"`
 	EventSchema   string `json:"eventSchema"`
+	ServiceUser   string `json:"serviceUser"`
 	Mode          string `json:"mode"`
 	Owner         string `json:"owner"`
 	Group         string `json:"group"`
@@ -264,6 +265,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		deployment.Operation != controllerNixOSDeploymentOperation ||
 		deployment.RequestSchema != controllerNixOSDeploymentRequestSchema ||
 		deployment.EventSchema != controllerNixOSDeploymentEventSchema ||
+		deployment.ServiceUser != ManagementControllerIdentityExpectedOwner ||
 		deployment.Mode != "0660" ||
 		deployment.Owner != "root" ||
 		deployment.Group != "fleet-deployment-operators" ||
