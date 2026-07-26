@@ -1677,6 +1677,12 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 	}
+	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
+		// Bubblewrap starts from the host mount namespace. Mask the WSL
+		// automount root before adding the profile's narrow, source-derived
+		// binds so no Windows drive remains visible inside workspace-egress.
+		args = append(args, "--tmpfs", "/mnt")
+	}
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
 		args = append(args, "--unshare-net")
 	} else {

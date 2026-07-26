@@ -860,6 +860,7 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 	}
 	joined := ShellString(cmd)
 	for _, want := range []string{
+		"'--tmpfs' '/mnt'",
 		"'--unshare-net'",
 		"'--ro-bind' '/var/run/nscd/socket' '/var/run/nscd/socket'",
 		"'--bind' '" + hostWorktree + "' '/workspace'",
