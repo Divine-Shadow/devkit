@@ -16,7 +16,7 @@ import (
 const (
 	ManagementControllerProfileIdentity     = "management-controller-convergence/v1"
 	ManagementControllerMountPolicyIdentity = "devkit/workspace-egress/v4"
-	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v4"
+	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v5"
 	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v5"
 	ControllerOperationRequestSchema        = "fleet-control/controller-operation-request/v1"
 	ControllerOperationAcceptedSchema       = "fleet-control/controller-operation-accepted/v1"

@@ -110,9 +110,8 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 	if err != nil {
 		return err
 	}
-	if filepath.Clean(profile.SourceRoots.Management.BackingPath) != filepath.Clean(p.Agent.HostWorktree) {
-		return fmt.Errorf("Management controller source backing root = %q, want active worktree %q", profile.SourceRoots.Management.BackingPath, p.Agent.HostWorktree)
-	}
+	activeManagementRoot := profile.SourceRoots.Management
+	activeManagementRoot.BackingPath = p.Agent.HostWorktree
 	for _, expected := range []nativeplan.Bind{
 		{Source: profile.SourceRoots.WSLNix.BackingPath, Target: profile.SourceRoots.WSLNix.LogicalPath, Mode: "rw", Required: true},
 		{Source: nativeplan.ManagementControllerProfileManifestPath, Target: nativeplan.ManagementControllerProfileManifestPath, Mode: "ro", Required: true},
@@ -123,7 +122,7 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 			return fmt.Errorf("Management controller plan lacks exact required bind %+v", expected)
 		}
 	}
-	if err := validateControllerSourceWorktree("Management", profile.SourceRoots.Management); err != nil {
+	if err := validateControllerSourceWorktree("active Management", activeManagementRoot); err != nil {
 		return err
 	}
 	if err := validateControllerSourceWorktree("WSL/Nix", profile.SourceRoots.WSLNix); err != nil {

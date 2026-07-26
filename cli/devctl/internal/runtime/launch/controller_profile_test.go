@@ -141,7 +141,7 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 	}
 }
 
-func TestPrepareAndBubblewrapUseExactManagementControllerV4Profile(t *testing.T) {
+func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T) {
 	root, err := os.MkdirTemp("", "devkit-v4-")
 	if err != nil {
 		t.Fatal(err)
