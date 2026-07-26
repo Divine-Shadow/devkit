@@ -78,9 +78,9 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			GUI:   controllerProfileFileIdentity(t, WorkspaceControllerGUIInventory, "gui\n"),
 		},
 		Targets: ControllerProfileTargets{
-			Controller:    ManagementControllerNode,
-			ControllerGUI: ManagementControllerGUI,
-			DrTalos:       ManagementControllerDrTalos,
+			Controller:       ManagementControllerNode,
+			ControllerGUI:    ManagementControllerGUI,
+			ProductAgentHost: ManagementControllerNode,
 		},
 		Schemas: ControllerProfileSchemas{
 			Request:  ControllerOperationRequestSchema,
@@ -88,7 +88,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Event:    ControllerOperationEventSchema,
 			Receipt:  ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"fleet.exec", "nixos.deploy-closure", "gui.replace-controller"},
+		Kinds: []string{"fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
 		Broker: ControllerProfileBroker{
 			Executable:     writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-control", "bin", "fleet-control")),
 			SourceRevision: strings.Repeat("c", 40),
@@ -98,6 +98,27 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			GitExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "git", "bin", "git")),
 			SSHExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "openssh", "bin", "ssh")),
 			SSHConfigPath: writeRegular(filepath.Join(ControllerProfileStoreRoot, "management-controller-github-ssh-config")),
+		},
+		ProductAgentLifecycle: ControllerProfileProductAgentLifecycle{
+			SocketPath:    controllerProductAgentSocket,
+			Executable:    writeExecutable(filepath.Join(ControllerProfileStoreRoot, "product-agent", "bin", "product-agent")),
+			Operation:     controllerProductAgentOperation,
+			RequestSchema: controllerProductAgentRequestSchema,
+			EventSchema:   controllerProductAgentEventSchema,
+			Mode:          "0660",
+			Owner:         "root",
+			Group:         "product-agent-operators",
+			NoFollow:      true,
+		},
+		NixOSDeployment: ControllerProfileNixOSDeployment{
+			SocketPath:    controllerNixOSDeploymentSocket,
+			Operation:     controllerNixOSDeploymentOperation,
+			RequestSchema: controllerNixOSDeploymentRequestSchema,
+			EventSchema:   controllerNixOSDeploymentEventSchema,
+			Mode:          "0660",
+			Owner:         "root",
+			Group:         "fleet-deployment-operators",
+			NoFollow:      true,
 		},
 	}
 	data, err := json.MarshalIndent(profile, "", "  ")

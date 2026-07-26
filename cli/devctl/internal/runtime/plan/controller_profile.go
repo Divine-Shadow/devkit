@@ -16,8 +16,8 @@ import (
 const (
 	ManagementControllerProfileIdentity     = "management-controller-convergence/v1"
 	ManagementControllerMountPolicyIdentity = "devkit/workspace-egress/v4"
-	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v1"
-	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v2"
+	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v4"
+	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v5"
 	ControllerOperationRequestSchema        = "fleet-control/controller-operation-request/v1"
 	ControllerOperationAcceptedSchema       = "fleet-control/controller-operation-accepted/v1"
 	ControllerOperationEventSchema          = "fleet-control/controller-operation-event/v1"
@@ -29,8 +29,15 @@ const (
 	ManagementControllerWSLNixLogicalRoot   = "/workspaces/dev/wsl-nix"
 	ManagementControllerNode                = "shadow-throne"
 	ManagementControllerGUI                 = "shadow-throne-management-2"
-	ManagementControllerDrTalos             = "drtalos"
 	controllerOperationStateDirectory       = "/var/lib/fleet-controller-operation"
+	controllerProductAgentSocket            = "/run/fleet-product-agent-lifecycle/control.sock"
+	controllerProductAgentOperation         = "cycle-test"
+	controllerProductAgentRequestSchema     = "fleet-control/product-agent-local-request/v1"
+	controllerProductAgentEventSchema       = "fleet-control/product-agent-local-event/v1"
+	controllerNixOSDeploymentSocket         = "/run/fleet-nixos-deploy-effect/control.sock"
+	controllerNixOSDeploymentOperation      = "nixos.deploy-closure"
+	controllerNixOSDeploymentRequestSchema  = "fleet-control/nixos-deploy-local-request/v1"
+	controllerNixOSDeploymentEventSchema    = "fleet-control/nixos-deploy-local-event/v1"
 )
 
 var (
@@ -81,9 +88,9 @@ type ControllerProfileInventories struct {
 }
 
 type ControllerProfileTargets struct {
-	Controller    string `json:"controller"`
-	ControllerGUI string `json:"controllerGui"`
-	DrTalos       string `json:"drtalos"`
+	Controller       string `json:"controller"`
+	ControllerGUI    string `json:"controllerGui"`
+	ProductAgentHost string `json:"productAgentHost"`
 }
 
 type ControllerProfileSchemas struct {
@@ -105,18 +112,43 @@ type ControllerProfileSourceAcquisition struct {
 	SSHConfigPath string `json:"sshConfigPath"`
 }
 
+type ControllerProfileProductAgentLifecycle struct {
+	SocketPath    string `json:"socketPath"`
+	Executable    string `json:"executable"`
+	Operation     string `json:"operation"`
+	RequestSchema string `json:"requestSchema"`
+	EventSchema   string `json:"eventSchema"`
+	Mode          string `json:"mode"`
+	Owner         string `json:"owner"`
+	Group         string `json:"group"`
+	NoFollow      bool   `json:"noFollow"`
+}
+
+type ControllerProfileNixOSDeployment struct {
+	SocketPath    string `json:"socketPath"`
+	Operation     string `json:"operation"`
+	RequestSchema string `json:"requestSchema"`
+	EventSchema   string `json:"eventSchema"`
+	Mode          string `json:"mode"`
+	Owner         string `json:"owner"`
+	Group         string `json:"group"`
+	NoFollow      bool   `json:"noFollow"`
+}
+
 type ManagementControllerProfile struct {
-	SchemaVersion       string                             `json:"schemaVersion"`
-	ProfileIdentity     string                             `json:"profileIdentity"`
-	MountPolicyIdentity string                             `json:"mountPolicyIdentity"`
-	OperationHandle     ControllerProfileOperationHandle   `json:"operationHandle"`
-	SourceRoots         ControllerProfileSourceRoots       `json:"sourceRoots"`
-	Inventories         ControllerProfileInventories       `json:"inventories"`
-	Targets             ControllerProfileTargets           `json:"targets"`
-	Schemas             ControllerProfileSchemas           `json:"schemas"`
-	Kinds               []string                           `json:"kinds"`
-	Broker              ControllerProfileBroker            `json:"broker"`
-	SourceAcquisition   ControllerProfileSourceAcquisition `json:"sourceAcquisition"`
+	SchemaVersion         string                                 `json:"schemaVersion"`
+	ProfileIdentity       string                                 `json:"profileIdentity"`
+	MountPolicyIdentity   string                                 `json:"mountPolicyIdentity"`
+	OperationHandle       ControllerProfileOperationHandle       `json:"operationHandle"`
+	ProductAgentLifecycle ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
+	NixOSDeployment       ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
+	SourceRoots           ControllerProfileSourceRoots           `json:"sourceRoots"`
+	Inventories           ControllerProfileInventories           `json:"inventories"`
+	Targets               ControllerProfileTargets               `json:"targets"`
+	Schemas               ControllerProfileSchemas               `json:"schemas"`
+	Kinds                 []string                               `json:"kinds"`
+	Broker                ControllerProfileBroker                `json:"broker"`
+	SourceAcquisition     ControllerProfileSourceAcquisition     `json:"sourceAcquisition"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
@@ -196,7 +228,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}
 	if profile.Targets.Controller != ManagementControllerNode ||
 		profile.Targets.ControllerGUI != ManagementControllerGUI ||
-		profile.Targets.DrTalos != ManagementControllerDrTalos {
+		profile.Targets.ProductAgentHost != ManagementControllerNode {
 		return fmt.Errorf("Management controller targets do not match the compiled inventory identities")
 	}
 	if profile.Schemas != (ControllerProfileSchemas{
@@ -207,11 +239,36 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}) {
 		return fmt.Errorf("Management controller operation schemas do not match the compiled contract")
 	}
-	expectedKinds := []string{"fleet.exec", "gui.replace-controller", "nixos.deploy-closure"}
+	expectedKinds := []string{"fleet.exec", "gui.replace-controller", "gui.start-app-server", "nixos.deploy-closure"}
 	actualKinds := append([]string(nil), profile.Kinds...)
 	sort.Strings(actualKinds)
 	if strings.Join(actualKinds, "\x00") != strings.Join(expectedKinds, "\x00") {
 		return fmt.Errorf("Management controller operation kinds = %v, want %v", profile.Kinds, expectedKinds)
+	}
+	productAgent := profile.ProductAgentLifecycle
+	if filepath.Clean(productAgent.SocketPath) != controllerProductAgentSocket ||
+		productAgent.Operation != controllerProductAgentOperation ||
+		productAgent.RequestSchema != controllerProductAgentRequestSchema ||
+		productAgent.EventSchema != controllerProductAgentEventSchema ||
+		productAgent.Mode != "0660" ||
+		productAgent.Owner != "root" ||
+		productAgent.Group != "product-agent-operators" ||
+		!productAgent.NoFollow {
+		return fmt.Errorf("Management controller Product-agent lifecycle does not match the compiled fail-closed contract")
+	}
+	if err := validateControllerStoreExecutable("Product-agent lifecycle", productAgent.Executable); err != nil {
+		return err
+	}
+	deployment := profile.NixOSDeployment
+	if filepath.Clean(deployment.SocketPath) != controllerNixOSDeploymentSocket ||
+		deployment.Operation != controllerNixOSDeploymentOperation ||
+		deployment.RequestSchema != controllerNixOSDeploymentRequestSchema ||
+		deployment.EventSchema != controllerNixOSDeploymentEventSchema ||
+		deployment.Mode != "0660" ||
+		deployment.Owner != "root" ||
+		deployment.Group != "fleet-deployment-operators" ||
+		!deployment.NoFollow {
+		return fmt.Errorf("Management controller NixOS deployment effect does not match the compiled fail-closed contract")
 	}
 	if err := validateControllerStoreExecutable("broker", profile.Broker.Executable); err != nil {
 		return err

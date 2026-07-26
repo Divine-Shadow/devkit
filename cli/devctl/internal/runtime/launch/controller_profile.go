@@ -56,24 +56,41 @@ type controllerOperationSourceRoots struct {
 }
 
 type controllerOperationTargets struct {
-	ControllerNode string `json:"controllerNode"`
-	ControllerGUI  string `json:"controllerGui"`
-	DrTalos        string `json:"drtalos"`
+	ControllerNode   string `json:"controllerNode"`
+	ControllerGUI    string `json:"controllerGui"`
+	ProductAgentHost string `json:"productAgentHost"`
+}
+
+type controllerOperationProductAgentLifecycle struct {
+	SocketPath    string `json:"socketPath"`
+	Executable    string `json:"executable"`
+	Operation     string `json:"operation"`
+	RequestSchema string `json:"requestSchema"`
+	EventSchema   string `json:"eventSchema"`
+}
+
+type controllerOperationNixOSDeployment struct {
+	SocketPath    string `json:"socketPath"`
+	Operation     string `json:"operation"`
+	RequestSchema string `json:"requestSchema"`
+	EventSchema   string `json:"eventSchema"`
 }
 
 type controllerOperationIdentity struct {
-	SchemaVersion     string                              `json:"schemaVersion"`
-	State             string                              `json:"state"`
-	AuthorityManifest controllerOperationFileIdentity     `json:"authorityManifest"`
-	Package           controllerOperationPackageIdentity  `json:"package"`
-	Socket            controllerOperationSocketIdentity   `json:"socket"`
-	SourceInventories controllerOperationInventories      `json:"sourceInventories"`
-	SourceRoots       controllerOperationSourceRoots      `json:"sourceRoots"`
-	Targets           controllerOperationTargets          `json:"targets"`
-	Schemas           nativeplan.ControllerProfileSchemas `json:"schemas"`
-	Kinds             []string                            `json:"kinds"`
-	ServerPID         int                                 `json:"serverPid"`
-	StartedAt         string                              `json:"startedAt"`
+	SchemaVersion         string                                   `json:"schemaVersion"`
+	State                 string                                   `json:"state"`
+	AuthorityManifest     controllerOperationFileIdentity          `json:"authorityManifest"`
+	Package               controllerOperationPackageIdentity       `json:"package"`
+	Socket                controllerOperationSocketIdentity        `json:"socket"`
+	ProductAgentLifecycle controllerOperationProductAgentLifecycle `json:"productAgentLifecycle"`
+	NixOSDeployment       controllerOperationNixOSDeployment       `json:"nixosDeployment"`
+	SourceInventories     controllerOperationInventories           `json:"sourceInventories"`
+	SourceRoots           controllerOperationSourceRoots           `json:"sourceRoots"`
+	Targets               controllerOperationTargets               `json:"targets"`
+	Schemas               nativeplan.ControllerProfileSchemas      `json:"schemas"`
+	Kinds                 []string                                 `json:"kinds"`
+	ServerPID             int                                      `json:"serverPid"`
+	StartedAt             string                                   `json:"startedAt"`
 }
 
 var controllerOperationStoreRoot = "/nix/store"
@@ -259,11 +276,28 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 		return fmt.Errorf("controller operation identity source roots do not match the profile")
 	}
 	if identity.Targets != (controllerOperationTargets{
-		ControllerNode: profile.Targets.Controller,
-		ControllerGUI:  profile.Targets.ControllerGUI,
-		DrTalos:        profile.Targets.DrTalos,
+		ControllerNode:   profile.Targets.Controller,
+		ControllerGUI:    profile.Targets.ControllerGUI,
+		ProductAgentHost: profile.Targets.ProductAgentHost,
 	}) || identity.Schemas != profile.Schemas {
 		return fmt.Errorf("controller operation identity targets or schemas do not match the profile")
+	}
+	if identity.ProductAgentLifecycle != (controllerOperationProductAgentLifecycle{
+		SocketPath:    profile.ProductAgentLifecycle.SocketPath,
+		Executable:    profile.ProductAgentLifecycle.Executable,
+		Operation:     profile.ProductAgentLifecycle.Operation,
+		RequestSchema: profile.ProductAgentLifecycle.RequestSchema,
+		EventSchema:   profile.ProductAgentLifecycle.EventSchema,
+	}) {
+		return fmt.Errorf("controller operation identity Product-agent lifecycle does not match the profile")
+	}
+	if identity.NixOSDeployment != (controllerOperationNixOSDeployment{
+		SocketPath:    profile.NixOSDeployment.SocketPath,
+		Operation:     profile.NixOSDeployment.Operation,
+		RequestSchema: profile.NixOSDeployment.RequestSchema,
+		EventSchema:   profile.NixOSDeployment.EventSchema,
+	}) {
+		return fmt.Errorf("controller operation identity NixOS deployment effect does not match the profile")
 	}
 	expectedKinds := append([]string(nil), profile.Kinds...)
 	actualKinds := append([]string(nil), identity.Kinds...)

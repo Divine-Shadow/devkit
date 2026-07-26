@@ -92,6 +92,19 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 			GID:            uint32(socketStat.Gid),
 			Mode:           uint32(socketInfo.Mode().Perm()),
 		},
+		ProductAgentLifecycle: controllerOperationProductAgentLifecycle{
+			SocketPath:    profile.ProductAgentLifecycle.SocketPath,
+			Executable:    profile.ProductAgentLifecycle.Executable,
+			Operation:     profile.ProductAgentLifecycle.Operation,
+			RequestSchema: profile.ProductAgentLifecycle.RequestSchema,
+			EventSchema:   profile.ProductAgentLifecycle.EventSchema,
+		},
+		NixOSDeployment: controllerOperationNixOSDeployment{
+			SocketPath:    profile.NixOSDeployment.SocketPath,
+			Operation:     profile.NixOSDeployment.Operation,
+			RequestSchema: profile.NixOSDeployment.RequestSchema,
+			EventSchema:   profile.NixOSDeployment.EventSchema,
+		},
 		SourceInventories: controllerOperationInventories{
 			Fleet: controllerOperationFileIdentity{
 				Path: profile.Inventories.Fleet.Path, SHA256: profile.Inventories.Fleet.SHA256,
@@ -109,9 +122,9 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 			WSLRevision:            profile.SourceRoots.WSLNix.Revision,
 		},
 		Targets: controllerOperationTargets{
-			ControllerNode: profile.Targets.Controller,
-			ControllerGUI:  profile.Targets.ControllerGUI,
-			DrTalos:        profile.Targets.DrTalos,
+			ControllerNode:   profile.Targets.Controller,
+			ControllerGUI:    profile.Targets.ControllerGUI,
+			ProductAgentHost: profile.Targets.ProductAgentHost,
 		},
 		Schemas:   profile.Schemas,
 		Kinds:     append([]string(nil), profile.Kinds...),
@@ -262,9 +275,9 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV4Profile(t *testing.T)
 			},
 		},
 		Targets: nativeplan.ControllerProfileTargets{
-			Controller:    nativeplan.ManagementControllerNode,
-			ControllerGUI: nativeplan.ManagementControllerGUI,
-			DrTalos:       nativeplan.ManagementControllerDrTalos,
+			Controller:       nativeplan.ManagementControllerNode,
+			ControllerGUI:    nativeplan.ManagementControllerGUI,
+			ProductAgentHost: nativeplan.ManagementControllerNode,
 		},
 		Schemas: nativeplan.ControllerProfileSchemas{
 			Request:  nativeplan.ControllerOperationRequestSchema,
@@ -272,7 +285,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV4Profile(t *testing.T)
 			Event:    nativeplan.ControllerOperationEventSchema,
 			Receipt:  nativeplan.ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"fleet.exec", "nixos.deploy-closure", "gui.replace-controller"},
+		Kinds: []string{"fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
 	}
 	operationStoreRoot := filepath.Join(root, "nix", "store")
 	previousOperationStoreRoot := controllerOperationStoreRoot
@@ -301,6 +314,27 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV4Profile(t *testing.T)
 		GitExecutable: writeExecutable(filepath.Join(operationStoreRoot, "git", "bin", "git")),
 		SSHExecutable: writeExecutable(filepath.Join(operationStoreRoot, "openssh", "bin", "ssh")),
 		SSHConfigPath: sshConfigPath,
+	}
+	profile.ProductAgentLifecycle = nativeplan.ControllerProfileProductAgentLifecycle{
+		SocketPath:    "/run/fleet-product-agent-lifecycle/control.sock",
+		Executable:    writeExecutable(filepath.Join(operationStoreRoot, "product-agent", "bin", "product-agent")),
+		Operation:     "cycle-test",
+		RequestSchema: "fleet-control/product-agent-local-request/v1",
+		EventSchema:   "fleet-control/product-agent-local-event/v1",
+		Mode:          "0660",
+		Owner:         "root",
+		Group:         "product-agent-operators",
+		NoFollow:      true,
+	}
+	profile.NixOSDeployment = nativeplan.ControllerProfileNixOSDeployment{
+		SocketPath:    "/run/fleet-nixos-deploy-effect/control.sock",
+		Operation:     "nixos.deploy-closure",
+		RequestSchema: "fleet-control/nixos-deploy-local-request/v1",
+		EventSchema:   "fleet-control/nixos-deploy-local-event/v1",
+		Mode:          "0660",
+		Owner:         "root",
+		Group:         "fleet-deployment-operators",
+		NoFollow:      true,
 	}
 	manifestBytes, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
