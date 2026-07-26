@@ -725,6 +725,9 @@
               grep -Fx \
                 '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-terraform.git' \
                 ${devctl}/overlays/ouroboros-terraform/devkit.yaml
+              grep -Fx \
+                "      command: codex --version | grep -q '0.144.0'" \
+                ${devctl}/overlays/ouroboros-terraform/devkit.yaml
 
               # Exercise the real installed dev-workspace package path from an
               # empty environment.  The protected controller files are exact
