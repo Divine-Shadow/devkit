@@ -1071,13 +1071,14 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs, repo string, brokerCfg runtimebroker.Config) nativeplan.BuildOptions {
 	isolationProfile, egressAllowlist, proxy, proxySocket := nativeIsolationOptions(ctx, cfg, repo, parsed.isolationProfile, parsed.egressAllowlist, parsed.proxy, parsed.proxySocket)
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
+	flakeInputRoot := config.RuntimeFlakeInputOverrideRoot(ctx.Paths.Root, cfg.Native.HostRoot)
 	return nativeplan.BuildOptions{
 		Paths:                 ctx.Paths,
 		HostRoot:              hostRoot,
 		Project:               ctx.Project,
 		Repo:                  repo,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
-		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(ctx.Paths.Root, cfg.Runtime.FlakeInputOverrides),
+		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides),
 		RuntimeLauncher:       strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER")),
 		BubblewrapBinary:      strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY")),
 		Launcher:              "bubblewrap",
@@ -1114,7 +1115,8 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 		opts.Flake = strings.TrimSpace(cfg.Runtime.Flake)
 	}
 	if len(opts.FlakeInputOverrides) == 0 {
-		opts.FlakeInputOverrides = config.ResolveRuntimeFlakeInputOverrides(ctx.Paths.Root, cfg.Runtime.FlakeInputOverrides)
+		flakeInputRoot := config.RuntimeFlakeInputOverrideRoot(ctx.Paths.Root, cfg.Native.HostRoot)
+		opts.FlakeInputOverrides = config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides)
 	}
 	if strings.TrimSpace(opts.RuntimeLauncher) == "" {
 		opts.RuntimeLauncher = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER"))

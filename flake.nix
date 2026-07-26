@@ -709,6 +709,23 @@
               test -r "$allowlist"
               grep -Fx 'ssh.github.com' "$allowlist"
 
+              terraform_plan="$TMPDIR/installed-terraform-plan.json"
+              env -i \
+                HOME="$TMPDIR/home" \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${devctl}/kit/bin/devctl -p ouroboros-terraform native plan \
+                  --repo ouroboros-terraform --index 1 --format json > "$terraform_plan"
+              ${pkgs.jq}/bin/jq -e \
+                '.agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-terraform" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform" and
+                 .flake_input_overrides["ouroboros-terraform"] == "path:/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform"' \
+                "$terraform_plan"
+              grep -Fx \
+                '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-terraform.git' \
+                ${devctl}/overlays/ouroboros-terraform/devkit.yaml
+
               # Exercise the real installed dev-workspace package path from an
               # empty environment.  The protected controller files are exact
               # read-only mount capabilities; this nested namespace supplies

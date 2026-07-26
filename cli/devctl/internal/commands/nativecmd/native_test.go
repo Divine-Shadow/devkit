@@ -442,6 +442,47 @@ func TestLifecyclePlanOptionsResolvesFlakeInputOverrides(t *testing.T) {
 	}
 }
 
+func TestLifecyclePlanOptionsResolvesInstalledFlakeInputOverridesFromLogicalHostRoot(t *testing.T) {
+	ctx := &cmdregistry.Context{
+		Project: "ouroboros-terraform",
+		Paths: devkitpaths.Paths{
+			Root:                 "/nix/store/example-devkit-runtime",
+			RuntimeAuthorityRoot: "/nix/store/example-devkit-runtime",
+		},
+	}
+	opts := lifecyclePlanOptions(ctx, config.OverlayConfig{
+		Runtime: config.Runtime{
+			Flake: "./overlays/ouroboros-terraform#default",
+			FlakeInputOverrides: map[string]string{
+				"ouroboros-terraform": "../ouroboros-terraform",
+			},
+		},
+		Native: config.Native{
+			HostRoot:                 "/home/bayesartre/dev",
+			WorktreeRoot:             "/home/bayesartre/dev/agent-worktrees",
+			StateRoot:                "/home/bayesartre/dev/.devkit/native-agents",
+			RequiredIsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+			IsolationProfiles: map[string]config.IsolationProfile{
+				nativeplan.IsolationProfileWorkspaceEgress: {
+					Filesystem:      "workspace-only",
+					EgressAllowlist: "/nix/store/example-devkit-runtime/kit/proxy/allowlist.txt",
+				},
+			},
+		},
+	}, lifecycleArgs{}, "ouroboros-terraform", runtimebroker.Config{Socket: "/tmp/broker.sock"})
+	if opts.FlakeInputOverrides["ouroboros-terraform"] != "path:/home/bayesartre/dev/ouroboros-terraform" {
+		t.Fatalf("flake input overrides = %#v", opts.FlakeInputOverrides)
+	}
+	p, err := nativeplan.BuildDevAll(opts)
+	if err != nil {
+		t.Fatalf("installed Terraform plan: %v", err)
+	}
+	want := "path:" + p.Agent.SandboxWorktree
+	if p.FlakeInputOverrides["ouroboros-terraform"] != want {
+		t.Fatalf("sandbox override = %q, want %q", p.FlakeInputOverrides["ouroboros-terraform"], want)
+	}
+}
+
 func TestLifecyclePlanOptionsCLIFlakeOverridesOverlayRuntimeFlake(t *testing.T) {
 	ctx := &cmdregistry.Context{
 		Project: "pokeemerald",

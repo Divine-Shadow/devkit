@@ -2,6 +2,7 @@ workspace: ../../../ouroboros-terraform
 service: dev-agent
 defaults:
   repo: ouroboros-terraform
+  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-terraform.git
   agents: 1
   base_branch: main
   branch_prefix: agent

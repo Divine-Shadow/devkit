@@ -144,18 +144,21 @@ func Discover(overlayRoots []string, includeAll bool) ([]Entry, error) {
 				service = "dev-agent"
 			}
 			entries = append(entries, Entry{
-				Overlay:             overlay,
-				Repo:                repo,
-				Service:             service,
-				Image:               image,
-				Flake:               flake,
-				FlakeInputOverrides: config.ResolveRuntimeFlakeInputOverrides(filepath.Dir(root), cfg.Runtime.FlakeInputOverrides),
-				CodexVersion:        strings.TrimSpace(cfg.Runtime.CodexVersion),
-				CoreCheck:           strings.TrimSpace(cfg.Runtime.CoreCheck),
-				Canonical:           canonical,
-				ConfigPath:          filepath.Join(cfgDir, "devkit.yaml"),
-				FlakePath:           filepath.Join(cfgDir, "flake.nix"),
-				RuntimeWorkDir:      filepath.Dir(root),
+				Overlay: overlay,
+				Repo:    repo,
+				Service: service,
+				Image:   image,
+				Flake:   flake,
+				FlakeInputOverrides: config.ResolveRuntimeFlakeInputOverrides(
+					config.RuntimeFlakeInputOverrideRoot(filepath.Dir(root), cfg.Native.HostRoot),
+					cfg.Runtime.FlakeInputOverrides,
+				),
+				CodexVersion:   strings.TrimSpace(cfg.Runtime.CodexVersion),
+				CoreCheck:      strings.TrimSpace(cfg.Runtime.CoreCheck),
+				Canonical:      canonical,
+				ConfigPath:     filepath.Join(cfgDir, "devkit.yaml"),
+				FlakePath:      filepath.Join(cfgDir, "flake.nix"),
+				RuntimeWorkDir: filepath.Dir(root),
 			})
 		}
 	}
