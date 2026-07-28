@@ -689,6 +689,7 @@
                   --repo ouroboros-ide --index 1 --format json > "$plan"
               ${pkgs.jq}/bin/jq -e \
                 --arg devctl '${devctl}' \
+                --arg broker '${broker}/bin/postgres-broker' \
                 '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
                  .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
                  .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
@@ -698,12 +699,22 @@
                  .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
                  .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
                  .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" and
+                 .env.DEVKIT_RUNTIME_BROKER_BINARY == $broker and
+                 any(.binds[]; .source == "/run/current-system/etc/fleet/product-governance.env" and
+                               .target == "/etc/fleet/product-governance.env" and
+                               .mode == "ro" and .required == true) and
                  any(.binds[]; .source == "/home/bayesartre/dev/.devkit/ouro8-governance-env.sh") and
                  any(.binds[]; .source == "/home/bayesartre/dev/.devkit/ouro8-governance-repo-env.json") and
                  any(.binds[]; .source == "/home/bayesartre/dev/.devkit/governance-control-plane" and .mode == "rw") and
                  all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
                  (tostring | contains("/nix/store/.devkit/") | not)' \
                 "$plan"
+              grep -F '    - name: product-governance-envelope' \
+                ${devctl}/overlays/dev-all/devkit.yaml
+              grep -F "        governance_env=/etc/fleet/product-governance.env" \
+                ${devctl}/overlays/dev-all/devkit.yaml
+              grep -F "        docker version --format '{{.Server.APIVersion}}' >/dev/null" \
+                ${devctl}/overlays/dev-all/devkit.yaml
               allowlist="$(${pkgs.jq}/bin/jq -r '.proxy.allowlist_path' "$plan")"
               test "$allowlist" = '${devctl}/kit/proxy/allowlist.txt'
               test -r "$allowlist"

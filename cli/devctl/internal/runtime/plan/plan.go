@@ -76,6 +76,7 @@ type BuildOptions struct {
 	Repo                  string
 	Flake                 string
 	FlakeInputOverrides   map[string]string
+	BrokerBinary          string
 	RuntimeLauncher       string
 	BubblewrapBinary      string
 	Launcher              string
@@ -110,7 +111,15 @@ var (
 	// routes, credentials, or source paths through native arguments or env.
 	WorkspaceControllerSourceInventory = "/etc/fleet/source/fleet-inventory.json"
 	WorkspaceControllerGUIInventory    = "/etc/fleet/source/fleet-codex-gui-inventory.json"
+	// WorkspaceProductGovernanceEnvSource is the sole source-derived Product
+	// governance environment projected into governed consumers. The path is
+	// compiled into Devkit; callers cannot select a file or provide a mutable
+	// replacement.
+	WorkspaceProductGovernanceEnvSource = "/run/current-system/etc/fleet/product-governance.env"
+	WorkspaceProductGovernanceStoreRoot = "/nix/store"
 )
+
+const WorkspaceProductGovernanceEnvTarget = "/etc/fleet/product-governance.env"
 
 // WorkspaceControllerExecSocket is the sole typed Fleet exec capability
 // projected into the Management workspace. Nix owns the listener and its
@@ -283,6 +292,11 @@ func Build(opts BuildOptions) (Plan, error) {
 		"AWS_CONFIG_FILE":              filepath.Join(paths.SandboxHome, ".aws", "config"),
 		"AWS_SHARED_CREDENTIALS_FILE":  filepath.Join(paths.SandboxHome, ".aws", "credentials"),
 		"AWS_SDK_LOAD_CONFIG":          "1",
+	}
+	if IsGovernedRuntimePlan(project, repo) {
+		if brokerBinary := strings.TrimSpace(opts.BrokerBinary); brokerBinary != "" {
+			env["DEVKIT_RUNTIME_BROKER_BINARY"] = filepath.Clean(brokerBinary)
+		}
 	}
 	env["SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES"] = sbtControlPlaneServerSystemProperties
 	if proxyURL != "" {
@@ -519,7 +533,7 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 		runtimeRoot = devkitRoot
 	}
 	add(runtimeRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
-	if isGovernedRuntimePlan(project, repo) {
+	if IsGovernedRuntimePlan(project, repo) {
 		// launch.Prepare materializes the immutable runtime identity projection
 		// and governance catalog beneath the controller dev root before every
 		// governed sandbox invocation. Readiness and the governed launcher
@@ -543,6 +557,12 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 			filepath.Join(hostRuntimeSupportRoot, "governance-control-plane"),
 			filepath.Join(sandboxRuntimeSupportRoot, "governance-control-plane"),
 			"rw",
+			true,
+		)
+		add(
+			WorkspaceProductGovernanceEnvSource,
+			WorkspaceProductGovernanceEnvTarget,
+			"ro",
 			true,
 		)
 	}
@@ -580,7 +600,7 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 	return binds, nil
 }
 
-func isGovernedRuntimePlan(project, repo string) bool {
+func IsGovernedRuntimePlan(project, repo string) bool {
 	switch strings.TrimSpace(repo) {
 	case "ouroboros-ide", "ouroboros-terraform":
 		return true

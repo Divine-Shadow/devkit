@@ -69,6 +69,38 @@ readiness:
           echo "dev-all readiness: Codex config missing [profiles.openai]: $config" >&2
           exit 1
         }
+    - name: product-governance-envelope
+      command: |
+        set -euo pipefail
+        governance_env=/etc/fleet/product-governance.env
+        broker_binary="${DEVKIT_RUNTIME_BROKER_BINARY:-}"
+        test -r "$governance_env" || {
+          echo "dev-all readiness: source-derived Product governance environment is unreadable: $governance_env" >&2
+          exit 1
+        }
+        test -n "$broker_binary" && test -x "$broker_binary" || {
+          echo "dev-all readiness: package-owned postgres broker is unavailable" >&2
+          exit 1
+        }
+        case "$broker_binary" in
+          /nix/store/*/bin/postgres-broker) ;;
+          *)
+            echo "dev-all readiness: postgres broker is outside its immutable package path: $broker_binary" >&2
+            exit 1
+            ;;
+        esac
+        case "${DOCKER_HOST:-}" in
+          unix://*) broker_socket="${DOCKER_HOST#unix://}" ;;
+          *)
+            echo "dev-all readiness: brokered DOCKER_HOST is not a Unix endpoint" >&2
+            exit 1
+            ;;
+        esac
+        test -S "$broker_socket" || {
+          echo "dev-all readiness: package-owned postgres broker socket is unavailable: $broker_socket" >&2
+          exit 1
+        }
+        docker version --format '{{.Server.APIVersion}}' >/dev/null
   repo_checks:
     - name: git-remote
       command: test -n "$(git config --worktree --get core.sshCommand)" && GIT_CONFIG_NOSYSTEM=1 git ls-remote --heads origin >/dev/null

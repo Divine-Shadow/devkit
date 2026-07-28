@@ -161,6 +161,52 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 	}
 }
 
+func TestGovernedWorkspaceProjectsImmutableGovernanceEnvelopeAndCarriesBrokerSelector(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktree := filepath.Join(devRoot, "agent-worktrees", "agent1", "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, worktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	governanceSource := filepath.Join(root, "run", "current-system", "etc", "fleet", "product-governance.env")
+	previousSource := WorkspaceProductGovernanceEnvSource
+	WorkspaceProductGovernanceEnvSource = governanceSource
+	t.Cleanup(func() { WorkspaceProductGovernanceEnvSource = previousSource })
+	brokerBinary := "/nix/store/example-devkit-postgres-broker/bin/postgres-broker"
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            1,
+		Repo:             "ouroboros-ide",
+		BrokerBinary:     brokerBinary,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	expected := Bind{
+		Source:   governanceSource,
+		Target:   WorkspaceProductGovernanceEnvTarget,
+		Mode:     "ro",
+		Required: true,
+	}
+	if !hasExactBind(p.Binds, expected) {
+		t.Fatalf("missing exact Product governance environment projection %#v in %#v", expected, p.Binds)
+	}
+	if got := p.Env["DEVKIT_RUNTIME_BROKER_BINARY"]; got != brokerBinary {
+		t.Fatalf("broker selector = %q, want %q", got, brokerBinary)
+	}
+	for _, bind := range p.Binds {
+		if bind.Target == filepath.Dir(WorkspaceProductGovernanceEnvTarget) {
+			t.Fatalf("governance projection exposed a mutable parent directory: %#v", bind)
+		}
+	}
+}
+
 func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")

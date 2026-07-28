@@ -113,6 +113,107 @@ func TestWorkspaceControllerCapabilityBindingRejectsOverridesAndWritableMode(t *
 	}
 }
 
+func TestProductGovernanceEnvironmentProjectionAcceptsOnlyImmutableCompiledSource(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, "nix", "store")
+	packageRoot := filepath.Join(storeRoot, "aaaaaaaa-native-product-governance")
+	storeFile := filepath.Join(packageRoot, "product-governance.env")
+	if err := os.MkdirAll(packageRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(storeFile, []byte("export FIXTURE=1\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "run", "current-system", "etc", "fleet", "product-governance.env")
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(storeFile, source); err != nil {
+		t.Fatal(err)
+	}
+	previousSource := nativeplan.WorkspaceProductGovernanceEnvSource
+	previousStoreRoot := nativeplan.WorkspaceProductGovernanceStoreRoot
+	nativeplan.WorkspaceProductGovernanceEnvSource = source
+	nativeplan.WorkspaceProductGovernanceStoreRoot = storeRoot
+	t.Cleanup(func() {
+		nativeplan.WorkspaceProductGovernanceEnvSource = previousSource
+		nativeplan.WorkspaceProductGovernanceStoreRoot = previousStoreRoot
+	})
+	valid := nativeplan.Plan{
+		Agent:            agent.Spec{ID: agent.ID{Project: "dev-all", Repo: "ouroboros-ide"}},
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		Binds: []nativeplan.Bind{{
+			Source: source, Target: nativeplan.WorkspaceProductGovernanceEnvTarget, Mode: "ro", Required: true,
+		}},
+	}
+	if err := validateProductGovernanceEnvironmentPlan(valid); err != nil {
+		t.Fatalf("valid immutable governance projection rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(nativeplan.Plan) nativeplan.Plan{
+		"absent": func(p nativeplan.Plan) nativeplan.Plan {
+			p.Binds = nil
+			return p
+		},
+		"source override": func(p nativeplan.Plan) nativeplan.Plan {
+			p.Binds = append([]nativeplan.Bind(nil), p.Binds...)
+			p.Binds[0].Source = filepath.Join(root, "caller.env")
+			return p
+		},
+		"writable": func(p nativeplan.Plan) nativeplan.Plan {
+			p.Binds = append([]nativeplan.Bind(nil), p.Binds...)
+			p.Binds[0].Mode = "rw"
+			return p
+		},
+		"optional": func(p nativeplan.Plan) nativeplan.Plan {
+			p.Binds = append([]nativeplan.Bind(nil), p.Binds...)
+			p.Binds[0].Required = false
+			return p
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateProductGovernanceEnvironmentPlan(mutate(valid)); err == nil {
+				t.Fatalf("%s projection must fail closed", name)
+			}
+		})
+	}
+
+	if err := os.Chmod(storeFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProductGovernanceEnvironmentPlan(valid); err == nil ||
+		!strings.Contains(err.Error(), "immutable regular file") {
+		t.Fatalf("writable store governance source must fail closed, got %v", err)
+	}
+	if err := os.Chmod(storeFile, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(packageRoot, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProductGovernanceEnvironmentPlan(valid); err == nil ||
+		!strings.Contains(err.Error(), "immutable regular file") {
+		t.Fatalf("directory governance source must fail closed, got %v", err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	mutable := filepath.Join(root, "mutable.env")
+	if err := os.WriteFile(mutable, []byte("mutable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(mutable, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProductGovernanceEnvironmentPlan(valid); err == nil ||
+		!strings.Contains(err.Error(), "beneath") {
+		t.Fatalf("mutable governance source must fail closed, got %v", err)
+	}
+}
+
 func testPackageSSHCommand(t *testing.T, configPath string) string {
 	t.Helper()
 	authority, err := resolvePackageSSHAuthority()

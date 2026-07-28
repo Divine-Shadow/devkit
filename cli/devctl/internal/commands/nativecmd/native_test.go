@@ -789,19 +789,23 @@ func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
 func TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables(t *testing.T) {
 	t.Setenv("DEVKIT_RUNTIME_SHELL_LAUNCHER", "/nix/store/runtime/bin/dev-all-runtime-shell")
 	t.Setenv("DEVKIT_RUNTIME_BWRAP_BINARY", "/nix/store/bubblewrap/bin/bwrap")
+	brokerBinary := "/nix/store/broker/bin/postgres-broker"
 	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/home/me/dev/devkit"}}
 	opts := lifecyclePlanOptions(
 		ctx,
 		config.OverlayConfig{},
 		lifecycleArgs{},
 		"ouroboros-ide",
-		runtimebroker.Config{Socket: "/tmp/broker.sock"},
+		runtimebroker.Config{Socket: "/tmp/broker.sock", Binary: brokerBinary},
 	)
 	if opts.RuntimeLauncher != "/nix/store/runtime/bin/dev-all-runtime-shell" {
 		t.Fatalf("runtime launcher = %q", opts.RuntimeLauncher)
 	}
 	if opts.BubblewrapBinary != "/nix/store/bubblewrap/bin/bwrap" {
 		t.Fatalf("bubblewrap binary = %q", opts.BubblewrapBinary)
+	}
+	if opts.BrokerBinary != brokerBinary {
+		t.Fatalf("broker binary = %q", opts.BrokerBinary)
 	}
 }
 

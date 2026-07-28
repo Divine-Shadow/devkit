@@ -1079,6 +1079,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		Repo:                  repo,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
 		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides),
+		BrokerBinary:          brokerCfg.Binary,
 		RuntimeLauncher:       strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER")),
 		BubblewrapBinary:      strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY")),
 		Launcher:              "bubblewrap",
@@ -1120,6 +1121,9 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	}
 	if strings.TrimSpace(opts.RuntimeLauncher) == "" {
 		opts.RuntimeLauncher = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER"))
+	}
+	if strings.TrimSpace(opts.BrokerBinary) == "" {
+		opts.BrokerBinary = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY"))
 	}
 	if strings.TrimSpace(opts.BubblewrapBinary) == "" {
 		opts.BubblewrapBinary = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY"))

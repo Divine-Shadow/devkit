@@ -46,6 +46,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := validateManagementControllerProfilePlan(p); err != nil {
 		return err
 	}
+	if err := validateProductGovernanceEnvironmentPlan(p); err != nil {
+		return err
+	}
 	for _, dir := range []string{p.Agent.HostHome, p.Agent.StateRoot} {
 		if strings.TrimSpace(dir) == "" {
 			continue
@@ -1719,6 +1722,11 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 				return err
 			}
 		}
+		if required && filepath.Clean(target) == nativeplan.WorkspaceProductGovernanceEnvTarget {
+			if err := validateProductGovernanceEnvironmentBinding(source, target, mode); err != nil {
+				return err
+			}
+		}
 		if _, err := os.Stat(source); err != nil {
 			if required {
 				addDir(filepath.Dir(target))
@@ -1908,6 +1916,66 @@ func validateWorkspaceControllerCapabilityBinding(source, target, mode string) e
 		return fmt.Errorf("controller capability %s must be projected read-only", target)
 	}
 	return validateWorkspaceControllerCapability(source, target)
+}
+
+func validateProductGovernanceEnvironmentPlan(p nativeplan.Plan) error {
+	if p.IsolationProfile != nativeplan.IsolationProfileWorkspaceEgress ||
+		!nativeplan.IsGovernedRuntimePlan(p.Agent.ID.Project, p.Agent.ID.Repo) {
+		return nil
+	}
+	found := 0
+	for _, bind := range p.Binds {
+		if filepath.Clean(bind.Target) != nativeplan.WorkspaceProductGovernanceEnvTarget {
+			continue
+		}
+		found++
+		if !bind.Required {
+			return fmt.Errorf("Product governance environment projection must be required")
+		}
+		if err := validateProductGovernanceEnvironmentBinding(bind.Source, bind.Target, bind.Mode); err != nil {
+			return err
+		}
+	}
+	if found != 1 {
+		return fmt.Errorf("governed workspace plan requires exactly one Product governance environment projection, got %d", found)
+	}
+	return nil
+}
+
+func validateProductGovernanceEnvironmentBinding(source, target, mode string) error {
+	if filepath.Clean(target) != nativeplan.WorkspaceProductGovernanceEnvTarget {
+		return fmt.Errorf("Product governance environment target override rejected: %s", target)
+	}
+	if filepath.Clean(source) != filepath.Clean(nativeplan.WorkspaceProductGovernanceEnvSource) {
+		return fmt.Errorf("Product governance environment source override rejected for %s", target)
+	}
+	if mode != "ro" {
+		return fmt.Errorf("Product governance environment must be projected read-only")
+	}
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect source-derived Product governance environment: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("source-derived Product governance environment must be a regular file or immutable store symlink")
+	}
+	resolved, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		return fmt.Errorf("resolve source-derived Product governance environment: %w", err)
+	}
+	storeRoot := filepath.Clean(nativeplan.WorkspaceProductGovernanceStoreRoot)
+	rel, err := filepath.Rel(storeRoot, filepath.Clean(resolved))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("source-derived Product governance environment must resolve beneath %s", storeRoot)
+	}
+	resolvedInfo, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("inspect resolved Product governance environment: %w", err)
+	}
+	if !resolvedInfo.Mode().IsRegular() || resolvedInfo.Mode().Perm()&0o222 != 0 {
+		return fmt.Errorf("source-derived Product governance environment must resolve to an immutable regular file")
+	}
+	return nil
 }
 
 func ShellString(cmd Command) string {
