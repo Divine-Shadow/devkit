@@ -1041,13 +1041,23 @@ func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.O
 
 func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed lifecycleArgs) runtimebroker.Config {
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
+	brokerSocket := resolveNativeRoot(hostRoot, strings.TrimSpace(cfg.Broker.Socket))
+	brokerStateRoot := strings.TrimSpace(parsed.brokerStateRoot)
+	if brokerStateRoot == "" && strings.TrimSpace(brokerSocket) != "" {
+		// The package-owned overlay declares the mutable broker socket relative
+		// to the explicit host root. Keep the broker's state beside that socket;
+		// deriving it from the immutable executable root (or from the host root
+		// as though it were a Devkit checkout) creates a second, inconsistent
+		// mutable geometry in installed consumers.
+		brokerStateRoot = filepath.Dir(brokerSocket)
+	}
 	brokerCfg := runtimebroker.Config{
 		DevkitRoot:    hostRoot,
-		Socket:        resolveNativeRoot(hostRoot, strings.TrimSpace(cfg.Broker.Socket)),
+		Socket:        brokerSocket,
 		Upstream:      strings.TrimSpace(cfg.Broker.Upstream),
 		AllowedImages: append([]string{}, cfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(cfg.Broker.LogLevel),
-		StateRoot:     strings.TrimSpace(parsed.brokerStateRoot),
+		StateRoot:     brokerStateRoot,
 		Binary:        strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY")),
 	}
 	if cfg.Broker.AllowPulls != nil {

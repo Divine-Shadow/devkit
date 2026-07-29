@@ -40,7 +40,11 @@ composition, or deletion paths.
   another convergence: selected worktree/state plus shared Git coordination,
   native manifest, runtime broker, and managed-egress roots are all probed and
   reported together before any process stop or disposal.
-- [ ] (2026-07-29) Publish the complete mutation-contract repair, consume it in
+- [x] (2026-07-29) Published the complete mutation-root preflight as
+  `df3cca9e78a8b05bdc33cf5861967d8f1c8d0f54`; the first real typed reset then
+  proved that installed overlays derived broker state outside their declared
+  broker socket root, before disposal or Product effects.
+- [ ] (2026-07-29) Publish the broker socket/state unification, consume it in
   the controller closure, and prove the real typed reset-to-GUI-ready boundary.
 
 ## Context and orientation
@@ -119,6 +123,11 @@ replacing one failed consumer and is not registered as `native reset`.
   not writable to the controller service. Probe every source-derived mutable
   root up front so a sandbox composition error returns one complete typed
   diagnosis instead of one denied dependency per deployment.
+- 2026-07-29: In an installed overlay, the broker socket is resolved from the
+  explicit host root but the default broker state was derived by treating that
+  host root as a Devkit checkout. Keep mutable broker state beside the resolved
+  package-owned socket unless an explicit state root is declared; this removes
+  the second mutable geometry rather than granting it to the controller.
 
 ## Verification
 

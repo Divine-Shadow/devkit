@@ -783,8 +783,26 @@ func TestLifecycleBrokerConfigResolvesRelativeOverlaySocket(t *testing.T) {
 	if got.Socket != "/home/me/dev/.devkit/native-broker/broker.sock" {
 		t.Fatalf("socket = %q", got.Socket)
 	}
+	if got.StateRoot != "/home/me/dev/.devkit/native-broker" {
+		t.Fatalf("state root = %q", got.StateRoot)
+	}
 	if got.Binary != "/nix/store/example-postgres-broker/bin/postgres-broker" {
 		t.Fatalf("broker binary = %q", got.Binary)
+	}
+}
+
+func TestLifecycleBrokerConfigInstalledHostRootKeepsSocketAndStateTogether(t *testing.T) {
+	ctx := &cmdregistry.Context{Paths: devkitpaths.Paths{Root: "/nix/store/example-devkit/kit"}}
+	cfg := config.OverlayConfig{
+		Broker: config.Broker{Socket: ".devkit/native-broker/broker.sock"},
+		Native: config.Native{HostRoot: "/home/bayesartre/dev"},
+	}
+	got := lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{})
+	if got.Socket != "/home/bayesartre/dev/.devkit/native-broker/broker.sock" {
+		t.Fatalf("socket = %q", got.Socket)
+	}
+	if got.StateRoot != "/home/bayesartre/dev/.devkit/native-broker" {
+		t.Fatalf("state root = %q", got.StateRoot)
 	}
 }
 
