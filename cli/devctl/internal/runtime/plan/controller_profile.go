@@ -240,7 +240,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}) {
 		return fmt.Errorf("Management controller operation schemas do not match the compiled contract")
 	}
-	expectedKinds := []string{"fleet.exec", "gui.replace-controller", "gui.start-app-server", "nixos.deploy-closure"}
+	expectedKinds := []string{"app-rpc.exec", "fleet.exec", "gui.replace-controller", "gui.start-app-server", "nixos.deploy-closure"}
 	actualKinds := append([]string(nil), profile.Kinds...)
 	sort.Strings(actualKinds)
 	if strings.Join(actualKinds, "\x00") != strings.Join(expectedKinds, "\x00") {

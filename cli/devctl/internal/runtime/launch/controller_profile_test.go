@@ -143,6 +143,7 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 }
 
 func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T) {
+	withProductGovernanceEnvironmentFixture(t)
 	root, err := os.MkdirTemp("", "devkit-v4-")
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +287,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T)
 			Event:    nativeplan.ControllerOperationEventSchema,
 			Receipt:  nativeplan.ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
+		Kinds: []string{"app-rpc.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
 	}
 	operationStoreRoot := filepath.Join(root, "nix", "store")
 	previousOperationStoreRoot := controllerOperationStoreRoot

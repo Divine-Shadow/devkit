@@ -88,7 +88,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Event:    ControllerOperationEventSchema,
 			Receipt:  ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
+		Kinds: []string{"app-rpc.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
 		Broker: ControllerProfileBroker{
 			Executable:     writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-control", "bin", "fleet-control")),
 			SourceRevision: strings.Repeat("c", 40),
@@ -212,6 +212,17 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	}
 	if hasBind(p.Binds, execSocket, execSocket) {
 		t.Fatalf("v4 must not project the legacy direct exec socket: %#v", p.Binds)
+	}
+	withoutControllerRead := profile
+	withoutControllerRead.Kinds = []string{
+		"fleet.exec",
+		"nixos.deploy-closure",
+		"gui.replace-controller",
+		"gui.start-app-server",
+	}
+	if err := validateManagementControllerProfile(withoutControllerRead); err == nil ||
+		!strings.Contains(err.Error(), "operation kinds") {
+		t.Fatalf("profile without controller read-only app-rpc was not rejected: %v", err)
 	}
 
 	product, err := Build(BuildOptions{

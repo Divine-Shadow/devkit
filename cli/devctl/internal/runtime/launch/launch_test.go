@@ -45,6 +45,35 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func withProductGovernanceEnvironmentFixture(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	storeRoot := filepath.Join(root, "nix", "store")
+	packageRoot := filepath.Join(storeRoot, "aaaaaaaa-native-product-governance")
+	storeFile := filepath.Join(packageRoot, "product-governance.env")
+	if err := os.MkdirAll(packageRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(storeFile, []byte("export FIXTURE=1\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "run", "current-system", "etc", "fleet", "product-governance.env")
+	if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(storeFile, source); err != nil {
+		t.Fatal(err)
+	}
+	previousSource := nativeplan.WorkspaceProductGovernanceEnvSource
+	previousStoreRoot := nativeplan.WorkspaceProductGovernanceStoreRoot
+	nativeplan.WorkspaceProductGovernanceEnvSource = source
+	nativeplan.WorkspaceProductGovernanceStoreRoot = storeRoot
+	t.Cleanup(func() {
+		nativeplan.WorkspaceProductGovernanceEnvSource = previousSource
+		nativeplan.WorkspaceProductGovernanceStoreRoot = previousStoreRoot
+	})
+}
+
 func TestWorkspaceControllerCapabilityValidationRejectsSymlinkAndWrongSocketMode(t *testing.T) {
 	root, err := os.MkdirTemp("/tmp", "devkit-exec-handle-")
 	if err != nil {
@@ -823,6 +852,7 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 }
 
 func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
+	withProductGovernanceEnvironmentFixture(t)
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
@@ -920,6 +950,7 @@ func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 }
 
 func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
+	withProductGovernanceEnvironmentFixture(t)
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")

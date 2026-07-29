@@ -1723,7 +1723,7 @@ func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
 			}
 		}
 		if required && filepath.Clean(target) == nativeplan.WorkspaceProductGovernanceEnvTarget {
-			if err := validateProductGovernanceEnvironmentBinding(source, target, mode); err != nil {
+			if err := validateProductGovernanceEnvironmentBindingContract(source, target, mode); err != nil {
 				return err
 			}
 		}
@@ -1943,14 +1943,8 @@ func validateProductGovernanceEnvironmentPlan(p nativeplan.Plan) error {
 }
 
 func validateProductGovernanceEnvironmentBinding(source, target, mode string) error {
-	if filepath.Clean(target) != nativeplan.WorkspaceProductGovernanceEnvTarget {
-		return fmt.Errorf("Product governance environment target override rejected: %s", target)
-	}
-	if filepath.Clean(source) != filepath.Clean(nativeplan.WorkspaceProductGovernanceEnvSource) {
-		return fmt.Errorf("Product governance environment source override rejected for %s", target)
-	}
-	if mode != "ro" {
-		return fmt.Errorf("Product governance environment must be projected read-only")
+	if err := validateProductGovernanceEnvironmentBindingContract(source, target, mode); err != nil {
+		return err
 	}
 	info, err := os.Lstat(source)
 	if err != nil {
@@ -1974,6 +1968,19 @@ func validateProductGovernanceEnvironmentBinding(source, target, mode string) er
 	}
 	if !resolvedInfo.Mode().IsRegular() || resolvedInfo.Mode().Perm()&0o222 != 0 {
 		return fmt.Errorf("source-derived Product governance environment must resolve to an immutable regular file")
+	}
+	return nil
+}
+
+func validateProductGovernanceEnvironmentBindingContract(source, target, mode string) error {
+	if filepath.Clean(target) != nativeplan.WorkspaceProductGovernanceEnvTarget {
+		return fmt.Errorf("Product governance environment target override rejected: %s", target)
+	}
+	if filepath.Clean(source) != filepath.Clean(nativeplan.WorkspaceProductGovernanceEnvSource) {
+		return fmt.Errorf("Product governance environment source override rejected for %s", target)
+	}
+	if mode != "ro" {
+		return fmt.Errorf("Product governance environment must be projected read-only")
 	}
 	return nil
 }
