@@ -46,6 +46,9 @@ composition, or deletion paths.
   broker socket root, before disposal or Product effects.
 - [ ] (2026-07-29) Publish the broker socket/state unification, consume it in
   the controller closure, and prove the real typed reset-to-GUI-ready boundary.
+- [ ] (2026-07-29) Bind native source acquisition to the package-owned absolute
+  Coreutils `env` and Git executables, preserve projected parent inodes during
+  failed-home cleanup, and rerun the complete reconstruction boundary.
 
 ## Context and orientation
 
@@ -128,6 +131,11 @@ replacing one failed consumer and is not registered as `native reset`.
   host root as a Devkit checkout. Keep mutable broker state beside the resolved
   package-owned socket unless an explicit state root is declared; this removes
   the second mutable geometry rather than granting it to the controller.
+- 2026-07-29: Native bootstrap must not inherit Git or even the environment
+  launcher from the broker service's PATH. Link both executable store paths
+  into Devctl, require them for promoted SSH source acquisition/reset, and
+  exercise SetupNative under a hostile PATH. Failed bootstrap owns the exact
+  home it created, never its pre-existing projected parent directories.
 
 ## Verification
 

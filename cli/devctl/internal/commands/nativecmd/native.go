@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -2191,11 +2190,6 @@ func removeOwnedBootstrapHome(path string, owned os.FileInfo) error {
 	}
 	if err := os.RemoveAll(path); err != nil {
 		return fmt.Errorf("remove failed native Git bootstrap home %s: %w", path, err)
-	}
-	for _, parent := range []string{filepath.Dir(path), filepath.Dir(filepath.Dir(path))} {
-		if err := os.Remove(parent); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
-			return fmt.Errorf("remove empty native Git bootstrap parent %s: %w", parent, err)
-		}
 	}
 	return nil
 }

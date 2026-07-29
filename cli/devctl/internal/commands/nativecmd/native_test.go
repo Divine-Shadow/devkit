@@ -806,6 +806,31 @@ func TestLifecycleBrokerConfigInstalledHostRootKeepsSocketAndStateTogether(t *te
 	}
 }
 
+func TestRemoveOwnedBootstrapHomePreservesUnownedParents(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "agent3")
+	home := filepath.Join(parent, ".devhome-agent3")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := os.Lstat(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "partial"), []byte("failed bootstrap"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeOwnedBootstrapHome(home, owned); err != nil {
+		t.Fatalf("removeOwnedBootstrapHome: %v", err)
+	}
+	if _, err := os.Lstat(home); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned home still exists: %v", err)
+	}
+	if info, err := os.Lstat(parent); err != nil || !info.IsDir() {
+		t.Fatalf("unowned parent was removed or changed: info=%v err=%v", info, err)
+	}
+}
+
 func TestLifecyclePlanOptionsConsumesImmutableRuntimeExecutables(t *testing.T) {
 	t.Setenv("DEVKIT_RUNTIME_SHELL_LAUNCHER", "/nix/store/runtime/bin/dev-all-runtime-shell")
 	t.Setenv("DEVKIT_RUNTIME_BWRAP_BINARY", "/nix/store/bubblewrap/bin/bwrap")

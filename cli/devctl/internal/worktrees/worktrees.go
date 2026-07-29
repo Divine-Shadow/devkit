@@ -24,6 +24,41 @@ const (
 	nativeTerminationGrace = 2 * time.Second
 )
 
+// Production packages bind these source-acquisition executables at link time.
+// Source tests retain conventional names; promoted native bootstrap/reset
+// requires the absolute package-owned values before effects.
+var (
+	packageEnvExecutable = "env"
+	packageGitExecutable = "git"
+)
+
+func nativeSourceExecutables(requirePackage bool) (string, string, error) {
+	envExecutable := strings.TrimSpace(packageEnvExecutable)
+	gitExecutable := strings.TrimSpace(packageGitExecutable)
+	if envExecutable == "" {
+		envExecutable = "env"
+	}
+	if gitExecutable == "" {
+		gitExecutable = "git"
+	}
+	if requirePackage && (!filepath.IsAbs(envExecutable) || !filepath.IsAbs(gitExecutable)) {
+		return "", "", fmt.Errorf("native source acquisition requires package-owned absolute env and Git executables")
+	}
+	for name, executable := range map[string]string{"env": envExecutable, "Git": gitExecutable} {
+		if !filepath.IsAbs(executable) {
+			continue
+		}
+		info, err := os.Stat(executable)
+		if err != nil {
+			return "", "", fmt.Errorf("validate package-owned %s executable %s: %w", name, executable, err)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			return "", "", fmt.Errorf("package-owned %s executable is not executable: %s", name, executable)
+		}
+	}
+	return envExecutable, gitExecutable, nil
+}
+
 func runWithPolicy(dry bool, fixedLimit, idleLimit time.Duration, name string, args ...string) error {
 	if dry {
 		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(append([]string{name}, args...), " "))
@@ -189,10 +224,10 @@ func rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir string) error {
 	return nil
 }
 
-func ensureNativeLinkedWorktreeNonBare(wt string, envLocalGit func(...string) []string, dryRun bool) error {
+func ensureNativeLinkedWorktreeNonBare(wt, envExecutable string, envLocalGit func(...string) []string, dryRun bool) error {
 	gitFile := filepath.Join(wt, ".git")
 	if dryRun {
-		return run(true, "env", envLocalGit("--git-dir", gitFile, "config", "--worktree", "core.bare", "false")...)
+		return run(true, envExecutable, envLocalGit("--git-dir", gitFile, "config", "--worktree", "core.bare", "false")...)
 	}
 	value, err := readGitdirPointer(gitFile)
 	if err != nil {
@@ -202,10 +237,10 @@ func ensureNativeLinkedWorktreeNonBare(wt string, envLocalGit func(...string) []
 	if !filepath.IsAbs(gitdir) {
 		gitdir = filepath.Clean(filepath.Join(wt, gitdir))
 	}
-	if err := run(false, "env", envLocalGit("--git-dir", gitdir, "config", "extensions.worktreeConfig", "true")...); err != nil {
+	if err := run(false, envExecutable, envLocalGit("--git-dir", gitdir, "config", "extensions.worktreeConfig", "true")...); err != nil {
 		return err
 	}
-	if err := run(false, "env", envLocalGit("--git-dir", gitdir, "config", "--worktree", "core.bare", "false")...); err != nil {
+	if err := run(false, envExecutable, envLocalGit("--git-dir", gitdir, "config", "--worktree", "core.bare", "false")...); err != nil {
 		return err
 	}
 	return nil
@@ -334,7 +369,7 @@ func cleanWorktreePath(repoWorktreesDir, wt string, rejectForeign bool) error {
 	return nil
 }
 
-func existingGitCheckout(wt string) (bool, error) {
+func existingGitCheckout(wt, gitExecutable string) (bool, error) {
 	info, err := os.Stat(wt)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -345,7 +380,7 @@ func existingGitCheckout(wt string) (bool, error) {
 	if !info.IsDir() {
 		return false, nil
 	}
-	out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--show-toplevel")
+	out, res := execx.Capture(context.Background(), gitExecutable, "-C", wt, "rev-parse", "--show-toplevel")
 	if res.Code != 0 {
 		return false, nil
 	}
@@ -363,28 +398,28 @@ func existingGitCheckout(wt string) (bool, error) {
 	return top == resolvedWT, nil
 }
 
-func verifyFreshNativeWorktree(wt, baseRef string) error {
-	ok, err := existingGitCheckout(wt)
+func verifyFreshNativeWorktree(wt, baseRef, gitExecutable string) error {
+	ok, err := existingGitCheckout(wt, gitExecutable)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		out, err := exec.Command("git", "-C", wt, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir").CombinedOutput()
+		out, err := exec.Command(gitExecutable, "-C", wt, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir").CombinedOutput()
 		gitFile, _ := os.ReadFile(filepath.Join(wt, ".git"))
 		return fmt.Errorf("fresh native worktree %s is not a Git checkout: %v: %s; gitdir=%q", wt, err, strings.TrimSpace(string(out)), strings.TrimSpace(string(gitFile)))
 	}
-	head, result := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "HEAD")
+	head, result := execx.Capture(context.Background(), gitExecutable, "-C", wt, "rev-parse", "HEAD")
 	if result.Code != 0 {
 		return fmt.Errorf("read fresh native worktree HEAD %s: exit %d", wt, result.Code)
 	}
-	base, result := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", baseRef)
+	base, result := execx.Capture(context.Background(), gitExecutable, "-C", wt, "rev-parse", baseRef)
 	if result.Code != 0 {
 		return fmt.Errorf("read fresh native worktree base %s at %s: exit %d", baseRef, wt, result.Code)
 	}
 	if strings.TrimSpace(head) != strings.TrimSpace(base) {
 		return fmt.Errorf("fresh native worktree %s HEAD %s does not match %s %s", wt, strings.TrimSpace(head), baseRef, strings.TrimSpace(base))
 	}
-	status, result := execx.Capture(context.Background(), "git", "-C", wt, "status", "--porcelain=v1")
+	status, result := execx.Capture(context.Background(), gitExecutable, "-C", wt, "status", "--porcelain=v1")
 	if result.Code != 0 {
 		return fmt.Errorf("read fresh native worktree status %s: exit %d", wt, result.Code)
 	}
@@ -517,8 +552,8 @@ func nativeOwnedCommonRepositoryMarker(repo, remoteURL string) (string, error) {
 	), nil
 }
 
-func captureNativeGit(args []string) (string, error) {
-	out, result := execx.Capture(context.Background(), "env", args...)
+func captureNativeGit(envExecutable string, args []string) (string, error) {
+	out, result := execx.Capture(context.Background(), envExecutable, args...)
 	if result.Code != 0 {
 		return "", fmt.Errorf("env %v: exit %d", args, result.Code)
 	}
@@ -527,6 +562,7 @@ func captureNativeGit(args []string) (string, error) {
 
 func validateNativeOwnedCommonRepository(
 	worktreesRoot, commonDir, repo, remoteURL string,
+	envExecutable string,
 	envLocalGit func(...string) []string,
 ) error {
 	info, err := os.Lstat(commonDir)
@@ -559,11 +595,11 @@ func validateNativeOwnedCommonRepository(
 	if string(marker) != expectedMarker {
 		return fmt.Errorf("package-owned common repository %s identity does not match repository %s and its declared origin", commonDir, repo)
 	}
-	bare, err := captureNativeGit(envLocalGit("--git-dir", commonDir, "rev-parse", "--is-bare-repository"))
+	bare, err := captureNativeGit(envExecutable, envLocalGit("--git-dir", commonDir, "rev-parse", "--is-bare-repository"))
 	if err != nil || bare != "true" {
 		return fmt.Errorf("package-owned common repository %s is not a bare Git repository", commonDir)
 	}
-	origin, err := captureNativeGit(envLocalGit("--git-dir", commonDir, "remote", "get-url", "origin"))
+	origin, err := captureNativeGit(envExecutable, envLocalGit("--git-dir", commonDir, "remote", "get-url", "origin"))
 	if err != nil {
 		return fmt.Errorf("read package-owned common repository origin %s: %w", commonDir, err)
 	}
@@ -575,6 +611,7 @@ func validateNativeOwnedCommonRepository(
 
 func ensureNativeOwnedCommonRepository(
 	worktreesRoot, repo, remoteURL string,
+	envExecutable string,
 	envLocalGit func(...string) []string,
 	envRemoteGit func(...string) []string,
 	dryRun bool,
@@ -588,13 +625,13 @@ func ensureNativeOwnedCommonRepository(
 		return "", err
 	}
 	if dryRun {
-		if err := run(true, "env", envLocalGit("init", "--bare", "--initial-branch=main", commonDir)...); err != nil {
+		if err := run(true, envExecutable, envLocalGit("init", "--bare", "--initial-branch=main", commonDir)...); err != nil {
 			return "", err
 		}
-		if err := run(true, "env", envLocalGit("--git-dir", commonDir, "remote", "add", "origin", remoteURL)...); err != nil {
+		if err := run(true, envExecutable, envLocalGit("--git-dir", commonDir, "remote", "add", "origin", remoteURL)...); err != nil {
 			return "", err
 		}
-		if err := runFetch(true, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
+		if err := runFetch(true, envExecutable, envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
 			return "", err
 		}
 		return commonDir, nil
@@ -607,10 +644,10 @@ func ensureNativeOwnedCommonRepository(
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("package-owned common repository %s must be a real directory", commonDir)
 		}
-		if err := validateNativeOwnedCommonRepository(worktreesRoot, commonDir, repo, remoteURL, envLocalGit); err != nil {
+		if err := validateNativeOwnedCommonRepository(worktreesRoot, commonDir, repo, remoteURL, envExecutable, envLocalGit); err != nil {
 			return "", err
 		}
-		if err := runFetch(false, "env", envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
+		if err := runFetch(false, envExecutable, envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
 			return "", err
 		}
 		return commonDir, nil
@@ -632,22 +669,22 @@ func ensureNativeOwnedCommonRepository(
 			_ = os.RemoveAll(staging)
 		}
 	}()
-	if err := run(false, "env", envLocalGit("init", "--bare", "--initial-branch=main", staging)...); err != nil {
+	if err := run(false, envExecutable, envLocalGit("init", "--bare", "--initial-branch=main", staging)...); err != nil {
 		return "", err
 	}
-	if err := run(false, "env", envLocalGit("--git-dir", staging, "config", "worktree.useRelativePaths", "true")...); err != nil {
+	if err := run(false, envExecutable, envLocalGit("--git-dir", staging, "config", "worktree.useRelativePaths", "true")...); err != nil {
 		return "", err
 	}
-	if err := run(false, "env", envLocalGit("--git-dir", staging, "remote", "add", "origin", remoteURL)...); err != nil {
+	if err := run(false, envExecutable, envLocalGit("--git-dir", staging, "remote", "add", "origin", remoteURL)...); err != nil {
 		return "", err
 	}
-	if err := runFetch(false, "env", envRemoteGit("--git-dir", staging, "fetch", "--all", "--prune", "--progress")...); err != nil {
+	if err := runFetch(false, envExecutable, envRemoteGit("--git-dir", staging, "fetch", "--all", "--prune", "--progress")...); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(staging, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
 		return "", fmt.Errorf("write package-owned common repository marker: %w", err)
 	}
-	if err := validateNativeOwnedCommonRepository(worktreesRoot, staging, repo, remoteURL, envLocalGit); err != nil {
+	if err := validateNativeOwnedCommonRepository(worktreesRoot, staging, repo, remoteURL, envExecutable, envLocalGit); err != nil {
 		return "", err
 	}
 	if err := os.Rename(staging, commonDir); err != nil {
@@ -802,16 +839,17 @@ type NativeResetOptions struct {
 // The command layer derives these roots from the selected overlay; this type
 // carries no arbitrary extra deletion paths.
 type NativeSlotResetOptions struct {
-	Project        string
-	Repo           string
-	Origin         string
-	BranchPrefix   string
-	Index          int
-	Count          int
-	WorktreeRoot   string
-	StateRoot      string
-	ProtectedRoots []string
-	DryRun         bool
+	Project                         string
+	Repo                            string
+	Origin                          string
+	BranchPrefix                    string
+	Index                           int
+	Count                           int
+	WorktreeRoot                    string
+	StateRoot                       string
+	ProtectedRoots                  []string
+	RequirePackageSourceExecutables bool
+	DryRun                          bool
 }
 
 type nativeResetCandidate struct {
@@ -832,6 +870,8 @@ type NativeResetPlan struct {
 	gitCommonDir   string
 	gitRef         string
 	gitRefOld      string
+	envExecutable  string
+	gitExecutable  string
 }
 
 var nativeResetMountPoints = readNativeResetMountPoints
@@ -1120,6 +1160,10 @@ func nativeSelectedWorktreeMetadata(commonDir, worktree string) (string, error) 
 // boundary before any process, Git, home, or filesystem effect occurs. Shared
 // common-repository and manifest paths are deliberately excluded.
 func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) {
+	envExecutable, gitExecutable, err := nativeSourceExecutables(opts.RequirePackageSourceExecutables)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(opts.Project) != "dev-all" {
 		return nil, fmt.Errorf("native slot reset requires the exact dev-all prefix")
 	}
@@ -1189,9 +1233,9 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			return nil, fmt.Errorf("native slot reset requires the source-declared origin to validate existing common Git metadata")
 		}
 		envLocalGit := func(args ...string) []string {
-			return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}, args...)
+			return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", gitExecutable}, args...)
 		}
-		if err := validateNativeOwnedCommonRepository(worktreeRoot, commonDir, repo, origin, envLocalGit); err != nil {
+		if err := validateNativeOwnedCommonRepository(worktreeRoot, commonDir, repo, origin, envExecutable, envLocalGit); err != nil {
 			return nil, err
 		}
 		metadata, err := nativeSelectedWorktreeMetadata(commonDir, worktree)
@@ -1210,10 +1254,10 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			branchPrefix = "agent"
 		}
 		gitRef = "refs/heads/" + fmt.Sprintf("%s%d", branchPrefix, opts.Index)
-		if err := run(false, "env", envLocalGit("check-ref-format", gitRef)...); err != nil {
+		if err := run(false, envExecutable, envLocalGit("check-ref-format", gitRef)...); err != nil {
 			return nil, fmt.Errorf("validate selected native slot branch ref %s: %w", gitRef, err)
 		}
-		old, result := execx.Capture(context.Background(), "env", envLocalGit("--git-dir", commonDir, "rev-parse", "--verify", gitRef)...)
+		old, result := execx.Capture(context.Background(), envExecutable, envLocalGit("--git-dir", commonDir, "rev-parse", "--verify", gitRef)...)
 		if result.Code == 0 {
 			gitRefOld = strings.TrimSpace(old)
 		}
@@ -1253,6 +1297,8 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 		gitCommonDir:   gitCommonDir,
 		gitRef:         gitRef,
 		gitRefOld:      gitRefOld,
+		envExecutable:  envExecutable,
+		gitExecutable:  gitExecutable,
 	}, nil
 }
 
@@ -1414,9 +1460,9 @@ func (plan *NativeResetPlan) Apply() error {
 		staged = append(staged, stagedNativeResetPath{source: candidate.path, target: target})
 	}
 	if plan.gitRefOld != "" {
-		envLocalGit := []string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}
+		envLocalGit := []string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", plan.gitExecutable}
 		args := append(envLocalGit, "--git-dir", plan.gitCommonDir, "update-ref", "-d", plan.gitRef, plan.gitRefOld)
-		if err := run(false, "env", args...); err != nil {
+		if err := run(false, plan.envExecutable, args...); err != nil {
 			rollbackErr := rollbackNativeResetStaging(staged)
 			cleanupEmptyQuarantines()
 			return errors.Join(fmt.Errorf("remove selected native slot branch %s: %w", plan.gitRef, err), rollbackErr)
@@ -1502,8 +1548,12 @@ func SetupNative(opts NativeOptions) error {
 	}
 	repoPath := filepath.Join(devRoot, repo)
 	gitSSHCommand := strings.TrimSpace(opts.GitSSHCommand)
+	envExecutable, gitExecutable, err := nativeSourceExecutables(opts.RequireSSHOrigin)
+	if err != nil {
+		return err
+	}
 	envLocalGit := func(args ...string) []string {
-		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}, args...)
+		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", gitExecutable}, args...)
 	}
 	envRemoteGit := func(args ...string) []string {
 		prefix := []string{}
@@ -1512,7 +1562,7 @@ func SetupNative(opts NativeOptions) error {
 		} else {
 			prefix = append(prefix, "-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 		}
-		return append(prefix, append([]string{"git"}, args...)...)
+		return append(prefix, append([]string{gitExecutable}, args...)...)
 	}
 	remoteURL := strings.TrimSpace(opts.Origin)
 	result := execx.Result{Code: 0}
@@ -1520,7 +1570,7 @@ func SetupNative(opts NativeOptions) error {
 		if opts.RequireSSHOrigin {
 			return fmt.Errorf("native Git bootstrap requires the source-declared SSH origin; ambient checkout remotes are not bootstrap authority")
 		}
-		remoteURL, result = execx.Capture(context.Background(), "git", "-C", repoPath, "remote", "get-url", "origin")
+		remoteURL, result = execx.Capture(context.Background(), gitExecutable, "-C", repoPath, "remote", "get-url", "origin")
 		if result.Code != 0 && !opts.DryRun {
 			return fmt.Errorf("read native Git bootstrap origin: exit %d", result.Code)
 		}
@@ -1554,6 +1604,7 @@ func SetupNative(opts NativeOptions) error {
 		worktreesRoot,
 		repo,
 		remoteURL,
+		envExecutable,
 		envLocalGit,
 		envRemoteGit,
 		opts.DryRun,
@@ -1561,7 +1612,7 @@ func SetupNative(opts NativeOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
+	if err := run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
 		return err
 	}
 	first, last := 1, count
@@ -1580,10 +1631,10 @@ func SetupNative(opts NativeOptions) error {
 		branch := fmt.Sprintf("%s%d", branchPrefix, i)
 		allowedHome := fmt.Sprintf(".devhome-agent%d", i)
 		if !opts.DryRun {
-			if ok, err := existingGitCheckout(wt); err != nil {
+			if ok, err := existingGitCheckout(wt, gitExecutable); err != nil {
 				return err
 			} else if ok {
-				if err := run(false, "env", envLocalGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
+				if err := run(false, envExecutable, envLocalGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
 					return err
 				}
 				if err := rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir); err != nil {
@@ -1599,12 +1650,12 @@ func SetupNative(opts NativeOptions) error {
 				return err
 			}
 		}
-		_ = run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "prune")...)
-		if err := run(opts.DryRun, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
+		_ = run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "prune")...)
+		if err := run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
 			if opts.DryRun {
 				return err
 			}
-			_ = run(false, "env", envLocalGit("--git-dir", repoCommonDir, "worktree", "remove", "-f", wt)...)
+			_ = run(false, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "remove", "-f", wt)...)
 			if remErr := os.RemoveAll(wt); remErr != nil && !errors.Is(remErr, os.ErrNotExist) {
 				return errors.Join(err, fmt.Errorf("remove failed native worktree %s: %w", wt, remErr))
 			}
@@ -1623,14 +1674,14 @@ func SetupNative(opts NativeOptions) error {
 				return err
 			}
 		}
-		if err := ensureNativeLinkedWorktreeNonBare(wt, envLocalGit, opts.DryRun); err != nil {
+		if err := ensureNativeLinkedWorktreeNonBare(wt, envExecutable, envLocalGit, opts.DryRun); err != nil {
 			return err
 		}
-		if err := run(opts.DryRun, "env", envLocalGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
+		if err := run(opts.DryRun, envExecutable, envLocalGit("-C", wt, "branch", "--set-upstream-to=origin/"+baseBranch, branch)...); err != nil {
 			return err
 		}
 		if !opts.DryRun {
-			if err := verifyFreshNativeWorktree(wt, "origin/"+baseBranch); err != nil {
+			if err := verifyFreshNativeWorktree(wt, "origin/"+baseBranch, gitExecutable); err != nil {
 				return err
 			}
 		}

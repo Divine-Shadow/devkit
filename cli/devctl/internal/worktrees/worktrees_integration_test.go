@@ -11,6 +11,18 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	envExecutable, envErr := exec.LookPath("env")
+	gitExecutable, gitErr := exec.LookPath("git")
+	if envErr != nil || gitErr != nil {
+		fmt.Fprintf(os.Stderr, "worktrees tests require env and git: env=%v git=%v\n", envErr, gitErr)
+		os.Exit(1)
+	}
+	packageEnvExecutable = envExecutable
+	packageGitExecutable = gitExecutable
+	os.Exit(m.Run())
+}
+
 func mustRun(t *testing.T, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
@@ -238,14 +250,22 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 
-	if err := SetupNative(NativeOptions{
+	originalPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", filepath.Join(root, "hostile-empty-path")); err != nil {
+		t.Fatal(err)
+	}
+	setupErr := SetupNative(NativeOptions{
 		DevkitRoot:   devkitRoot,
 		Repo:         "ouroboros-ide",
 		Count:        2,
 		BaseBranch:   "main",
 		BranchPrefix: "agent",
-	}); err != nil {
-		t.Fatalf("native setup failed: %v", err)
+	})
+	if err := os.Setenv("PATH", originalPath); err != nil {
+		t.Fatal(err)
+	}
+	if setupErr != nil {
+		t.Fatalf("native setup under hostile PATH failed: %v", setupErr)
 	}
 
 	checkBranchAndUpstream(t, filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide"), "agent1")

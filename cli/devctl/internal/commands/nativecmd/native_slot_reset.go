@@ -591,16 +591,17 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	}
 	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
 	resetOptions := wtx.NativeSlotResetOptions{
-		Project:        ctx.Project,
-		Repo:           declaredRepo,
-		Origin:         strings.TrimSpace(cfg.Defaults.Origin),
-		BranchPrefix:   branchPrefix,
-		Index:          parsed.index,
-		Count:          count,
-		WorktreeRoot:   opts.WorktreeRoot,
-		StateRoot:      opts.StateRoot,
-		ProtectedRoots: protectedRoots,
-		DryRun:         ctx.DryRun,
+		Project:                         ctx.Project,
+		Repo:                            declaredRepo,
+		Origin:                          strings.TrimSpace(cfg.Defaults.Origin),
+		BranchPrefix:                    branchPrefix,
+		Index:                           parsed.index,
+		Count:                           count,
+		WorktreeRoot:                    opts.WorktreeRoot,
+		StateRoot:                       opts.StateRoot,
+		ProtectedRoots:                  protectedRoots,
+		RequirePackageSourceExecutables: true,
+		DryRun:                          ctx.DryRun,
 	}
 	resetPlan, err := wtx.PlanNativeSlotReset(resetOptions)
 	if err != nil {

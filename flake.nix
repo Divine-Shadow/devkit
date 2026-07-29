@@ -86,6 +86,8 @@
             "-w"
             "-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=${sshExecutable}"
             "-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=${knownHostsFile}"
+            "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
+            "-X=devkit/cli/devctl/internal/worktrees.packageGitExecutable=${pkgs.git}/bin/git"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"
@@ -633,8 +635,12 @@
               ];
             } ''
               grep -aqF '${pkgs.openssh}/bin/ssh' ${devctl}/kit/bin/devctl
+              grep -aqF '${pkgs.coreutils}/bin/env' ${devctl}/kit/bin/devctl
+              grep -aqF '${pkgs.git}/bin/git' ${devctl}/kit/bin/devctl
               grep -aqF '${githubSSHKnownHosts}' ${devctl}/kit/bin/devctl
               grep -qFx '${pkgs.openssh}' ${closure}/store-paths
+              grep -qFx '${pkgs.coreutils}' ${closure}/store-paths
+              grep -qFx '${pkgs.git}' ${closure}/store-paths
               grep -qFx '${githubSSHKnownHosts}' ${closure}/store-paths
               grep -qF '[ssh.github.com]:443 ' '${githubSSHKnownHosts}'
               ! rg -n 'StrictHostKeyChecking[[:space:]]+accept-new' "$src/cli/devctl"
