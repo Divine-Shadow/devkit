@@ -815,8 +815,9 @@ type NativeSlotResetOptions struct {
 }
 
 type nativeResetCandidate struct {
-	path     string
-	boundary string
+	path         string
+	boundary     string
+	preserveRoot bool
 }
 
 // NativeResetPlan is an opaque, preflighted disposal plan. The paths are
@@ -920,6 +921,9 @@ func validateNativeResetCandidate(candidate nativeResetCandidate, protectedRoots
 	for _, mountPoint := range mountPoints {
 		mountPoint = filepath.Clean(strings.TrimSpace(mountPoint))
 		if mountPoint == "" {
+			continue
+		}
+		if candidate.path == mountPoint && candidate.preserveRoot {
 			continue
 		}
 		if candidate.path == mountPoint || pathWithinRoot(candidate.path, mountPoint) {
@@ -1149,6 +1153,7 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 
 	agentRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", opts.Index))
 	worktree := filepath.Join(agentRoot, repo)
+	selectedState := filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, opts.Index))
 	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo)
 	if err != nil {
 		return nil, err
@@ -1156,7 +1161,7 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 	candidates := []nativeResetCandidate{
 		{path: worktree, boundary: agentRoot},
 		{
-			path:     filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, opts.Index)),
+			path:     selectedState,
 			boundary: stateRoot,
 		},
 	}
@@ -1225,7 +1230,16 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 	if err != nil {
 		return nil, err
 	}
-	for _, candidate := range candidates {
+	for index := range candidates {
+		if candidates[index].path == selectedState {
+			for _, mountPoint := range mountPoints {
+				if filepath.Clean(strings.TrimSpace(mountPoint)) == selectedState {
+					candidates[index].preserveRoot = true
+					break
+				}
+			}
+		}
+		candidate := candidates[index]
 		if err := validateNativeResetCandidate(candidate, opts.ProtectedRoots, mountPoints); err != nil {
 			return nil, err
 		}
@@ -1306,7 +1320,11 @@ func (plan *NativeResetPlan) Apply() error {
 	}
 	if plan.dryRun {
 		for _, candidate := range plan.candidates {
-			fmt.Fprintf(os.Stderr, "+ reset-owned %s\n", candidate.path)
+			if candidate.preserveRoot {
+				fmt.Fprintf(os.Stderr, "+ reset-owned-contents %s\n", candidate.path)
+			} else {
+				fmt.Fprintf(os.Stderr, "+ reset-owned %s\n", candidate.path)
+			}
 		}
 		if plan.gitRefOld != "" {
 			fmt.Fprintf(os.Stderr, "+ reset-owned-git-ref %s %s\n", plan.gitCommonDir, plan.gitRef)
@@ -1334,6 +1352,44 @@ func (plan *NativeResetPlan) Apply() error {
 			rollbackErr := rollbackNativeResetStaging(staged)
 			cleanupEmptyQuarantines()
 			return errors.Join(fmt.Errorf("native reset target %s became a symlink or junction", candidate.path), rollbackErr)
+		}
+		if candidate.preserveRoot {
+			if !info.IsDir() {
+				rollbackErr := rollbackNativeResetStaging(staged)
+				cleanupEmptyQuarantines()
+				return errors.Join(fmt.Errorf("mounted native reset target %s must be a real directory", candidate.path), rollbackErr)
+			}
+			quarantineName := plan.quarantineName
+			if quarantineName == "" {
+				quarantineName = ".devkit-reset-"
+			}
+			quarantine, err := os.MkdirTemp(candidate.path, quarantineName)
+			if err != nil {
+				rollbackErr := rollbackNativeResetStaging(staged)
+				cleanupEmptyQuarantines()
+				return errors.Join(fmt.Errorf("create native reset quarantine inside mounted root %s: %w", candidate.path, err), rollbackErr)
+			}
+			quarantines[candidate.path] = quarantine
+			entries, err := os.ReadDir(candidate.path)
+			if err != nil {
+				rollbackErr := rollbackNativeResetStaging(staged)
+				cleanupEmptyQuarantines()
+				return errors.Join(fmt.Errorf("enumerate mounted native reset target %s: %w", candidate.path, err), rollbackErr)
+			}
+			for _, entry := range entries {
+				source := filepath.Join(candidate.path, entry.Name())
+				if source == quarantine {
+					continue
+				}
+				target := filepath.Join(quarantine, fmt.Sprintf("%03d", len(staged)))
+				if err := os.Rename(source, target); err != nil {
+					rollbackErr := rollbackNativeResetStaging(staged)
+					cleanupEmptyQuarantines()
+					return errors.Join(fmt.Errorf("stage mounted native reset content %s: %w", source, err), rollbackErr)
+				}
+				staged = append(staged, stagedNativeResetPath{source: source, target: target})
+			}
+			continue
 		}
 		quarantine := quarantines[candidate.boundary]
 		if quarantine == "" {

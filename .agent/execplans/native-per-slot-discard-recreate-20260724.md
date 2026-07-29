@@ -30,6 +30,12 @@ composition, or deletion paths.
   preservation and failed-reconstruction absence.
 - [x] (2026-07-24) Passed focused and full Go tests, Go vet, and the staged-source Nix flake check.
 - [x] (2026-07-24) Closed this implementation plan for publication.
+- [x] (2026-07-29) Extended selected-slot reset for the production controller
+  sandbox: when and only when the exact selected state root is itself a
+  mounted writable projection, preserve that root inode and atomically dispose
+  all contents inside it. Nested mounts and mounted worktrees still reject.
+- [x] (2026-07-29) Passed the focused mounted-root reset tests and all eleven
+  Devkit flake checks.
 
 ## Context and orientation
 
@@ -95,6 +101,12 @@ replacing one failed consumer and is not registered as `native reset`.
 - 2026-07-24: Do not reuse `lifecycleUp`, because it loops over every configured
   slot and would prepare or readiness-check healthy siblings. The new handler
   composes the same lower-level production functions for exactly one index.
+- 2026-07-29: A systemd `ReadWritePaths` projection makes the selected state
+  root a mount point, so renaming the root is impossible even though every
+  byte beneath it remains selected-slot state. Preserve only that mount-root
+  inode and stage its children into an in-root quarantine before deletion.
+  This exception is derived internally for the exact selected state root;
+  callers cannot opt in another path, and any nested mount still blocks reset.
 
 ## Verification
 
@@ -127,3 +139,8 @@ linked-worktree admin/ref state is discarded with the slot; the shared
 manifest is verified and preserved byte-for-byte; and a broker created by a
 failed reconstruction is stopped. Process signaling is guarded by both slot
 identity and Linux process start time.
+
+The production controller composition also works when systemd projects the
+exact selected state root writable. The root remains a real, empty directory
+while its prior contents and selected worktree disappear; sibling state stays
+byte-identical, and mounted worktrees or nested mounts remain fail-closed.

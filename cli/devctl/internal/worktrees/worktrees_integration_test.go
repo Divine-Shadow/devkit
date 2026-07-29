@@ -994,6 +994,66 @@ func TestNativeSlotResetDisposesOnlySelectedSlot(t *testing.T) {
 	}
 }
 
+func TestNativeSlotResetPreservesSelectedMountedStateRootAndDisposesItsContents(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "owned-worktrees")
+	stateRoot := filepath.Join(root, "owned-state")
+	selectedWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	siblingState := filepath.Join(stateRoot, "dev-all-agent2")
+	for _, path := range []string{
+		filepath.Join(selectedWorktree, "src"),
+		filepath.Join(selectedState, "home", ".codex"),
+		siblingState,
+	} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(selectedState, "home", ".codex", "state"), []byte("discard\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	siblingSentinel := filepath.Join(siblingState, "preserve")
+	if err := os.WriteFile(siblingSentinel, []byte("sibling\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeResetMountPoints = func() ([]string, error) {
+		return []string{"/", selectedState}, nil
+	}
+
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project:      "dev-all",
+		Repo:         "ouroboros-ide",
+		Index:        1,
+		Count:        2,
+		WorktreeRoot: worktreeRoot,
+		StateRoot:    stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(selectedWorktree); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected worktree survived mounted-state reset: %v", err)
+	}
+	info, err := os.Lstat(selectedState)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("selected mounted state root was not preserved as a real directory: %#v %v", info, err)
+	}
+	entries, err := os.ReadDir(selectedState)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("selected mounted state contents survived: %#v %v", entries, err)
+	}
+	if got, err := os.ReadFile(siblingSentinel); err != nil || string(got) != "sibling\n" {
+		t.Fatalf("sibling state changed: %q %v", got, err)
+	}
+}
+
 func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
@@ -1137,6 +1197,18 @@ func TestNativeSlotResetRejectsInvalidIndexAndSelectedEscapesBeforeDisposal(t *t
 			t.Fatal(err)
 		}
 		nativeResetMountPoints = func() ([]string, error) { return []string{filepath.Join(selected, "mounted")}, nil }
+		if _, err := PlanNativeSlotReset(opts); err == nil || !strings.Contains(err.Error(), "contains mount point") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("selected worktree mount", func(t *testing.T) {
+		root := t.TempDir()
+		opts := newOptions(root)
+		selected := filepath.Join(opts.WorktreeRoot, "agent1", "ouroboros-ide")
+		if err := os.MkdirAll(selected, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		nativeResetMountPoints = func() ([]string, error) { return []string{selected}, nil }
 		if _, err := PlanNativeSlotReset(opts); err == nil || !strings.Contains(err.Error(), "contains mount point") {
 			t.Fatalf("error = %v", err)
 		}
