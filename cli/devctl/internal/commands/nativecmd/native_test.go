@@ -18,10 +18,12 @@ import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/devkitpaths"
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/runtime/readiness"
+	wtx "devkit/cli/devctl/internal/worktrees"
 )
 
 func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
@@ -1297,12 +1299,15 @@ func TestRunCommandPreservingExitProjectsStdoutByteExactly(t *testing.T) {
 }
 
 func TestNativeSlotResetLockSerializesPackageOwnedDisposal(t *testing.T) {
-	stateRoot := filepath.Join(t.TempDir(), "native-state")
-	first, err := acquireNativeSlotResetLock(stateRoot, "dev-all")
+	coordinationRoot := filepath.Join(t.TempDir(), "worktrees", ".devkit", "git")
+	first, err := acquireNativeSlotResetLock(coordinationRoot, "dev-all")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := acquireNativeSlotResetLock(stateRoot, "dev-all")
+	if first.path != filepath.Join(coordinationRoot, ".dev-all-native-reset.lock") {
+		t.Fatalf("native reset lock path = %q", first.path)
+	}
+	second, err := acquireNativeSlotResetLock(coordinationRoot, "dev-all")
 	if err == nil || !strings.Contains(err.Error(), "another package-owned native reset is active") {
 		if second != nil {
 			_ = second.release()
@@ -1312,12 +1317,85 @@ func TestNativeSlotResetLockSerializesPackageOwnedDisposal(t *testing.T) {
 	if err := first.release(); err != nil {
 		t.Fatal(err)
 	}
-	reacquired, err := acquireNativeSlotResetLock(stateRoot, "dev-all")
+	reacquired, err := acquireNativeSlotResetLock(coordinationRoot, "dev-all")
 	if err != nil {
 		t.Fatalf("reacquire native reset lock: %v", err)
 	}
 	if err := reacquired.release(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNativeSlotMutationPreflightChecksEveryProductionRootAndLeavesNoProbe(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "valid")
+	if err := os.MkdirAll(valid, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	notDirectory := filepath.Join(root, "not-directory")
+	if err := os.WriteFile(notDirectory, []byte("no\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(root, "symlink")
+	if err := os.Symlink(valid, symlink); err != nil {
+		t.Fatal(err)
+	}
+	err := preflightNativeSlotMutationRoots([]nativeSlotMutationRoot{
+		{name: "selected-worktree-parent", path: valid},
+		{name: "shared-git-coordination", path: notDirectory},
+		{name: "shared-runtime-broker", path: symlink},
+	})
+	if err == nil {
+		t.Fatal("native slot mutation preflight accepted invalid production roots")
+	}
+	for _, want := range []string{"shared-git-coordination", "shared-runtime-broker"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("native slot mutation preflight did not report %s: %v", want, err)
+		}
+	}
+	entries, err := os.ReadDir(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("native slot mutation preflight left residue: %#v", entries)
+	}
+}
+
+func TestNativeSlotMutationRootsCoverTheCompleteReconstructionContract(t *testing.T) {
+	roots, err := nativeSlotMutationRoots(
+		wtx.NativeSlotResetOptions{
+			WorktreeRoot: "/home/bayesartre/dev/agent-worktrees",
+		},
+		nativeplan.Plan{
+			Agent: nativeagent.Spec{
+				HostWorktree: "/home/bayesartre/dev/agent-worktrees/agent3/ouroboros-ide",
+				StateRoot:    "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent3",
+			},
+			Proxy: nativeplan.ProxyConfig{
+				UnixSocket: "/home/bayesartre/dev/.devkit/native-egress/dev-all-agent3-workspace-egress.sock",
+			},
+		},
+		"/home/bayesartre/dev/.devkit/native-agents/manifests/dev-all.json",
+		runtimebroker.Config{StateRoot: "/home/bayesartre/dev/.devkit/native-broker"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, root := range roots {
+		got = append(got, root.name+"="+root.path)
+	}
+	want := []string{
+		"selected-worktree-parent=/home/bayesartre/dev/agent-worktrees/agent3",
+		"selected-state=/home/bayesartre/dev/.devkit/native-agents/dev-all-agent3",
+		"shared-git-coordination=/home/bayesartre/dev/agent-worktrees/.devkit/git",
+		"shared-native-manifest=/home/bayesartre/dev/.devkit/native-agents/manifests",
+		"shared-runtime-broker=/home/bayesartre/dev/.devkit/native-broker",
+		"managed-egress=/home/bayesartre/dev/.devkit/native-egress",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("native slot mutation roots =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

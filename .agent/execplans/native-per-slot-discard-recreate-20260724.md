@@ -36,6 +36,12 @@ composition, or deletion paths.
   all contents inside it. Nested mounts and mounted worktrees still reject.
 - [x] (2026-07-29) Passed the focused mounted-root reset tests and all eleven
   Devkit flake checks.
+- [x] (2026-07-29) Closed the complete controller-side mutation contract before
+  another convergence: selected worktree/state plus shared Git coordination,
+  native manifest, runtime broker, and managed-egress roots are all probed and
+  reported together before any process stop or disposal.
+- [ ] (2026-07-29) Publish the complete mutation-contract repair, consume it in
+  the controller closure, and prove the real typed reset-to-GUI-ready boundary.
 
 ## Context and orientation
 
@@ -107,6 +113,12 @@ replacing one failed consumer and is not registered as `native reset`.
   inode and stage its children into an in-root quarantine before deletion.
   This exception is derived internally for the exact selected state root;
   callers cannot opt in another path, and any nested mount still blocks reset.
+- 2026-07-29: The global reset lock belongs with the package-owned common Git
+  coordination root, not the broad native-state parent. Both slot resets can
+  mutate shared Git metadata, while the state parent itself is intentionally
+  not writable to the controller service. Probe every source-derived mutable
+  root up front so a sandbox composition error returns one complete typed
+  diagnosis instead of one denied dependency per deployment.
 
 ## Verification
 
@@ -144,3 +156,5 @@ The production controller composition also works when systemd projects the
 exact selected state root writable. The root remains a real, empty directory
 while its prior contents and selected worktree disappear; sibling state stays
 byte-identical, and mounted worktrees or nested mounts remain fail-closed.
+The reconstruction handler now validates the entire production mutation
+surface before that destructive boundary and leaves no write-probe residue.

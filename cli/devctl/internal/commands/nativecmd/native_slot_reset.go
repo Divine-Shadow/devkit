@@ -356,22 +356,105 @@ type nativeSlotResetLock struct {
 	path string
 }
 
-func acquireNativeSlotResetLock(stateRoot, project string) (*nativeSlotResetLock, error) {
-	stateRoot = filepath.Clean(strings.TrimSpace(stateRoot))
-	if stateRoot == "" || !filepath.IsAbs(stateRoot) {
-		return nil, fmt.Errorf("native reset lock requires an absolute source-declared state root")
+type nativeSlotMutationRoot struct {
+	name string
+	path string
+}
+
+func nativeSlotResetCoordinationRoot(worktreeRoot string) (string, error) {
+	worktreeRoot = filepath.Clean(strings.TrimSpace(worktreeRoot))
+	if worktreeRoot == "" || !filepath.IsAbs(worktreeRoot) {
+		return "", fmt.Errorf("native reset coordination requires an absolute source-declared worktree root")
 	}
-	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
-		return nil, fmt.Errorf("create native reset state root %s: %w", stateRoot, err)
-	}
-	info, err := os.Lstat(stateRoot)
+	return filepath.Join(worktreeRoot, ".devkit", "git"), nil
+}
+
+func nativeSlotMutationRoots(
+	resetOptions wtx.NativeSlotResetOptions,
+	selectedPlan nativeplan.Plan,
+	manifestPath string,
+	brokerCfg broker.Config,
+) ([]nativeSlotMutationRoot, error) {
+	coordinationRoot, err := nativeSlotResetCoordinationRoot(resetOptions.WorktreeRoot)
 	if err != nil {
-		return nil, fmt.Errorf("inspect native reset state root %s: %w", stateRoot, err)
+		return nil, err
+	}
+	roots := []nativeSlotMutationRoot{
+		{name: "selected-worktree-parent", path: filepath.Dir(selectedPlan.Agent.HostWorktree)},
+		{name: "selected-state", path: selectedPlan.Agent.StateRoot},
+		{name: "shared-git-coordination", path: coordinationRoot},
+		{name: "shared-native-manifest", path: filepath.Dir(manifestPath)},
+		{name: "shared-runtime-broker", path: brokerCfg.StateRoot},
+	}
+	if proxySocket := strings.TrimSpace(selectedPlan.Proxy.UnixSocket); proxySocket != "" {
+		roots = append(roots, nativeSlotMutationRoot{
+			name: "managed-egress",
+			path: filepath.Dir(proxySocket),
+		})
+	}
+	return roots, nil
+}
+
+func probeNativeSlotMutationRoot(root nativeSlotMutationRoot) (retErr error) {
+	path := filepath.Clean(strings.TrimSpace(root.path))
+	if strings.TrimSpace(root.name) == "" || path == "" || !filepath.IsAbs(path) {
+		return fmt.Errorf("native slot mutation root %q requires a named absolute path", root.name)
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return fmt.Errorf("create %s root %s: %w", root.name, path, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect %s root %s: %w", root.name, path, err)
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("native reset state root %s must be a real directory", stateRoot)
+		return fmt.Errorf("%s root %s must be a real directory", root.name, path)
 	}
-	lockPath := filepath.Join(stateRoot, "."+project+"-native-reset.lock")
+	probe, err := os.CreateTemp(path, ".devkit-native-reset-write-probe-")
+	if err != nil {
+		return fmt.Errorf("write-probe %s root %s: %w", root.name, path, err)
+	}
+	probePath := probe.Name()
+	defer func() {
+		if err := os.Remove(probePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			retErr = errors.Join(retErr, fmt.Errorf("remove %s write probe %s: %w", root.name, probePath, err))
+		}
+	}()
+	if err := probe.Close(); err != nil {
+		return fmt.Errorf("close %s write probe %s: %w", root.name, probePath, err)
+	}
+	return nil
+}
+
+func preflightNativeSlotMutationRoots(roots []nativeSlotMutationRoot) error {
+	var result error
+	for _, root := range roots {
+		if err := probeNativeSlotMutationRoot(root); err != nil {
+			result = errors.Join(result, err)
+		}
+	}
+	if result != nil {
+		return fmt.Errorf("native slot reconstruction mutation contract is unavailable: %w", result)
+	}
+	return nil
+}
+
+func acquireNativeSlotResetLock(coordinationRoot, project string) (*nativeSlotResetLock, error) {
+	coordinationRoot = filepath.Clean(strings.TrimSpace(coordinationRoot))
+	if coordinationRoot == "" || !filepath.IsAbs(coordinationRoot) {
+		return nil, fmt.Errorf("native reset lock requires an absolute package-owned coordination root")
+	}
+	if err := os.MkdirAll(coordinationRoot, 0o700); err != nil {
+		return nil, fmt.Errorf("create native reset coordination root %s: %w", coordinationRoot, err)
+	}
+	info, err := os.Lstat(coordinationRoot)
+	if err != nil {
+		return nil, fmt.Errorf("inspect native reset coordination root %s: %w", coordinationRoot, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("native reset coordination root %s must be a real directory", coordinationRoot)
+	}
+	lockPath := filepath.Join(coordinationRoot, "."+project+"-native-reset.lock")
 	fd, err := syscall.Open(
 		lockPath,
 		syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
@@ -523,7 +606,20 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
-	resetLock, err := acquireNativeSlotResetLock(resetOptions.StateRoot, ctx.Project)
+	mutationRoots, err := nativeSlotMutationRoots(resetOptions, selectedPlan, manifestPath, brokerCfg)
+	if err != nil {
+		return err
+	}
+	if !ctx.DryRun {
+		if err := preflightNativeSlotMutationRoots(mutationRoots); err != nil {
+			return err
+		}
+	}
+	coordinationRoot, err := nativeSlotResetCoordinationRoot(resetOptions.WorktreeRoot)
+	if err != nil {
+		return err
+	}
+	resetLock, err := acquireNativeSlotResetLock(coordinationRoot, ctx.Project)
 	if err != nil {
 		return err
 	}
