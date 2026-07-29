@@ -1,6 +1,7 @@
 package worktrees
 
 import (
+	"devkit/cli/devctl/internal/gitauthority"
 	"devkit/cli/devctl/internal/paths"
 	"errors"
 	"fmt"
@@ -19,7 +20,8 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	packageEnvExecutable = envExecutable
-	packageGitExecutable = gitExecutable
+	restoreGit := gitauthority.SetExecutableForTesting(gitExecutable)
+	defer restoreGit()
 	os.Exit(m.Run())
 }
 

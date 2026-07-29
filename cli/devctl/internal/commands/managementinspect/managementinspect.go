@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
+	"devkit/cli/devctl/internal/gitauthority"
 )
 
 const (
@@ -401,7 +402,7 @@ func canonicalRepository(ctx context.Context, requested string) (string, error) 
 }
 
 func archiveCommit(ctx context.Context, repo, revision, destination string) error {
-	archive := exec.CommandContext(ctx, "git", "-C", repo, "archive", "--format=tar", revision)
+	archive := exec.CommandContext(ctx, gitauthority.Executable(), "-C", repo, "archive", "--format=tar", revision)
 	tar := exec.CommandContext(ctx, "tar", "-x", "-C", destination, "--no-same-owner", "--no-same-permissions")
 	pipe, err := archive.StdoutPipe()
 	if err != nil {
@@ -459,7 +460,7 @@ func ensureGCRoot(ctx context.Context, root, storePath string) error {
 
 func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
 	all := append([]string{"-C", repo}, args...)
-	return commandOutput(ctx, "git", all...)
+	return commandOutput(ctx, gitauthority.Executable(), all...)
 }
 
 func commandOutput(ctx context.Context, name string, args ...string) (string, error) {

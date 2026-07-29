@@ -13,12 +13,19 @@ import (
 	"testing"
 
 	"devkit/cli/devctl/internal/devkitpaths"
+	"devkit/cli/devctl/internal/gitauthority"
 	"devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
 
 func TestMain(m *testing.M) {
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		panic(err)
+	}
+	restoreGit := gitauthority.SetExecutableForTesting(gitExecutable)
+	defer restoreGit()
 	testExecutable, err := os.Executable()
 	if err != nil {
 		panic(err)
@@ -43,6 +50,33 @@ func TestMain(m *testing.M) {
 		return testSSHAuthority, nil
 	}
 	os.Exit(m.Run())
+}
+
+func TestConfigureWorktreeGitSSHUsesPackageGitUnderHostilePath(t *testing.T) {
+	worktree := filepath.Join(t.TempDir(), "worktree")
+	gitExecutable := gitauthority.Executable()
+	command := exec.Command(gitExecutable, "init", "--initial-branch=main", worktree)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, output)
+	}
+	originalPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", filepath.Join(t.TempDir(), "hostile-empty-path")); err != nil {
+		t.Fatal(err)
+	}
+	configureErr := configureWorktreeGitSSH(worktree, "/nix/store/example-openssh/bin/ssh -F /tmp/config")
+	if err := os.Setenv("PATH", originalPath); err != nil {
+		t.Fatal(err)
+	}
+	if configureErr != nil {
+		t.Fatalf("configureWorktreeGitSSH under hostile PATH: %v", configureErr)
+	}
+	output, err := exec.Command(gitExecutable, "-C", worktree, "config", "--worktree", "--get", "core.sshCommand").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read worktree SSH command: %v\n%s", err, output)
+	}
+	if got, want := strings.TrimSpace(string(output)), "/nix/store/example-openssh/bin/ssh -F /tmp/config"; got != want {
+		t.Fatalf("core.sshCommand = %q, want %q", got, want)
+	}
 }
 
 func withProductGovernanceEnvironmentFixture(t *testing.T) {

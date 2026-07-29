@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"devkit/cli/devctl/internal/gitauthority"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
@@ -114,7 +115,7 @@ func Prepare(p nativeplan.Plan) error {
 }
 
 func requireGitWorktree(worktree string) error {
-	cmd := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
+	cmd := exec.Command(gitauthority.Executable(), "-C", worktree, "rev-parse", "--show-toplevel")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("host worktree %s is not a Git worktree: %w: %s", worktree, err, strings.TrimSpace(string(out)))
@@ -443,7 +444,7 @@ func configureWorktreeGitSSH(worktree string, sshCommand string) error {
 	} else if err != nil {
 		return fmt.Errorf("inspect Git metadata marker %s: %w", gitMarker, err)
 	}
-	out, err := exec.Command("git", "-C", worktree, "rev-parse", "--git-dir").CombinedOutput()
+	out, err := exec.Command(gitauthority.Executable(), "-C", worktree, "rev-parse", "--git-dir").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("resolve Git metadata for %s: %w: %s", worktree, err, strings.TrimSpace(string(out)))
 	}
@@ -471,7 +472,7 @@ func runGitConfigWithLockRetry(args ...string) ([]byte, error) {
 	var out []byte
 	var err error
 	for attempt := 0; attempt < 6; attempt++ {
-		out, err = exec.Command("git", args...).CombinedOutput()
+		out, err = exec.Command(gitauthority.Executable(), args...).CombinedOutput()
 		if err == nil || !isGitConfigLockError(out) {
 			return out, err
 		}

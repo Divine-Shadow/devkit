@@ -17,6 +17,7 @@ import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/execx"
+	"devkit/cli/devctl/internal/gitauthority"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	"devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
@@ -773,7 +774,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	}
 	head := ""
 	if !ctx.DryRun {
-		out, result := execx.Capture(context.Background(), "git", "-C", selectedPlan.Agent.HostWorktree, "rev-parse", "HEAD")
+		out, result := execx.Capture(context.Background(), gitauthority.Executable(), "-C", selectedPlan.Agent.HostWorktree, "rev-parse", "HEAD")
 		if result.Code != 0 {
 			return cleanupFailedSlot(fmt.Errorf("read reconstructed native slot HEAD: exit %d", result.Code))
 		}

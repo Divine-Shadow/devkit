@@ -87,7 +87,7 @@
             "-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=${sshExecutable}"
             "-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=${knownHostsFile}"
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
-            "-X=devkit/cli/devctl/internal/worktrees.packageGitExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"

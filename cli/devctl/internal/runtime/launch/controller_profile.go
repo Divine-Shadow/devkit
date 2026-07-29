@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"devkit/cli/devctl/internal/gitauthority"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
@@ -159,7 +160,7 @@ func validateControllerSourceWorktree(label string, root nativeplan.ControllerPr
 		"origin URL": {"remote", "get-url", "origin"},
 		"status":     {"status", "--porcelain=v1", "--untracked-files=all"},
 	} {
-		output, err := exec.Command("git", append([]string{"-C", root.BackingPath}, args...)...).CombinedOutput()
+		output, err := exec.Command(gitauthority.Executable(), append([]string{"-C", root.BackingPath}, args...)...).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("read %s controller source %s: %w: %s", label, description, err, strings.TrimSpace(string(output)))
 		}

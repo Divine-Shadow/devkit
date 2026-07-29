@@ -3,6 +3,7 @@ package worktrees
 import (
 	"context"
 	"devkit/cli/devctl/internal/execx"
+	"devkit/cli/devctl/internal/gitauthority"
 	"devkit/cli/devctl/internal/paths"
 	runtimeagent "devkit/cli/devctl/internal/runtime/agent"
 	"errors"
@@ -29,20 +30,23 @@ const (
 // requires the absolute package-owned values before effects.
 var (
 	packageEnvExecutable = "env"
-	packageGitExecutable = "git"
 )
 
 func nativeSourceExecutables(requirePackage bool) (string, string, error) {
 	envExecutable := strings.TrimSpace(packageEnvExecutable)
-	gitExecutable := strings.TrimSpace(packageGitExecutable)
+	gitExecutable := gitauthority.Executable()
 	if envExecutable == "" {
 		envExecutable = "env"
 	}
-	if gitExecutable == "" {
-		gitExecutable = "git"
-	}
-	if requirePackage && (!filepath.IsAbs(envExecutable) || !filepath.IsAbs(gitExecutable)) {
+	if requirePackage && !filepath.IsAbs(envExecutable) {
 		return "", "", fmt.Errorf("native source acquisition requires package-owned absolute env and Git executables")
+	}
+	if requirePackage {
+		var err error
+		gitExecutable, err = gitauthority.RequirePackage()
+		if err != nil {
+			return "", "", err
+		}
 	}
 	for name, executable := range map[string]string{"env": envExecutable, "Git": gitExecutable} {
 		if !filepath.IsAbs(executable) {
@@ -101,7 +105,7 @@ func rewriteGitdir(wt string, relative bool) {
 	if info, err := os.Stat(filepath.Join(wt, ".git")); err == nil && info.IsDir() {
 		return
 	}
-	out, res := execx.Capture(context.Background(), "git", "-C", wt, "rev-parse", "--git-dir")
+	out, res := execx.Capture(context.Background(), gitauthority.Executable(), "-C", wt, "rev-parse", "--git-dir")
 	if res.Code != 0 {
 		return
 	}
@@ -442,12 +446,12 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 	// Legacy local worktree setup must not invent an SSH executable or config.
 	// Promoted SSH bootstrap uses SetupNative with the package-owned command.
 	envGit := func(args ...string) []string {
-		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "git"}, args...)
+		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", gitauthority.Executable()}, args...)
 	}
 
 	var repoWorktreesDir string
 	if !dry {
-		if out, res := execx.Capture(context.Background(), "git", "-C", repoPath, "rev-parse", "--git-dir"); res.Code == 0 {
+		if out, res := execx.Capture(context.Background(), gitauthority.Executable(), "-C", repoPath, "rev-parse", "--git-dir"); res.Code == 0 {
 			gitdir := strings.TrimSpace(out)
 			if gitdir != "" {
 				if !filepath.IsAbs(gitdir) {

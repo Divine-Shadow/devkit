@@ -49,6 +49,9 @@ composition, or deletion paths.
 - [ ] (2026-07-29) Bind native source acquisition to the package-owned absolute
   Coreutils `env` and Git executables, preserve projected parent inodes during
   failed-home cleanup, and rerun the complete reconstruction boundary.
+- [ ] (2026-07-29) Consume one shared compiled Git authority across reset,
+  worktree construction, launch preparation, source verification, and final
+  HEAD readback; prove the full path under hostile PATH.
 
 ## Context and orientation
 
@@ -136,6 +139,10 @@ replacing one failed consumer and is not registered as `native reset`.
   into Devctl, require them for promoted SSH source acquisition/reset, and
   exercise SetupNative under a hostile PATH. Failed bootstrap owns the exact
   home it created, never its pre-existing projected parent directories.
+- 2026-07-29: A Git authority private to `worktrees` is incomplete because
+  launch preparation configures the freshly materialized checkout afterward.
+  Use one compiled `gitauthority` package across every production Git lookup;
+  operative source search must contain no ambient Git invocation.
 
 ## Verification
 

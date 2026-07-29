@@ -29,6 +29,7 @@ import (
 	poolcfg "devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/devkitpaths"
 	"devkit/cli/devctl/internal/execx"
+	"devkit/cli/devctl/internal/gitauthority"
 	"devkit/cli/devctl/internal/layout"
 	"devkit/cli/devctl/internal/netutil"
 	pth "devkit/cli/devctl/internal/paths"
@@ -87,7 +88,7 @@ func gitIdentityFromHost() (name, email string) {
 	}
 	// Host git config (best effort)
 	if name == "" {
-		if out, r := execx.Capture(context.Background(), "git", "config", "--global", "user.name"); r.Code == 0 {
+		if out, r := execx.Capture(context.Background(), gitauthority.Executable(), "config", "--global", "user.name"); r.Code == 0 {
 			v := strings.TrimSpace(out)
 			if v != "" {
 				name = v
@@ -95,7 +96,7 @@ func gitIdentityFromHost() (name, email string) {
 		}
 	}
 	if email == "" {
-		if out, r := execx.Capture(context.Background(), "git", "config", "--global", "user.email"); r.Code == 0 {
+		if out, r := execx.Capture(context.Background(), gitauthority.Executable(), "config", "--global", "user.email"); r.Code == 0 {
 			v := strings.TrimSpace(out)
 			if v != "" {
 				email = v
@@ -1332,7 +1333,7 @@ exit 0`
 		idx := sub[1]
 		branch := sub[2]
 		path := nativeHostWorktree(paths, project, repo, mustAtoi(idx))
-		runner.Host(dryRun, "git", "-C", path, "checkout", "-b", branch)
+		runner.Host(dryRun, gitauthority.Executable(), "-C", path, "checkout", "-b", branch)
 	case "worktrees-status":
 		mustProject(project)
 		if !isNativeRuntime {
@@ -1348,17 +1349,17 @@ exit 0`
 		}
 		if idx != "" {
 			path := nativeHostWorktree(paths, project, repo, mustAtoi(idx))
-			runner.Host(dryRun, "git", "-C", path, "status", "-sb")
+			runner.Host(dryRun, gitauthority.Executable(), "-C", path, "status", "-sb")
 		} else {
 			count := nativeDefaultAgentCount(paths, project, 2)
 			for i := 1; i <= count; i++ {
 				path := nativeHostWorktree(paths, project, repo, i)
 				if dryRun {
-					runner.Host(dryRun, "git", "-C", path, "status", "-sb")
+					runner.Host(dryRun, gitauthority.Executable(), "-C", path, "status", "-sb")
 					continue
 				}
 				if _, err := os.Stat(path); err == nil {
-					runner.Host(false, "git", "-C", path, "status", "-sb")
+					runner.Host(false, gitauthority.Executable(), "-C", path, "status", "-sb")
 				}
 			}
 		}
@@ -1384,17 +1385,17 @@ exit 0`
 		}
 		if idx != "" {
 			path := nativeHostWorktree(paths, project, repo, mustAtoi(idx))
-			runner.Host(dryRun, "git", append([]string{"-C", path}, gitcmd...)...)
+			runner.Host(dryRun, gitauthority.Executable(), append([]string{"-C", path}, gitcmd...)...)
 		} else {
 			count := nativeDefaultAgentCount(paths, project, 6)
 			for i := 1; i <= count; i++ {
 				path := nativeHostWorktree(paths, project, repo, i)
 				if dryRun {
-					runner.Host(dryRun, "git", append([]string{"-C", path}, gitcmd...)...)
+					runner.Host(dryRun, gitauthority.Executable(), append([]string{"-C", path}, gitcmd...)...)
 					continue
 				}
 				if _, err := os.Stat(path); err == nil {
-					runner.Host(false, "git", append([]string{"-C", path}, gitcmd...)...)
+					runner.Host(false, gitauthority.Executable(), append([]string{"-C", path}, gitcmd...)...)
 				}
 			}
 		}
