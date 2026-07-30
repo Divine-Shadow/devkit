@@ -88,7 +88,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Event:    ControllerOperationEventSchema,
 			Receipt:  ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"app-rpc.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
+		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
 		Broker: ControllerProfileBroker{
 			Executable:     writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-control", "bin", "fleet-control")),
 			SourceRevision: strings.Repeat("c", 40),
