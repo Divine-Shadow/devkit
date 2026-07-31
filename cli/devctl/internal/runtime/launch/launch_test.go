@@ -1152,6 +1152,70 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	}
 }
 
+func TestEnsureGitSSHConfigPreservesManagedUnixConnectorForWorkspaceEgress(t *testing.T) {
+	tmp := t.TempDir()
+	hostHome := filepath.Join(tmp, "agent-home")
+	writeTestFile(t, filepath.Join(hostHome, ".ssh", "id_ed25519"), "private")
+
+	runtimeRoot := filepath.Join(tmp, "runtime-authority")
+	devctlPath := filepath.Join(runtimeRoot, "kit", "bin", "devctl")
+	writeTestFile(t, devctlPath, "#!/bin/sh\nexit 99\n")
+	if err := os.Chmod(devctlPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	worktree := filepath.Join(tmp, "dev", "agent-worktrees", "agent1", "ouroboros-terraform")
+	initTestGitWorktree(t, worktree)
+	sandboxHome := "/agent-state/ouroboros-terraform-agent1/home"
+	socketPath := filepath.Join(tmp, "native-egress", "ouroboros-terraform-agent1.sock")
+	p := nativeplan.Plan{
+		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		RuntimeAuthorityRoot: runtimeRoot,
+		Agent: agent.Spec{
+			ID:           agent.ID{Project: "ouroboros-terraform", Index: 1, Repo: "ouroboros-terraform"},
+			HostHome:     hostHome,
+			SandboxHome:  sandboxHome,
+			HostWorktree: worktree,
+		},
+		Proxy: nativeplan.ProxyConfig{
+			HTTPProxy:  "http://127.0.0.1:18888",
+			UnixSocket: socketPath,
+		},
+	}
+	authority, err := resolvePackageSSHAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureGitSSHConfig(p, authority); err != nil {
+		t.Fatalf("ensureGitSSHConfig: %v", err)
+	}
+
+	configPath := filepath.Join(hostHome, ".ssh", "config")
+	cfg := readTestFile(t, configPath)
+	for _, want := range []string{
+		"  ProxyCommand '" + devctlPath + "' -p 'ouroboros-terraform' native proxy-connect --socket '" + socketPath + "' --target %h:%p",
+		"  IdentityFile " + filepath.Join(sandboxHome, ".ssh", "id_ed25519"),
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("runtime SSH config missing %q:\n%s", want, cfg)
+		}
+	}
+	for _, forbidden := range []string{"ProxyCommand nc ", "127.0.0.1:18888", filepath.Join(hostHome, ".ssh", "id_ed25519")} {
+		if strings.Contains(cfg, forbidden) {
+			t.Fatalf("runtime SSH config retained forbidden transport or identity %q:\n%s", forbidden, cfg)
+		}
+	}
+
+	output, err := exec.Command(gitauthority.Executable(), "-C", worktree, "config", "--worktree", "--get", "core.sshCommand").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read worktree SSH command: %v\n%s", err, output)
+	}
+	wantSSHCommand := testPackageSSHCommand(t, filepath.Join(sandboxHome, ".ssh", "config"))
+	if got := strings.TrimSpace(string(output)); got != wantSSHCommand {
+		t.Fatalf("core.sshCommand = %q, want %q", got, wantSSHCommand)
+	}
+}
+
 func TestPrepareGitBootstrapRejectsMissingPackageOwnedProxyHelper(t *testing.T) {
 	tmp := t.TempDir()
 	hostUserHome := filepath.Join(tmp, "host-user")

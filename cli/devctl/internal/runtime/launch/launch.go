@@ -162,11 +162,14 @@ func ensureGitSSHConfig(p nativeplan.Plan, sshAuthority sshauthority.Authority) 
 	if err != nil {
 		return err
 	}
-	proxyURL := ""
+	proxyCommand := ""
 	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
-		proxyURL = p.Proxy.HTTPProxy
+		proxyCommand, err = gitManagedProxyCommand(p)
+		if err != nil {
+			return err
+		}
 	}
-	if err := writeGitSSHConfig(hostHome, sandboxHome, identityNames, proxyURL); err != nil {
+	if err := writeGitSSHConfigWithProxyCommand(hostHome, sandboxHome, identityNames, proxyCommand); err != nil {
 		return err
 	}
 	if err := runGitConfigFile(filepath.Join(hostHome, ".gitconfig"), "core.sshCommand", sshCommand); err != nil {
@@ -222,7 +225,7 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 	}
 	proxyCommand := ""
 	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
-		proxyCommand, err = gitBootstrapProxyCommand(p)
+		proxyCommand, err = gitManagedProxyCommand(p)
 		if err != nil {
 			return "", err
 		}
@@ -238,7 +241,7 @@ func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
 	return sshCommand, nil
 }
 
-func gitBootstrapProxyCommand(p nativeplan.Plan) (string, error) {
+func gitManagedProxyCommand(p nativeplan.Plan) (string, error) {
 	runtimeRoot := strings.TrimSpace(p.RuntimeAuthorityRoot)
 	if runtimeRoot == "" {
 		return "", fmt.Errorf("native Git bootstrap requires a source-derived runtime authority root")
