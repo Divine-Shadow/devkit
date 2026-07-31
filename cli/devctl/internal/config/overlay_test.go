@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -85,6 +86,15 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"  worktree_container_root: /worktrees\n" +
 		"  state_container_root: /agent-state\n" +
 		"  required_isolation_profile: workspace-egress\n" +
+		"  reset_orphan_processes:\n" +
+		"    - name: product-sbt-server\n" +
+		"      executable_name: java\n" +
+		"      arguments_before_launcher:\n" +
+		"        - -Xss64m\n" +
+		"        - -Xmx6g\n" +
+		"        - -jar\n" +
+		"      launcher_relative_path: tools/sbt-launch-2.0.0-RC8.jar\n" +
+		"      codex_home_root: /tmp/fleet-native-product-governance\n" +
 		"  isolation_profiles:\n" +
 		"    workspace-egress:\n" +
 		"      filesystem: workspace-only\n" +
@@ -126,6 +136,18 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if cfg.Native.RequiredIsolationProfile != "workspace-egress" {
 		t.Fatalf("required isolation profile = %q", cfg.Native.RequiredIsolationProfile)
+	}
+	if len(cfg.Native.ResetOrphanProcesses) != 1 {
+		t.Fatalf("reset orphan processes = %#v", cfg.Native.ResetOrphanProcesses)
+	}
+	orphan := cfg.Native.ResetOrphanProcesses[0]
+	if orphan.Name != "product-sbt-server" || orphan.ExecutableName != "java" ||
+		orphan.LauncherRelativePath != "tools/sbt-launch-2.0.0-RC8.jar" ||
+		orphan.CodexHomeRoot != "/tmp/fleet-native-product-governance" {
+		t.Fatalf("reset orphan process = %#v", orphan)
+	}
+	if got := strings.Join(orphan.ArgumentsBeforeLauncher, " "); got != "-Xss64m -Xmx6g -jar" {
+		t.Fatalf("reset orphan arguments = %q", got)
 	}
 	profile := cfg.Native.IsolationProfiles["workspace-egress"]
 	if profile.Filesystem != "workspace-only" || profile.EgressAllowlist != "../../docker/dev/tinyproxy/allowlist.txt" {

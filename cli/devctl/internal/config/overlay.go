@@ -103,6 +103,19 @@ type Native struct {
 	StateContainerRoot       string                      `yaml:"state_container_root"`
 	RequiredIsolationProfile string                      `yaml:"required_isolation_profile"`
 	IsolationProfiles        map[string]IsolationProfile `yaml:"isolation_profiles"`
+	ResetOrphanProcesses     []NativeResetOrphanProcess  `yaml:"reset_orphan_processes"`
+}
+
+// NativeResetOrphanProcess is a source-declared process signature that native
+// slot reconstruction may acquire after the original native launcher has
+// exited. The reset command derives the absolute worktree, home, and launcher
+// paths; callers cannot supply or override them.
+type NativeResetOrphanProcess struct {
+	Name                    string   `yaml:"name"`
+	ExecutableName          string   `yaml:"executable_name"`
+	ArgumentsBeforeLauncher []string `yaml:"arguments_before_launcher"`
+	LauncherRelativePath    string   `yaml:"launcher_relative_path"`
+	CodexHomeRoot           string   `yaml:"codex_home_root"`
 }
 
 type IsolationProfile struct {

@@ -83,24 +83,120 @@ type nativeSlotProcessIdentity struct {
 	sandboxHome     string
 	stateRoot       string
 	sandboxState    string
+	owner           *nativeSlotOwner
+	orphanRules     []nativeSlotOrphanRule
 }
 
 type nativeSlotProcessPlan struct {
-	identity nativeSlotProcessIdentity
-	pids     []int
-	starts   map[int]string
-	dryRun   bool
+	identity           nativeSlotProcessIdentity
+	pids               []int
+	starts             map[int]string
+	parents            map[int]int
+	adoptedRoots       map[int]string
+	adoptedDescendants map[int]int
+	bootID             string
+	signalOutcomes     map[int]*nativeSlotProcessSignalOutcome
+	dryRun             bool
+}
+
+type nativeSlotProcessSignalOutcome struct {
+	termAttempted bool
+	termOutcome   string
+	killAttempted bool
+	killOutcome   string
+}
+
+type nativeSlotProcessHandles struct {
+	byPID map[int]int
 }
 
 type nativeProc struct {
-	pid     int
-	ppid    int
-	start   string
-	environ map[string]string
-	touches bool
+	pid        int
+	ppid       int
+	start      string
+	environ    map[string]string
+	touches    bool
+	fdTouches  bool
+	uid        [4]uint32
+	gid        [4]uint32
+	hasOwner   bool
+	args       []string
+	cwd        string
+	executable string
 }
 
-var nativeSlotProcRoot = "/proc"
+type nativeSlotOwner struct {
+	uid uint32
+	gid uint32
+}
+
+type nativeSlotOrphanRule struct {
+	name                    string
+	executableName          string
+	argumentsBeforeLauncher []string
+	launcherRelativePath    string
+	codexHomeRoot           string
+}
+
+var (
+	nativeSlotProcRoot           = "/proc"
+	nativeExecutableEvalSymlinks = filepath.EvalSymlinks
+	nativeReadBootID             = readNativeBootID
+	nativeOpenPidfd              = openNativePidfd
+	nativeSendPidfdSignal        = sendNativePidfdSignal
+	nativeClosePidfd             = syscall.Close
+	nativeSelectedProcessExists  = nativeProcessExists
+	nativeTermWait               = 2 * time.Second
+	nativeKillWait               = time.Second
+	nativeStopPoll               = 20 * time.Millisecond
+)
+
+func normalizeNativeSlotOrphanRules(declared []config.NativeResetOrphanProcess) ([]nativeSlotOrphanRule, error) {
+	rules := make([]nativeSlotOrphanRule, 0, len(declared))
+	names := map[string]bool{}
+	for index, candidate := range declared {
+		name := strings.TrimSpace(candidate.Name)
+		if name == "" {
+			return nil, fmt.Errorf("native reset orphan process rule %d requires a name", index+1)
+		}
+		if names[name] {
+			return nil, fmt.Errorf("native reset orphan process rule name %q is duplicated", name)
+		}
+		names[name] = true
+		executableName := strings.TrimSpace(candidate.ExecutableName)
+		if executableName == "" || executableName == "." || executableName == ".." || filepath.Base(executableName) != executableName {
+			return nil, fmt.Errorf("native reset orphan process rule %q requires an executable basename", name)
+		}
+		arguments := append([]string(nil), candidate.ArgumentsBeforeLauncher...)
+		if len(arguments) == 0 {
+			return nil, fmt.Errorf("native reset orphan process rule %q requires exact arguments before its launcher", name)
+		}
+		for _, argument := range arguments {
+			if strings.TrimSpace(argument) == "" || strings.ContainsRune(argument, '\x00') {
+				return nil, fmt.Errorf("native reset orphan process rule %q contains an invalid launcher argument", name)
+			}
+		}
+		launcher := strings.TrimSpace(candidate.LauncherRelativePath)
+		cleanLauncher := filepath.Clean(launcher)
+		if launcher == "" || cleanLauncher == "." || filepath.IsAbs(cleanLauncher) || cleanLauncher != launcher ||
+			cleanLauncher == ".." || strings.HasPrefix(cleanLauncher, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("native reset orphan process rule %q requires a clean relative launcher path", name)
+		}
+		codexHomeRoot := strings.TrimSpace(candidate.CodexHomeRoot)
+		cleanCodexHomeRoot := filepath.Clean(codexHomeRoot)
+		if codexHomeRoot == "" || !filepath.IsAbs(cleanCodexHomeRoot) || cleanCodexHomeRoot != codexHomeRoot || cleanCodexHomeRoot == string(filepath.Separator) {
+			return nil, fmt.Errorf("native reset orphan process rule %q requires a clean absolute Codex home root", name)
+		}
+		rules = append(rules, nativeSlotOrphanRule{
+			name:                    name,
+			executableName:          executableName,
+			argumentsBeforeLauncher: arguments,
+			launcherRelativePath:    cleanLauncher,
+			codexHomeRoot:           cleanCodexHomeRoot,
+		})
+	}
+	return rules, nil
+}
 
 func parseNativeProcEnviron(data []byte) map[string]string {
 	result := map[string]string{}
@@ -155,24 +251,99 @@ func nativePathTouchesTargets(path string, targets []string) bool {
 	return false
 }
 
-func nativeProcTouchesTargets(procPath string, targets []string) bool {
+func nativeProcTouchEvidence(procPath string, targets []string) (bool, bool) {
+	touches := false
 	for _, name := range []string{"cwd", "root", "exe"} {
 		path, err := os.Readlink(filepath.Join(procPath, name))
 		if err == nil && nativePathTouchesTargets(path, targets) {
-			return true
+			touches = true
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(procPath, "fd"))
 	if err != nil {
-		return false
+		return touches, false
 	}
+	fdTouches := false
 	for _, entry := range entries {
 		path, err := os.Readlink(filepath.Join(procPath, "fd", entry.Name()))
 		if err == nil && nativePathTouchesTargets(path, targets) {
-			return true
+			touches = true
+			fdTouches = true
 		}
 	}
-	return false
+	return touches, fdTouches
+}
+
+func readNativeProcOwner(path string) ([4]uint32, [4]uint32, bool) {
+	var uid [4]uint32
+	var gid [4]uint32
+	data, err := os.ReadFile(filepath.Join(path, "status"))
+	if err != nil {
+		return uid, gid, false
+	}
+	read := func(prefix string, target *[4]uint32) bool {
+		for _, line := range strings.Split(string(data), "\n") {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			fields := strings.Fields(strings.TrimPrefix(line, prefix))
+			if len(fields) != len(target) {
+				return false
+			}
+			for index, field := range fields {
+				value, err := strconv.ParseUint(field, 10, 32)
+				if err != nil {
+					return false
+				}
+				target[index] = uint32(value)
+			}
+			return true
+		}
+		return false
+	}
+	uidOK := read("Uid:", &uid)
+	gidOK := read("Gid:", &gid)
+	return uid, gid, uidOK && gidOK
+}
+
+func readNativeProcArgs(path string) []string {
+	data, err := os.ReadFile(filepath.Join(path, "cmdline"))
+	if err != nil {
+		return nil
+	}
+	fields := strings.Split(string(data), "\x00")
+	for len(fields) > 0 && fields[len(fields)-1] == "" {
+		fields = fields[:len(fields)-1]
+	}
+	return fields
+}
+
+func readNativeProc(pid int, targets []string) nativeProc {
+	path := filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid))
+	environData, environErr := os.ReadFile(filepath.Join(path, "environ"))
+	environ := map[string]string{}
+	if environErr == nil {
+		environ = parseNativeProcEnviron(environData)
+	}
+	touches, fdTouches := nativeProcTouchEvidence(path, targets)
+	ppid, start := readNativeProcIdentity(path)
+	uid, gid, hasOwner := readNativeProcOwner(path)
+	cwd, _ := os.Readlink(filepath.Join(path, "cwd"))
+	executable, _ := os.Readlink(filepath.Join(path, "exe"))
+	return nativeProc{
+		pid:        pid,
+		ppid:       ppid,
+		start:      start,
+		environ:    environ,
+		touches:    touches,
+		fdTouches:  fdTouches,
+		uid:        uid,
+		gid:        gid,
+		hasOwner:   hasOwner,
+		args:       readNativeProcArgs(path),
+		cwd:        cwd,
+		executable: executable,
+	}
 }
 
 func nativeProcHasSlotIdentity(env map[string]string, identity nativeSlotProcessIdentity) bool {
@@ -190,8 +361,167 @@ func nativeProcHasSlotIdentity(env map[string]string, identity nativeSlotProcess
 	return false
 }
 
-func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*nativeSlotProcessPlan, error) {
-	targets := []string{
+func discoverNativeSlotOwner(identity nativeSlotProcessIdentity) (*nativeSlotOwner, error) {
+	var owner *nativeSlotOwner
+	for _, path := range []string{identity.hostWorktree, identity.sandboxWorktree} {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "" || path == "." {
+			continue
+		}
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect native slot owner at %s: %w", path, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("native slot owner path %s must be a real directory", path)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil, fmt.Errorf("native slot owner path %s has no Unix ownership identity", path)
+		}
+		candidate := nativeSlotOwner{uid: stat.Uid, gid: stat.Gid}
+		if owner != nil && *owner != candidate {
+			return nil, fmt.Errorf("native slot host and sandbox ownership identities disagree")
+		}
+		value := candidate
+		owner = &value
+	}
+	return owner, nil
+}
+
+func nativeProcOwnerMatches(process nativeProc, owner *nativeSlotOwner) bool {
+	if owner == nil || !process.hasOwner {
+		return false
+	}
+	for _, value := range process.uid {
+		if value != owner.uid {
+			return false
+		}
+	}
+	for _, value := range process.gid {
+		if value != owner.gid {
+			return false
+		}
+	}
+	return true
+}
+
+func nativePathWithin(root, candidate string, minimumDescendants int) bool {
+	root = filepath.Clean(strings.TrimSpace(root))
+	candidate = filepath.Clean(strings.TrimSpace(candidate))
+	if root == "" || root == "." || candidate == "" || candidate == "." || !filepath.IsAbs(root) || !filepath.IsAbs(candidate) {
+		return false
+	}
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return len(strings.Split(relative, string(filepath.Separator))) >= minimumDescendants
+}
+
+func nativeNixStoreExecutableMatches(executable, argument, name string) bool {
+	executable = filepath.Clean(strings.TrimSuffix(strings.TrimSpace(executable), " (deleted)"))
+	argument = filepath.Clean(strings.TrimSuffix(strings.TrimSpace(argument), " (deleted)"))
+	name = strings.TrimSpace(name)
+	if executable == "" || argument == "" || filepath.Base(executable) != name || filepath.Base(argument) != name {
+		return false
+	}
+	if filepath.Base(filepath.Dir(executable)) != "bin" || filepath.Base(filepath.Dir(argument)) != "bin" ||
+		!nativePathWithin("/nix/store", executable, 3) || !nativePathWithin("/nix/store", argument, 3) {
+		return false
+	}
+	if executable == argument {
+		return true
+	}
+	resolved, err := nativeExecutableEvalSymlinks(argument)
+	return err == nil && filepath.Clean(resolved) == executable
+}
+
+func nativeStringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func nativeProcMatchesOrphanRule(process nativeProc, identity nativeSlotProcessIdentity, rule nativeSlotOrphanRule) bool {
+	if process.ppid != 1 || !process.touches || !process.fdTouches || !nativeProcOwnerMatches(process, identity.owner) {
+		return false
+	}
+	if strings.TrimSpace(process.environ["DEVKIT_NATIVE_AGENT"]) != "" || len(process.args) < 2 {
+		return false
+	}
+	if !nativeNixStoreExecutableMatches(process.executable, process.args[0], rule.executableName) {
+		return false
+	}
+	type pathPair struct {
+		worktree string
+		home     string
+	}
+	pairs := []pathPair{
+		{worktree: identity.hostWorktree, home: identity.hostHome},
+		{worktree: identity.sandboxWorktree, home: identity.sandboxHome},
+	}
+	for _, pair := range pairs {
+		worktree := filepath.Clean(strings.TrimSpace(pair.worktree))
+		home := filepath.Clean(strings.TrimSpace(pair.home))
+		if worktree == "" || worktree == "." || home == "" || home == "." {
+			continue
+		}
+		if filepath.Clean(strings.TrimSpace(process.cwd)) != worktree ||
+			filepath.Clean(strings.TrimSpace(process.environ["HOME"])) != home {
+			continue
+		}
+		launcher := filepath.Join(worktree, rule.launcherRelativePath)
+		expectedArgs := make([]string, 0, len(rule.argumentsBeforeLauncher)+2)
+		expectedArgs = append(expectedArgs, process.args[0])
+		expectedArgs = append(expectedArgs, rule.argumentsBeforeLauncher...)
+		expectedArgs = append(expectedArgs, launcher)
+		if !nativeStringSlicesEqual(process.args, expectedArgs) {
+			continue
+		}
+		codexHomeBase := filepath.Join(
+			rule.codexHomeRoot,
+			fmt.Sprintf("agent%d", identity.index),
+			"control-plane",
+			"workspace-submit-artifacts",
+		)
+		if !nativePathWithin(codexHomeBase, process.environ["CODEX_HOME"], 2) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func nativeProcMatchingOrphanRule(process nativeProc, identity nativeSlotProcessIdentity) string {
+	for _, rule := range identity.orphanRules {
+		if nativeProcMatchesOrphanRule(process, identity, rule) {
+			return rule.name
+		}
+	}
+	return ""
+}
+
+func nativeSlotOrphanRuleNamed(identity nativeSlotProcessIdentity, name string) (nativeSlotOrphanRule, bool) {
+	for _, rule := range identity.orphanRules {
+		if rule.name == name {
+			return rule, true
+		}
+	}
+	return nativeSlotOrphanRule{}, false
+}
+
+func nativeSlotProcessTargets(identity nativeSlotProcessIdentity) []string {
+	return []string{
 		identity.hostWorktree,
 		identity.sandboxWorktree,
 		identity.hostHome,
@@ -199,6 +529,18 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 		identity.stateRoot,
 		identity.sandboxState,
 	}
+}
+
+func readNativeBootID() string {
+	data, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*nativeSlotProcessPlan, error) {
+	targets := nativeSlotProcessTargets(identity)
 	entries, err := os.ReadDir(nativeSlotProcRoot)
 	if err != nil {
 		return nil, fmt.Errorf("read native process inventory: %w", err)
@@ -206,22 +548,20 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 	processes := map[int]nativeProc{}
 	owned := map[int]bool{}
 	starts := map[int]string{}
+	adoptedRoots := map[int]string{}
+	adoptedDescendants := map[int]int{}
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil || pid < 1 || pid == os.Getpid() {
 			continue
 		}
-		path := filepath.Join(nativeSlotProcRoot, entry.Name())
-		environData, environErr := os.ReadFile(filepath.Join(path, "environ"))
-		environ := map[string]string{}
-		if environErr == nil {
-			environ = parseNativeProcEnviron(environData)
-		}
-		touches := nativeProcTouchesTargets(path, targets)
-		ppid, start := readNativeProcIdentity(path)
-		processes[pid] = nativeProc{pid: pid, ppid: ppid, start: start, environ: environ, touches: touches}
-		if nativeProcHasSlotIdentity(environ, identity) {
+		process := readNativeProc(pid, targets)
+		processes[pid] = process
+		if nativeProcHasSlotIdentity(process.environ, identity) {
 			owned[pid] = true
+		} else if ruleName := nativeProcMatchingOrphanRule(process, identity); ruleName != "" {
+			owned[pid] = true
+			adoptedRoots[pid] = ruleName
 		}
 	}
 
@@ -233,6 +573,11 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 		for pid, process := range processes {
 			if !owned[pid] && owned[process.ppid] {
 				owned[pid] = true
+				if ruleName, ok := adoptedRoots[process.ppid]; ok && ruleName != "" {
+					adoptedDescendants[pid] = process.ppid
+				} else if rootPID, ok := adoptedDescendants[process.ppid]; ok {
+					adoptedDescendants[pid] = rootPID
+				}
 				changed = true
 			}
 		}
@@ -243,12 +588,50 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 		}
 	}
 	pids := make([]int, 0, len(owned))
+	parents := make(map[int]int, len(owned))
 	for pid := range owned {
 		pids = append(pids, pid)
 		starts[pid] = processes[pid].start
+		parents[pid] = processes[pid].ppid
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(pids)))
-	return &nativeSlotProcessPlan{identity: identity, pids: pids, starts: starts, dryRun: dryRun}, nil
+	depths := make(map[int]int, len(pids))
+	for _, pid := range pids {
+		current := pid
+		visited := map[int]bool{}
+		for owned[parents[current]] {
+			if visited[current] {
+				return nil, fmt.Errorf("selected native process ancestry contains a cycle at pid %d", current)
+			}
+			visited[current] = true
+			depths[pid]++
+			current = parents[current]
+		}
+	}
+	sort.Slice(pids, func(left, right int) bool {
+		leftPID, rightPID := pids[left], pids[right]
+		if depths[leftPID] != depths[rightPID] {
+			return depths[leftPID] > depths[rightPID]
+		}
+		return leftPID > rightPID
+	})
+	bootID := ""
+	if len(pids) != 0 {
+		bootID = strings.TrimSpace(nativeReadBootID())
+		if bootID == "" {
+			return nil, fmt.Errorf("selected native processes have no stable boot identity")
+		}
+	}
+	return &nativeSlotProcessPlan{
+		identity:           identity,
+		pids:               pids,
+		starts:             starts,
+		parents:            parents,
+		adoptedRoots:       adoptedRoots,
+		adoptedDescendants: adoptedDescendants,
+		bootID:             bootID,
+		signalOutcomes:     map[int]*nativeSlotProcessSignalOutcome{},
+		dryRun:             dryRun,
+	}, nil
 }
 
 func nativeProcessStillMatches(pid int, expectedStart string) (bool, error) {
@@ -268,6 +651,83 @@ func nativeProcessStillMatches(pid int, expectedStart string) (bool, error) {
 	return true, nil
 }
 
+func (plan *nativeSlotProcessPlan) selectedProcessStillMatches(pid int) (bool, error) {
+	if plan.bootID == "" || strings.TrimSpace(nativeReadBootID()) != plan.bootID {
+		return false, fmt.Errorf("selected native process %d lost its stable boot identity", pid)
+	}
+	matches, err := nativeProcessStillMatches(pid, plan.starts[pid])
+	if err != nil || !matches {
+		return matches, err
+	}
+	targets := nativeSlotProcessTargets(plan.identity)
+	if ruleName, adopted := plan.adoptedRoots[pid]; adopted {
+		rule, ok := nativeSlotOrphanRuleNamed(plan.identity, ruleName)
+		if !ok {
+			return false, fmt.Errorf("selected native orphan process %d lost source rule %q", pid, ruleName)
+		}
+		process := readNativeProc(pid, targets)
+		if process.start != plan.starts[pid] || !nativeProcMatchesOrphanRule(process, plan.identity, rule) {
+			return false, fmt.Errorf("selected native orphan process %d changed before signaling", pid)
+		}
+		return true, nil
+	}
+	rootPID, adoptedDescendant := plan.adoptedDescendants[pid]
+	if !adoptedDescendant {
+		return true, nil
+	}
+	rootMatches, err := plan.selectedProcessStillMatches(rootPID)
+	if err != nil || !rootMatches {
+		return false, err
+	}
+	currentPID := pid
+	visited := map[int]bool{}
+	for currentPID != rootPID {
+		if currentPID < 1 || visited[currentPID] {
+			return false, fmt.Errorf("selected native orphan descendant %d lost its source-declared ancestry", pid)
+		}
+		visited[currentPID] = true
+		process := readNativeProc(currentPID, targets)
+		expectedStart, selected := plan.starts[currentPID]
+		if !selected || process.start == "" || process.start != expectedStart ||
+			!process.touches || !nativeProcOwnerMatches(process, plan.identity.owner) {
+			return false, fmt.Errorf("selected native orphan descendant %d changed before signaling", pid)
+		}
+		marker := strings.TrimSpace(process.environ["DEVKIT_NATIVE_AGENT"])
+		if marker != "" && marker != strconv.Itoa(plan.identity.index) {
+			return false, fmt.Errorf("selected native orphan descendant %d acquired a contradictory slot identity", pid)
+		}
+		currentPID = process.ppid
+	}
+	return true, nil
+}
+
+func (plan *nativeSlotProcessPlan) selectedProcessStillMatchesAfterTerm(pid int) (bool, error) {
+	if plan.bootID == "" || strings.TrimSpace(nativeReadBootID()) != plan.bootID {
+		return false, fmt.Errorf("selected native process %d lost its stable boot identity", pid)
+	}
+	matches, err := nativeProcessStillMatches(pid, plan.starts[pid])
+	if err != nil || !matches {
+		return matches, err
+	}
+	if _, adoptedDescendant := plan.adoptedDescendants[pid]; !adoptedDescendant {
+		return plan.selectedProcessStillMatches(pid)
+	}
+	// A descendant may be reparented after the package-owned TERM phase stops
+	// its adopted root. The already-open pidfd preserves kernel identity; retain
+	// custody only while stable start, owner, slot contact, and marker evidence
+	// remain non-contradictory.
+	process := readNativeProc(pid, nativeSlotProcessTargets(plan.identity))
+	if process.start == "" || process.start != plan.starts[pid] ||
+		!process.touches || !nativeProcOwnerMatches(process, plan.identity.owner) {
+		return false, fmt.Errorf("selected native orphan descendant %d changed after TERM", pid)
+	}
+	marker := strings.TrimSpace(process.environ["DEVKIT_NATIVE_AGENT"])
+	if marker != "" && marker != strconv.Itoa(plan.identity.index) {
+		return false, fmt.Errorf("selected native orphan descendant %d acquired a contradictory slot identity after TERM", pid)
+	}
+	return true, nil
+}
+
 func nativeProcessExists(pid int) bool {
 	if data, err := os.ReadFile(filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid), "stat")); err == nil {
 		text := string(data)
@@ -282,74 +742,300 @@ func nativeProcessExists(pid int) bool {
 	return err == nil || !errors.Is(err, syscall.ESRCH)
 }
 
-func (plan *nativeSlotProcessPlan) Stop() error {
+func (handles *nativeSlotProcessHandles) close() error {
+	if handles == nil {
+		return nil
+	}
+	var result error
+	for pid, fd := range handles.byPID {
+		if err := nativeClosePidfd(fd); err != nil {
+			result = errors.Join(result, fmt.Errorf("close selected native process %d pidfd: %w", pid, err))
+		}
+		delete(handles.byPID, pid)
+	}
+	return result
+}
+
+func (plan *nativeSlotProcessPlan) openHandles() (*nativeSlotProcessHandles, error) {
+	handles := &nativeSlotProcessHandles{byPID: make(map[int]int, len(plan.pids))}
+	for _, pid := range plan.pids {
+		fd, err := nativeOpenPidfd(pid)
+		if err != nil {
+			return nil, errors.Join(
+				fmt.Errorf("acquire identity-bound handle for selected native process %d: %w", pid, err),
+				handles.close(),
+			)
+		}
+		handles.byPID[pid] = fd
+	}
+	return handles, nil
+}
+
+func (plan *nativeSlotProcessPlan) prevalidateSelectedSet() (map[int]bool, error) {
+	matches := make(map[int]bool, len(plan.pids))
+	for _, pid := range plan.pids {
+		matched, err := plan.selectedProcessStillMatches(pid)
+		if err != nil {
+			return nil, err
+		}
+		matches[pid] = matched
+	}
+	return matches, nil
+}
+
+func (plan *nativeSlotProcessPlan) signalOutcome(pid int) *nativeSlotProcessSignalOutcome {
+	outcome := plan.signalOutcomes[pid]
+	if outcome == nil {
+		outcome = &nativeSlotProcessSignalOutcome{}
+		plan.signalOutcomes[pid] = outcome
+	}
+	return outcome
+}
+
+func (plan *nativeSlotProcessPlan) sendSignal(handles *nativeSlotProcessHandles, pid int, signal syscall.Signal) error {
+	fd, ok := handles.byPID[pid]
+	if !ok {
+		return fmt.Errorf("selected native process %d has no identity-bound signal handle", pid)
+	}
+	outcome := plan.signalOutcome(pid)
+	label := "term"
+	if signal == syscall.SIGKILL {
+		label = "kill"
+		outcome.killAttempted = true
+	} else {
+		outcome.termAttempted = true
+	}
+	err := nativeSendPidfdSignal(fd, signal)
+	result := "sent"
+	if errors.Is(err, syscall.ESRCH) {
+		result = "already-exited"
+		err = nil
+	} else if err != nil {
+		result = "failed: " + err.Error()
+	}
+	if signal == syscall.SIGKILL {
+		outcome.killOutcome = result
+	} else {
+		outcome.termOutcome = result
+	}
+	if err != nil {
+		return fmt.Errorf("%s selected native slot process %d through pidfd: %w", label, pid, err)
+	}
+	return nil
+}
+
+func (plan *nativeSlotProcessPlan) Stop() (retErr error) {
 	if plan == nil {
 		return fmt.Errorf("native slot process plan is required")
 	}
+	defer func() {
+		retErr = plan.withEffectReceipt(retErr)
+	}()
 	if plan.dryRun {
 		for _, pid := range plan.pids {
 			fmt.Fprintf(os.Stderr, "+ stop-native-slot-process %d\n", pid)
 		}
 		return nil
 	}
+	handles, err := plan.openHandles()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, handles.close())
+	}()
+	selected, err := plan.prevalidateSelectedSet()
+	if err != nil {
+		return err
+	}
 	for _, pid := range plan.pids {
-		matches, err := nativeProcessStillMatches(pid, plan.starts[pid])
+		if !selected[pid] {
+			continue
+		}
+		matches, err := plan.selectedProcessStillMatches(pid)
 		if err != nil {
 			return err
 		}
 		if !matches {
 			continue
 		}
-		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-			return fmt.Errorf("stop selected native slot process %d: %w", pid, err)
+		if err := plan.sendSignal(handles, pid, syscall.SIGTERM); err != nil {
+			return err
 		}
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(nativeTermWait)
 	for time.Now().Before(deadline) {
 		alive := false
 		for _, pid := range plan.pids {
-			alive = alive || nativeProcessExists(pid)
+			alive = alive || nativeSelectedProcessExists(pid)
 		}
 		if !alive {
 			return nil
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(nativeStopPoll)
+	}
+	killSelected := make(map[int]bool, len(plan.pids))
+	for _, pid := range plan.pids {
+		if !nativeSelectedProcessExists(pid) {
+			continue
+		}
+		matches, err := plan.selectedProcessStillMatchesAfterTerm(pid)
+		if err != nil {
+			return err
+		}
+		killSelected[pid] = matches
 	}
 	for _, pid := range plan.pids {
-		if nativeProcessExists(pid) {
-			matches, err := nativeProcessStillMatches(pid, plan.starts[pid])
-			if err != nil {
-				return err
-			}
-			if !matches {
-				continue
-			}
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		if !killSelected[pid] {
+			continue
+		}
+		matches, err := plan.selectedProcessStillMatchesAfterTerm(pid)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			continue
+		}
+		if err := plan.sendSignal(handles, pid, syscall.SIGKILL); err != nil {
+			return err
 		}
 	}
-	deadline = time.Now().Add(time.Second)
+	deadline = time.Now().Add(nativeKillWait)
 	for time.Now().Before(deadline) {
 		alive := false
 		for _, pid := range plan.pids {
-			alive = alive || nativeProcessExists(pid)
+			alive = alive || nativeSelectedProcessExists(pid)
 		}
 		if !alive {
 			return nil
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(nativeStopPoll)
 	}
 	return fmt.Errorf("selected native slot processes did not terminate: %v", plan.pids)
 }
 
 type nativeSlotResetStatus struct {
-	Command      string           `json:"command"`
-	Runtime      string           `json:"runtime"`
-	Repo         string           `json:"repo"`
-	Index        int              `json:"index"`
-	Status       string           `json:"status"`
-	Head         string           `json:"head,omitempty"`
-	ManifestPath string           `json:"manifest_path,omitempty"`
-	Capacity     capacity.Summary `json:"capacity"`
+	Command           string                          `json:"command"`
+	Runtime           string                          `json:"runtime"`
+	Repo              string                          `json:"repo"`
+	Index             int                             `json:"index"`
+	Status            string                          `json:"status"`
+	Head              string                          `json:"head,omitempty"`
+	ManifestPath      string                          `json:"manifest_path,omitempty"`
+	SelectedProcesses []nativeSlotResetProcessReceipt `json:"selected_processes,omitempty"`
+	Capacity          capacity.Summary                `json:"capacity"`
+}
+
+type nativeSlotResetProcessReceipt struct {
+	PID           int    `json:"pid"`
+	StartTicks    string `json:"start_ticks"`
+	BootID        string `json:"boot_id,omitempty"`
+	Custody       string `json:"custody"`
+	Rule          string `json:"rule,omitempty"`
+	RootPID       int    `json:"root_pid,omitempty"`
+	TermAttempted bool   `json:"term_attempted,omitempty"`
+	TermOutcome   string `json:"term_outcome,omitempty"`
+	KillAttempted bool   `json:"kill_attempted,omitempty"`
+	KillOutcome   string `json:"kill_outcome,omitempty"`
+}
+
+func (plan *nativeSlotProcessPlan) receipts() []nativeSlotResetProcessReceipt {
+	if plan == nil {
+		return nil
+	}
+	receipts := make([]nativeSlotResetProcessReceipt, 0, len(plan.pids))
+	for _, pid := range plan.pids {
+		receipt := nativeSlotResetProcessReceipt{
+			PID:        pid,
+			StartTicks: plan.starts[pid],
+			BootID:     plan.bootID,
+			Custody:    "native-slot-identity",
+		}
+		if ruleName, ok := plan.adoptedRoots[pid]; ok {
+			receipt.Custody = "source-declared-orphan"
+			receipt.Rule = ruleName
+		} else if rootPID, ok := plan.adoptedDescendants[pid]; ok {
+			receipt.Custody = "source-declared-orphan-descendant"
+			receipt.RootPID = rootPID
+			receipt.Rule = plan.adoptedRoots[rootPID]
+		}
+		if outcome := plan.signalOutcomes[pid]; outcome != nil {
+			receipt.TermAttempted = outcome.termAttempted
+			receipt.TermOutcome = outcome.termOutcome
+			receipt.KillAttempted = outcome.killAttempted
+			receipt.KillOutcome = outcome.killOutcome
+		}
+		receipts = append(receipts, receipt)
+	}
+	return receipts
+}
+
+type nativeSlotResetProcessEffectError struct {
+	cause    error
+	receipts []nativeSlotResetProcessReceipt
+	plans    map[*nativeSlotProcessPlan]bool
+}
+
+func (err *nativeSlotResetProcessEffectError) Error() string {
+	data, marshalErr := json.Marshal(err.receipts)
+	if marshalErr != nil {
+		return fmt.Sprintf("%v: encode native slot process effect receipt: %v", err.cause, marshalErr)
+	}
+	return fmt.Sprintf("%v: native_slot_process_effects=%s", err.cause, data)
+}
+
+func (err *nativeSlotResetProcessEffectError) Unwrap() error {
+	return err.cause
+}
+
+func nativeSlotResetEffectHasPlan(cause error, plan *nativeSlotProcessPlan) bool {
+	if cause == nil || plan == nil {
+		return false
+	}
+	if effect, ok := cause.(*nativeSlotResetProcessEffectError); ok && effect.plans[plan] {
+		return true
+	}
+	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if nativeSlotResetEffectHasPlan(child, plan) {
+				return true
+			}
+		}
+		return false
+	}
+	if wrapped, ok := cause.(interface{ Unwrap() error }); ok {
+		return nativeSlotResetEffectHasPlan(wrapped.Unwrap(), plan)
+	}
+	return false
+}
+
+func (plan *nativeSlotProcessPlan) withEffectReceipt(cause error) error {
+	if plan == nil || cause == nil {
+		return cause
+	}
+	if nativeSlotResetEffectHasPlan(cause, plan) {
+		return cause
+	}
+	hasEffect := false
+	for _, outcome := range plan.signalOutcomes {
+		if outcome != nil && (outcome.termAttempted || outcome.killAttempted) {
+			hasEffect = true
+			break
+		}
+	}
+	if !hasEffect {
+		return cause
+	}
+	receipts := plan.receipts()
+	plans := map[*nativeSlotProcessPlan]bool{plan: true}
+	var existing *nativeSlotResetProcessEffectError
+	if errors.As(cause, &existing) {
+		receipts = append(append([]nativeSlotResetProcessReceipt(nil), existing.receipts...), receipts...)
+		for existingPlan := range existing.plans {
+			plans[existingPlan] = true
+		}
+	}
+	return &nativeSlotResetProcessEffectError{cause: cause, receipts: receipts, plans: plans}
 }
 
 type nativeSlotResetLock struct {
@@ -506,6 +1192,18 @@ func printNativeSlotResetStatus(status nativeSlotResetStatus, format string) err
 	if status.ManifestPath != "" {
 		fmt.Fprintf(os.Stdout, "manifest: %s\n", status.ManifestPath)
 	}
+	for _, process := range status.SelectedProcesses {
+		fmt.Fprintf(
+			os.Stdout,
+			"selected_process: pid=%d start_ticks=%s custody=%s rule=%s root_pid=%d boot_id=%s\n",
+			process.PID,
+			process.StartTicks,
+			process.Custody,
+			process.Rule,
+			process.RootPID,
+			process.BootID,
+		)
+	}
 	fmt.Fprintf(os.Stdout, "runtime_ready: %d/%d\nrepo_ready: %d/%d\n", status.Capacity.RuntimeReady, status.Capacity.Total, status.Capacity.RepoReady, status.Capacity.Total)
 	return nil
 }
@@ -537,6 +1235,10 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		return err
 	}
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
+	if err != nil {
+		return err
+	}
+	orphanRules, err := normalizeNativeSlotOrphanRules(cfg.Native.ResetOrphanProcesses)
 	if err != nil {
 		return err
 	}
@@ -642,11 +1344,19 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		sandboxHome:     selectedPlan.Agent.SandboxHome,
 		stateRoot:       selectedPlan.Agent.StateRoot,
 		sandboxState:    selectedPlan.Agent.SandboxStateRoot,
+		orphanRules:     orphanRules,
+	}
+	processIdentity.owner, err = discoverNativeSlotOwner(processIdentity)
+	if err != nil {
+		return err
 	}
 	processPlan, err := planNativeSlotProcesses(processIdentity, ctx.DryRun)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		retErr = processPlan.withEffectReceipt(retErr)
+	}()
 	if err := processPlan.Stop(); err != nil {
 		return err
 	}
@@ -700,11 +1410,16 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		}
 		cleanupPlan, planErr := wtx.PlanNativeSlotReset(resetOptions)
 		if planErr != nil {
-			return errors.Join(cause, processErr, fmt.Errorf("plan selected-slot cleanup after failed reconstruction: %w", planErr), cleanupCreatedBroker())
+			return cleanupProcesses.withEffectReceipt(errors.Join(
+				cause,
+				processErr,
+				fmt.Errorf("plan selected-slot cleanup after failed reconstruction: %w", planErr),
+				cleanupCreatedBroker(),
+			))
 		}
 		cleanupErr := cleanupPlan.Apply()
 		brokerErr := cleanupCreatedBroker()
-		return errors.Join(cause, processErr, cleanupErr, brokerErr)
+		return cleanupProcesses.withEffectReceipt(errors.Join(cause, processErr, cleanupErr, brokerErr))
 	}
 
 	if !ctx.DryRun {
@@ -787,6 +1502,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	}
 	return printNativeSlotResetStatus(nativeSlotResetStatus{
 		Command: "reset", Runtime: "native", Repo: declaredRepo, Index: parsed.index,
-		Status: "ready", Head: head, ManifestPath: manifestPath, Capacity: summary,
+		Status: "ready", Head: head, ManifestPath: manifestPath,
+		SelectedProcesses: processPlan.receipts(), Capacity: summary,
 	}, parsed.format)
 }

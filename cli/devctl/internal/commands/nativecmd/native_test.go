@@ -13,7 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
@@ -1150,6 +1152,548 @@ func TestPlanNativeSlotProcessesSelectsOnlyExactSlotIdentity(t *testing.T) {
 	writeProc(104, 1, map[string]string{}, identity.hostWorktree)
 	if _, err := planNativeSlotProcesses(identity, true); err == nil || !strings.Contains(err.Error(), "unowned active process 104") {
 		t.Fatalf("unowned process error = %v", err)
+	}
+}
+
+type nativeProcFixture struct {
+	pid        int
+	ppid       int
+	start      string
+	uid        uint32
+	gid        uint32
+	environ    map[string]string
+	args       []string
+	cwd        string
+	executable string
+	fdPath     string
+}
+
+func writeNativeProcFixtureStat(t *testing.T, root string, fixture nativeProcFixture) {
+	t.Helper()
+	fields := []string{"S", strconv.Itoa(fixture.ppid)}
+	for len(fields) < 20 {
+		fields = append(fields, "0")
+	}
+	fields[19] = fixture.start
+	if err := os.WriteFile(
+		filepath.Join(root, strconv.Itoa(fixture.pid), "stat"),
+		[]byte(fmt.Sprintf("%d (fixture) %s\n", fixture.pid, strings.Join(fields, " "))),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNativeProcFixture(t *testing.T, root string, fixture nativeProcFixture) {
+	t.Helper()
+	proc := filepath.Join(root, strconv.Itoa(fixture.pid))
+	if err := os.MkdirAll(filepath.Join(proc, "fd"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var environment []string
+	for key, value := range fixture.environ {
+		environment = append(environment, key+"="+value)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "environ"), []byte(strings.Join(environment, "\x00")+"\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeNativeProcFixtureStat(t, root, fixture)
+	status := fmt.Sprintf(
+		"Uid:\t%d\t%d\t%d\t%d\nGid:\t%d\t%d\t%d\t%d\n",
+		fixture.uid, fixture.uid, fixture.uid, fixture.uid,
+		fixture.gid, fixture.gid, fixture.gid, fixture.gid,
+	)
+	if err := os.WriteFile(filepath.Join(proc, "status"), []byte(status), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "cmdline"), []byte(strings.Join(fixture.args, "\x00")+"\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.cwd != "" {
+		if err := os.Symlink(fixture.cwd, filepath.Join(proc, "cwd")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fixture.executable != "" {
+		if err := os.Symlink(fixture.executable, filepath.Join(proc, "exe")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fixture.fdPath != "" {
+		if err := os.Symlink(fixture.fdPath, filepath.Join(proc, "fd", "9")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func nativeSlotOrphanTestIdentity(t *testing.T) (nativeSlotProcessIdentity, nativeProcFixture) {
+	t.Helper()
+	rules, err := normalizeNativeSlotOrphanRules([]config.NativeResetOrphanProcess{{
+		Name:                    "product-sbt-server",
+		ExecutableName:          "java",
+		ArgumentsBeforeLauncher: []string{"-Xss64m", "-Xmx6g", "-jar"},
+		LauncherRelativePath:    "tools/sbt-launch-2.0.0-RC8.jar",
+		CodexHomeRoot:           "/tmp/fleet-native-product-governance",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := nativeSlotProcessIdentity{
+		index:           1,
+		hostWorktree:    "/host/worktrees/agent1/ouroboros-ide",
+		sandboxWorktree: "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
+		hostHome:        "/host/worktrees/agent1/ouroboros-ide/.devhome-agent1",
+		sandboxHome:     "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
+		stateRoot:       "/host/state/dev-all-agent1",
+		sandboxState:    "/agent-state/dev-all-agent1",
+		owner:           &nativeSlotOwner{uid: 1000, gid: 100},
+		orphanRules:     rules,
+	}
+	executable := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openjdk/bin/java"
+	launcher := filepath.Join(identity.sandboxWorktree, rules[0].launcherRelativePath)
+	fixture := nativeProcFixture{
+		pid:   201,
+		ppid:  1,
+		start: "12345",
+		uid:   1000,
+		gid:   100,
+		environ: map[string]string{
+			"HOME":       identity.sandboxHome,
+			"CODEX_HOME": "/tmp/fleet-native-product-governance/agent1/control-plane/workspace-submit-artifacts/digest/implement",
+		},
+		args:       []string{executable, "-Xss64m", "-Xmx6g", "-jar", launcher},
+		cwd:        identity.sandboxWorktree,
+		executable: executable,
+		fdPath:     launcher,
+	}
+	return identity, fixture
+}
+
+func TestPlanNativeSlotProcessesAdoptsOnlyDeclaredOrphanAndDescendants(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+	nativeSlotProcRoot = t.TempDir()
+	identity, root := nativeSlotOrphanTestIdentity(t)
+	writeNativeProcFixture(t, nativeSlotProcRoot, root)
+	child := nativeProcFixture{
+		pid:        202,
+		ppid:       root.pid,
+		start:      "12346",
+		uid:        root.uid,
+		gid:        root.gid,
+		environ:    root.environ,
+		args:       []string{"tail", "--pid=201", "-f", "/dev/null"},
+		cwd:        root.cwd,
+		executable: "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-coreutils/bin/tail",
+		fdPath:     filepath.Join(identity.sandboxWorktree, "target", "sbt-control-plane", "server.log"),
+	}
+	writeNativeProcFixture(t, nativeSlotProcRoot, child)
+
+	plan, err := planNativeSlotProcesses(identity, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(plan.pids); got != "[202 201]" {
+		t.Fatalf("selected pids = %s", got)
+	}
+	if plan.adoptedRoots[root.pid] != "product-sbt-server" {
+		t.Fatalf("adopted roots = %#v", plan.adoptedRoots)
+	}
+	if plan.adoptedDescendants[child.pid] != root.pid {
+		t.Fatalf("adopted descendants = %#v", plan.adoptedDescendants)
+	}
+	receipts := plan.receipts()
+	if len(receipts) != 2 || receipts[0].PID != child.pid || receipts[0].Custody != "source-declared-orphan-descendant" ||
+		receipts[0].Rule != "product-sbt-server" || receipts[0].RootPID != root.pid ||
+		receipts[1].PID != root.pid || receipts[1].Custody != "source-declared-orphan" || receipts[1].Rule != "product-sbt-server" {
+		t.Fatalf("process receipts = %#v", receipts)
+	}
+	if matches, err := plan.selectedProcessStillMatches(root.pid); err != nil || !matches {
+		t.Fatalf("root revalidation = %t, %v", matches, err)
+	}
+	if matches, err := plan.selectedProcessStillMatches(child.pid); err != nil || !matches {
+		t.Fatalf("child revalidation = %t, %v", matches, err)
+	}
+
+	root.args[1] = "-Xss32m"
+	if err := os.WriteFile(
+		filepath.Join(nativeSlotProcRoot, strconv.Itoa(root.pid), "cmdline"),
+		[]byte(strings.Join(root.args, "\x00")+"\x00"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if matches, err := plan.selectedProcessStillMatches(root.pid); err == nil || matches || !strings.Contains(err.Error(), "changed before signaling") {
+		t.Fatalf("mutated root revalidation = %t, %v", matches, err)
+	}
+}
+
+func TestPlanNativeSlotProcessesOrdersDescendantsLeafFirst(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+	nativeSlotProcRoot = t.TempDir()
+	identity, root := nativeSlotOrphanTestIdentity(t)
+	root.pid = 303
+	writeNativeProcFixture(t, nativeSlotProcRoot, root)
+	child := nativeProcFixture{
+		pid:        202,
+		ppid:       root.pid,
+		start:      "12346",
+		uid:        root.uid,
+		gid:        root.gid,
+		environ:    map[string]string{},
+		args:       []string{"tail", "--pid=303", "-f", "/dev/null"},
+		cwd:        root.cwd,
+		executable: "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-coreutils/bin/tail",
+		fdPath:     filepath.Join(identity.sandboxWorktree, "target", "sbt-control-plane", "server.log"),
+	}
+	writeNativeProcFixture(t, nativeSlotProcRoot, child)
+	grandchild := child
+	grandchild.pid = 101
+	grandchild.ppid = child.pid
+	grandchild.start = "12347"
+	grandchild.args = []string{"tail", "--pid=202", "-f", "/dev/null"}
+	writeNativeProcFixture(t, nativeSlotProcRoot, grandchild)
+
+	plan, err := planNativeSlotProcesses(identity, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(plan.pids); got != "[101 202 303]" {
+		t.Fatalf("leaf-first selected pids = %s", got)
+	}
+}
+
+func nativeOwnedProcessFixture(identity nativeSlotProcessIdentity, pid int, start string) nativeProcFixture {
+	return nativeProcFixture{
+		pid:   pid,
+		ppid:  1,
+		start: start,
+		uid:   1000,
+		gid:   100,
+		environ: map[string]string{
+			"DEVKIT_NATIVE_AGENT": strconv.Itoa(identity.index),
+			"HOME":                identity.sandboxHome,
+			"CODEX_HOME":          filepath.Join(identity.sandboxHome, ".codex"),
+		},
+		args:       []string{"/nix/store/cccccccccccccccccccccccccccccccc-bash/bin/bash"},
+		cwd:        identity.sandboxWorktree,
+		executable: "/nix/store/cccccccccccccccccccccccccccccccc-bash/bin/bash",
+		fdPath:     filepath.Join(identity.sandboxWorktree, "native.log"),
+	}
+}
+
+func installNativePidfdTestHooks(
+	t *testing.T,
+	send func(int, syscall.Signal) error,
+	exists func(int) bool,
+) {
+	t.Helper()
+	originalOpen := nativeOpenPidfd
+	originalSend := nativeSendPidfdSignal
+	originalClose := nativeClosePidfd
+	originalExists := nativeSelectedProcessExists
+	t.Cleanup(func() {
+		nativeOpenPidfd = originalOpen
+		nativeSendPidfdSignal = originalSend
+		nativeClosePidfd = originalClose
+		nativeSelectedProcessExists = originalExists
+	})
+	nativeOpenPidfd = func(pid int) (int, error) { return pid + 1000, nil }
+	nativeSendPidfdSignal = send
+	nativeClosePidfd = func(int) error { return nil }
+	nativeSelectedProcessExists = exists
+}
+
+func TestNativeSlotProcessStopPrevalidatesWholeSetBeforeAnySignal(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+	nativeSlotProcRoot = t.TempDir()
+	identity, _ := nativeSlotOrphanTestIdentity(t)
+	first := nativeOwnedProcessFixture(identity, 302, "20001")
+	later := nativeOwnedProcessFixture(identity, 301, "20002")
+	writeNativeProcFixture(t, nativeSlotProcRoot, first)
+	writeNativeProcFixture(t, nativeSlotProcRoot, later)
+	plan, err := planNativeSlotProcesses(identity, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(plan.pids); got != "[302 301]" {
+		t.Fatalf("selected pids = %s", got)
+	}
+	later.start = "replacement"
+	writeNativeProcFixtureStat(t, nativeSlotProcRoot, later)
+	var signals []syscall.Signal
+	installNativePidfdTestHooks(t, func(_ int, signal syscall.Signal) error {
+		signals = append(signals, signal)
+		return nil
+	}, func(int) bool { return false })
+	if err := plan.Stop(); err == nil || !strings.Contains(err.Error(), "replaced before signaling") {
+		t.Fatalf("stop drift error = %v", err)
+	}
+	if len(signals) != 0 {
+		t.Fatalf("signals before full-set validation = %v", signals)
+	}
+}
+
+func TestNativeSlotProcessStopSignalsThroughPidfdAfterRevalidation(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+	nativeSlotProcRoot = t.TempDir()
+	identity, _ := nativeSlotOrphanTestIdentity(t)
+	fixture := nativeOwnedProcessFixture(identity, 401, "30001")
+	writeNativeProcFixture(t, nativeSlotProcRoot, fixture)
+	plan, err := planNativeSlotProcesses(identity, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signaledFD int
+	var signaled syscall.Signal
+	installNativePidfdTestHooks(t, func(fd int, signal syscall.Signal) error {
+		signaledFD = fd
+		signaled = signal
+		// Replacement after semantic revalidation cannot retarget the pidfd.
+		if err := os.RemoveAll(filepath.Join(nativeSlotProcRoot, strconv.Itoa(fixture.pid))); err != nil {
+			t.Fatal(err)
+		}
+		return nil
+	}, func(int) bool { return false })
+	if err := plan.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if signaledFD != fixture.pid+1000 || signaled != syscall.SIGTERM {
+		t.Fatalf("pidfd signal = fd %d signal %v", signaledFD, signaled)
+	}
+	receipts := plan.receipts()
+	if len(receipts) != 1 || !receipts[0].TermAttempted || receipts[0].TermOutcome != "sent" {
+		t.Fatalf("effect receipts = %#v", receipts)
+	}
+}
+
+func TestNativeSlotProcessStopEscalatesReparentedDescendantThroughPidfd(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	originalTermWait := nativeTermWait
+	originalKillWait := nativeKillWait
+	originalStopPoll := nativeStopPoll
+	t.Cleanup(func() {
+		nativeSlotProcRoot = originalProcRoot
+		nativeTermWait = originalTermWait
+		nativeKillWait = originalKillWait
+		nativeStopPoll = originalStopPoll
+	})
+	nativeSlotProcRoot = t.TempDir()
+	nativeTermWait = 3 * time.Millisecond
+	nativeKillWait = 3 * time.Millisecond
+	nativeStopPoll = time.Millisecond
+	identity, root := nativeSlotOrphanTestIdentity(t)
+	root.pid = 703
+	root.start = "70001"
+	writeNativeProcFixture(t, nativeSlotProcRoot, root)
+	child := nativeProcFixture{
+		pid:        202,
+		ppid:       root.pid,
+		start:      "70002",
+		uid:        root.uid,
+		gid:        root.gid,
+		environ:    map[string]string{},
+		args:       []string{"tail", "--pid=703", "-f", "/dev/null"},
+		cwd:        root.cwd,
+		executable: "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-coreutils/bin/tail",
+		fdPath:     filepath.Join(identity.sandboxWorktree, "target", "sbt-control-plane", "server.log"),
+	}
+	writeNativeProcFixture(t, nativeSlotProcRoot, child)
+	plan, err := planNativeSlotProcesses(identity, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signals []string
+	childKilled := false
+	installNativePidfdTestHooks(t, func(fd int, signal syscall.Signal) error {
+		pid := fd - 1000
+		signals = append(signals, fmt.Sprintf("%d:%d", pid, signal))
+		if pid == root.pid && signal == syscall.SIGTERM {
+			if err := os.RemoveAll(filepath.Join(nativeSlotProcRoot, strconv.Itoa(root.pid))); err != nil {
+				t.Fatal(err)
+			}
+			child.ppid = 1
+			writeNativeProcFixtureStat(t, nativeSlotProcRoot, child)
+		}
+		if pid == child.pid && signal == syscall.SIGKILL {
+			childKilled = true
+		}
+		return nil
+	}, func(pid int) bool {
+		return pid == child.pid && !childKilled
+	})
+	if err := plan.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		fmt.Sprintf("%d:%d", child.pid, syscall.SIGTERM),
+		fmt.Sprintf("%d:%d", root.pid, syscall.SIGTERM),
+		fmt.Sprintf("%d:%d", child.pid, syscall.SIGKILL),
+	}
+	if fmt.Sprint(signals) != fmt.Sprint(want) {
+		t.Fatalf("pidfd signal sequence = %v, want %v", signals, want)
+	}
+	receipts := plan.receipts()
+	if len(receipts) != 2 || !receipts[0].KillAttempted || receipts[0].KillOutcome != "sent" {
+		t.Fatalf("escalation receipts = %#v", receipts)
+	}
+}
+
+func TestNativeSlotProcessStopRejectsBootIdentityDrift(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	originalReadBootID := nativeReadBootID
+	t.Cleanup(func() {
+		nativeSlotProcRoot = originalProcRoot
+		nativeReadBootID = originalReadBootID
+	})
+	nativeSlotProcRoot = t.TempDir()
+	identity, _ := nativeSlotOrphanTestIdentity(t)
+	fixture := nativeOwnedProcessFixture(identity, 501, "40001")
+	writeNativeProcFixture(t, nativeSlotProcRoot, fixture)
+	plan, err := planNativeSlotProcesses(identity, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signalCount int
+	installNativePidfdTestHooks(t, func(int, syscall.Signal) error {
+		signalCount++
+		return nil
+	}, func(int) bool { return false })
+	nativeReadBootID = func() string { return "different-boot" }
+	if err := plan.Stop(); err == nil || !strings.Contains(err.Error(), "stable boot identity") {
+		t.Fatalf("boot drift error = %v", err)
+	}
+	if signalCount != 0 {
+		t.Fatalf("signals after boot drift = %d", signalCount)
+	}
+}
+
+func TestNativeSlotProcessEffectReceiptSurvivesLaterFailure(t *testing.T) {
+	initial := &nativeSlotProcessPlan{
+		pids:           []int{601},
+		starts:         map[int]string{601: "50001"},
+		bootID:         "test-boot",
+		signalOutcomes: map[int]*nativeSlotProcessSignalOutcome{601: {termAttempted: true, termOutcome: "sent"}},
+	}
+	cleanup := &nativeSlotProcessPlan{
+		pids:           []int{602},
+		starts:         map[int]string{602: "50002"},
+		bootID:         "test-boot",
+		signalOutcomes: map[int]*nativeSlotProcessSignalOutcome{602: {termAttempted: true, termOutcome: "sent"}},
+	}
+	sentinel := errors.New("bootstrap failed")
+	err := initial.withEffectReceipt(sentinel)
+	err = cleanup.withEffectReceipt(errors.Join(err, errors.New("cleanup apply failed")))
+	err = initial.withEffectReceipt(err)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("effect error lost cause: %v", err)
+	}
+	var effect *nativeSlotResetProcessEffectError
+	if !errors.As(err, &effect) || len(effect.receipts) != 2 {
+		t.Fatalf("aggregated effect receipts = %#v", effect)
+	}
+	for _, want := range []string{`native_slot_process_effects=`, `"pid":601`, `"pid":602`, `"term_attempted":true`, `"term_outcome":"sent"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("effect error missing %q: %v", want, err)
+		}
+	}
+}
+
+func TestNativeNixStoreExecutableMatchesResolvedSymlink(t *testing.T) {
+	original := nativeExecutableEvalSymlinks
+	t.Cleanup(func() { nativeExecutableEvalSymlinks = original })
+	argument := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openjdk/bin/java"
+	executable := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-openjdk/lib/openjdk/bin/java"
+	nativeExecutableEvalSymlinks = func(path string) (string, error) {
+		if path != argument {
+			t.Fatalf("resolved path = %q", path)
+		}
+		return executable, nil
+	}
+	if !nativeNixStoreExecutableMatches(executable, argument, "java") {
+		t.Fatal("resolved immutable executable was rejected")
+	}
+	nativeExecutableEvalSymlinks = func(string) (string, error) {
+		return "/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-openjdk/lib/openjdk/bin/java", nil
+	}
+	if nativeNixStoreExecutableMatches(executable, argument, "java") {
+		t.Fatal("foreign resolved executable was accepted")
+	}
+}
+
+func TestPlanNativeSlotProcessesRejectsHostileOrphanEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*nativeSlotProcessIdentity, *nativeProcFixture)
+	}{
+		{name: "no-source-rule", mutate: func(identity *nativeSlotProcessIdentity, _ *nativeProcFixture) { identity.orphanRules = nil }},
+		{name: "wrong-uid", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.uid = 1001 }},
+		{name: "wrong-gid", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.gid = 101 }},
+		{name: "not-parentless", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.ppid = 17 }},
+		{name: "foreign-executable", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.executable = "/usr/bin/java" }},
+		{name: "argument-drift", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.args[1] = "-Xss32m" }},
+		{name: "foreign-launcher", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) {
+			fixture.args[len(fixture.args)-1] = "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide/tools/sbt-launch-2.0.0-RC8.jar"
+		}},
+		{name: "wrong-home", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) {
+			fixture.environ["HOME"] = "/tmp/foreign"
+		}},
+		{name: "wrong-cwd", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.cwd = "/tmp" }},
+		{name: "wrong-codex-home", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) {
+			fixture.environ["CODEX_HOME"] = "/tmp/foreign/agent1/digest/implement"
+		}},
+		{name: "contradictory-native-agent", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) {
+			fixture.environ["DEVKIT_NATIVE_AGENT"] = "2"
+		}},
+		{name: "no-slot-fd", mutate: func(_ *nativeSlotProcessIdentity, fixture *nativeProcFixture) { fixture.fdPath = "" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			originalProcRoot := nativeSlotProcRoot
+			t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+			nativeSlotProcRoot = t.TempDir()
+			identity, fixture := nativeSlotOrphanTestIdentity(t)
+			test.mutate(&identity, &fixture)
+			writeNativeProcFixture(t, nativeSlotProcRoot, fixture)
+			if _, err := planNativeSlotProcesses(identity, true); err == nil || !strings.Contains(err.Error(), "unowned active process 201") {
+				t.Fatalf("hostile orphan error = %v", err)
+			}
+		})
+	}
+}
+
+func TestNormalizeNativeSlotOrphanRulesRejectsUnsafeSourceDeclarations(t *testing.T) {
+	valid := config.NativeResetOrphanProcess{
+		Name:                    "product-sbt-server",
+		ExecutableName:          "java",
+		ArgumentsBeforeLauncher: []string{"-jar"},
+		LauncherRelativePath:    "tools/sbt-launch.jar",
+		CodexHomeRoot:           "/tmp/fleet-native-product-governance",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*config.NativeResetOrphanProcess)
+	}{
+		{name: "missing-name", mutate: func(rule *config.NativeResetOrphanProcess) { rule.Name = "" }},
+		{name: "path-executable", mutate: func(rule *config.NativeResetOrphanProcess) { rule.ExecutableName = "/bin/java" }},
+		{name: "missing-arguments", mutate: func(rule *config.NativeResetOrphanProcess) { rule.ArgumentsBeforeLauncher = nil }},
+		{name: "unsafe-launcher", mutate: func(rule *config.NativeResetOrphanProcess) { rule.LauncherRelativePath = "../launcher.jar" }},
+		{name: "relative-codex-root", mutate: func(rule *config.NativeResetOrphanProcess) { rule.CodexHomeRoot = "tmp/governance" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rule := valid
+			test.mutate(&rule)
+			if _, err := normalizeNativeSlotOrphanRules([]config.NativeResetOrphanProcess{rule}); err == nil {
+				t.Fatal("unsafe orphan rule was accepted")
+			}
+		})
+	}
+	if _, err := normalizeNativeSlotOrphanRules([]config.NativeResetOrphanProcess{valid, valid}); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("duplicate orphan rule error = %v", err)
 	}
 }
 

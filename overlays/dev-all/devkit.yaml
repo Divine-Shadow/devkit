@@ -233,6 +233,20 @@ native:
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
+  # Governed SBT workers can outlive their native launcher after a terminal
+  # governance failure. Native reset may acquire only this exact parentless
+  # launcher shape after independently proving slot owner, HOME, CWD,
+  # CODEX_HOME lineage, stable process identity, and slot-scoped descriptors.
+  # Callers cannot provide a PID or broaden this source declaration.
+  reset_orphan_processes:
+    - name: product-sbt-server
+      executable_name: java
+      arguments_before_launcher:
+        - -Xss64m
+        - -Xmx6g
+        - -jar
+      launcher_relative_path: tools/sbt-launch-2.0.0-RC8.jar
+      codex_home_root: /tmp/fleet-native-product-governance
   isolation_profiles:
     workspace-egress:
       filesystem: workspace-only
