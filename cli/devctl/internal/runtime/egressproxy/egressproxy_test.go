@@ -91,6 +91,35 @@ func TestRepositoryAllowlistScopesSessionManagerToDeclaredRegion(t *testing.T) {
 	}
 }
 
+func TestRepositoryAllowlistAllowsOnlyDeclaredTailscaleAPIHost(t *testing.T) {
+	allowlistPath := filepath.Join("..", "..", "..", "..", "..", "kit", "proxy", "allowlist.txt")
+	allowlist, err := LoadAllowlist(allowlistPath)
+	if err != nil {
+		t.Fatalf("load repository allowlist: %v", err)
+	}
+
+	for _, host := range []string{
+		"api.tailscale.com",
+		"api.tailscale.com:443",
+	} {
+		if !allowlist.Allowed(host) {
+			t.Fatalf("expected declared Tailscale API endpoint %s to be allowed", host)
+		}
+	}
+
+	for _, host := range []string{
+		"tailscale.com",
+		"login.tailscale.com",
+		"evil-api.tailscale.com",
+		"api.tailscale.com.attacker.invalid",
+		"100.100.100.100",
+	} {
+		if allowlist.Allowed(host) {
+			t.Fatalf("expected unrelated Tailscale endpoint %s to be rejected", host)
+		}
+	}
+}
+
 func TestServeChainsConnectThroughConfiguredUpstreamProxy(t *testing.T) {
 	upstream, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

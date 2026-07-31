@@ -53,6 +53,9 @@ api.mistral.ai
 # DNS provider automation
 api.dnsimple.com
 
+# Tailscale policy automation
+api.tailscale.com
+
 # AWS (us-east-2 primary)
 sts.amazonaws.com
 sts.us-east-2.amazonaws.com
