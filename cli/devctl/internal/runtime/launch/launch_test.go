@@ -1135,6 +1135,52 @@ chmod 0600 %q %q
 	}
 }
 
+func TestSeedTerraformProviderCredentialsReportsOnlyApprovedHydratorReason(t *testing.T) {
+	root := t.TempDir()
+	hydrator := filepath.Join(root, "hydrate")
+	if err := os.WriteFile(hydrator, []byte(`#!/bin/sh
+printf '%s\n' 'Terraform provider credential hydration failed: approved DNSimple token source is unavailable' >&2
+exit 1
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousHydrator := terraformProviderCredentialHydrator
+	terraformProviderCredentialHydrator = hydrator
+	t.Cleanup(func() { terraformProviderCredentialHydrator = previousHydrator })
+
+	p := nativeplan.Plan{Agent: agent.Spec{
+		ID:       agent.ID{Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 1},
+		HostHome: filepath.Join(root, "agent1-home"),
+	}}
+	err := SeedTerraformProviderCredentials(p)
+	if err == nil || !strings.Contains(err.Error(), "approved DNSimple token source is unavailable") {
+		t.Fatalf("approved hydrator reason error = %v", err)
+	}
+}
+
+func TestSeedTerraformProviderCredentialsRedactsUnapprovedHydratorStderr(t *testing.T) {
+	root := t.TempDir()
+	hydrator := filepath.Join(root, "hydrate")
+	if err := os.WriteFile(hydrator, []byte(`#!/bin/sh
+printf '%s\n' 'secret-bearing provider output' >&2
+exit 1
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousHydrator := terraformProviderCredentialHydrator
+	terraformProviderCredentialHydrator = hydrator
+	t.Cleanup(func() { terraformProviderCredentialHydrator = previousHydrator })
+
+	p := nativeplan.Plan{Agent: agent.Spec{
+		ID:       agent.ID{Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 1},
+		HostHome: filepath.Join(root, "agent1-home"),
+	}}
+	err := SeedTerraformProviderCredentials(p)
+	if err == nil || err.Error() != "source-derived Terraform provider credential hydration failed" {
+		t.Fatalf("unapproved hydrator stderr was not redacted: %v", err)
+	}
+}
+
 func TestCopyProtectedProviderCredentialRejectsSymlinkAndUnsafeMode(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")

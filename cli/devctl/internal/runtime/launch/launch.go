@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -139,8 +140,12 @@ func SeedTerraformProviderCredentials(p nativeplan.Plan) error {
 	}
 	cmd := exec.Command(hydrator)
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if reason := terraformProviderCredentialHydrationFailureReason(stderr.String()); reason != "" {
+			return fmt.Errorf("source-derived Terraform provider credential hydration failed: %s", reason)
+		}
 		return fmt.Errorf("source-derived Terraform provider credential hydration failed")
 	}
 	files := []struct {
@@ -162,6 +167,29 @@ func SeedTerraformProviderCredentials(p nativeplan.Plan) error {
 		}
 	}
 	return nil
+}
+
+func terraformProviderCredentialHydrationFailureReason(stderr string) string {
+	const prefix = "Terraform provider credential hydration failed: "
+	allowed := map[string]struct{}{
+		"protected credential source is not a regular non-symlink file": {},
+		"protected credential source mode is not private":               {},
+		"Google ADC source does not have an accepted credential schema": {},
+		"approved DNSimple token source is unavailable":                 {},
+		"approved DNSimple account source is unavailable":               {},
+		"approved DNSimple credential source returned an empty value":   {},
+		"approved DNSimple credential must be one line":                 {},
+	}
+	for _, line := range strings.Split(stderr, "\n") {
+		reason := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		if _, ok := allowed[reason]; ok {
+			return reason
+		}
+	}
+	return ""
 }
 
 func copyProtectedProviderCredential(source, target string) error {
