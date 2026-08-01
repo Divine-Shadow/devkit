@@ -52,6 +52,14 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	tags ...string,
 ) string {
 	t.Helper()
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envExecutable, err := exec.LookPath("env")
+	if err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(t.TempDir(), "runtime", "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
@@ -66,6 +74,8 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 		strings.Join([]string{
 			"-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=" + sshExecutable,
 			"-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=" + knownHosts,
+			"-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=" + envExecutable,
+			"-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=" + gitExecutable,
 		}, " "),
 	)
 	args = append(args, "-o", bin, "./")
@@ -445,7 +455,7 @@ windows:
 		{name: "tmux-add-cd", args: []string{"tmux-add-cd", "1", ".", "--session", "native-front", "--name", "agent-1"}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "tmux-apply-layout", args: []string{"tmux-apply-layout", "--file", layoutPath}, want: " -p " + project + " exec 1 --repo " + repo},
 		{name: "worktrees-init", args: []string{"worktrees-init", repo, "1"}, want: "Initialize worktrees for " + repo},
-		{name: "worktrees-setup", args: []string{"worktrees-setup", repo, "1"}, want: "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C"},
+		{name: "worktrees-setup", args: []string{"worktrees-setup", repo, "1"}, want: "GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /"},
 		{name: "run", args: []string{"run", repo, "1"}, want: " -p " + project + " up --repo " + repo + " --count 1"},
 		{name: "worktrees-branch", args: []string{"worktrees-branch", repo, "1", "agent-test"}, want: "git -C"},
 		{name: "worktrees-status", args: []string{"worktrees-status", repo, "--index", "1"}, want: "git -C"},

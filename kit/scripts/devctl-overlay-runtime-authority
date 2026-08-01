@@ -54,7 +54,11 @@ jq -e --arg authority "$devctl" --arg sandbox /workspaces/dev/devkit \
   .runtime_authority_root == $authority and
   .devkit_sandbox_root == $sandbox and
   .flake == $flake and
-  (.launcher_args | index($flake)) != null
+  (.runtime_launcher
+    | (startswith("/nix/store/") and
+       endswith("/bin/dev-all-runtime-shell"))) and
+  (.runtime_launcher as $runtime_launcher |
+   any(.launcher_args[]; contains($runtime_launcher)))
 ' "$tmp_dir/plan.json" >/dev/null
 
 printf 'devctl-overlay-runtime-authority: ok (%s -> %s)\n' "$devctl" "$shell_drv"

@@ -24,6 +24,7 @@ type Config struct {
 
 type Allowlist struct {
 	domains map[string]bool
+	exact   map[string]bool
 }
 
 type bufferedConn struct {
@@ -55,6 +56,7 @@ func LoadAllowlist(path string) (Allowlist, error) {
 		return Allowlist{}, err
 	}
 	domains := map[string]bool{}
+	exact := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -63,12 +65,19 @@ func LoadAllowlist(path string) (Allowlist, error) {
 		if fields := strings.Fields(line); len(fields) > 0 {
 			line = fields[0]
 		}
-		line = strings.TrimPrefix(strings.ToLower(line), ".")
+		line = strings.ToLower(line)
+		exactOnly := strings.HasPrefix(line, "=")
+		line = strings.TrimPrefix(line, "=")
+		line = strings.TrimPrefix(line, ".")
 		if line != "" {
-			domains[line] = true
+			if exactOnly {
+				exact[line] = true
+			} else {
+				domains[line] = true
+			}
 		}
 	}
-	return Allowlist{domains: domains}, nil
+	return Allowlist{domains: domains, exact: exact}, nil
 }
 
 func (a Allowlist) Allowed(hostport string) bool {
@@ -83,7 +92,7 @@ func (a Allowlist) Allowed(hostport string) bool {
 	if net.ParseIP(host) != nil {
 		return false
 	}
-	if a.domains[host] {
+	if a.exact[host] || a.domains[host] {
 		return true
 	}
 	for domain := range a.domains {
@@ -95,9 +104,12 @@ func (a Allowlist) Allowed(hostport string) bool {
 }
 
 func (a Allowlist) Domains() []string {
-	domains := make([]string, 0, len(a.domains))
+	domains := make([]string, 0, len(a.domains)+len(a.exact))
 	for domain := range a.domains {
 		domains = append(domains, domain)
+	}
+	for domain := range a.exact {
+		domains = append(domains, "="+domain)
 	}
 	sort.Strings(domains)
 	return domains

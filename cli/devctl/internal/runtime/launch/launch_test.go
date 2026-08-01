@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -886,6 +887,7 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 }
 
 func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
+	t.Setenv(nativeplan.ManagementControllerProfileEnvironment, "")
 	withProductGovernanceEnvironmentFixture(t)
 	tmp := t.TempDir()
 	devRoot := filepath.Join(tmp, "dev")
@@ -1069,6 +1071,92 @@ func TestPrepareRequiresExistingWorktree(t *testing.T) {
 	}
 	if err := Prepare(p); err == nil {
 		t.Fatalf("expected missing worktree error")
+	}
+}
+
+func TestSeedTerraformProviderCredentialsUsesFixedHydratorAndExactConsumer(t *testing.T) {
+	root := t.TempDir()
+	credentialRoot := filepath.Join(root, "provider-credentials")
+	hydrator := filepath.Join(root, "hydrate")
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+install -d -m 0700 %q
+printf 'fixture-google-adc' > %q
+printf 'fixture-dnsimple-env' > %q
+chmod 0600 %q %q
+`, credentialRoot,
+		filepath.Join(credentialRoot, "google-adc.json"),
+		filepath.Join(credentialRoot, "dnsimple-provider.env"),
+		filepath.Join(credentialRoot, "google-adc.json"),
+		filepath.Join(credentialRoot, "dnsimple-provider.env"))
+	if err := os.WriteFile(hydrator, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	previousHydrator := terraformProviderCredentialHydrator
+	previousRoot := terraformProviderCredentialRoot
+	terraformProviderCredentialHydrator = hydrator
+	terraformProviderCredentialRoot = credentialRoot
+	t.Cleanup(func() {
+		terraformProviderCredentialHydrator = previousHydrator
+		terraformProviderCredentialRoot = previousRoot
+	})
+
+	home := filepath.Join(root, "agent1-home")
+	p := nativeplan.Plan{Agent: agent.Spec{
+		ID:       agent.ID{Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 1},
+		HostHome: home,
+	}}
+	if err := SeedTerraformProviderCredentials(p); err != nil {
+		t.Fatalf("SeedTerraformProviderCredentials: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".config", "gcloud", "application_default_credentials.d", "ouroboros-ai-498921-codex-terraform.json"),
+		filepath.Join(home, ".config", "ouroboros", "dnsimple-provider.env"),
+	} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			t.Fatalf("credential target mode = %v", info.Mode())
+		}
+	}
+
+	nonOwnerHome := filepath.Join(root, "agent2-home")
+	nonOwner := nativeplan.Plan{Agent: agent.Spec{
+		ID:       agent.ID{Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 2},
+		HostHome: nonOwnerHome,
+	}}
+	if err := SeedTerraformProviderCredentials(nonOwner); err != nil {
+		t.Fatalf("non-owner seed: %v", err)
+	}
+	if _, err := os.Stat(nonOwnerHome); !os.IsNotExist(err) {
+		t.Fatalf("non-owner consumer received provider credentials")
+	}
+}
+
+func TestCopyProtectedProviderCredentialRejectsSymlinkAndUnsafeMode(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(source, []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyProtectedProviderCredential(source, target); err == nil || !strings.Contains(err.Error(), "unsafe mode") {
+		t.Fatalf("unsafe source mode error = %v", err)
+	}
+	if err := os.Chmod(source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(root, "source-link")
+	if err := os.Symlink(source, symlink); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyProtectedProviderCredential(symlink, target); err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("symlink source error = %v", err)
 	}
 }
 

@@ -28,6 +28,11 @@ type Command struct {
 	Dir  string
 }
 
+var (
+	terraformProviderCredentialHydrator = "/run/current-system/sw/bin/terraform-ouro-provider-credential-hydrate"
+	terraformProviderCredentialRoot     = "/run/terraform-ouro-provider-credentials"
+)
+
 func Prepare(p nativeplan.Plan) error {
 	sshAuthority, err := resolvePackageSSHAuthority()
 	if err != nil {
@@ -97,6 +102,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
 		return err
 	}
+	if err := SeedTerraformProviderCredentials(p); err != nil {
+		return err
+	}
 	if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
 		return err
 	}
@@ -111,6 +119,108 @@ func Prepare(p nativeplan.Plan) error {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
 	}
+	return nil
+}
+
+// SeedTerraformProviderCredentials projects only the two provider credential
+// files owned by the source-derived WSL hydrator into the sole Terraform
+// acceptance consumer. The helper has no caller-supplied source, target, or
+// secret identifier; Devkit never reads a credential from an ambient path.
+func SeedTerraformProviderCredentials(p nativeplan.Plan) error {
+	if p.Agent.ID.Project != "ouroboros-terraform" ||
+		p.Agent.ID.Repo != "ouroboros-terraform" ||
+		p.Agent.ID.Index != 1 {
+		return nil
+	}
+	hydrator := filepath.Clean(strings.TrimSpace(terraformProviderCredentialHydrator))
+	root := filepath.Clean(strings.TrimSpace(terraformProviderCredentialRoot))
+	if !filepath.IsAbs(hydrator) || !filepath.IsAbs(root) {
+		return fmt.Errorf("Terraform provider credential authority is not absolute")
+	}
+	cmd := exec.Command(hydrator)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("source-derived Terraform provider credential hydration failed")
+	}
+	files := []struct {
+		source string
+		target string
+	}{
+		{
+			source: filepath.Join(root, "google-adc.json"),
+			target: filepath.Join(p.Agent.HostHome, ".config", "gcloud", "application_default_credentials.d", "ouroboros-ai-498921-codex-terraform.json"),
+		},
+		{
+			source: filepath.Join(root, "dnsimple-provider.env"),
+			target: filepath.Join(p.Agent.HostHome, ".config", "ouroboros", "dnsimple-provider.env"),
+		},
+	}
+	for _, file := range files {
+		if err := copyProtectedProviderCredential(file.source, file.target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyProtectedProviderCredential(source, target string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect protected provider credential source: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("protected provider credential source must be a regular non-symlink file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("protected provider credential source has unsafe mode %04o", info.Mode().Perm())
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read protected provider credential source: %w", err)
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create protected provider credential target directory: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("chmod protected provider credential target directory: %w", err)
+	}
+	if targetInfo, err := os.Lstat(target); err == nil {
+		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.Mode().IsRegular() {
+			return fmt.Errorf("protected provider credential target must be a regular non-symlink file")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect protected provider credential target: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".provider-credential-")
+	if err != nil {
+		return fmt.Errorf("create protected provider credential staging file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod protected provider credential staging file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write protected provider credential staging file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync protected provider credential staging file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close protected provider credential staging file: %w", err)
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return fmt.Errorf("install protected provider credential target: %w", err)
+	}
+	committed = true
 	return nil
 }
 

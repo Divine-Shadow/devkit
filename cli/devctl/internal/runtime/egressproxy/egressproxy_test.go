@@ -35,6 +35,31 @@ func TestAllowlistRejectsSiblingSuffixesAndIPs(t *testing.T) {
 	}
 }
 
+func TestAllowlistExactEntryRejectsSubdomainsAndSuffixSpoofs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "allowlist.txt")
+	if err := os.WriteFile(path, []byte("=api.example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allowlist, err := LoadAllowlist(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"api.example.com", "api.example.com:443"} {
+		if !allowlist.Allowed(host) {
+			t.Fatalf("expected exact endpoint %s to be allowed", host)
+		}
+	}
+	for _, host := range []string{
+		"child.api.example.com",
+		"sibling.example.com",
+		"api.example.com.attacker.invalid",
+	} {
+		if allowlist.Allowed(host) {
+			t.Fatalf("expected non-exact endpoint %s to be rejected", host)
+		}
+	}
+}
+
 func TestRepositoryAllowlistScopesSessionManagerToDeclaredRegion(t *testing.T) {
 	allowlistPath := filepath.Join("..", "..", "..", "..", "..", "kit", "proxy", "allowlist.txt")
 	allowlist, err := LoadAllowlist(allowlistPath)
@@ -117,6 +142,78 @@ func TestRepositoryAllowlistAllowsOnlyDeclaredTailscaleAPIHost(t *testing.T) {
 		if allowlist.Allowed(host) {
 			t.Fatalf("expected unrelated Tailscale endpoint %s to be rejected", host)
 		}
+	}
+}
+
+func TestRepositoryAllowlistScopesTerraformAcceptanceEndpoints(t *testing.T) {
+	allowlistPath := filepath.Join("..", "..", "..", "..", "..", "kit", "proxy", "allowlist.txt")
+	allowlist, err := LoadAllowlist(allowlistPath)
+	if err != nil {
+		t.Fatalf("load repository allowlist: %v", err)
+	}
+
+	for _, host := range []string{
+		"api.tailscale.com",
+		"monitoring.us-east-2.amazonaws.com",
+		"acm.us-east-2.amazonaws.com",
+		"acm.us-east-1.amazonaws.com",
+		"cloudfront.amazonaws.com",
+	} {
+		if !allowlist.Allowed(host) || !allowlist.Allowed(host+":443") {
+			t.Fatalf("expected Terraform acceptance endpoint %s to be allowed", host)
+		}
+	}
+
+	for _, host := range []string{
+		"sts.us-east-1.amazonaws.com",
+		"monitoring.us-east-1.amazonaws.com",
+		"evil-monitoring.us-east-2.amazonaws.com",
+		"child.monitoring.us-east-2.amazonaws.com",
+		"acm.us-east-1.amazonaws.com.attacker.invalid",
+		"api.tailscale.com.attacker.invalid",
+		"unrelated.amazonaws.com",
+	} {
+		if allowlist.Allowed(host) {
+			t.Fatalf("expected unrelated or spoofed endpoint %s to be rejected", host)
+		}
+	}
+
+	dynamodbCount := 0
+	for host := range allowlist.exact {
+		if strings.HasSuffix(host, ".ddb.us-east-2.amazonaws.com") {
+			dynamodbCount++
+			account := strings.TrimSuffix(host, ".ddb.us-east-2.amazonaws.com")
+			if len(account) != 12 || strings.Trim(account, "0123456789") != "" {
+				t.Fatalf("account-scoped DynamoDB endpoint is malformed")
+			}
+			if !allowlist.Allowed(host) || allowlist.Allowed("child."+host) || allowlist.Allowed(host+".attacker.invalid") {
+				t.Fatalf("account-scoped DynamoDB endpoint is not exact")
+			}
+		}
+	}
+	if dynamodbCount != 1 {
+		t.Fatalf("expected exactly one exact account-scoped DynamoDB endpoint, got %d", dynamodbCount)
+	}
+
+	dnsPath := filepath.Join("..", "..", "..", "..", "..", "kit", "dns", "dnsmasq.conf")
+	dnsData, err := os.ReadFile(dnsPath)
+	if err != nil {
+		t.Fatalf("load repository DNS policy: %v", err)
+	}
+	for _, host := range []string{
+		"api.tailscale.com",
+		"monitoring.us-east-2.amazonaws.com",
+		"acm.us-east-2.amazonaws.com",
+		"acm.us-east-1.amazonaws.com",
+		"cloudfront.amazonaws.com",
+	} {
+		line := "server=/" + host + "/1.1.1.1"
+		if strings.Count(string(dnsData), line) != 1 {
+			t.Fatalf("expected exact DNS policy line once: %s", line)
+		}
+	}
+	if strings.Contains(string(dnsData), "server=/sts.us-east-1.amazonaws.com/") {
+		t.Fatal("us-east-1 STS must remain absent from DNS policy")
 	}
 }
 

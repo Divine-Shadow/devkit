@@ -208,6 +208,7 @@ func TestGovernedWorkspaceProjectsImmutableGovernanceEnvelopeAndCarriesBrokerSel
 }
 
 func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testing.T) {
+	t.Setenv(ManagementControllerProfileEnvironment, "")
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
 	execSocket := filepath.Join(root, "run", "fleet-controller-exec", "control.sock")

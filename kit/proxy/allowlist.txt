@@ -54,7 +54,7 @@ api.mistral.ai
 api.dnsimple.com
 
 # Tailscale policy automation
-api.tailscale.com
+=api.tailscale.com
 
 # AWS (us-east-2 primary)
 sts.amazonaws.com
@@ -80,6 +80,11 @@ inbound-smtp.us-east-1.amazonaws.com
 inbound-smtp.us-east-2.amazonaws.com
 s3.us-east-1.amazonaws.com
 cloudformation.us-east-2.amazonaws.com
+=monitoring.us-east-2.amazonaws.com
+=acm.us-east-2.amazonaws.com
+=acm.us-east-1.amazonaws.com
+=cloudfront.amazonaws.com
+=339713140717.ddb.us-east-2.amazonaws.com
 lambda.us-east-2.amazonaws.com
 logs.us-east-2.amazonaws.com
 autoscaling.us-east-2.amazonaws.com
