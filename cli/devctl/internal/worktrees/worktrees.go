@@ -402,7 +402,10 @@ func existingGitCheckout(wt, gitExecutable string) (bool, error) {
 	return top == resolvedWT, nil
 }
 
-func verifyFreshNativeWorktree(wt, baseRef, gitExecutable string) error {
+// VerifyFreshNativeWorktree proves that a package-owned worktree is on the
+// declared branch, tracks the fetched source-derived base ref, and is clean
+// at that exact ref.
+func VerifyFreshNativeWorktree(wt, branch, baseRef, gitExecutable string) error {
 	ok, err := existingGitCheckout(wt, gitExecutable)
 	if err != nil {
 		return err
@@ -411,6 +414,20 @@ func verifyFreshNativeWorktree(wt, baseRef, gitExecutable string) error {
 		out, err := exec.Command(gitExecutable, "-C", wt, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir").CombinedOutput()
 		gitFile, _ := os.ReadFile(filepath.Join(wt, ".git"))
 		return fmt.Errorf("fresh native worktree %s is not a Git checkout: %v: %s; gitdir=%q", wt, err, strings.TrimSpace(string(out)), strings.TrimSpace(string(gitFile)))
+	}
+	actualBranch, result := execx.Capture(context.Background(), gitExecutable, "-C", wt, "symbolic-ref", "--short", "HEAD")
+	if result.Code != 0 {
+		return fmt.Errorf("read fresh native worktree branch %s: exit %d", wt, result.Code)
+	}
+	if strings.TrimSpace(actualBranch) != branch {
+		return fmt.Errorf("fresh native worktree %s branch %s does not match declared branch %s", wt, strings.TrimSpace(actualBranch), branch)
+	}
+	upstream, result := execx.Capture(context.Background(), gitExecutable, "-C", wt, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+	if result.Code != 0 {
+		return fmt.Errorf("read fresh native worktree upstream %s: exit %d", wt, result.Code)
+	}
+	if strings.TrimSpace(upstream) != baseRef {
+		return fmt.Errorf("fresh native worktree %s upstream %s does not match declared base %s", wt, strings.TrimSpace(upstream), baseRef)
 	}
 	head, result := execx.Capture(context.Background(), gitExecutable, "-C", wt, "rev-parse", "HEAD")
 	if result.Code != 0 {
@@ -431,6 +448,27 @@ func verifyFreshNativeWorktree(wt, baseRef, gitExecutable string) error {
 		return fmt.Errorf("fresh native worktree %s is dirty", wt)
 	}
 	return nil
+}
+
+func reconstructSelectedNativeWorktree(
+	wt, branch, baseRef, envExecutable string,
+	envLocalGit func(...string) []string,
+	gitExecutable string,
+) error {
+	// ReconstructSelected is set only by the native slot reset lane, after that
+	// lane has validated package-owned geometry and acquired its destructive
+	// reset lock. Ordinary setup retains non-destructive existing-worktree
+	// behavior.
+	if err := run(false, envExecutable, envLocalGit("-C", wt, "checkout", "--force", "-B", branch, baseRef)...); err != nil {
+		return fmt.Errorf("reset selected native worktree %s to %s: %w", wt, baseRef, err)
+	}
+	if err := run(false, envExecutable, envLocalGit("-C", wt, "clean", "-ffd")...); err != nil {
+		return fmt.Errorf("remove untracked state from selected native worktree %s: %w", wt, err)
+	}
+	if err := run(false, envExecutable, envLocalGit("-C", wt, "branch", "--set-upstream-to="+baseRef, branch)...); err != nil {
+		return err
+	}
+	return VerifyFreshNativeWorktree(wt, branch, baseRef, gitExecutable)
 }
 
 // Setup ensures worktrees and branches exist for agents 1..n.
@@ -823,7 +861,11 @@ type NativeOptions struct {
 	WorktreeRoot     string
 	GitSSHCommand    string
 	RequireSSHOrigin bool
-	DryRun           bool
+	// ReconstructSelected authorizes destructive convergence of the exact
+	// Index-selected package-owned worktree. It is invalid without Index and is
+	// reserved for the native slot reset lane.
+	ReconstructSelected bool
+	DryRun              bool
 }
 
 // NativeResetOptions describes the one destructive native lifecycle boundary.
@@ -1530,6 +1572,9 @@ func SetupNative(opts NativeOptions) error {
 	if runtimeagent.IsWorkspaceRootRepo(repo) {
 		return nil
 	}
+	if opts.ReconstructSelected && opts.Index < 1 {
+		return fmt.Errorf("selected native worktree reconstruction requires an explicit slot index")
+	}
 	count := opts.Count
 	if count < 1 {
 		count = 1
@@ -1644,6 +1689,18 @@ func SetupNative(opts NativeOptions) error {
 				if err := rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir); err != nil {
 					return err
 				}
+				if opts.ReconstructSelected {
+					if err := reconstructSelectedNativeWorktree(
+						wt,
+						branch,
+						"origin/"+baseBranch,
+						envExecutable,
+						envLocalGit,
+						gitExecutable,
+					); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 		}
@@ -1685,7 +1742,7 @@ func SetupNative(opts NativeOptions) error {
 			return err
 		}
 		if !opts.DryRun {
-			if err := verifyFreshNativeWorktree(wt, "origin/"+baseBranch, gitExecutable); err != nil {
+			if err := VerifyFreshNativeWorktree(wt, branch, "origin/"+baseBranch, gitExecutable); err != nil {
 				return err
 			}
 		}

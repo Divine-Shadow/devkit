@@ -742,15 +742,16 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		return cleanupFailedSlot(err)
 	}
 	worktreeOptions := wtx.NativeOptions{
-		DevkitRoot:       filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), "devkit"),
-		Repo:             declaredRepo,
-		Origin:           strings.TrimSpace(cfg.Defaults.Origin),
-		Index:            parsed.index,
-		Count:            count,
-		BaseBranch:       baseBranch,
-		BranchPrefix:     branchPrefix,
-		WorktreeRoot:     opts.WorktreeRoot,
-		RequireSSHOrigin: declaredRepo == "ouroboros-ide",
+		DevkitRoot:          filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), "devkit"),
+		Repo:                declaredRepo,
+		Origin:              strings.TrimSpace(cfg.Defaults.Origin),
+		Index:               parsed.index,
+		Count:               count,
+		BaseBranch:          baseBranch,
+		BranchPrefix:        branchPrefix,
+		WorktreeRoot:        opts.WorktreeRoot,
+		RequireSSHOrigin:    declaredRepo == "ouroboros-ide",
+		ReconstructSelected: true,
 	}
 	if err := prepareNativeGitBootstrapAndWorktrees(bootstrapPlan, worktreeOptions, ctx.DryRun); err != nil {
 		return cleanupFailedSlot(err)
@@ -774,6 +775,14 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	}
 	head := ""
 	if !ctx.DryRun {
+		if err := wtx.VerifyFreshNativeWorktree(
+			selectedPlan.Agent.HostWorktree,
+			fmt.Sprintf("%s%d", branchPrefix, parsed.index),
+			"origin/"+baseBranch,
+			gitauthority.Executable(),
+		); err != nil {
+			return cleanupFailedSlot(fmt.Errorf("verify reconstructed native slot Git custody before launch: %w", err))
+		}
 		out, result := execx.Capture(context.Background(), gitauthority.Executable(), "-C", selectedPlan.Agent.HostWorktree, "rev-parse", "HEAD")
 		if result.Code != 0 {
 			return cleanupFailedSlot(fmt.Errorf("read reconstructed native slot HEAD: exit %d", result.Code))

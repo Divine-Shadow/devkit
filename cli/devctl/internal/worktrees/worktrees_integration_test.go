@@ -279,6 +279,87 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 	}
 }
 
+func TestSetupNativeSelectedReconstructionConvergesFreshCurrentWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	for _, scenario := range []string{"dirty tracked", "staged", "untracked", "behind upstream"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := t.TempDir()
+			devRoot := filepath.Join(root, "dev")
+			devkitRoot := filepath.Join(devRoot, "devkit")
+			if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+
+			opts := NativeOptions{
+				DevkitRoot:   devkitRoot,
+				Repo:         "ouroboros-ide",
+				Count:        2,
+				BaseBranch:   "main",
+				BranchPrefix: "agent",
+			}
+			if err := SetupNative(opts); err != nil {
+				t.Fatalf("prepare native worktrees: %v", err)
+			}
+			selected := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide")
+			sibling := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent2", "ouroboros-ide")
+			siblingSentinel := filepath.Join(sibling, "preserve-selected-reset-sibling")
+			if err := os.WriteFile(siblingSentinel, []byte("preserve\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			oldHead := readTrim(t, "git", "-C", selected, "rev-parse", "HEAD")
+
+			switch scenario {
+			case "dirty tracked":
+				if err := os.WriteFile(filepath.Join(selected, "README.md"), []byte("dirty tracked\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "staged":
+				if err := os.WriteFile(filepath.Join(selected, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				mustRun(t, "git", "-C", selected, "add", "staged.txt")
+			case "untracked":
+				if err := os.WriteFile(filepath.Join(selected, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "behind upstream":
+				source := filepath.Join(devRoot, "ouroboros-ide")
+				if err := os.WriteFile(filepath.Join(source, "remote-update.txt"), []byte("new upstream\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				mustRun(t, "git", "-C", source, "add", "remote-update.txt")
+				mustRun(t, "git", "-C", source, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "advance upstream")
+				mustRun(t, "git", "-C", source, "push", "origin", "main")
+			}
+
+			opts.Index = 1
+			opts.ReconstructSelected = true
+			if err := SetupNative(opts); err != nil {
+				t.Fatalf("selected native reconstruction failed: %v", err)
+			}
+			checkBranchAndUpstream(t, selected, "agent1")
+			if got, want := readTrim(t, "git", "-C", selected, "rev-parse", "HEAD"), readTrim(t, "git", "-C", selected, "rev-parse", "origin/main"); got != want {
+				t.Fatalf("selected reconstruction HEAD = %s, origin/main = %s", got, want)
+			}
+			if got := readTrim(t, "git", "-C", selected, "status", "--porcelain=v1"); got != "" {
+				t.Fatalf("selected reconstruction is dirty: %q", got)
+			}
+			if scenario == "behind upstream" {
+				if got := readTrim(t, "git", "-C", selected, "rev-parse", "HEAD"); got == oldHead {
+					t.Fatalf("selected reconstruction remained at stale HEAD %s", got)
+				}
+			}
+			if got, err := os.ReadFile(siblingSentinel); err != nil || string(got) != "preserve\n" {
+				t.Fatalf("selected reconstruction changed sibling state: %q %v", got, err)
+			}
+		})
+	}
+}
+
 func TestSetupNative_NestedGuiWorktreeSurvivesDevRootProjection(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -1462,7 +1543,7 @@ func TestSetupNative_FromLinkedSourceWorktreeUsesOwnedPortableCommonRepository(t
 	checkRelativeNativeMetadata(t, agentWorktree, commonDir, primaryDevRoot)
 }
 
-func TestSetupNative_RejectsStandaloneAgentCheckoutAsForeignAuthority(t *testing.T) {
+func TestSetupNativeSelectedReconstructionRejectsStandaloneAgentCheckoutAsForeignAuthority(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -1483,11 +1564,13 @@ func TestSetupNative_RejectsStandaloneAgentCheckoutAsForeignAuthority(t *testing
 	mustRun(t, "git", "-C", standalone, "checkout", "main")
 
 	err := SetupNative(NativeOptions{
-		DevkitRoot:   devkitRoot,
-		Repo:         "ouroboros-ide",
-		Count:        1,
-		BaseBranch:   "main",
-		BranchPrefix: "agent",
+		DevkitRoot:          devkitRoot,
+		Repo:                "ouroboros-ide",
+		Index:               1,
+		Count:               1,
+		BaseBranch:          "main",
+		BranchPrefix:        "agent",
+		ReconstructSelected: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "standalone checkout") {
 		t.Fatalf("native setup error = %v, want standalone foreign-authority rejection", err)
