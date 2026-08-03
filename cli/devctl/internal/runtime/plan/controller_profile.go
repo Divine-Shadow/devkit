@@ -155,6 +155,26 @@ type ControllerProfileSensitiveInputIngress struct {
 	ContentLogging         bool   `json:"contentLogging"`
 }
 
+type ControllerProfileSensitiveOutputEgress struct {
+	Operation              string `json:"operation"`
+	PackagePath            string `json:"packagePath"`
+	ExecutablePath         string `json:"executablePath"`
+	SourceRevision         string `json:"sourceRevision"`
+	RequestSchema          string `json:"requestSchema"`
+	AcceptedSchema         string `json:"acceptedSchema"`
+	ReceiptSchema          string `json:"receiptSchema"`
+	SourceLogicalRoot      string `json:"sourceLogicalRoot"`
+	SourceLocalRoot        string `json:"sourceLocalRoot"`
+	DestinationWindowsRoot string `json:"destinationWindowsRoot"`
+	DestinationLocalRoot   string `json:"destinationLocalRoot"`
+	DirectoryMode          string `json:"directoryMode"`
+	FileMode               string `json:"fileMode"`
+	PDFOnly                bool   `json:"pdfOnly"`
+	Overwrite              bool   `json:"overwrite"`
+	ContentLogging         bool   `json:"contentLogging"`
+	PreserveSource         bool   `json:"preserveSource"`
+}
+
 type ManagementControllerProfile struct {
 	SchemaVersion         string                                 `json:"schemaVersion"`
 	ProfileIdentity       string                                 `json:"profileIdentity"`
@@ -170,6 +190,7 @@ type ManagementControllerProfile struct {
 	Broker                ControllerProfileBroker                `json:"broker"`
 	SourceAcquisition     ControllerProfileSourceAcquisition     `json:"sourceAcquisition"`
 	SensitiveInputIngress ControllerProfileSensitiveInputIngress `json:"sensitiveInputIngress"`
+	SensitiveOutputEgress ControllerProfileSensitiveOutputEgress `json:"sensitiveOutputEgress"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {

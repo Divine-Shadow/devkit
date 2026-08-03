@@ -166,6 +166,42 @@ func TestManagementControllerProfileRecognizesTypedSensitiveIngress(t *testing.T
 	}
 }
 
+func TestManagementControllerProfileRecognizesTypedSensitiveOutputEgress(t *testing.T) {
+	var profile ManagementControllerProfile
+	decoder := json.NewDecoder(strings.NewReader(`{
+		"sensitiveOutputEgress": {
+			"operation": "sensitive-output.egress",
+			"packagePath": "/nix/store/example-sensitive-output-egress",
+			"executablePath": "/nix/store/example-sensitive-output-egress/bin/devops-sensitive-input-ingress",
+			"sourceRevision": "9c74d3d9c706c53a004d321126d2af9864951361",
+			"requestSchema": "ouroboros-sensitive-output-egress/request/v1",
+			"acceptedSchema": "ouroboros-sensitive-output-egress/accepted/v1",
+			"receiptSchema": "ouroboros-sensitive-output-egress/receipt/v1",
+			"sourceLogicalRoot": "/workspaces/dev/.sensitive-outputs/demotrax-redacted-20260803",
+			"sourceLocalRoot": "/home/bayesartre/dev/.sensitive-outputs/demotrax-redacted-20260803",
+			"destinationWindowsRoot": "C:\\Users\\Shadow's Throne\\Downloads\\Demotrax Redacted 2026-08-03",
+			"destinationLocalRoot": "/mnt/c/Users/Shadow's Throne/Downloads/Demotrax Redacted 2026-08-03",
+			"directoryMode": "0700",
+			"fileMode": "0600",
+			"pdfOnly": true,
+			"overwrite": false,
+			"contentLogging": false,
+			"preserveSource": true
+		}
+	}`))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&profile); err != nil {
+		t.Fatalf("typed sensitive-output egress profile field rejected: %v", err)
+	}
+	if profile.SensitiveOutputEgress.Operation != "sensitive-output.egress" ||
+		profile.SensitiveOutputEgress.ContentLogging ||
+		profile.SensitiveOutputEgress.Overwrite ||
+		!profile.SensitiveOutputEgress.PDFOnly ||
+		!profile.SensitiveOutputEgress.PreserveSource {
+		t.Fatalf("typed sensitive-output egress profile decoded incorrectly: %#v", profile.SensitiveOutputEgress)
+	}
+}
+
 func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
