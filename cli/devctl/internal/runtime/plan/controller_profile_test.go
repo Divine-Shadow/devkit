@@ -132,6 +132,40 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 	return profile
 }
 
+func TestManagementControllerProfileRecognizesTypedSensitiveIngress(t *testing.T) {
+	var profile ManagementControllerProfile
+	decoder := json.NewDecoder(strings.NewReader(`{
+		"sensitiveInputIngress": {
+			"operation": "sensitive-input.ingress",
+			"packagePath": "/nix/store/example-sensitive-input-ingress",
+			"executablePath": "/nix/store/example-sensitive-input-ingress/bin/devops-sensitive-input-ingress",
+			"sourceRevision": "dce48fd684d298616940ec72615326b43cbb6319",
+			"requestSchema": "ouroboros-sensitive-input-ingress/request/v1",
+			"acceptedSchema": "ouroboros-sensitive-input-ingress/accepted/v1",
+			"receiptSchema": "ouroboros-sensitive-input-ingress/receipt/v1",
+			"sourceWindowsRoot": "C:\\Users\\Shadow's Throne\\Downloads",
+			"sourceLocalRoot": "/mnt/c/Users/Shadow's Throne/Downloads",
+			"destinationLogicalRoot": "/workspaces/dev/.sensitive-inputs",
+			"destinationLocalRoot": "/home/bayesartre/dev/.sensitive-inputs",
+			"directoryMode": "0700",
+			"fileMode": "0600",
+			"pdfOnly": true,
+			"overwrite": false,
+			"contentLogging": false
+		}
+	}`))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&profile); err != nil {
+		t.Fatalf("typed sensitive-input ingress profile field rejected: %v", err)
+	}
+	if profile.SensitiveInputIngress.Operation != "sensitive-input.ingress" ||
+		profile.SensitiveInputIngress.ContentLogging ||
+		profile.SensitiveInputIngress.Overwrite ||
+		!profile.SensitiveInputIngress.PDFOnly {
+		t.Fatalf("typed sensitive-input ingress profile decoded incorrectly: %#v", profile.SensitiveInputIngress)
+	}
+}
+
 func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")

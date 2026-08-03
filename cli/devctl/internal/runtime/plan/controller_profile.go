@@ -136,6 +136,25 @@ type ControllerProfileNixOSDeployment struct {
 	NoFollow      bool   `json:"noFollow"`
 }
 
+type ControllerProfileSensitiveInputIngress struct {
+	Operation              string `json:"operation"`
+	PackagePath            string `json:"packagePath"`
+	ExecutablePath         string `json:"executablePath"`
+	SourceRevision         string `json:"sourceRevision"`
+	RequestSchema          string `json:"requestSchema"`
+	AcceptedSchema         string `json:"acceptedSchema"`
+	ReceiptSchema          string `json:"receiptSchema"`
+	SourceWindowsRoot      string `json:"sourceWindowsRoot"`
+	SourceLocalRoot        string `json:"sourceLocalRoot"`
+	DestinationLogicalRoot string `json:"destinationLogicalRoot"`
+	DestinationLocalRoot   string `json:"destinationLocalRoot"`
+	DirectoryMode          string `json:"directoryMode"`
+	FileMode               string `json:"fileMode"`
+	PDFOnly                bool   `json:"pdfOnly"`
+	Overwrite              bool   `json:"overwrite"`
+	ContentLogging         bool   `json:"contentLogging"`
+}
+
 type ManagementControllerProfile struct {
 	SchemaVersion         string                                 `json:"schemaVersion"`
 	ProfileIdentity       string                                 `json:"profileIdentity"`
@@ -150,6 +169,7 @@ type ManagementControllerProfile struct {
 	Kinds                 []string                               `json:"kinds"`
 	Broker                ControllerProfileBroker                `json:"broker"`
 	SourceAcquisition     ControllerProfileSourceAcquisition     `json:"sourceAcquisition"`
+	SensitiveInputIngress ControllerProfileSensitiveInputIngress `json:"sensitiveInputIngress"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
