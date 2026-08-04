@@ -134,6 +134,7 @@ type topExecArgs struct {
 	agentStateRoot          string
 	worktreeContainerRoot   string
 	agentStateContainerRoot string
+	managedAppServer        bool
 	command                 []string
 }
 
@@ -877,6 +878,8 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.agentStateRoot = ctx.Args[i+1]
 			i++
+		case "--managed-app-server":
+			parsed.managedAppServer = true
 		case "--":
 			parsed.command = append([]string{}, ctx.Args[i+1:]...)
 			return parsed, nil
@@ -942,6 +945,15 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		}
 	}
 	cmdSpec, err := launch.BuildBubblewrap(p, command)
+	if parsed.managedAppServer {
+		if os.Getenv(managedAppServerServiceEnv) != managedAppServerServiceIdentity {
+			return fmt.Errorf("--managed-app-server requires %s=%s", managedAppServerServiceEnv, managedAppServerServiceIdentity)
+		}
+		if len(command) < 2 || !strings.Contains(command[0], "codex") || command[1] != "app-server" {
+			return fmt.Errorf("--managed-app-server permits only codex app-server")
+		}
+		cmdSpec, err = launch.BuildManagedAppServerBubblewrap(p, command)
+	}
 	if err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,6 +45,14 @@ func TestParsePlanArgsRecognizesManagedAppServerOnlyForExec(t *testing.T) {
 	}
 	if _, err := parsePlanArgs(ctx, false, false); err == nil || !strings.Contains(err.Error(), "only valid for native exec") {
 		t.Fatalf("non-exec accepted managed app-server: %v", err)
+	}
+}
+
+func TestParseTopExecArgsRecognizesManagedAppServerBeforeSeparator(t *testing.T) {
+	ctx := &cmdregistry.Context{Args: []string{"2", "--managed-app-server", "--", "codex", "app-server"}}
+	parsed, err := parseTopExecArgs(ctx, false)
+	if err != nil || !parsed.managedAppServer || !reflect.DeepEqual(parsed.command, []string{"codex", "app-server"}) {
+		t.Fatalf("top exec managed app-server parse = %#v, %v", parsed, err)
 	}
 }
 
