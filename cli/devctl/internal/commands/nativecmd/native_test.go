@@ -36,6 +36,17 @@ func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
 	}
 }
 
+func TestParsePlanArgsRecognizesManagedAppServerOnlyForExec(t *testing.T) {
+	ctx := &cmdregistry.Context{Args: []string{"exec", "--managed-app-server", "--", "codex", "app-server"}}
+	parsed, err := parsePlanArgs(ctx, true, false)
+	if err != nil || !parsed.managedAppServer {
+		t.Fatalf("managed app-server parse = %#v, %v", parsed, err)
+	}
+	if _, err := parsePlanArgs(ctx, false, false); err == nil || !strings.Contains(err.Error(), "only valid for native exec") {
+		t.Fatalf("non-exec accepted managed app-server: %v", err)
+	}
+}
+
 func TestParseSandboxReadinessResultsPreservesPerCheckDetails(t *testing.T) {
 	encodedOK := base64.StdEncoding.EncodeToString([]byte("tool ready\n"))
 	encodedFail := base64.StdEncoding.EncodeToString([]byte("missing playwright\n"))

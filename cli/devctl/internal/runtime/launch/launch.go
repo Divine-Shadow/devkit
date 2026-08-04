@@ -1810,17 +1810,31 @@ func copyAWSDir(src, dst string, force bool) error {
 }
 
 func BuildBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
+	return buildBubblewrap(p, command, true)
+}
+
+// BuildManagedAppServerBubblewrap is reserved for the typed, systemd-owned
+// GUI lifecycle. Ordinary native exec must retain parent-death coupling.
+func BuildManagedAppServerBubblewrap(p nativeplan.Plan, command []string) (Command, error) {
+	if p.IsolationProfile != nativeplan.IsolationProfileWorkspaceEgress {
+		return Command{}, fmt.Errorf("managed app-server launcher requires workspace-egress isolation")
+	}
+	return buildBubblewrap(p, command, false)
+}
+
+func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (Command, error) {
 	if err := validateManagementControllerProfilePlan(p); err != nil {
 		return Command{}, err
 	}
 	if strings.TrimSpace(p.DevkitSandboxRoot) == "" {
 		return Command{}, fmt.Errorf("devkit sandbox root is empty")
 	}
-	args := []string{
-		"--die-with-parent",
-		"--proc", "/proc",
+	args := []string{"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
+	}
+	if dieWithParent {
+		args = append([]string{"--die-with-parent"}, args...)
 	}
 	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
 		// Bubblewrap starts from the host mount namespace. Mask the WSL

@@ -778,6 +778,9 @@ func TestBuildBubblewrapUsesImmutableRuntimeLauncherWithoutConsumerFlakeEvaluati
 		t.Fatalf("BuildBubblewrap: %v", err)
 	}
 	joined := ShellString(cmd)
+	if _, err := BuildManagedAppServerBubblewrap(p, []string{"/run/current-system/sw/bin/codex", "app-server"}); err == nil || !strings.Contains(err.Error(), "workspace-egress") {
+		t.Fatalf("non-workspace-egress plan accepted managed app-server: %v", err)
+	}
 	if !strings.Contains(joined, "'"+runtimeLauncher+"' 'bash' '-c'") {
 		t.Fatalf("command did not select the immutable runtime launcher:\n%s", joined)
 	}
@@ -1027,6 +1030,22 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 		t.Fatalf("BuildBubblewrap: %v", err)
 	}
 	joined := ShellString(cmd)
+	if !strings.Contains(joined, "'--die-with-parent'") {
+		t.Fatalf("ordinary native exec must retain parent-death coupling:\n%s", joined)
+	}
+	managed, err := BuildManagedAppServerBubblewrap(p, []string{"/run/current-system/sw/bin/codex", "app-server"})
+	if err != nil {
+		t.Fatalf("BuildManagedAppServerBubblewrap: %v", err)
+	}
+	managedJoined := ShellString(managed)
+	if strings.Contains(managedJoined, "'--die-with-parent'") {
+		t.Fatalf("managed app-server must omit only parent-death coupling:\n%s", managedJoined)
+	}
+	for _, want := range []string{"'--tmpfs' '/mnt'", "'--unshare-net'", "'--bind' '" + hostWorktree + "' '/workspace'"} {
+		if !strings.Contains(managedJoined, want) {
+			t.Fatalf("managed app-server lost workspace-egress control %q:\n%s", want, managedJoined)
+		}
+	}
 	for _, want := range []string{
 		"'--tmpfs' '/mnt'",
 		"'--unshare-net'",

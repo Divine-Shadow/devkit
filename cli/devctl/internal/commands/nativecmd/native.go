@@ -84,8 +84,12 @@ type planArgs struct {
 	repoCheck          string
 	readinessMode      string
 	readinessModeSet   bool
+	managedAppServer   bool
 	command            []string
 }
+
+const managedAppServerServiceEnv = "DEVKIT_MANAGED_APP_SERVER_SERVICE"
+const managedAppServerServiceIdentity = "fleet-controller-operation.service"
 
 type lifecycleArgs struct {
 	repo                    string
@@ -311,6 +315,11 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			i++
 		case "--dry-run":
 			parsed.dryRun = true
+		case "--managed-app-server":
+			if !allowCommand {
+				return parsed, fmt.Errorf("--managed-app-server is only valid for native exec")
+			}
+			parsed.managedAppServer = true
 		case "--count":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--count requires a value")
@@ -1961,6 +1970,15 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		}
 	}
 	cmdSpec, err := launch.BuildBubblewrap(p, parsed.command)
+	if parsed.managedAppServer {
+		if os.Getenv(managedAppServerServiceEnv) != managedAppServerServiceIdentity {
+			return fmt.Errorf("--managed-app-server requires %s=%s", managedAppServerServiceEnv, managedAppServerServiceIdentity)
+		}
+		if len(parsed.command) < 2 || !strings.Contains(parsed.command[0], "codex") || parsed.command[1] != "app-server" {
+			return fmt.Errorf("--managed-app-server permits only codex app-server")
+		}
+		cmdSpec, err = launch.BuildManagedAppServerBubblewrap(p, parsed.command)
+	}
 	if err != nil {
 		return err
 	}
