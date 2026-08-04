@@ -134,3 +134,6 @@ api.box.com
 oauth2.googleapis.com
 cloudresourcemanager.googleapis.com
 serviceusage.googleapis.com
+access-analyzer.us-east-2.amazonaws.com
+apigateway.us-east-2.amazonaws.com
+guardduty.us-east-2.amazonaws.com
