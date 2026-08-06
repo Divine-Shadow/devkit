@@ -56,6 +56,31 @@ func TestParseTopExecArgsRecognizesManagedAppServerBeforeSeparator(t *testing.T)
 	}
 }
 
+func TestManagedAppServerRequiresDedicatedGUIServiceIdentity(t *testing.T) {
+	if managedAppServerServiceIdentity != "fleet-gui-shadow-throne-management-2.service" {
+		t.Fatalf("managed app-server service identity = %q", managedAppServerServiceIdentity)
+	}
+	if managedAppServerServiceIdentity == "fleet-controller-operation.service" {
+		t.Fatal("transient operation broker must not be accepted as the durable GUI owner")
+	}
+	if !managedAppServerServiceOwnedWithCgroup(
+		managedAppServerServiceIdentity,
+		"invocation-id",
+		"0::/system.slice/fleet-gui-shadow-throne-management-2.service",
+	) {
+		t.Fatal("exact managed GUI service cgroup was rejected")
+	}
+	for _, candidate := range []struct{ service, invocation, cgroup string }{
+		{"fleet-controller-operation.service", "invocation-id", "0::/system.slice/fleet-controller-operation.service"},
+		{managedAppServerServiceIdentity, "", "0::/system.slice/fleet-gui-shadow-throne-management-2.service"},
+		{managedAppServerServiceIdentity, "invocation-id", "0::/user.slice/user-1000.slice"},
+	} {
+		if managedAppServerServiceOwnedWithCgroup(candidate.service, candidate.invocation, candidate.cgroup) {
+			t.Fatalf("non-service managed app-server owner accepted: %#v", candidate)
+		}
+	}
+}
+
 func TestParseSandboxReadinessResultsPreservesPerCheckDetails(t *testing.T) {
 	encodedOK := base64.StdEncoding.EncodeToString([]byte("tool ready\n"))
 	encodedFail := base64.StdEncoding.EncodeToString([]byte("missing playwright\n"))

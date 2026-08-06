@@ -89,7 +89,29 @@ type planArgs struct {
 }
 
 const managedAppServerServiceEnv = "DEVKIT_MANAGED_APP_SERVER_SERVICE"
-const managedAppServerServiceIdentity = "fleet-controller-operation.service"
+
+// The managed launcher may omit bubblewrap parent-death coupling only for the
+// exact Nix-owned GUI service.  The typed operation broker is intentionally
+// not that owner: it exits after persisting each receipt.
+const managedAppServerServiceIdentity = "fleet-gui-shadow-throne-management-2.service"
+
+func managedAppServerServiceOwned() bool {
+	cgroup, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return false
+	}
+	return managedAppServerServiceOwnedWithCgroup(
+		os.Getenv(managedAppServerServiceEnv),
+		os.Getenv("INVOCATION_ID"),
+		string(cgroup),
+	)
+}
+
+func managedAppServerServiceOwnedWithCgroup(service, invocationID, cgroup string) bool {
+	return service == managedAppServerServiceIdentity &&
+		strings.TrimSpace(invocationID) != "" &&
+		strings.Contains(cgroup, managedAppServerServiceIdentity)
+}
 
 type lifecycleArgs struct {
 	repo                    string
@@ -946,8 +968,8 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	}
 	cmdSpec, err := launch.BuildBubblewrap(p, command)
 	if parsed.managedAppServer {
-		if os.Getenv(managedAppServerServiceEnv) != managedAppServerServiceIdentity {
-			return fmt.Errorf("--managed-app-server requires %s=%s", managedAppServerServiceEnv, managedAppServerServiceIdentity)
+		if !managedAppServerServiceOwned() {
+			return fmt.Errorf("--managed-app-server requires the exact systemd-owned %s cgroup", managedAppServerServiceIdentity)
 		}
 		if len(command) < 2 || !strings.Contains(command[0], "codex") || command[1] != "app-server" {
 			return fmt.Errorf("--managed-app-server permits only codex app-server")
@@ -1983,8 +2005,8 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	cmdSpec, err := launch.BuildBubblewrap(p, parsed.command)
 	if parsed.managedAppServer {
-		if os.Getenv(managedAppServerServiceEnv) != managedAppServerServiceIdentity {
-			return fmt.Errorf("--managed-app-server requires %s=%s", managedAppServerServiceEnv, managedAppServerServiceIdentity)
+		if !managedAppServerServiceOwned() {
+			return fmt.Errorf("--managed-app-server requires the exact systemd-owned %s cgroup", managedAppServerServiceIdentity)
 		}
 		if len(parsed.command) < 2 || !strings.Contains(parsed.command[0], "codex") || parsed.command[1] != "app-server" {
 			return fmt.Errorf("--managed-app-server permits only codex app-server")
