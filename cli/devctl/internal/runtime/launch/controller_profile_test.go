@@ -93,11 +93,12 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 			Mode:           uint32(socketInfo.Mode().Perm()),
 		},
 		ProductAgentLifecycle: controllerOperationProductAgentLifecycle{
-			SocketPath:    profile.ProductAgentLifecycle.SocketPath,
-			Executable:    profile.ProductAgentLifecycle.Executable,
-			Operation:     profile.ProductAgentLifecycle.Operation,
-			RequestSchema: profile.ProductAgentLifecycle.RequestSchema,
-			EventSchema:   profile.ProductAgentLifecycle.EventSchema,
+			SocketPath:         profile.ProductAgentLifecycle.SocketPath,
+			Executable:         profile.ProductAgentLifecycle.Executable,
+			Operation:          profile.ProductAgentLifecycle.Operation,
+			ReconcileOperation: profile.ProductAgentLifecycle.ReconcileOperation,
+			RequestSchema:      profile.ProductAgentLifecycle.RequestSchema,
+			EventSchema:        profile.ProductAgentLifecycle.EventSchema,
 		},
 		NixOSDeployment: controllerOperationNixOSDeployment{
 			SocketPath:    profile.NixOSDeployment.SocketPath,
@@ -142,7 +143,7 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 	}
 }
 
-func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T) {
+func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T) {
 	withProductGovernanceEnvironmentFixture(t)
 	root, err := os.MkdirTemp("", "devkit-v4-")
 	if err != nil {
@@ -287,7 +288,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T)
 			Event:    nativeplan.ControllerOperationEventSchema,
 			Receipt:  nativeplan.ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
+		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server", "product-agent.reconcile-absence"},
 	}
 	operationStoreRoot := filepath.Join(root, "nix", "store")
 	previousOperationStoreRoot := controllerOperationStoreRoot
@@ -318,15 +319,16 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV5Profile(t *testing.T)
 		SSHConfigPath: sshConfigPath,
 	}
 	profile.ProductAgentLifecycle = nativeplan.ControllerProfileProductAgentLifecycle{
-		SocketPath:    "/run/fleet-product-agent-lifecycle/control.sock",
-		Executable:    writeExecutable(filepath.Join(operationStoreRoot, "product-agent", "bin", "product-agent")),
-		Operation:     "cycle-test",
-		RequestSchema: "fleet-control/product-agent-local-request/v1",
-		EventSchema:   "fleet-control/product-agent-local-event/v1",
-		Mode:          "0660",
-		Owner:         "root",
-		Group:         "product-agent-operators",
-		NoFollow:      true,
+		SocketPath:         "/run/fleet-product-agent-lifecycle/control.sock",
+		Executable:         writeExecutable(filepath.Join(operationStoreRoot, "product-agent", "bin", "product-agent")),
+		Operation:          "cycle-test",
+		ReconcileOperation: "reconcile-absence",
+		RequestSchema:      "fleet-control/product-agent-local-request/v1",
+		EventSchema:        "fleet-control/product-agent-local-event/v1",
+		Mode:               "0660",
+		Owner:              "root",
+		Group:              "product-agent-operators",
+		NoFollow:           true,
 	}
 	profile.NixOSDeployment = nativeplan.ControllerProfileNixOSDeployment{
 		SocketPath:    "/run/fleet-nixos-deploy-effect/control.sock",

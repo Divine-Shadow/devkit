@@ -88,7 +88,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Event:    ControllerOperationEventSchema,
 			Receipt:  ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server"},
+		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server", "product-agent.reconcile-absence"},
 		Broker: ControllerProfileBroker{
 			Executable:     writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-control", "bin", "fleet-control")),
 			SourceRevision: strings.Repeat("c", 40),
@@ -100,15 +100,16 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			SSHConfigPath: writeRegular(filepath.Join(ControllerProfileStoreRoot, "management-controller-github-ssh-config")),
 		},
 		ProductAgentLifecycle: ControllerProfileProductAgentLifecycle{
-			SocketPath:    controllerProductAgentSocket,
-			Executable:    writeExecutable(filepath.Join(ControllerProfileStoreRoot, "product-agent", "bin", "product-agent")),
-			Operation:     controllerProductAgentOperation,
-			RequestSchema: controllerProductAgentRequestSchema,
-			EventSchema:   controllerProductAgentEventSchema,
-			Mode:          "0660",
-			Owner:         "root",
-			Group:         "product-agent-operators",
-			NoFollow:      true,
+			SocketPath:         controllerProductAgentSocket,
+			Executable:         writeExecutable(filepath.Join(ControllerProfileStoreRoot, "product-agent", "bin", "product-agent")),
+			Operation:          controllerProductAgentOperation,
+			ReconcileOperation: "reconcile-absence",
+			RequestSchema:      controllerProductAgentRequestSchema,
+			EventSchema:        controllerProductAgentEventSchema,
+			Mode:               "0660",
+			Owner:              "root",
+			Group:              "product-agent-operators",
+			NoFollow:           true,
 		},
 		NixOSDeployment: ControllerProfileNixOSDeployment{
 			SocketPath:    controllerNixOSDeploymentSocket,
@@ -282,6 +283,12 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	}
 	if hasBind(p.Binds, execSocket, execSocket) {
 		t.Fatalf("v4 must not project the legacy direct exec socket: %#v", p.Binds)
+	}
+	withoutReconcile := profile
+	withoutReconcile.ProductAgentLifecycle.ReconcileOperation = ""
+	if err := validateManagementControllerProfile(withoutReconcile); err == nil ||
+		!strings.Contains(err.Error(), "Product-agent lifecycle") {
+		t.Fatalf("profile without Product-agent reconciliation operation was not rejected: %v", err)
 	}
 	withoutControllerRead := profile
 	withoutControllerRead.Kinds = []string{

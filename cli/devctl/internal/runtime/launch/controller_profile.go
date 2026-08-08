@@ -63,11 +63,12 @@ type controllerOperationTargets struct {
 }
 
 type controllerOperationProductAgentLifecycle struct {
-	SocketPath    string `json:"socketPath"`
-	Executable    string `json:"executable"`
-	Operation     string `json:"operation"`
-	RequestSchema string `json:"requestSchema"`
-	EventSchema   string `json:"eventSchema"`
+	SocketPath         string `json:"socketPath"`
+	Executable         string `json:"executable"`
+	Operation          string `json:"operation"`
+	ReconcileOperation string `json:"reconcileOperation"`
+	RequestSchema      string `json:"requestSchema"`
+	EventSchema        string `json:"eventSchema"`
 }
 
 type controllerOperationNixOSDeployment struct {
@@ -284,11 +285,12 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 		return fmt.Errorf("controller operation identity targets or schemas do not match the profile")
 	}
 	if identity.ProductAgentLifecycle != (controllerOperationProductAgentLifecycle{
-		SocketPath:    profile.ProductAgentLifecycle.SocketPath,
-		Executable:    profile.ProductAgentLifecycle.Executable,
-		Operation:     profile.ProductAgentLifecycle.Operation,
-		RequestSchema: profile.ProductAgentLifecycle.RequestSchema,
-		EventSchema:   profile.ProductAgentLifecycle.EventSchema,
+		SocketPath:         profile.ProductAgentLifecycle.SocketPath,
+		Executable:         profile.ProductAgentLifecycle.Executable,
+		Operation:          profile.ProductAgentLifecycle.Operation,
+		ReconcileOperation: profile.ProductAgentLifecycle.ReconcileOperation,
+		RequestSchema:      profile.ProductAgentLifecycle.RequestSchema,
+		EventSchema:        profile.ProductAgentLifecycle.EventSchema,
 	}) {
 		return fmt.Errorf("controller operation identity Product-agent lifecycle does not match the profile")
 	}

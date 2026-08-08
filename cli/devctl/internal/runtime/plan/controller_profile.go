@@ -16,8 +16,8 @@ import (
 const (
 	ManagementControllerProfileIdentity     = "management-controller-convergence/v1"
 	ManagementControllerMountPolicyIdentity = "devkit/workspace-egress/v4"
-	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v5"
-	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v5"
+	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v6"
+	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v6"
 	ControllerOperationRequestSchema        = "fleet-control/controller-operation-request/v1"
 	ControllerOperationAcceptedSchema       = "fleet-control/controller-operation-accepted/v1"
 	ControllerOperationEventSchema          = "fleet-control/controller-operation-event/v1"
@@ -113,15 +113,16 @@ type ControllerProfileSourceAcquisition struct {
 }
 
 type ControllerProfileProductAgentLifecycle struct {
-	SocketPath    string `json:"socketPath"`
-	Executable    string `json:"executable"`
-	Operation     string `json:"operation"`
-	RequestSchema string `json:"requestSchema"`
-	EventSchema   string `json:"eventSchema"`
-	Mode          string `json:"mode"`
-	Owner         string `json:"owner"`
-	Group         string `json:"group"`
-	NoFollow      bool   `json:"noFollow"`
+	SocketPath         string `json:"socketPath"`
+	Executable         string `json:"executable"`
+	Operation          string `json:"operation"`
+	ReconcileOperation string `json:"reconcileOperation"`
+	RequestSchema      string `json:"requestSchema"`
+	EventSchema        string `json:"eventSchema"`
+	Mode               string `json:"mode"`
+	Owner              string `json:"owner"`
+	Group              string `json:"group"`
+	NoFollow           bool   `json:"noFollow"`
 }
 
 type ControllerProfileNixOSDeployment struct {
@@ -281,7 +282,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}) {
 		return fmt.Errorf("Management controller operation schemas do not match the compiled contract")
 	}
-	expectedKinds := []string{"app-rpc.exec", "auth.exec", "fleet.exec", "gui.replace-controller", "gui.start-app-server", "nixos.deploy-closure"}
+	expectedKinds := []string{"app-rpc.exec", "auth.exec", "fleet.exec", "gui.replace-controller", "gui.start-app-server", "nixos.deploy-closure", "product-agent.reconcile-absence"}
 	actualKinds := append([]string(nil), profile.Kinds...)
 	sort.Strings(actualKinds)
 	if strings.Join(actualKinds, "\x00") != strings.Join(expectedKinds, "\x00") {
@@ -290,6 +291,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	productAgent := profile.ProductAgentLifecycle
 	if filepath.Clean(productAgent.SocketPath) != controllerProductAgentSocket ||
 		productAgent.Operation != controllerProductAgentOperation ||
+		productAgent.ReconcileOperation != "reconcile-absence" ||
 		productAgent.RequestSchema != controllerProductAgentRequestSchema ||
 		productAgent.EventSchema != controllerProductAgentEventSchema ||
 		productAgent.Mode != "0660" ||
