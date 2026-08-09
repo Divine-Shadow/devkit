@@ -341,6 +341,43 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T)
 		Group:         "fleet-deployment-operators",
 		NoFollow:      true,
 	}
+	remoteHome := filepath.Join(base.Agent.HostHome, ".codex")
+	profile.RemoteProductGUI = nativeplan.ControllerProfileRemoteProductGUI{
+		SchemaVersion: "wsl-nix/remote-product-gui-authority/v1",
+		Targets: []nativeplan.ControllerProfileRemoteProductGUITarget{{
+			Agent: 2, ConfigPath: filepath.Join(remoteHome, "config.toml"), GovernanceWorkspaceID: "agent2",
+			Home: nativeplan.ControllerProfilePathPair{Host: base.Agent.HostHome, Remote: base.Agent.HostHome},
+			ID:   "test-2", Kind: "devkit-agent", RemoteCodexHome: remoteHome,
+			RuntimeProfile: "dev-all", SocketName: "a2-app.sock", Station: "test",
+			Transport: nativeplan.ControllerProfileRemoteProductGUITransport{
+				Address: "100.64.0.2", AddressFamily: "AF_INET", HostKeyFingerprint: "SHA256:test",
+				IdentityReference: filepath.Join(root, "ssh", "fleet"), PreferredRoute: "tailnet-direct",
+				User: nativeplan.ManagementControllerIdentityExpectedOwner, WorkerAlias: "test-nix",
+			},
+			Worktree: nativeplan.ControllerProfilePathPair{Host: base.Agent.HostWorktree, Remote: base.Agent.HostWorktree},
+		}},
+		Transport: nativeplan.ControllerProfileRemoteProductGUIAuthorityTransport{
+			ProtectedIdentityHandles: []nativeplan.ControllerProfileProtectedIdentityHandle{{
+				Group: nativeplan.ManagementControllerIdentityExpectedGroup, Mode: "0600", NoFollow: true,
+				Owner: nativeplan.ManagementControllerIdentityExpectedOwner, Path: filepath.Join(root, "ssh", "fleet"),
+			}},
+			ServiceNetwork: nativeplan.ControllerProfileServiceNetwork{AddressFamilies: []string{"AF_UNIX", "AF_INET"}},
+			SSHExecutable:  profile.SourceAcquisition.SSHExecutable,
+		},
+	}
+	codexConfigPath := filepath.Join(operationStoreRoot, "codex-config.toml")
+	writeTestFile(t, codexConfigPath, "# permission_contract = wsl-nix/codex-granular-custom/v1\n")
+	profile.CodexPermissions = nativeplan.ControllerProfileCodexPermissions{
+		ApprovalPolicy:    nativeplan.ControllerProfileCodexApprovalPolicy{Granular: nativeplan.ControllerProfileCodexGranularPolicy{}},
+		ApprovalsReviewer: "user", Contract: "wsl-nix/codex-granular-custom/v1", DestinationMode: "0600",
+		Mode: "custom", SandboxMode: "danger-full-access", Source: "config.toml",
+		SourcePath: codexConfigPath, SourceSHA256: hashControllerTestFile(t, codexConfigPath),
+		TargetProjection: nativeplan.ControllerProfileCodexTargetProjection{
+			ByteEqualToSource: true, Group: nativeplan.ManagementControllerIdentityExpectedGroup, Mode: "0600",
+			NoFollow: true, Owner: nativeplan.ManagementControllerIdentityExpectedOwner,
+			PathRule: "remoteProductGUI.targets[].configPath", RegularFile: true,
+		},
+	}
 	manifestBytes, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
 		t.Fatal(err)

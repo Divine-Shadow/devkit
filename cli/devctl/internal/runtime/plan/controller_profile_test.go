@@ -44,6 +44,9 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 		}
 		return path
 	}
+	codexConfig := controllerProfileFileIdentity(t, filepath.Join(ControllerProfileStoreRoot, "codex-config.toml"), "# permission_contract = wsl-nix/codex-granular-custom/v1\n")
+	remoteHome := filepath.Join(managementRoot, ".devhome-agent1")
+	remoteWorktree := filepath.Join(managementRoot, "ouroboros-ide")
 	profile := ManagementControllerProfile{
 		SchemaVersion:       ManagementControllerProfileSchema,
 		ProfileIdentity:     ManagementControllerProfileIdentity,
@@ -122,6 +125,40 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Group:         "fleet-deployment-operators",
 			NoFollow:      true,
 		},
+		RemoteProductGUI: ControllerProfileRemoteProductGUI{
+			SchemaVersion: controllerRemoteProductGUISchema,
+			Targets: []ControllerProfileRemoteProductGUITarget{{
+				Agent: 1, ConfigPath: filepath.Join(remoteHome, ".codex", "config.toml"),
+				GovernanceWorkspaceID: "agent1", Home: ControllerProfilePathPair{Host: remoteHome, Remote: remoteHome},
+				ID: "test-1", Kind: "devkit-agent", RemoteCodexHome: filepath.Join(remoteHome, ".codex"),
+				RuntimeProfile: "dev-all", SocketName: "a1-app.sock", Station: "test",
+				Transport: ControllerProfileRemoteProductGUITransport{
+					Address: "100.64.0.1", AddressFamily: "AF_INET", HostKeyFingerprint: "SHA256:test",
+					IdentityReference: filepath.Join(managementRoot, ".ssh", "fleet"), PreferredRoute: "tailnet-direct",
+					User: ManagementControllerIdentityExpectedOwner, WorkerAlias: "test-nix",
+				},
+				Worktree: ControllerProfilePathPair{Host: remoteWorktree, Remote: remoteWorktree},
+			}},
+			Transport: ControllerProfileRemoteProductGUIAuthorityTransport{
+				ProtectedIdentityHandles: []ControllerProfileProtectedIdentityHandle{{
+					Group: ManagementControllerIdentityExpectedGroup, Mode: "0600", NoFollow: true,
+					Owner: ManagementControllerIdentityExpectedOwner, Path: filepath.Join(managementRoot, ".ssh", "fleet"),
+				}},
+				ServiceNetwork: ControllerProfileServiceNetwork{AddressFamilies: []string{"AF_UNIX", "AF_INET"}},
+				SSHExecutable:  filepath.Join(ControllerProfileStoreRoot, "openssh", "bin", "ssh"),
+			},
+		},
+		CodexPermissions: ControllerProfileCodexPermissions{
+			ApprovalPolicy:    ControllerProfileCodexApprovalPolicy{Granular: ControllerProfileCodexGranularPolicy{}},
+			ApprovalsReviewer: "user", Contract: controllerCodexPermissionContract, DestinationMode: "0600",
+			Mode: "custom", SandboxMode: "danger-full-access", Source: "config.toml",
+			SourcePath: codexConfig.Path, SourceSHA256: codexConfig.SHA256,
+			TargetProjection: ControllerProfileCodexTargetProjection{
+				ByteEqualToSource: true, Group: ManagementControllerIdentityExpectedGroup, Mode: "0600",
+				NoFollow: true, Owner: ManagementControllerIdentityExpectedOwner,
+				PathRule: "remoteProductGUI.targets[].configPath", RegularFile: true,
+			},
+		},
 	}
 	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
@@ -131,6 +168,32 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 		t.Fatal(err)
 	}
 	return profile
+}
+
+func TestManagementControllerProfileRecognizesV7CodexPermissionsAndRemoteGUI(t *testing.T) {
+	profile := ManagementControllerProfile{
+		RemoteProductGUI: ControllerProfileRemoteProductGUI{
+			SchemaVersion: controllerRemoteProductGUISchema,
+			Targets:       []ControllerProfileRemoteProductGUITarget{{ID: "station-1"}},
+		},
+		CodexPermissions: ControllerProfileCodexPermissions{
+			Mode: "custom", Contract: controllerCodexPermissionContract,
+			ApprovalPolicy: ControllerProfileCodexApprovalPolicy{Granular: ControllerProfileCodexGranularPolicy{}},
+		},
+	}
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	var decoded ManagementControllerProfile
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatalf("v7 controller fields rejected: %v", err)
+	}
+	if decoded.CodexPermissions.Mode != "custom" || decoded.RemoteProductGUI.SchemaVersion != controllerRemoteProductGUISchema {
+		t.Fatalf("v7 controller fields decoded incorrectly: %#v", decoded)
+	}
 }
 
 func TestManagementControllerProfileRecognizesTypedSensitiveIngress(t *testing.T) {

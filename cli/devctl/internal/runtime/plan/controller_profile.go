@@ -16,8 +16,8 @@ import (
 const (
 	ManagementControllerProfileIdentity     = "management-controller-convergence/v1"
 	ManagementControllerMountPolicyIdentity = "devkit/workspace-egress/v4"
-	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v6"
-	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v6"
+	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v7"
+	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v7"
 	ControllerOperationRequestSchema        = "fleet-control/controller-operation-request/v1"
 	ControllerOperationAcceptedSchema       = "fleet-control/controller-operation-accepted/v1"
 	ControllerOperationEventSchema          = "fleet-control/controller-operation-event/v1"
@@ -38,6 +38,8 @@ const (
 	controllerNixOSDeploymentOperation      = "nixos.deploy-closure"
 	controllerNixOSDeploymentRequestSchema  = "fleet-control/nixos-deploy-local-request/v1"
 	controllerNixOSDeploymentEventSchema    = "fleet-control/nixos-deploy-local-event/v1"
+	controllerRemoteProductGUISchema        = "wsl-nix/remote-product-gui-authority/v1"
+	controllerCodexPermissionContract       = "wsl-nix/codex-granular-custom/v1"
 )
 
 var (
@@ -176,6 +178,96 @@ type ControllerProfileSensitiveOutputEgress struct {
 	PreserveSource         bool   `json:"preserveSource"`
 }
 
+type ControllerProfilePathPair struct {
+	Host   string `json:"host"`
+	Remote string `json:"remote"`
+}
+
+type ControllerProfileRemoteProductGUITransport struct {
+	Address            string `json:"address"`
+	AddressFamily      string `json:"addressFamily"`
+	HostKeyFingerprint string `json:"hostKeyFingerprint"`
+	IdentityReference  string `json:"identityReference"`
+	PreferredRoute     string `json:"preferredRoute"`
+	User               string `json:"user"`
+	WorkerAlias        string `json:"workerAlias"`
+}
+
+type ControllerProfileRemoteProductGUITarget struct {
+	Agent                 int                                        `json:"agent"`
+	ConfigPath            string                                     `json:"configPath"`
+	GovernanceWorkspaceID string                                     `json:"governanceWorkspaceId"`
+	Home                  ControllerProfilePathPair                  `json:"home"`
+	ID                    string                                     `json:"id"`
+	Kind                  string                                     `json:"kind"`
+	RemoteCodexHome       string                                     `json:"remoteCodexHome"`
+	RuntimeProfile        string                                     `json:"runtimeProfile"`
+	SocketName            string                                     `json:"socketName"`
+	Station               string                                     `json:"station"`
+	Transport             ControllerProfileRemoteProductGUITransport `json:"transport"`
+	Worktree              ControllerProfilePathPair                  `json:"worktree"`
+}
+
+type ControllerProfileProtectedIdentityHandle struct {
+	Group    string `json:"group"`
+	Mode     string `json:"mode"`
+	NoFollow bool   `json:"noFollow"`
+	Owner    string `json:"owner"`
+	Path     string `json:"path"`
+}
+
+type ControllerProfileServiceNetwork struct {
+	AddressFamilies []string `json:"addressFamilies"`
+	PrivateNetwork  bool     `json:"privateNetwork"`
+}
+
+type ControllerProfileRemoteProductGUIAuthorityTransport struct {
+	ProtectedIdentityHandles []ControllerProfileProtectedIdentityHandle `json:"protectedIdentityHandles"`
+	ServiceNetwork           ControllerProfileServiceNetwork            `json:"serviceNetwork"`
+	SSHExecutable            string                                     `json:"sshExecutable"`
+}
+
+type ControllerProfileRemoteProductGUI struct {
+	SchemaVersion string                                              `json:"schemaVersion"`
+	Targets       []ControllerProfileRemoteProductGUITarget           `json:"targets"`
+	Transport     ControllerProfileRemoteProductGUIAuthorityTransport `json:"transport"`
+}
+
+type ControllerProfileCodexGranularPolicy struct {
+	MCPElicitations    bool `json:"mcp_elicitations"`
+	RequestPermissions bool `json:"request_permissions"`
+	Rules              bool `json:"rules"`
+	SandboxApproval    bool `json:"sandbox_approval"`
+	SkillApproval      bool `json:"skill_approval"`
+}
+
+type ControllerProfileCodexApprovalPolicy struct {
+	Granular ControllerProfileCodexGranularPolicy `json:"granular"`
+}
+
+type ControllerProfileCodexTargetProjection struct {
+	ByteEqualToSource bool   `json:"byteEqualToSource"`
+	Group             string `json:"group"`
+	Mode              string `json:"mode"`
+	NoFollow          bool   `json:"noFollow"`
+	Owner             string `json:"owner"`
+	PathRule          string `json:"pathRule"`
+	RegularFile       bool   `json:"regularFile"`
+}
+
+type ControllerProfileCodexPermissions struct {
+	ApprovalPolicy    ControllerProfileCodexApprovalPolicy   `json:"approvalPolicy"`
+	ApprovalsReviewer string                                 `json:"approvalsReviewer"`
+	Contract          string                                 `json:"contract"`
+	DestinationMode   string                                 `json:"destinationMode"`
+	Mode              string                                 `json:"mode"`
+	SandboxMode       string                                 `json:"sandboxMode"`
+	Source            string                                 `json:"source"`
+	SourcePath        string                                 `json:"sourcePath"`
+	SourceSHA256      string                                 `json:"sourceSha256"`
+	TargetProjection  ControllerProfileCodexTargetProjection `json:"targetProjection"`
+}
+
 type ManagementControllerProfile struct {
 	SchemaVersion         string                                 `json:"schemaVersion"`
 	ProfileIdentity       string                                 `json:"profileIdentity"`
@@ -192,6 +284,8 @@ type ManagementControllerProfile struct {
 	SourceAcquisition     ControllerProfileSourceAcquisition     `json:"sourceAcquisition"`
 	SensitiveInputIngress ControllerProfileSensitiveInputIngress `json:"sensitiveInputIngress"`
 	SensitiveOutputEgress ControllerProfileSensitiveOutputEgress `json:"sensitiveOutputEgress"`
+	RemoteProductGUI      ControllerProfileRemoteProductGUI      `json:"remoteProductGUI"`
+	CodexPermissions      ControllerProfileCodexPermissions      `json:"codexPermissions"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
@@ -274,6 +368,12 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		profile.Targets.ProductAgentHost != ManagementControllerNode {
 		return fmt.Errorf("Management controller targets do not match the compiled inventory identities")
 	}
+	if err := validateControllerRemoteProductGUI(profile.RemoteProductGUI); err != nil {
+		return err
+	}
+	if err := validateControllerCodexPermissions(profile.CodexPermissions); err != nil {
+		return err
+	}
 	if profile.Schemas != (ControllerProfileSchemas{
 		Request:  ControllerOperationRequestSchema,
 		Accepted: ControllerOperationAcceptedSchema,
@@ -329,6 +429,94 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}
 	if err := validateControllerStoreFile("SSH config", profile.SourceAcquisition.SSHConfigPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateControllerRemoteProductGUI(remote ControllerProfileRemoteProductGUI) error {
+	if remote.SchemaVersion != controllerRemoteProductGUISchema || len(remote.Targets) == 0 {
+		return fmt.Errorf("Management controller remote Product GUI authority does not match the compiled contract")
+	}
+	seen := make(map[string]struct{}, len(remote.Targets))
+	for _, target := range remote.Targets {
+		if target.Agent <= 0 || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.Station) == "" ||
+			target.Kind != "devkit-agent" || target.RuntimeProfile != "dev-all" ||
+			target.GovernanceWorkspaceID != fmt.Sprintf("agent%d", target.Agent) ||
+			target.SocketName != fmt.Sprintf("a%d-app.sock", target.Agent) {
+			return fmt.Errorf("Management controller remote Product GUI target %q has invalid identity", target.ID)
+		}
+		if _, exists := seen[target.ID]; exists {
+			return fmt.Errorf("Management controller remote Product GUI target %q is duplicated", target.ID)
+		}
+		seen[target.ID] = struct{}{}
+		for label, path := range map[string]string{
+			"host home": target.Home.Host, "remote home": target.Home.Remote,
+			"host worktree": target.Worktree.Host, "remote worktree": target.Worktree.Remote,
+			"remote Codex home": target.RemoteCodexHome, "config": target.ConfigPath,
+		} {
+			if !filepath.IsAbs(path) || strings.HasPrefix(filepath.ToSlash(path), "/mnt/") {
+				return fmt.Errorf("Management controller remote Product GUI target %q %s path is invalid", target.ID, label)
+			}
+		}
+		if filepath.Clean(target.RemoteCodexHome) != filepath.Join(filepath.Clean(target.Home.Remote), ".codex") ||
+			filepath.Clean(target.ConfigPath) != filepath.Join(filepath.Clean(target.RemoteCodexHome), "config.toml") {
+			return fmt.Errorf("Management controller remote Product GUI target %q Codex paths are inconsistent", target.ID)
+		}
+		transport := target.Transport
+		if strings.TrimSpace(transport.Address) == "" || transport.AddressFamily != "AF_INET" ||
+			strings.TrimSpace(transport.HostKeyFingerprint) == "" || !filepath.IsAbs(transport.IdentityReference) ||
+			strings.HasPrefix(filepath.ToSlash(transport.IdentityReference), "/mnt/") ||
+			(transport.PreferredRoute != "tailnet-direct" && transport.PreferredRoute != "wireguard-direct") ||
+			transport.User != ManagementControllerIdentityExpectedOwner ||
+			strings.TrimSpace(transport.WorkerAlias) == "" {
+			return fmt.Errorf("Management controller remote Product GUI target %q transport is invalid", target.ID)
+		}
+	}
+	if err := validateControllerStoreExecutable("remote Product GUI SSH", remote.Transport.SSHExecutable); err != nil {
+		return err
+	}
+	families := append([]string(nil), remote.Transport.ServiceNetwork.AddressFamilies...)
+	sort.Strings(families)
+	if remote.Transport.ServiceNetwork.PrivateNetwork || strings.Join(families, "\x00") != "AF_INET\x00AF_UNIX" ||
+		len(remote.Transport.ProtectedIdentityHandles) == 0 {
+		return fmt.Errorf("Management controller remote Product GUI transport does not match the compiled contract")
+	}
+	for _, handle := range remote.Transport.ProtectedIdentityHandles {
+		if !filepath.IsAbs(handle.Path) || strings.HasPrefix(filepath.ToSlash(handle.Path), "/mnt/") ||
+			handle.Mode != "0600" || handle.Owner != ManagementControllerIdentityExpectedOwner ||
+			handle.Group != ManagementControllerIdentityExpectedGroup || !handle.NoFollow {
+			return fmt.Errorf("Management controller remote Product GUI protected identity handle is invalid")
+		}
+	}
+	return nil
+}
+
+func validateControllerCodexPermissions(permissions ControllerProfileCodexPermissions) error {
+	projection := permissions.TargetProjection
+	if permissions.Mode != "custom" || permissions.Source != "config.toml" ||
+		permissions.Contract != controllerCodexPermissionContract || permissions.DestinationMode != "0600" ||
+		permissions.ApprovalsReviewer != "user" || permissions.SandboxMode != "danger-full-access" ||
+		permissions.ApprovalPolicy.Granular != (ControllerProfileCodexGranularPolicy{}) ||
+		projection != (ControllerProfileCodexTargetProjection{
+			ByteEqualToSource: true,
+			Group:             ManagementControllerIdentityExpectedGroup,
+			Mode:              "0600",
+			NoFollow:          true,
+			Owner:             ManagementControllerIdentityExpectedOwner,
+			PathRule:          "remoteProductGUI.targets[].configPath",
+			RegularFile:       true,
+		}) || !validControllerSHA256(permissions.SourceSHA256) {
+		return fmt.Errorf("Management controller Codex permissions do not match the compiled custom contract")
+	}
+	if err := validateControllerStoreFile("Codex permission source", permissions.SourcePath); err != nil {
+		return err
+	}
+	actual, err := hashControllerFile(permissions.SourcePath)
+	if err != nil {
+		return fmt.Errorf("validate Codex permission source: %w", err)
+	}
+	if actual != permissions.SourceSHA256 {
+		return fmt.Errorf("Codex permission source SHA-256 = %q, want %q", actual, permissions.SourceSHA256)
 	}
 	return nil
 }
