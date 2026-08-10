@@ -133,19 +133,25 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 				ID: "test-1", Kind: "devkit-agent", RemoteCodexHome: filepath.Join(remoteHome, ".codex"),
 				RuntimeProfile: "dev-all", SocketName: "a1-app.sock", Station: "test",
 				Transport: ControllerProfileRemoteProductGUITransport{
-					Address: "100.64.0.1", AddressFamily: "AF_INET", HostKeyFingerprint: "SHA256:test",
-					IdentityReference: filepath.Join(managementRoot, ".ssh", "fleet"), PreferredRoute: "tailnet-direct",
-					User: ManagementControllerIdentityExpectedOwner, WorkerAlias: "test-nix",
+					Address: "100.64.0.1", AddressFamily: "AF_INET", ClientIdentityHandle: "identity-fleet",
+					Connector: "direct", HostKeyAlias: "test", Port: 22, PreferredRoute: "tailnet-direct",
+					ServerHostKeyFingerprint: "SHA256:test", User: ManagementControllerIdentityExpectedOwner,
+					WorkerAlias: "test-nix",
 				},
 				Worktree: ControllerProfilePathPair{Host: remoteWorktree, Remote: remoteWorktree},
 			}},
 			Transport: ControllerProfileRemoteProductGUIAuthorityTransport{
 				ProtectedIdentityHandles: []ControllerProfileProtectedIdentityHandle{{
-					Group: ManagementControllerIdentityExpectedGroup, Mode: "0600", NoFollow: true,
-					Owner: ManagementControllerIdentityExpectedOwner, Path: filepath.Join(managementRoot, ".ssh", "fleet"),
+					ID: "identity-fleet", RuntimePath: "/run/credentials/fleet-controller-operation.service/identity-fleet",
+					PublicKeyFingerprint: "SHA256:client", TargetIDs: []string{"test-1"},
+					RegularFile: true, NoFollow: true, ReadableByService: true,
 				}},
-				ServiceNetwork: ControllerProfileServiceNetwork{AddressFamilies: []string{"AF_UNIX", "AF_INET"}},
-				SSHExecutable:  filepath.Join(ControllerProfileStoreRoot, "openssh", "bin", "ssh"),
+				ServiceNetwork: ControllerProfileServiceNetwork{
+					TargetAddressFamilies: []string{"AF_INET"},
+					BrokerAddressFamilies: []string{"AF_UNIX", "AF_INET", "AF_NETLINK"},
+				},
+				SSHExecutable:       filepath.Join(ControllerProfileStoreRoot, "openssh", "bin", "ssh"),
+				SSHKeygenExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "openssh", "bin", "ssh-keygen")),
 			},
 		},
 		CodexPermissions: ControllerProfileCodexPermissions{

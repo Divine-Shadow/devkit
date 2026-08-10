@@ -38,7 +38,7 @@ const (
 	controllerNixOSDeploymentOperation      = "nixos.deploy-closure"
 	controllerNixOSDeploymentRequestSchema  = "fleet-control/nixos-deploy-local-request/v1"
 	controllerNixOSDeploymentEventSchema    = "fleet-control/nixos-deploy-local-event/v1"
-	controllerRemoteProductGUISchema        = "wsl-nix/remote-product-gui-authority/v1"
+	controllerRemoteProductGUISchema        = "wsl-nix/remote-product-gui-authority/v2"
 	controllerCodexPermissionContract       = "wsl-nix/codex-granular-custom/v1"
 )
 
@@ -184,13 +184,16 @@ type ControllerProfilePathPair struct {
 }
 
 type ControllerProfileRemoteProductGUITransport struct {
-	Address            string `json:"address"`
-	AddressFamily      string `json:"addressFamily"`
-	HostKeyFingerprint string `json:"hostKeyFingerprint"`
-	IdentityReference  string `json:"identityReference"`
-	PreferredRoute     string `json:"preferredRoute"`
-	User               string `json:"user"`
-	WorkerAlias        string `json:"workerAlias"`
+	Address                  string `json:"address"`
+	AddressFamily            string `json:"addressFamily"`
+	ClientIdentityHandle     string `json:"clientIdentityHandle"`
+	Connector                string `json:"connector"`
+	HostKeyAlias             string `json:"hostKeyAlias"`
+	Port                     int    `json:"port"`
+	PreferredRoute           string `json:"preferredRoute"`
+	ServerHostKeyFingerprint string `json:"serverHostKeyFingerprint"`
+	User                     string `json:"user"`
+	WorkerAlias              string `json:"workerAlias"`
 }
 
 type ControllerProfileRemoteProductGUITarget struct {
@@ -209,22 +212,26 @@ type ControllerProfileRemoteProductGUITarget struct {
 }
 
 type ControllerProfileProtectedIdentityHandle struct {
-	Group    string `json:"group"`
-	Mode     string `json:"mode"`
-	NoFollow bool   `json:"noFollow"`
-	Owner    string `json:"owner"`
-	Path     string `json:"path"`
+	ID                   string   `json:"id"`
+	RuntimePath          string   `json:"runtimePath"`
+	PublicKeyFingerprint string   `json:"publicKeyFingerprint"`
+	TargetIDs            []string `json:"targetIds"`
+	RegularFile          bool     `json:"regularFile"`
+	NoFollow             bool     `json:"noFollow"`
+	ReadableByService    bool     `json:"readableByService"`
 }
 
 type ControllerProfileServiceNetwork struct {
-	AddressFamilies []string `json:"addressFamilies"`
-	PrivateNetwork  bool     `json:"privateNetwork"`
+	BrokerAddressFamilies []string `json:"brokerAddressFamilies"`
+	TargetAddressFamilies []string `json:"targetAddressFamilies"`
+	PrivateNetwork        bool     `json:"privateNetwork"`
 }
 
 type ControllerProfileRemoteProductGUIAuthorityTransport struct {
 	ProtectedIdentityHandles []ControllerProfileProtectedIdentityHandle `json:"protectedIdentityHandles"`
 	ServiceNetwork           ControllerProfileServiceNetwork            `json:"serviceNetwork"`
 	SSHExecutable            string                                     `json:"sshExecutable"`
+	SSHKeygenExecutable      string                                     `json:"sshKeygenExecutable"`
 }
 
 type ControllerProfileRemoteProductGUI struct {
@@ -438,6 +445,7 @@ func validateControllerRemoteProductGUI(remote ControllerProfileRemoteProductGUI
 		return fmt.Errorf("Management controller remote Product GUI authority does not match the compiled contract")
 	}
 	seen := make(map[string]struct{}, len(remote.Targets))
+	targetHandles := make(map[string]string, len(remote.Targets))
 	for _, target := range remote.Targets {
 		if target.Agent <= 0 || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.Station) == "" ||
 			target.Kind != "devkit-agent" || target.RuntimeProfile != "dev-all" ||
@@ -464,31 +472,74 @@ func validateControllerRemoteProductGUI(remote ControllerProfileRemoteProductGUI
 		}
 		transport := target.Transport
 		if strings.TrimSpace(transport.Address) == "" || transport.AddressFamily != "AF_INET" ||
-			strings.TrimSpace(transport.HostKeyFingerprint) == "" || !filepath.IsAbs(transport.IdentityReference) ||
-			strings.HasPrefix(filepath.ToSlash(transport.IdentityReference), "/mnt/") ||
+			transport.Connector != "direct" || transport.Port != 22 ||
+			!validControllerAuthorityToken(transport.HostKeyAlias) ||
+			!strings.HasPrefix(transport.ServerHostKeyFingerprint, "SHA256:") ||
+			!strings.HasPrefix(transport.ClientIdentityHandle, "identity-") ||
+			!validControllerAuthorityToken(transport.ClientIdentityHandle) ||
 			(transport.PreferredRoute != "tailnet-direct" && transport.PreferredRoute != "wireguard-direct") ||
 			transport.User != ManagementControllerIdentityExpectedOwner ||
 			strings.TrimSpace(transport.WorkerAlias) == "" {
 			return fmt.Errorf("Management controller remote Product GUI target %q transport is invalid", target.ID)
 		}
+		targetHandles[target.ID] = transport.ClientIdentityHandle
 	}
 	if err := validateControllerStoreExecutable("remote Product GUI SSH", remote.Transport.SSHExecutable); err != nil {
 		return err
 	}
-	families := append([]string(nil), remote.Transport.ServiceNetwork.AddressFamilies...)
-	sort.Strings(families)
-	if remote.Transport.ServiceNetwork.PrivateNetwork || strings.Join(families, "\x00") != "AF_INET\x00AF_UNIX" ||
+	if err := validateControllerStoreExecutable("remote Product GUI SSH keygen", remote.Transport.SSHKeygenExecutable); err != nil {
+		return err
+	}
+	targetFamilies := append([]string(nil), remote.Transport.ServiceNetwork.TargetAddressFamilies...)
+	brokerFamilies := append([]string(nil), remote.Transport.ServiceNetwork.BrokerAddressFamilies...)
+	sort.Strings(targetFamilies)
+	sort.Strings(brokerFamilies)
+	if remote.Transport.ServiceNetwork.PrivateNetwork || strings.Join(targetFamilies, "\x00") != "AF_INET" ||
+		strings.Join(brokerFamilies, "\x00") != "AF_INET\x00AF_NETLINK\x00AF_UNIX" ||
 		len(remote.Transport.ProtectedIdentityHandles) == 0 {
 		return fmt.Errorf("Management controller remote Product GUI transport does not match the compiled contract")
 	}
+	seenHandles := make(map[string]struct{}, len(remote.Transport.ProtectedIdentityHandles))
+	boundTargets := make(map[string]struct{}, len(remote.Targets))
 	for _, handle := range remote.Transport.ProtectedIdentityHandles {
-		if !filepath.IsAbs(handle.Path) || strings.HasPrefix(filepath.ToSlash(handle.Path), "/mnt/") ||
-			handle.Mode != "0600" || handle.Owner != ManagementControllerIdentityExpectedOwner ||
-			handle.Group != ManagementControllerIdentityExpectedGroup || !handle.NoFollow {
+		if !strings.HasPrefix(handle.ID, "identity-") || !validControllerAuthorityToken(handle.ID) ||
+			handle.RuntimePath != filepath.Join("/run/credentials/fleet-controller-operation.service", handle.ID) ||
+			!strings.HasPrefix(handle.PublicKeyFingerprint, "SHA256:") || len(handle.TargetIDs) == 0 ||
+			!handle.RegularFile || !handle.NoFollow || !handle.ReadableByService {
 			return fmt.Errorf("Management controller remote Product GUI protected identity handle is invalid")
 		}
+		if _, exists := seenHandles[handle.ID]; exists {
+			return fmt.Errorf("Management controller remote Product GUI protected identity handle %q is duplicated", handle.ID)
+		}
+		seenHandles[handle.ID] = struct{}{}
+		for _, targetID := range handle.TargetIDs {
+			if targetHandles[targetID] != handle.ID {
+				return fmt.Errorf("Management controller remote Product GUI protected identity handle %q has invalid target %q", handle.ID, targetID)
+			}
+			if _, exists := boundTargets[targetID]; exists {
+				return fmt.Errorf("Management controller remote Product GUI target %q has multiple protected identity handles", targetID)
+			}
+			boundTargets[targetID] = struct{}{}
+		}
+	}
+	if len(boundTargets) != len(targetHandles) {
+		return fmt.Errorf("Management controller remote Product GUI protected identity handles do not cover every target")
 	}
 	return nil
+}
+
+func validControllerAuthorityToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateControllerCodexPermissions(permissions ControllerProfileCodexPermissions) error {
