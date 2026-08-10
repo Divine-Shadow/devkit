@@ -100,7 +100,11 @@ type nativeProc struct {
 	touches bool
 }
 
-var nativeSlotProcRoot = "/proc"
+var (
+	nativeSlotProcRoot          = "/proc"
+	nativeSlotMutationRename    = os.Rename
+	nativeSlotMutationRemoveAll = os.RemoveAll
+)
 
 func parseNativeProcEnviron(data []byte) map[string]string {
 	result := map[string]string{}
@@ -411,18 +415,37 @@ func probeNativeSlotMutationRoot(root nativeSlotMutationRoot) (retErr error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%s root %s must be a real directory", root.name, path)
 	}
-	probe, err := os.CreateTemp(path, ".devkit-native-reset-write-probe-")
+	probePath, err := os.MkdirTemp(path, ".devkit-native-reset-mutation-probe-")
 	if err != nil {
-		return fmt.Errorf("write-probe %s root %s: %w", root.name, path, err)
+		return fmt.Errorf("create mutation probe in %s root %s: %w", root.name, path, err)
 	}
-	probePath := probe.Name()
+	stagedPath := probePath + ".staged"
 	defer func() {
-		if err := os.Remove(probePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			retErr = errors.Join(retErr, fmt.Errorf("remove %s write probe %s: %w", root.name, probePath, err))
+		for _, candidate := range []string{probePath, stagedPath} {
+			if err := nativeSlotMutationRemoveAll(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove %s mutation probe %s: %w", root.name, candidate, err))
+			}
 		}
 	}()
-	if err := probe.Close(); err != nil {
-		return fmt.Errorf("close %s write probe %s: %w", root.name, probePath, err)
+	child := filepath.Join(probePath, "existing-child")
+	if err := os.Mkdir(child, 0o700); err != nil {
+		return fmt.Errorf("create existing-child probe in %s root %s: %w", root.name, path, err)
+	}
+	payload := filepath.Join(child, "payload")
+	if err := os.WriteFile(payload, []byte("disposable\n"), 0o600); err != nil {
+		return fmt.Errorf("create delete-child probe in %s root %s: %w", root.name, path, err)
+	}
+	if err := nativeSlotMutationRename(probePath, stagedPath); err != nil {
+		return fmt.Errorf("stage existing candidate in %s root %s: %w", root.name, path, err)
+	}
+	if err := nativeSlotMutationRename(stagedPath, probePath); err != nil {
+		return fmt.Errorf("roll back staged candidate in %s root %s: %w", root.name, path, err)
+	}
+	if err := nativeSlotMutationRemoveAll(probePath); err != nil {
+		return fmt.Errorf("discard existing candidate contents in %s root %s: %w", root.name, path, err)
+	}
+	if _, err := os.Lstat(probePath); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("mutation probe survived disposal in %s root %s", root.name, path)
 	}
 	return nil
 }

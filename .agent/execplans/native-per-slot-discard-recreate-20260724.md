@@ -52,6 +52,25 @@ composition, or deletion paths.
 - [ ] (2026-07-29) Consume one shared compiled Git authority across reset,
   worktree construction, launch preparation, source verification, and final
   HEAD readback; prove the full path under hostile PATH.
+- [x] (2026-08-10) Reconciled typed failure
+  `op-c536b547c267077022f2346599fbc3fb`: mutation-root preflight could create
+  and remove a new file, but selected reset then failed renaming the existing
+  source-declared worktree root with `permission denied`.
+- [x] (2026-08-10) Closed the adjacent mutation family in the reset owner:
+  preflight now exercises existing-directory stage, rollback, descendant
+  deletion, and residue absence; selected and broad reset may preserve and
+  empty only their exact declared worktree/state/home roots when replacement
+  of that existing name is denied.
+- [x] (2026-08-10) Added focused consequences for selected and broad reset,
+  two fresh Git reconstruction round trips, sibling/outside preservation,
+  mounted-root staging, denied child/rollback, quarantine cleanup recovery,
+  and symlink/path-swap rejection. Focused and complete Go tests and the
+  hermetic Devctl Go Nix check pass.
+- [x] (2026-08-10) Passed all Go packages, Go vet, the hermetic Devctl Go Nix
+  check, and the complete eleven-check Devkit flake gate.
+- [x] (2026-08-10) Sealed the clean local repair candidate for parent-owned
+  publication and convergence; no runtime, slot, deployment, pin, or
+  publication effect was performed in this lane.
 
 ## Context and orientation
 
@@ -143,6 +162,18 @@ replacing one failed consumer and is not registered as `native reset`.
   launch preparation configures the freshly materialized checkout afterward.
   Use one compiled `gitauthority` package across every production Git lookup;
   operative source search must contain no ambient Git invocation.
+- 2026-08-10: A successful new-file probe is not proof that an existing name
+  can be staged, rolled back, or recursively discarded. Keep the fail-closed
+  probe, but exercise the actual mutation classes. When only replacement of a
+  declared disposable directory root is denied, preserve that inode and use
+  the already-established mounted-root quarantine algorithm on its contents.
+  This authority is encoded on exact internally derived slot roots; Git
+  metadata, manifests, quarantine names, siblings, protected roots, and
+  foreign paths never inherit it.
+- 2026-08-10: An empty root retained by reset is a lawful Git worktree target.
+  Materialization may reuse it only when removing that empty name fails with
+  the same narrow permission/mount class; a non-empty or structurally invalid
+  root remains rejected.
 
 ## Verification
 
@@ -182,3 +213,12 @@ while its prior contents and selected worktree disappear; sibling state stays
 byte-identical, and mounted worktrees or nested mounts remain fail-closed.
 The reconstruction handler now validates the entire production mutation
 surface before that destructive boundary and leaves no write-probe residue.
+
+The permission-family repair extends that contract from newly created probes
+to the actual stage/rollback/delete operations. If the parent denies renaming
+an existing declared slot directory, reset revalidates the boundary and empties
+only that directory through an in-root quarantine; the following package Git
+reconstruction reuses the empty root. Hostile child permissions, rollback
+failure, or quarantine deletion failure return typed errors with recoverable
+source-named residue, and a second reset reclaims that residue without touching
+siblings or foreign data.

@@ -1157,6 +1157,408 @@ func TestNativeSlotResetPreservesSelectedMountedStateRootAndDisposesItsContents(
 	}
 }
 
+func TestNativeSlotResetReusesOnlyExactSelectedRootsWhenParentDeniesRename(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalRename := nativeResetRename
+	originalRemove := nativeResetRemove
+	originalDiscard := nativeResetDiscardTree
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetRename = originalRename
+		nativeResetRemove = originalRemove
+		nativeResetDiscardTree = originalDiscard
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	selectedWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
+	if err := os.MkdirAll(sibling, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	siblingSentinel := filepath.Join(sibling, "preserve")
+	if err := os.WriteFile(siblingSentinel, []byte("sibling\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	nativeResetRename = func(oldPath, newPath string) error {
+		if oldPath == selectedWorktree || oldPath == selectedState {
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	for round := 1; round <= 2; round++ {
+		for _, path := range []string{selectedWorktree, selectedState} {
+			if err := os.MkdirAll(filepath.Join(path, "nested"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "nested", fmt.Sprintf("round-%d", round)), []byte("discard\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+			Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 2,
+			WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := plan.Apply(); err != nil {
+			t.Fatalf("round %d reset: %v", round, err)
+		}
+		for _, path := range []string{selectedWorktree, selectedState} {
+			entries, err := os.ReadDir(path)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("round %d exact reusable root %s = %#v, %v", round, path, entries, err)
+			}
+		}
+		if got, err := os.ReadFile(siblingSentinel); err != nil || string(got) != "sibling\n" {
+			t.Fatalf("round %d changed sibling: %q %v", round, got, err)
+		}
+	}
+}
+
+func TestNativeBroadResetReusesOnlyDeclaredSlotRootsWhenParentDeniesRename(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalRename := nativeResetRename
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetRename = originalRename
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	agentRoot := filepath.Join(worktreeRoot, "agent1")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	outside := filepath.Join(root, "outside")
+	for _, path := range []string{filepath.Join(agentRoot, "ouroboros-ide"), selectedState, outside} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideSentinel := filepath.Join(outside, "preserve")
+	if err := os.WriteFile(outsideSentinel, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeResetRename = func(oldPath, newPath string) error {
+		if oldPath == agentRoot || oldPath == selectedState {
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	plan, err := PlanNativeReset(NativeResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{agentRoot, selectedState} {
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("declared broad-reset root %s = %#v, %v", path, entries, err)
+		}
+	}
+	if got, err := os.ReadFile(outsideSentinel); err != nil || string(got) != "outside\n" {
+		t.Fatalf("broad reset changed outside data: %q %v", got, err)
+	}
+}
+
+func TestNativeWorktreeMaterializationAcceptsOnlyEmptyPermissionPreservedRoot(t *testing.T) {
+	originalRemove := nativeResetRemove
+	t.Cleanup(func() { nativeResetRemove = originalRemove })
+
+	root := t.TempDir()
+	worktree := filepath.Join(root, "ouroboros-ide")
+	if err := os.Mkdir(worktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nativeResetRemove = func(path string) error {
+		if path == worktree {
+			return &os.PathError{Op: "remove", Path: path, Err: os.ErrPermission}
+		}
+		return os.Remove(path)
+	}
+	staging, err := stageNativeWorktreePayload(worktree, ".devhome-agent1")
+	if err != nil || staging != "" {
+		t.Fatalf("empty preserved root staging = %q, %v", staging, err)
+	}
+	info, err := os.Lstat(worktree)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("empty preserved worktree root changed: %#v %v", info, err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "foreign"), []byte("preserve\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stageNativeWorktreePayload(worktree, ".devhome-agent1"); err == nil ||
+		!strings.Contains(err.Error(), "became non-empty") {
+		t.Fatalf("non-empty preserved root error = %v", err)
+	}
+}
+
+func TestSelectedResetReconstructsFreshGitWorktreeTwiceFromPermissionPreservedRoot(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalRename := nativeResetRename
+	originalRemove := nativeResetRemove
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetRename = originalRename
+		nativeResetRemove = originalRemove
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	origin := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "remote", "get-url", "origin")
+	opts := NativeOptions{
+		DevkitRoot: devkitRoot, Repo: "ouroboros-ide", Origin: origin,
+		Count: 2, BaseBranch: "main", BranchPrefix: "agent",
+	}
+	if err := SetupNative(opts); err != nil {
+		t.Fatal(err)
+	}
+	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
+	stateRoot := filepath.Join(root, "state")
+	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
+	siblingSentinel := filepath.Join(sibling, "preserve")
+	if err := os.WriteFile(siblingSentinel, []byte("sibling\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeResetRename = func(oldPath, newPath string) error {
+		if oldPath == selected {
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	nativeResetRemove = func(path string) error {
+		if path == selected {
+			return &os.PathError{Op: "remove", Path: path, Err: os.ErrPermission}
+		}
+		return os.Remove(path)
+	}
+	for round := 1; round <= 2; round++ {
+		plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+			Project: "dev-all", Repo: "ouroboros-ide", Origin: origin,
+			BranchPrefix: "agent", Index: 1, Count: 2,
+			WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+		})
+		if err != nil {
+			t.Fatalf("round %d plan: %v", round, err)
+		}
+		if err := plan.Apply(); err != nil {
+			t.Fatalf("round %d reset: %v", round, err)
+		}
+		opts.Index = 1
+		opts.ReconstructSelected = true
+		if err := SetupNative(opts); err != nil {
+			t.Fatalf("round %d reconstruction: %v", round, err)
+		}
+		checkBranchAndUpstream(t, selected, "agent1")
+		if got := readTrim(t, "git", "-C", selected, "status", "--porcelain=v1"); got != "" {
+			t.Fatalf("round %d reconstructed worktree dirty: %q", round, got)
+		}
+		if got, err := os.ReadFile(siblingSentinel); err != nil || string(got) != "sibling\n" {
+			t.Fatalf("round %d changed sibling: %q %v", round, got, err)
+		}
+	}
+}
+
+func TestNativeSlotResetRetainsTypedResidueWhenChildStagingAndRollbackAreDenied(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalRename := nativeResetRename
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetRename = originalRename
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
+	for _, path := range []string{selected, sibling} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"a", "b"} {
+		if err := os.WriteFile(filepath.Join(selected, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	siblingSentinel := filepath.Join(sibling, "preserve")
+	if err := os.WriteFile(siblingSentinel, []byte("sibling\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeResetRename = func(oldPath, newPath string) error {
+		if oldPath == selected || oldPath == filepath.Join(selected, "b") ||
+			(strings.Contains(oldPath, ".devkit-reset-dev-all-agent1-") && newPath == filepath.Join(selected, "a")) {
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 2,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = plan.Apply()
+	if err == nil || !strings.Contains(err.Error(), "reclaim exact native reset reusable root") ||
+		!strings.Contains(err.Error(), "restore native reset target") {
+		t.Fatalf("denied child/rollback error = %v", err)
+	}
+	if got, readErr := os.ReadFile(siblingSentinel); readErr != nil || string(got) != "sibling\n" {
+		t.Fatalf("failed reset changed sibling: %q %v", got, readErr)
+	}
+
+	nativeResetRename = os.Rename
+	cleanupPlan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 2,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupPlan.Apply(); err != nil {
+		t.Fatalf("second reset did not reclaim typed rollback residue: %v", err)
+	}
+	if _, err := os.Lstat(selected); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected root survived second reset: %v", err)
+	}
+}
+
+func TestNativeSlotResetQuarantineFailureIsReclaimableOnSecondReset(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalDiscard := nativeResetDiscardTree
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetDiscardTree = originalDiscard
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	if err := os.MkdirAll(selected, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(selected, "discard"), []byte("payload\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nativeResetDiscardTree = func(path string) error {
+		return &os.PathError{Op: "removeall", Path: path, Err: os.ErrPermission}
+	}
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "discard native reset quarantine") {
+		t.Fatalf("quarantine failure = %v", err)
+	}
+
+	nativeResetDiscardTree = os.RemoveAll
+	cleanupPlan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupPlan.Apply(); err != nil {
+		t.Fatalf("second reset did not reclaim quarantine residue: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(worktreeRoot, "agent1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".devkit-reset-") {
+			t.Fatalf("quarantine residue survived second reset: %s", entry.Name())
+		}
+	}
+}
+
+func TestNativeSlotResetFallbackRejectsPathSwapBeforeEnteringReusableRoot(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalRename := nativeResetRename
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetRename = originalRename
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	saved := filepath.Join(worktreeRoot, "agent1", "saved-selected")
+	outside := filepath.Join(root, "outside")
+	for _, path := range []string{selected, outside} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideSentinel := filepath.Join(outside, "preserve")
+	if err := os.WriteFile(outsideSentinel, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	nativeResetRename = func(oldPath, newPath string) error {
+		if oldPath == selected && !swapped {
+			swapped = true
+			if err := os.Rename(selected, saved); err != nil {
+				return err
+			}
+			if err := os.Symlink(outside, selected); err != nil {
+				return err
+			}
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = plan.Apply()
+	if err == nil || !strings.Contains(err.Error(), "symlink or junction") {
+		t.Fatalf("path-swap error = %v", err)
+	}
+	if got, readErr := os.ReadFile(outsideSentinel); readErr != nil || string(got) != "outside\n" {
+		t.Fatalf("path swap changed outside target: %q %v", got, readErr)
+	}
+	if err := os.Remove(selected); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, selected); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })

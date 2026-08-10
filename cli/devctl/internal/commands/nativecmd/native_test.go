@@ -1450,6 +1450,72 @@ func TestNativeSlotMutationPreflightChecksEveryProductionRootAndLeavesNoProbe(t 
 	}
 }
 
+func TestNativeSlotMutationPreflightExercisesStageRollbackAndDeleteChildAuthority(t *testing.T) {
+	originalRename := nativeSlotMutationRename
+	originalRemoveAll := nativeSlotMutationRemoveAll
+	t.Cleanup(func() {
+		nativeSlotMutationRename = originalRename
+		nativeSlotMutationRemoveAll = originalRemoveAll
+	})
+
+	t.Run("stage denied", func(t *testing.T) {
+		root := t.TempDir()
+		nativeSlotMutationRename = func(oldPath, newPath string) error {
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		nativeSlotMutationRemoveAll = os.RemoveAll
+		err := preflightNativeSlotMutationRoots([]nativeSlotMutationRoot{{name: "selected-worktree-parent", path: root}})
+		if err == nil || !strings.Contains(err.Error(), "stage existing candidate") {
+			t.Fatalf("stage-denied preflight error = %v", err)
+		}
+		entries, readErr := os.ReadDir(root)
+		if readErr != nil || len(entries) != 0 {
+			t.Fatalf("stage-denied preflight residue = %#v, %v", entries, readErr)
+		}
+	})
+
+	t.Run("rollback denied", func(t *testing.T) {
+		root := t.TempDir()
+		calls := 0
+		nativeSlotMutationRename = func(oldPath, newPath string) error {
+			calls++
+			if calls == 2 {
+				return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+			}
+			return os.Rename(oldPath, newPath)
+		}
+		nativeSlotMutationRemoveAll = os.RemoveAll
+		err := preflightNativeSlotMutationRoots([]nativeSlotMutationRoot{{name: "selected-state", path: root}})
+		if err == nil || !strings.Contains(err.Error(), "roll back staged candidate") {
+			t.Fatalf("rollback-denied preflight error = %v", err)
+		}
+		entries, readErr := os.ReadDir(root)
+		if readErr != nil || len(entries) != 0 {
+			t.Fatalf("rollback-denied preflight residue = %#v, %v", entries, readErr)
+		}
+	})
+
+	t.Run("delete child denied", func(t *testing.T) {
+		root := t.TempDir()
+		nativeSlotMutationRename = os.Rename
+		denied := true
+		nativeSlotMutationRemoveAll = func(path string) error {
+			if denied && strings.Contains(filepath.Base(path), ".devkit-native-reset-mutation-probe-") {
+				return &os.PathError{Op: "removeall", Path: path, Err: os.ErrPermission}
+			}
+			return os.RemoveAll(path)
+		}
+		err := preflightNativeSlotMutationRoots([]nativeSlotMutationRoot{{name: "selected-state", path: root}})
+		if err == nil || !strings.Contains(err.Error(), "discard existing candidate contents") {
+			t.Fatalf("delete-child-denied preflight error = %v", err)
+		}
+		denied = false
+		if err := os.RemoveAll(root); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestNativeSlotMutationRootsCoverTheCompleteReconstructionContract(t *testing.T) {
 	roots, err := nativeSlotMutationRoots(
 		wtx.NativeSlotResetOptions{
