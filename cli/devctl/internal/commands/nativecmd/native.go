@@ -94,6 +94,12 @@ const managedAppServerServiceEnv = "DEVKIT_MANAGED_APP_SERVER_SERVICE"
 // exact Nix-owned GUI service.  The typed operation broker is intentionally
 // not that owner: it exits after persisting each receipt.
 const managedAppServerServiceIdentity = "fleet-gui-shadow-throne-management-2.service"
+const managedAdditionalAppServerServiceIdentity = "fleet-gui-shadow-throne-management.service"
+
+func managedAppServerServiceAllowed(service string) bool {
+	return service == managedAppServerServiceIdentity ||
+		service == managedAdditionalAppServerServiceIdentity
+}
 
 func managedAppServerServiceOwned() bool {
 	cgroup, err := os.ReadFile("/proc/self/cgroup")
@@ -108,9 +114,9 @@ func managedAppServerServiceOwned() bool {
 }
 
 func managedAppServerServiceOwnedWithCgroup(service, invocationID, cgroup string) bool {
-	return service == managedAppServerServiceIdentity &&
+	return managedAppServerServiceAllowed(service) &&
 		strings.TrimSpace(invocationID) != "" &&
-		strings.Contains(cgroup, managedAppServerServiceIdentity)
+		strings.Contains(cgroup, service)
 }
 
 type lifecycleArgs struct {

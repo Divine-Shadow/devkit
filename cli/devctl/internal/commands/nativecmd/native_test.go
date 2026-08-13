@@ -70,6 +70,13 @@ func TestManagedAppServerRequiresDedicatedGUIServiceIdentity(t *testing.T) {
 	) {
 		t.Fatal("exact managed GUI service cgroup was rejected")
 	}
+	if !managedAppServerServiceOwnedWithCgroup(
+		managedAdditionalAppServerServiceIdentity,
+		"invocation-id",
+		"0::/user.slice/user-1000.slice/fleet-gui-shadow-throne-management.service",
+	) {
+		t.Fatal("additional declared managed GUI service cgroup was rejected")
+	}
 	for _, candidate := range []struct{ service, invocation, cgroup string }{
 		{"fleet-controller-operation.service", "invocation-id", "0::/system.slice/fleet-controller-operation.service"},
 		{managedAppServerServiceIdentity, "", "0::/system.slice/fleet-gui-shadow-throne-management-2.service"},
