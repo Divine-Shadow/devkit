@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1454,6 +1455,86 @@ fi
 	if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(sshLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("fresh bootstrap JSON reserves stdout and preserves sibling state", func(t *testing.T) {
+		worktreesRoot := filepath.Join(base, "agent-worktrees")
+		siblingHome := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
+		siblingState := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
+		for _, path := range []string{siblingHome, siblingState} {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(path, "selected-reset-must-preserve"), []byte("sibling remains exact\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		commonRepo := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
+		selectedWorktree := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide")
+		for _, absent := range []string{commonRepo, selectedWorktree} {
+			if _, err := os.Lstat(absent); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("fresh JSON reset prerequisite %s is not absent: %v", absent, err)
+			}
+		}
+
+		command := exec.Command(packageDevctl,
+			"-p", "dev-all", "native", "reset",
+			"--repo", "ouroboros-ide", "--index", "1", "--format", "json",
+		)
+		command.Env = env
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		if err := command.Run(); err != nil {
+			t.Fatalf("fresh JSON slot reset failed: %v\nstderr:\n%s\nstdout:\n%s", err, stderr.String(), stdout.String())
+		}
+
+		var receipt struct {
+			Command      string `json:"command"`
+			Runtime      string `json:"runtime"`
+			Repo         string `json:"repo"`
+			Index        int    `json:"index"`
+			Status       string `json:"status"`
+			Head         string `json:"head"`
+			ManifestPath string `json:"manifest_path"`
+			Capacity     struct {
+				Total        int `json:"total"`
+				RuntimeReady int `json:"runtime_ready"`
+				RepoReady    int `json:"repo_ready"`
+			} `json:"capacity"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+		if err := decoder.Decode(&receipt); err != nil {
+			t.Fatalf("reset stdout is not one JSON receipt: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+		}
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			t.Fatalf("reset stdout contains data after its JSON receipt: %v %#v\n%s", err, extra, stdout.String())
+		}
+		freshHead := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", sourceRepo, "rev-parse", "HEAD"))
+		if receipt.Command != "reset" || receipt.Runtime != "native" || receipt.Repo != "ouroboros-ide" ||
+			receipt.Index != 1 || receipt.Status != "ready" || receipt.Head != freshHead ||
+			receipt.ManifestPath == "" || receipt.Capacity.Total != 1 ||
+			receipt.Capacity.RuntimeReady != 1 || receipt.Capacity.RepoReady != 1 {
+			t.Fatalf("unexpected fresh JSON reset receipt: %#v", receipt)
+		}
+		if !strings.Contains(stderr.String(), "Initialized empty Git repository") {
+			t.Fatalf("fresh Git stdout was not projected to diagnostics stderr:\n%s", stderr.String())
+		}
+		for _, path := range []string{siblingHome, siblingState} {
+			got, err := os.ReadFile(filepath.Join(path, "selected-reset-must-preserve"))
+			if err != nil || string(got) != "sibling remains exact\n" {
+				t.Fatalf("selected JSON reset changed sibling state %s: %q %v", path, got, err)
+			}
+		}
+		if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", selectedWorktree, "status", "--porcelain=v1")); got != "" {
+			t.Fatalf("fresh JSON reset left selected worktree dirty: %s", got)
+		}
+	})
 	if err := os.WriteFile(sshLog, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

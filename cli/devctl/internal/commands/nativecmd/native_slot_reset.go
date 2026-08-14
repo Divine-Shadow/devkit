@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -356,6 +357,103 @@ type nativeSlotResetStatus struct {
 	Capacity     capacity.Summary `json:"capacity"`
 }
 
+const nativeSlotResetJSONDiagnosticLimit = 64 * 1024
+
+// nativeSlotResetJSONOutput reserves stdout for the one typed reset receipt.
+// Fresh Git construction uses package-owned helpers that intentionally stream
+// command output. In JSON mode that diagnostic output is redirected through a
+// bounded pipe to stderr so it cannot prefix or suffix the machine receipt.
+// Text mode retains the existing streaming behavior.
+type nativeSlotResetJSONOutput struct {
+	receipt          *os.File
+	diagnosticReader *os.File
+	diagnosticWriter *os.File
+	diagnostics      *boundedNativeSlotResetDiagnostics
+	done             chan struct{}
+	copyErr          error
+	active           bool
+}
+
+type boundedNativeSlotResetDiagnostics struct {
+	destination io.Writer
+	remaining   int
+	truncated   bool
+	err         error
+}
+
+func nativeSlotResetJSONDiagnosticTruncationMarker() string {
+	return fmt.Sprintf("\n[native reset JSON diagnostic stdout truncated after %d bytes]\n", nativeSlotResetJSONDiagnosticLimit)
+}
+
+func (writer *boundedNativeSlotResetDiagnostics) writeDestination(payload []byte) {
+	if len(payload) == 0 || writer.err != nil {
+		return
+	}
+	written, err := writer.destination.Write(payload)
+	if err != nil {
+		writer.err = err
+		return
+	}
+	if written != len(payload) {
+		writer.err = io.ErrShortWrite
+	}
+}
+
+func (writer *boundedNativeSlotResetDiagnostics) Write(payload []byte) (int, error) {
+	total := len(payload)
+	allowed := total
+	if allowed > writer.remaining {
+		allowed = writer.remaining
+	}
+	writer.writeDestination(payload[:allowed])
+	writer.remaining -= allowed
+	if allowed != total && !writer.truncated {
+		writer.truncated = true
+		writer.writeDestination([]byte(nativeSlotResetJSONDiagnosticTruncationMarker()))
+	}
+	// Always drain the pipe even if stderr is unavailable. close() surfaces the
+	// first projection error after the child process has exited, avoiding a
+	// blocked child that would hide the actual lifecycle failure.
+	return total, nil
+}
+
+func reserveNativeSlotResetJSONOutput(format string) (*nativeSlotResetJSONOutput, error) {
+	reserved := &nativeSlotResetJSONOutput{receipt: os.Stdout}
+	if format != "json" {
+		return reserved, nil
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("reserve native reset JSON stdout: %w", err)
+	}
+	reserved.diagnosticReader = reader
+	reserved.diagnosticWriter = writer
+	reserved.diagnostics = &boundedNativeSlotResetDiagnostics{
+		destination: os.Stderr,
+		remaining:   nativeSlotResetJSONDiagnosticLimit,
+	}
+	reserved.done = make(chan struct{})
+	reserved.active = true
+	os.Stdout = writer
+	go func() {
+		_, reserved.copyErr = io.Copy(reserved.diagnostics, reader)
+		close(reserved.done)
+	}()
+	return reserved, nil
+}
+
+func (reserved *nativeSlotResetJSONOutput) close() error {
+	if reserved == nil || !reserved.active {
+		return nil
+	}
+	os.Stdout = reserved.receipt
+	writeErr := reserved.diagnosticWriter.Close()
+	<-reserved.done
+	readErr := reserved.diagnosticReader.Close()
+	reserved.active = false
+	return errors.Join(writeErr, reserved.copyErr, reserved.diagnostics.err, readErr)
+}
+
 type nativeSlotResetLock struct {
 	file *os.File
 	path string
@@ -513,23 +611,46 @@ func (lock *nativeSlotResetLock) release() error {
 	return errors.Join(unlockErr, closeErr)
 }
 
-func printNativeSlotResetStatus(status nativeSlotResetStatus, format string) error {
+func printNativeSlotResetStatus(status nativeSlotResetStatus, format string, stdout io.Writer) error {
 	if format == "json" {
 		data, err := json.MarshalIndent(status, "", "  ")
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(os.Stdout, string(data))
-		return nil
+		_, err = fmt.Fprintln(stdout, string(data))
+		return err
 	}
-	fmt.Fprintf(os.Stdout, "runtime: %s\ncommand: %s\nrepo: %s\nindex: %d\nstatus: %s\n", status.Runtime, status.Command, status.Repo, status.Index, status.Status)
+	if _, err := fmt.Fprintf(stdout, "runtime: %s\ncommand: %s\nrepo: %s\nindex: %d\nstatus: %s\n", status.Runtime, status.Command, status.Repo, status.Index, status.Status); err != nil {
+		return err
+	}
 	if status.Head != "" {
-		fmt.Fprintf(os.Stdout, "head: %s\n", status.Head)
+		if _, err := fmt.Fprintf(stdout, "head: %s\n", status.Head); err != nil {
+			return err
+		}
 	}
 	if status.ManifestPath != "" {
-		fmt.Fprintf(os.Stdout, "manifest: %s\n", status.ManifestPath)
+		if _, err := fmt.Fprintf(stdout, "manifest: %s\n", status.ManifestPath); err != nil {
+			return err
+		}
 	}
-	fmt.Fprintf(os.Stdout, "runtime_ready: %d/%d\nrepo_ready: %d/%d\n", status.Capacity.RuntimeReady, status.Capacity.Total, status.Capacity.RepoReady, status.Capacity.Total)
+	_, err := fmt.Fprintf(stdout, "runtime_ready: %d/%d\nrepo_ready: %d/%d\n", status.Capacity.RuntimeReady, status.Capacity.Total, status.Capacity.RepoReady, status.Capacity.Total)
+	return err
+}
+
+func finishNativeSlotResetOutput(
+	output *nativeSlotResetJSONOutput,
+	status nativeSlotResetStatus,
+	format string,
+) error {
+	if output == nil {
+		return fmt.Errorf("native reset output reservation is required")
+	}
+	if err := output.close(); err != nil {
+		return fmt.Errorf("finalize native reset diagnostic output: %w", err)
+	}
+	if err := printNativeSlotResetStatus(status, format, output.receipt); err != nil {
+		return fmt.Errorf("write native reset %s receipt: %w", format, err)
+	}
 	return nil
 }
 
@@ -559,6 +680,13 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
+	output, err := reserveNativeSlotResetJSONOutput(parsed.format)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		retErr = errors.Join(retErr, output.close())
+	}()
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 	if err != nil {
 		return err
@@ -817,7 +945,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 			return cleanupFailedSlot(err)
 		}
 	}
-	return printNativeSlotResetStatus(nativeSlotResetStatus{
+	return finishNativeSlotResetOutput(output, nativeSlotResetStatus{
 		Command: "reset", Runtime: "native", Repo: declaredRepo, Index: parsed.index,
 		Status: "ready", Head: head, ManifestPath: manifestPath, Capacity: summary,
 	}, parsed.format)

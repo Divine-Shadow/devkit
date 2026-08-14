@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1140,6 +1141,196 @@ func TestParseNativeSlotResetArgsAcceptsOnlyRepoIndexAndFormat(t *testing.T) {
 			t.Fatalf("args %v error = %v", args, err)
 		}
 	}
+}
+
+func TestNativeSlotResetJSONOutputReservation(t *testing.T) {
+	status := nativeSlotResetStatus{
+		Command: "reset", Runtime: "native", Repo: "ouroboros-ide", Index: 1,
+		Status: "ready", Head: strings.Repeat("a", 40), ManifestPath: "/state/dev-all.json",
+		Capacity: capacity.Summary{Total: 1, Status: "ready", RuntimeReady: 1, RepoReady: 1},
+	}
+
+	t.Run("restores stdout, bounds diagnostics, and emits one strict receipt", func(t *testing.T) {
+		originalStdout := os.Stdout
+		originalStderr := os.Stderr
+		receiptReader, receiptWriter, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		diagnosticReader, diagnosticWriter, err := os.Pipe()
+		if err != nil {
+			_ = receiptReader.Close()
+			_ = receiptWriter.Close()
+			t.Fatal(err)
+		}
+		var output *nativeSlotResetJSONOutput
+		t.Cleanup(func() {
+			if output != nil {
+				_ = output.close()
+			}
+			os.Stdout = originalStdout
+			os.Stderr = originalStderr
+			_ = receiptReader.Close()
+			_ = receiptWriter.Close()
+			_ = diagnosticReader.Close()
+			_ = diagnosticWriter.Close()
+		})
+
+		type readResult struct {
+			data []byte
+			err  error
+		}
+		diagnosticResult := make(chan readResult, 1)
+		go func() {
+			data, err := io.ReadAll(diagnosticReader)
+			diagnosticResult <- readResult{data: data, err: err}
+		}()
+		os.Stdout = receiptWriter
+		os.Stderr = diagnosticWriter
+		output, err = reserveNativeSlotResetJSONOutput("json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if output.receipt != receiptWriter || os.Stdout != output.diagnosticWriter {
+			t.Fatal("JSON output reservation did not preserve the receipt writer and install its diagnostic pipe")
+		}
+		payload := bytes.Repeat([]byte("x"), nativeSlotResetJSONDiagnosticLimit+1024)
+		if written, err := os.Stdout.Write(payload); err != nil || written != len(payload) {
+			t.Fatalf("write reserved diagnostic stdout = %d, %v", written, err)
+		}
+		if err := finishNativeSlotResetOutput(output, status, "json"); err != nil {
+			t.Fatal(err)
+		}
+		if os.Stdout != receiptWriter {
+			t.Fatal("JSON output finalization did not restore stdout before writing its receipt")
+		}
+
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+		if err := receiptWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := diagnosticWriter.Close(); err != nil {
+			t.Fatal(err)
+		}
+		receiptData, err := io.ReadAll(receiptReader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		diagnostics := <-diagnosticResult
+		if diagnostics.err != nil {
+			t.Fatal(diagnostics.err)
+		}
+		wantDiagnostics := append(
+			bytes.Repeat([]byte("x"), nativeSlotResetJSONDiagnosticLimit),
+			[]byte(nativeSlotResetJSONDiagnosticTruncationMarker())...,
+		)
+		if !bytes.Equal(diagnostics.data, wantDiagnostics) {
+			t.Fatalf("bounded diagnostic output length = %d, want %d", len(diagnostics.data), len(wantDiagnostics))
+		}
+		decoder := json.NewDecoder(bytes.NewReader(receiptData))
+		var receipt nativeSlotResetStatus
+		if err := decoder.Decode(&receipt); err != nil {
+			t.Fatalf("decode reserved receipt: %v\n%s", err, receiptData)
+		}
+		var extra any
+		if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+			t.Fatalf("reserved receipt has trailing output: %v %#v\n%s", err, extra, receiptData)
+		}
+		if !reflect.DeepEqual(receipt, status) {
+			t.Fatalf("reserved receipt = %#v, want %#v", receipt, status)
+		}
+	})
+
+	t.Run("diagnostic close failure restores stdout and suppresses ready receipt", func(t *testing.T) {
+		originalStdout := os.Stdout
+		originalStderr := os.Stderr
+		receiptReader, receiptWriter, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		diagnosticReader, diagnosticWriter, err := os.Pipe()
+		if err != nil {
+			_ = receiptReader.Close()
+			_ = receiptWriter.Close()
+			t.Fatal(err)
+		}
+		if err := diagnosticReader.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var output *nativeSlotResetJSONOutput
+		t.Cleanup(func() {
+			if output != nil {
+				_ = output.close()
+			}
+			os.Stdout = originalStdout
+			os.Stderr = originalStderr
+			_ = receiptReader.Close()
+			_ = receiptWriter.Close()
+			_ = diagnosticWriter.Close()
+		})
+
+		os.Stdout = receiptWriter
+		os.Stderr = diagnosticWriter
+		output, err = reserveNativeSlotResetJSONOutput("json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stdout.Write([]byte("diagnostic projection must fail")); err != nil {
+			t.Fatal(err)
+		}
+		finishErr := finishNativeSlotResetOutput(output, status, "json")
+		restored := os.Stdout == receiptWriter
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+		_ = receiptWriter.Close()
+		_ = diagnosticWriter.Close()
+		receiptData, readErr := io.ReadAll(receiptReader)
+		if finishErr == nil || !strings.Contains(finishErr.Error(), "finalize native reset diagnostic output") {
+			t.Fatalf("diagnostic projection error = %v", finishErr)
+		}
+		if !restored {
+			t.Fatal("diagnostic projection failure did not restore stdout")
+		}
+		if readErr != nil || len(receiptData) != 0 {
+			t.Fatalf("diagnostic projection failure emitted receipt %q: %v", receiptData, readErr)
+		}
+	})
+
+	t.Run("final receipt write failure is propagated", func(t *testing.T) {
+		originalStdout := os.Stdout
+		receiptReader, receiptWriter, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := receiptReader.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var output *nativeSlotResetJSONOutput
+		t.Cleanup(func() {
+			if output != nil {
+				_ = output.close()
+			}
+			os.Stdout = originalStdout
+			_ = receiptWriter.Close()
+		})
+
+		os.Stdout = receiptWriter
+		output, err = reserveNativeSlotResetJSONOutput("json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		finishErr := finishNativeSlotResetOutput(output, status, "json")
+		restored := os.Stdout == receiptWriter
+		os.Stdout = originalStdout
+		_ = receiptWriter.Close()
+		if finishErr == nil || !strings.Contains(finishErr.Error(), "write native reset json receipt") {
+			t.Fatalf("receipt write error = %v", finishErr)
+		}
+		if !restored {
+			t.Fatal("receipt write failure did not leave stdout restored")
+		}
+	})
 }
 
 func TestPlanNativeSlotProcessesSelectsOnlyExactSlotIdentity(t *testing.T) {
