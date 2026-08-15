@@ -185,10 +185,13 @@ func nativeProcHasSlotIdentity(env map[string]string, identity nativeSlotProcess
 		return false
 	}
 	home := filepath.Clean(strings.TrimSpace(env["HOME"]))
-	codexHome := filepath.Clean(strings.TrimSpace(env["CODEX_HOME"]))
 	for _, expected := range []string{identity.hostHome, identity.sandboxHome} {
 		expected = filepath.Clean(strings.TrimSpace(expected))
-		if expected != "" && expected != "." && home == expected && codexHome == filepath.Join(expected, ".codex") {
+		// CODEX_HOME is a child-runtime concern: governed Product work may replace
+		// it with a generated role home while retaining the Devkit slot's exact
+		// agent and HOME identity. Do not make that mutable child context part of
+		// the slot-root ownership witness.
+		if expected != "" && expected != "." && home == expected {
 			return true
 		}
 	}

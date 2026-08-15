@@ -1371,7 +1371,7 @@ func TestPlanNativeSlotProcessesSelectsOnlyExactSlotIdentity(t *testing.T) {
 	writeProc(101, 1, map[string]string{
 		"DEVKIT_NATIVE_AGENT": "1",
 		"HOME":                identity.sandboxHome,
-		"CODEX_HOME":          filepath.Join(identity.sandboxHome, ".codex"),
+		"CODEX_HOME":          "/agent-state/dev-all-agent1/governed-codex-homes/implementer",
 	}, identity.sandboxWorktree)
 	writeProc(102, 1, map[string]string{
 		"DEVKIT_NATIVE_AGENT": "2",
@@ -1390,9 +1390,88 @@ func TestPlanNativeSlotProcessesSelectsOnlyExactSlotIdentity(t *testing.T) {
 		t.Fatalf("selected pids = %s", got)
 	}
 
-	writeProc(104, 1, map[string]string{}, identity.hostWorktree)
-	if _, err := planNativeSlotProcesses(identity, true); err == nil || !strings.Contains(err.Error(), "unowned active process 104") {
-		t.Fatalf("unowned process error = %v", err)
+	for _, candidate := range []struct {
+		name string
+		pid  int
+		env  map[string]string
+	}{
+		{
+			name: "wrong agent",
+			pid:  104,
+			env: map[string]string{
+				"DEVKIT_NATIVE_AGENT": "2",
+				"HOME":                identity.sandboxHome,
+				"CODEX_HOME":          "/agent-state/dev-all-agent1/governed-codex-homes/implementer",
+			},
+		},
+		{
+			name: "wrong home",
+			pid:  105,
+			env: map[string]string{
+				"DEVKIT_NATIVE_AGENT": "1",
+				"HOME":                "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2",
+				"CODEX_HOME":          "/agent-state/dev-all-agent1/governed-codex-homes/implementer",
+			},
+		},
+	} {
+		t.Run(candidate.name, func(t *testing.T) {
+			writeProc(candidate.pid, 1, candidate.env, identity.hostWorktree)
+			t.Cleanup(func() {
+				_ = os.RemoveAll(filepath.Join(nativeSlotProcRoot, strconv.Itoa(candidate.pid)))
+			})
+			if _, err := planNativeSlotProcesses(identity, true); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unowned active process %d", candidate.pid)) {
+				t.Fatalf("unowned process error = %v", err)
+			}
+			if err := os.RemoveAll(filepath.Join(nativeSlotProcRoot, strconv.Itoa(candidate.pid))); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestNativeProcessStillMatchesRequiresStableStartTimeIdentity(t *testing.T) {
+	originalProcRoot := nativeSlotProcRoot
+	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
+	nativeSlotProcRoot = t.TempDir()
+	const pid = 201
+	procRoot := filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid))
+	if err := os.MkdirAll(procRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeStat := func(start string) {
+		t.Helper()
+		fields := []string{"S", "1"}
+		for len(fields) < 20 {
+			fields = append(fields, "0")
+		}
+		fields[19] = start
+		if err := os.WriteFile(
+			filepath.Join(procRoot, "stat"),
+			[]byte(fmt.Sprintf("%d (fixture) %s\n", pid, strings.Join(fields, " "))),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeStat("4242")
+	if matches, err := nativeProcessStillMatches(pid, "4242"); err != nil || !matches {
+		t.Fatalf("stable process identity = %v, %v", matches, err)
+	}
+	if matches, err := nativeProcessStillMatches(pid, "4343"); err == nil || matches || !strings.Contains(err.Error(), "was replaced") {
+		t.Fatalf("changed process identity = %v, %v", matches, err)
+	}
+	if err := os.WriteFile(filepath.Join(procRoot, "stat"), []byte(fmt.Sprintf("%d (fixture) S 1\n", pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if matches, err := nativeProcessStillMatches(pid, "4242"); err == nil || matches || !strings.Contains(err.Error(), "no stable start-time identity") {
+		t.Fatalf("missing process identity = %v, %v", matches, err)
+	}
+	if err := os.RemoveAll(procRoot); err != nil {
+		t.Fatal(err)
+	}
+	if matches, err := nativeProcessStillMatches(pid, "4242"); err != nil || matches {
+		t.Fatalf("absent process identity = %v, %v", matches, err)
 	}
 }
 

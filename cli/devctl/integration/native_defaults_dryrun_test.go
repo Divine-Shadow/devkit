@@ -1661,30 +1661,83 @@ fi
 	siblingHeadBefore := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent2Worktree, "rev-parse", "HEAD"))
 	siblingStatusBefore := runNativeFixtureCommand(t, "git", "-C", agent2Worktree, "status", "--porcelain=v1")
 
-	startSlotProcess := func(index int, sandboxHome string) *exec.Cmd {
+	startSlotProcess := func(index int, sandboxHome string, codexHome string, cwd string) *exec.Cmd {
 		t.Helper()
 		command := exec.Command("sleep", "300")
 		command.Env = append(os.Environ(),
 			"DEVKIT_NATIVE_AGENT="+strconv.Itoa(index),
 			"HOME="+sandboxHome,
-			"CODEX_HOME="+filepath.Join(sandboxHome, ".codex"),
+			"CODEX_HOME="+codexHome,
 		)
+		command.Dir = cwd
 		if err := command.Start(); err != nil {
 			t.Fatal(err)
 		}
 		return command
 	}
-	selectedProcess := startSlotProcess(1, "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1")
-	siblingProcess := startSlotProcess(2, "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2")
+	tailExecutable, err := exec.LookPath("tail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedSandboxHome := "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1"
+	selectedProcess := exec.Command(
+		"sh", "-c",
+		`env -i "$1" --pid="$$" -f /dev/null & printf '%s\n' "$!"; wait`,
+		"selected-slot-supervisor", tailExecutable,
+	)
+	selectedProcess.Env = append(os.Environ(),
+		"DEVKIT_NATIVE_AGENT=1",
+		"HOME="+selectedSandboxHome,
+		"CODEX_HOME="+filepath.Join(base, "governed-codex-homes", "implementer"),
+	)
+	selectedProcess.Dir = agent1Worktree
+	selectedStdout, err := selectedProcess.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := selectedProcess.Start(); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if selectedProcess.Process != nil {
 			_ = selectedProcess.Process.Kill()
+			_ = selectedProcess.Wait()
 		}
-		_, _ = selectedProcess.Process.Wait()
+	})
+	type descendantResult struct {
+		line string
+		err  error
+	}
+	descendantResultChannel := make(chan descendantResult, 1)
+	go func() {
+		line, readErr := bufio.NewReader(selectedStdout).ReadString('\n')
+		descendantResultChannel <- descendantResult{line: line, err: readErr}
+	}()
+	var selectedDescendantPID int
+	select {
+	case result := <-descendantResultChannel:
+		if result.err != nil {
+			t.Fatalf("read selected descendant pid: %v", result.err)
+		}
+		selectedDescendantPID, err = strconv.Atoi(strings.TrimSpace(result.line))
+		if err != nil || selectedDescendantPID < 1 {
+			t.Fatalf("selected descendant pid = %q, %v", result.line, err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for selected descendant pid")
+	}
+	t.Cleanup(func() {
+		if selectedDescendantPID > 0 {
+			_ = syscall.Kill(selectedDescendantPID, syscall.SIGKILL)
+		}
+	})
+	siblingSandboxHome := "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2"
+	siblingProcess := startSlotProcess(2, siblingSandboxHome, filepath.Join(siblingSandboxHome, ".codex"), agent2Worktree)
+	t.Cleanup(func() {
 		if siblingProcess.Process != nil {
 			_ = siblingProcess.Process.Kill()
+			_ = siblingProcess.Wait()
 		}
-		_, _ = siblingProcess.Process.Wait()
 	})
 
 	if err := os.WriteFile(filepath.Join(agent1Worktree, "dirty-selected"), []byte("discard\n"), 0o600); err != nil {
@@ -1738,6 +1791,34 @@ fi
 		command.Env = env
 		return command.CombinedOutput()
 	}
+	foreignProcess := startSlotProcess(2, selectedSandboxHome, filepath.Join(selectedSandboxHome, ".codex"), agent1Worktree)
+	t.Cleanup(func() {
+		if foreignProcess.Process != nil {
+			_ = foreignProcess.Process.Kill()
+			_ = foreignProcess.Wait()
+		}
+	})
+	foreignOutput, foreignErr := runSlotReset()
+	if foreignErr == nil || !strings.Contains(string(foreignOutput), fmt.Sprintf("unowned active process %d", foreignProcess.Process.Pid)) {
+		t.Fatalf("selected reset did not reject the wrong-agent toucher: %v\n%s", foreignErr, foreignOutput)
+	}
+	if _, err := os.Stat(filepath.Join(agent1Worktree, "dirty-selected")); err != nil {
+		t.Fatalf("wrong-agent rejection changed selected slot before mutation: %v", err)
+	}
+	for name, pid := range map[string]int{
+		"selected root":       selectedProcess.Process.Pid,
+		"selected descendant": selectedDescendantPID,
+		"sibling":             siblingProcess.Process.Pid,
+	} {
+		if err := syscall.Kill(pid, 0); err != nil {
+			t.Fatalf("%s process %d did not survive rejected reset: %v", name, pid, err)
+		}
+	}
+	if err := foreignProcess.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = foreignProcess.Wait()
+
 	slotOutput, slotErr := runSlotReset()
 	if slotErr != nil {
 		t.Fatalf("per-slot reset failed: %v\n%s", slotErr, slotOutput)
@@ -1764,6 +1845,20 @@ fi
 	}
 	if err := selectedProcess.Wait(); err == nil {
 		t.Fatal("selected slot process exited successfully instead of being terminated")
+	}
+	descendantDeadline := time.Now().Add(2 * time.Second)
+	for {
+		err := syscall.Kill(selectedDescendantPID, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("inspect selected descendant process %d: %v", selectedDescendantPID, err)
+		}
+		if time.Now().After(descendantDeadline) {
+			t.Fatalf("selected descendant process %d survived reset", selectedDescendantPID)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if err := syscall.Kill(siblingProcess.Process.Pid, 0); err != nil {
 		t.Fatalf("sibling process was stopped by selected reset: %v", err)
