@@ -288,7 +288,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T)
 			Event:    nativeplan.ControllerOperationEventSchema,
 			Receipt:  nativeplan.ControllerOperationReceiptSchema,
 		},
-		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "gui.replace-controller", "gui.start-app-server", "product-agent.reconcile-absence"},
+		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "nixos.wsl-sentinel", "gui.replace-controller", "gui.start-app-server", "product-agent.reconcile-absence"},
 	}
 	operationStoreRoot := filepath.Join(root, "nix", "store")
 	previousOperationStoreRoot := controllerOperationStoreRoot
