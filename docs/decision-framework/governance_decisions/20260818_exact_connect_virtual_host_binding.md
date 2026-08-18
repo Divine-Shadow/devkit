@@ -31,7 +31,8 @@ This boundary does not inspect encrypted HTTP authority. For the v0
 HTTPS-only, exact-provider destination set, binding CONNECT authority, DNS
 result, fixed dial address, and TLS SNI is the narrowest useful enforcement
 that does not become a TLS or inference broker. Encrypted ClientHello is not a
-fallback; a client that does not expose the exact SNI fails closed and must be
+fallback: the presence of its extension fails closed even if an outer SNI
+matches, because the effective name is not inspectable. Such a client must be
 evaluated as an explicit future protocol change.
 
 ## Safety checks
@@ -41,7 +42,9 @@ evaluated as an explicit future protocol change.
   absent, duplicate, malformed, oversized, over-fragmented, or mismatched
   names close the tunnel before any client byte reaches the upstream socket.
 - DNS must return a small all-public address set, and dialing uses only those
-  literal addresses under one total timeout.
+  literal addresses under one total timeout. IPv6 admission is constrained to
+  `2000::/3` plus explicit reserved and unallocated exclusions rather than
+  relying on `IsGlobalUnicast` alone.
 - The externally owned allowlist is opened without following a final symlink
   and must have no write bits, matching its intended Nix-store custody.
 - Unit and race tests cover co-hosted-IP mismatch, bounded fragmentation,

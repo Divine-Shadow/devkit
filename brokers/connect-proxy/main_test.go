@@ -100,8 +100,8 @@ func TestPublicAddressRejectsPrivateAndReservedSpace(t *testing.T) {
 		"0.0.0.1", "10.0.0.1", "100.64.0.1", "127.0.0.1", "169.254.1.1",
 		"172.16.0.1", "192.0.2.1", "192.168.1.1", "198.18.0.1",
 		"198.51.100.1", "203.0.113.1", "224.0.0.1", "240.0.0.1",
-		"::1", "64:ff9b::1", "64:ff9b:1::1", "100::1", "2001:db8::1", "3ffe::1",
-		"fc00::1", "fe80::1", "fec0::1", "ff00::1",
+		"::1", "::192.0.2.1", "64:ff9b::1", "64:ff9b:1::1", "100::1", "2001:db8::1",
+		"3f00::1", "3ffe::1", "4000::1", "5f01::1", "fc00::1", "fe80::1", "fec0::1", "ff00::1",
 	} {
 		if _, valid := publicAddress(net.ParseIP(value)); valid {
 			t.Fatalf("accepted forbidden address %s", value)
@@ -167,6 +167,15 @@ func TestConnectContract(t *testing.T) {
 }
 
 func testClientHello(serverNames ...string) []byte {
+	return testClientHelloWithExtensions(serverNames, nil)
+}
+
+type testHelloExtension struct {
+	extensionType uint16
+	payload       []byte
+}
+
+func testClientHelloWithExtensions(serverNames []string, extra []testHelloExtension) []byte {
 	var names bytes.Buffer
 	for _, serverName := range serverNames {
 		names.WriteByte(0)
@@ -181,6 +190,11 @@ func testClientHello(serverNames ...string) []byte {
 		_ = binary.Write(&extensions, binary.BigEndian, uint16(0))
 		_ = binary.Write(&extensions, binary.BigEndian, uint16(serverNameExtension.Len()))
 		extensions.Write(serverNameExtension.Bytes())
+	}
+	for _, extension := range extra {
+		_ = binary.Write(&extensions, binary.BigEndian, extension.extensionType)
+		_ = binary.Write(&extensions, binary.BigEndian, uint16(len(extension.payload)))
+		extensions.Write(extension.payload)
 	}
 	var hello bytes.Buffer
 	hello.Write([]byte{3, 3})
@@ -237,6 +251,10 @@ func TestClientHelloBindsTLSNameToConnectAuthority(t *testing.T) {
 		"mismatch":  testClientHello("cohosted.example"),
 		"absent":    testClientHello(),
 		"duplicate": testClientHello("api.openai.com", "api.openai.com"),
+		"encrypted-client-hello": testClientHelloWithExtensions(
+			[]string{"api.openai.com"},
+			[]testHelloExtension{{extensionType: 0xfe0d, payload: []byte{0}}},
+		),
 		"non-TLS":   []byte("arbitrary tunnel payload"),
 		"oversized": {22, 3, 1, 0x49, 0x00},
 		"too-many-fragments": func() []byte {
@@ -437,43 +455,56 @@ func TestWriteAllHandlesRepeatedShortWrites(t *testing.T) {
 	_ = server.Close()
 }
 
-func TestProxyRejectsMismatchedSNIAtCohostedAddress(t *testing.T) {
+func TestProxyRejectsVirtualHostEvasionBeforeUpstreamBytes(t *testing.T) {
 	t.Parallel()
-	upstreamServer, upstreamProxy := net.Pipe()
-	service := proxy{
-		allow: map[string]struct{}{"api.openai.com": {}},
-		lookup: func(context.Context, string) ([]net.IPAddr, error) {
-			return []net.IPAddr{{IP: net.ParseIP("1.1.1.1")}}, nil
-		},
-		dial:    func(context.Context, string) (net.Conn, error) { return upstreamProxy, nil },
-		permits: make(chan struct{}, 1),
+	cases := map[string][]byte{
+		"mismatched-sni": testClientHello("cohosted.example"),
+		"encrypted-client-hello": testClientHelloWithExtensions(
+			[]string{"api.openai.com"},
+			[]testHelloExtension{{extensionType: 0xfe0d, payload: []byte{0}}},
+		),
 	}
-	clientProxy, client := net.Pipe()
-	service.permits <- struct{}{}
-	service.wg.Add(1)
-	go service.handle(clientProxy)
-	if _, err := io.WriteString(client, "CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n"); err != nil {
-		t.Fatal(err)
+	for name, hello := range cases {
+		name, hello := name, hello
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			upstreamServer, upstreamProxy := net.Pipe()
+			service := proxy{
+				allow: map[string]struct{}{"api.openai.com": {}},
+				lookup: func(context.Context, string) ([]net.IPAddr, error) {
+					return []net.IPAddr{{IP: net.ParseIP("1.1.1.1")}}, nil
+				},
+				dial:    func(context.Context, string) (net.Conn, error) { return upstreamProxy, nil },
+				permits: make(chan struct{}, 1),
+			}
+			clientProxy, client := net.Pipe()
+			service.permits <- struct{}{}
+			service.wg.Add(1)
+			go service.handle(clientProxy)
+			if _, err := io.WriteString(client, "CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			reader := bufio.NewReader(client)
+			if status, err := reader.ReadString('\n'); err != nil || !strings.Contains(status, "200") {
+				t.Fatalf("status=%q err=%v", status, err)
+			}
+			if _, err := reader.ReadString('\n'); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Write(hello); err != nil {
+				t.Fatal(err)
+			}
+			if err := upstreamServer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if payload, err := io.ReadAll(upstreamServer); err != nil || len(payload) != 0 {
+				t.Fatalf("forbidden ClientHello reached co-hosted address: payload=%x err=%v", payload, err)
+			}
+			_ = client.Close()
+			_ = upstreamServer.Close()
+			service.wg.Wait()
+		})
 	}
-	reader := bufio.NewReader(client)
-	if status, err := reader.ReadString('\n'); err != nil || !strings.Contains(status, "200") {
-		t.Fatalf("status=%q err=%v", status, err)
-	}
-	if _, err := reader.ReadString('\n'); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Write(testClientHello("cohosted.example")); err != nil {
-		t.Fatal(err)
-	}
-	if err := upstreamServer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if payload, err := io.ReadAll(upstreamServer); err != nil || len(payload) != 0 {
-		t.Fatalf("mismatched SNI reached co-hosted address: payload=%x err=%v", payload, err)
-	}
-	_ = client.Close()
-	_ = upstreamServer.Close()
-	service.wg.Wait()
 }
 
 func TestCloseActiveClosesExistingAndFutureConnections(t *testing.T) {

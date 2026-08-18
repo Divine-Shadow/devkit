@@ -9,9 +9,12 @@ The proxy owns no product or EMDR policy. Wildcards, IP literals, private or
 reserved DNS results, non-CONNECT methods, and non-443 ports fail closed. It
 also requires the first bounded TLS handshake to contain exactly one SNI name
 matching the CONNECT authority. This prevents a caller from using a
-provider/CDN address for a different virtual host. It does not terminate TLS
-or inspect the encrypted HTTP authority, and it does not log policy entries,
-request targets, SNI names, or payloads.
+provider/CDN address for a different virtual host. A ClientHello carrying the
+Encrypted ClientHello extension fails closed because the proxy could not
+verify its effective name. IPv6 results must be in the current Internet global
+allocation and must pass the explicit reserved/unallocated exclusions. The
+proxy does not terminate TLS or inspect the encrypted HTTP authority, and it
+does not log policy entries, request targets, SNI names, or payloads.
 
 The policy and socket paths must be absolute. The policy must be a canonical,
 non-symlink regular file with no write bits (a Nix-store file satisfies this

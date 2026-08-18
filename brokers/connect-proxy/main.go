@@ -60,14 +60,17 @@ var forbiddenPrefixes = mustPrefixes(
 	"2001::/23",
 	"2001:db8::/32",
 	"2002::/16",
+	"3000::/4",
 	"3fff::/20",
 	"3ffe::/16",
-	"5f00::/16",
+	"5f00::/8",
 	"fc00::/7",
 	"fe80::/10",
 	"fec0::/10",
 	"ff00::/8",
 )
+
+var internetIPv6Prefix = netip.MustParsePrefix("2000::/3")
 
 type lookupIP func(context.Context, string) ([]net.IPAddr, error)
 type dialTCP func(context.Context, string) (net.Conn, error)
@@ -184,6 +187,9 @@ func publicAddress(ip net.IP) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	address = address.Unmap()
+	if address.Is6() && !internetIPv6Prefix.Contains(address) {
+		return netip.Addr{}, false
+	}
 	if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() ||
 		address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() ||
 		address.IsMulticast() || address.IsUnspecified() {
@@ -338,6 +344,9 @@ func clientHelloServerName(hello []byte) (string, error) {
 		}
 		extension := extensions[:extensionLength]
 		extensions = extensions[extensionLength:]
+		if extensionType == 0xfe0d {
+			return "", errors.New("encrypted ClientHello is not supported")
+		}
 		if extensionType != 0 {
 			continue
 		}
