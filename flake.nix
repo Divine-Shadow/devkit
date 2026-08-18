@@ -58,6 +58,23 @@
       codexVersion = "0.144.0";
       codexReleaseTag = "rust-v${codexVersion}";
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
+      mkExactConnectProxy =
+        pkgs:
+        pkgs.buildGoModule {
+          pname = "devkit-exact-connect-proxy";
+          version = "1.0.0";
+          src = ./brokers/connect-proxy;
+          vendorHash = null;
+          env.CGO_ENABLED = "0";
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+          doCheck = true;
+          postInstall = ''
+            mv "$out/bin/connect-proxy" "$out/bin/devkit-connect-proxy"
+          '';
+        };
       mkDevAllRuntimeBundle =
         { pkgs, pkgsPlaywright }:
         import ./nix/dev-all-runtime-bundle.nix {
@@ -579,6 +596,7 @@
             inherit pkgs runtimeTools;
           };
           management-inspection = mkManagementInspectionApp pkgs;
+          exact-connect-proxy = mkExactConnectProxy pkgs;
 
           postgres-broker = pkgs.buildGoModule {
             pname = "devkit-postgres-broker";
@@ -605,7 +623,7 @@
       );
 
       checks = forEachSystem (
-        { pkgs, pkgsPlaywright, ... }:
+        { system, pkgs, pkgsPlaywright, ... }:
         let
           runtimeBundle = mkDevAllRuntimeBundle { inherit pkgs pkgsPlaywright; };
           runtimeTools = mkDevAllRuntimeTools {
@@ -620,6 +638,37 @@
           };
           devctl-go-tests = mkDevctlGoTests pkgs;
           management-inspection-cli = mkProductionDevctl pkgs;
+          exact-connect-proxy = self.packages.${system}.exact-connect-proxy;
+          exact-connect-proxy-closure =
+            let
+              package = self.packages.${system}.exact-connect-proxy;
+              closure = pkgs.closureInfo { rootPaths = [ package ]; };
+            in
+            pkgs.runCommand "devkit-exact-connect-proxy-closure" {
+              nativeBuildInputs = [
+                pkgs.findutils
+                pkgs.gnugrep
+              ];
+            } ''
+              test -x ${package}/bin/devkit-connect-proxy
+              test "$(find ${package} -type f | wc -l)" -eq 1
+              failure_output="$(${package}/bin/devkit-connect-proxy \
+                --socket /sensitive-socket-name \
+                --allowlist /sensitive-policy-name 2>&1 || true)"
+              test "$failure_output" = \
+                'devkit-connect-proxy: startup or policy failure (class 1)'
+              test "$(wc -l < ${closure}/store-paths)" -le 4
+              grep -qFx '${package}' ${closure}/store-paths
+              grep -vFx '${package}' ${closure}/store-paths > "$TMPDIR/data-paths"
+              test "$(wc -l < "$TMPDIR/data-paths")" -le 3
+              if grep -Ev -- '-(tzdata|mailcap|iana-etc)-' "$TMPDIR/data-paths"; then
+                echo 'exact CONNECT proxy gained a non-data runtime dependency' >&2
+                exit 1
+              fi
+              ! grep -E '(awscli|curl|git-|firefox|chromium|age-)' ${closure}/store-paths
+              ! grep -aF 'AGE-SECRET-KEY-' ${package}/bin/devkit-connect-proxy
+              touch "$out"
+            '';
           devctl-openssh-executable-authority =
             let
               devctl = mkProductionDevctl pkgs;
