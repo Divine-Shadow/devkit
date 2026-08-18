@@ -1961,6 +1961,19 @@ fi
 	}
 	beforeForeignSSH := append([]byte(nil), sshInvocations...)
 	output, err = runReset()
+	if err == nil ||
+		!strings.Contains(string(output), "index 2 pids [") ||
+		!strings.Contains(string(output), strconv.Itoa(siblingProcess.Process.Pid)) {
+		t.Fatalf("whole reset did not refuse the active sibling slot before disposal: %v\n%s", err, output)
+	}
+	if after, readErr := os.ReadFile(foreignGitFile); readErr != nil || string(after) != string(foreignContent) {
+		t.Fatalf("refused whole reset changed opaque in-prefix metadata: %q %v", after, readErr)
+	}
+	if err := siblingProcess.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("stop sibling process before whole reset: %v", err)
+	}
+	_ = siblingProcess.Wait()
+	output, err = runReset()
 	if err != nil {
 		t.Fatalf("reset did not reconstruct opaque in-prefix foreign metadata: %v\n%s", err, output)
 	}

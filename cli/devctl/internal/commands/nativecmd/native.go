@@ -1385,12 +1385,22 @@ func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr err
 	if err != nil {
 		return err
 	}
-	cfg, repo, count, _, _, err := lifecycleDefaults(ctx, parsed)
+	cfg, repo, count, baseBranch, branchPrefix, err := lifecycleDefaults(ctx, parsed)
 	if err != nil {
 		return err
 	}
+	sourceCount := cfg.Defaults.Agents
+	if err := validateNativeWholeResetCount(count, sourceCount); err != nil {
+		return err
+	}
+	parsed.baseBranch = baseBranch
+	parsed.branchPrefix = branchPrefix
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
 	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
+	slotIdentities, err := sourceDerivedNativeSlotProcessIdentities(planOpts, sourceCount)
+	if err != nil {
+		return err
+	}
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
 	protectedRoots := []string{
 		ctx.Paths.Root,
@@ -1411,30 +1421,47 @@ func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr err
 	if err != nil {
 		return err
 	}
-	if err := lifecycleDown(ctx, parsed); err != nil {
+	coordinationRoot, err := nativeSlotResetCoordinationRoot(resetOptions.WorktreeRoot)
+	if err != nil {
 		return err
 	}
-	if stopSessions != nil {
-		stopSessions()
-	}
-	if err := resetPlan.Apply(); err != nil {
-		return err
-	}
-	if err := lifecycleUp(ctx, parsed, "reset"); err != nil {
-		if ctx.DryRun {
+	return withNativeWholeResetLock(coordinationRoot, ctx.Project, ctx.DryRun, func() error {
+		// Re-plan under the shared lifecycle lock so a selected-slot reset cannot
+		// change the disposal boundary between validation and the whole reset.
+		if !ctx.DryRun {
+			resetPlan, err = wtx.PlanNativeReset(resetOptions)
+			if err != nil {
+				return err
+			}
+		}
+		if err := executeNativeWholeResetBoundary(nativeWholeResetBoundary{
+			inspectSlots: func() error {
+				return requireSourceDerivedNativeSlotsIdle(slotIdentities)
+			},
+			lifecycleDown: func() error {
+				return lifecycleDown(ctx, parsed)
+			},
+			stopSessions: stopSessions,
+			applyPlan:    resetPlan.Apply,
+		}); err != nil {
 			return err
 		}
-		cleanupPlan, planErr := wtx.PlanNativeReset(resetOptions)
-		if planErr != nil {
-			return errors.Join(err, fmt.Errorf("plan cleanup after failed native reset reconstruction: %w", planErr))
+		if err := lifecycleUp(ctx, parsed, "reset"); err != nil {
+			if ctx.DryRun {
+				return err
+			}
+			cleanupPlan, planErr := wtx.PlanNativeReset(resetOptions)
+			if planErr != nil {
+				return errors.Join(err, fmt.Errorf("plan cleanup after failed native reset reconstruction: %w", planErr))
+			}
+			cleanupErr := applyNativeWholeResetFailureCleanup(slotIdentities, cleanupPlan.Apply)
+			if cleanupErr != nil {
+				return errors.Join(err, cleanupErr)
+			}
+			return err
 		}
-		cleanupErr := cleanupPlan.Apply()
-		if cleanupErr != nil {
-			return errors.Join(err, fmt.Errorf("cleanup failed native reset reconstruction: %w", cleanupErr))
-		}
-		return err
-	}
-	return nil
+		return nil
+	})
 }
 
 func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string) (retErr error) {
