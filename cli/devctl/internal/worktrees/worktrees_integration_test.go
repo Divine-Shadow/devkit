@@ -284,7 +284,7 @@ func TestSetupNativeSelectedReconstructionConvergesFreshCurrentWorktree(t *testi
 		t.Skip("git not available")
 	}
 
-	for _, scenario := range []string{"dirty tracked", "staged", "untracked", "behind upstream"} {
+	for _, scenario := range []string{"dirty tracked", "staged", "untracked", "local-only commit", "behind upstream"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			devRoot := filepath.Join(root, "dev")
@@ -326,6 +326,12 @@ func TestSetupNativeSelectedReconstructionConvergesFreshCurrentWorktree(t *testi
 				if err := os.WriteFile(filepath.Join(selected, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
 					t.Fatal(err)
 				}
+			case "local-only commit":
+				if err := os.WriteFile(filepath.Join(selected, "discarded-local-commit.txt"), []byte("discard me\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				mustRun(t, "git", "-C", selected, "add", "discarded-local-commit.txt")
+				mustRun(t, "git", "-C", selected, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "discard local-only work")
 			case "behind upstream":
 				source := filepath.Join(devRoot, "ouroboros-ide")
 				if err := os.WriteFile(filepath.Join(source, "remote-update.txt"), []byte("new upstream\n"), 0o644); err != nil {
@@ -357,6 +363,143 @@ func TestSetupNativeSelectedReconstructionConvergesFreshCurrentWorktree(t *testi
 				t.Fatalf("selected reconstruction changed sibling state: %q %v", got, err)
 			}
 		})
+	}
+}
+
+func TestNativeSlotResetReconstructionDiscardsSelectedRefAdvanceAfterPlanning(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	origin := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "remote", "get-url", "origin")
+	opts := NativeOptions{
+		DevkitRoot: devkitRoot, Repo: "ouroboros-ide", Origin: origin,
+		Count: 2, BaseBranch: "main", BranchPrefix: "agent",
+	}
+	if err := SetupNative(opts); err != nil {
+		t.Fatal(err)
+	}
+	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
+	stateRoot := filepath.Join(root, "state")
+	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
+	siblingHead := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedRef := "refs/heads/agent1"
+
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Origin: origin,
+		BranchPrefix: "agent", Index: 1, Count: 2,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(selected, "late-local-commit.txt"), []byte("discard after plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", selected, "add", "late-local-commit.txt")
+	mustRun(t, "git", "-C", selected, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "advance selected ref after reset plan")
+	advanced := readTrim(t, "git", "-C", selected, "rev-parse", "HEAD")
+	if err := plan.Apply(); err != nil {
+		t.Fatalf("reset rejected disposable selected-ref advance %s: %v", advanced, err)
+	}
+	if got := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef); got != advanced {
+		t.Fatalf("reset mutated selected ref before reconstruction: got %s want %s", got, advanced)
+	}
+
+	opts.Index = 1
+	opts.ReconstructSelected = true
+	if err := SetupNative(opts); err != nil {
+		t.Fatalf("reconstruct after selected-ref advance: %v", err)
+	}
+	checkBranchAndUpstream(t, selected, "agent1")
+	if got, want := readTrim(t, "git", "-C", selected, "rev-parse", "HEAD"), readTrim(t, "git", "-C", selected, "rev-parse", "origin/main"); got != want {
+		t.Fatalf("reconstructed selected HEAD = %s, origin/main = %s", got, want)
+	}
+	if got := readTrim(t, "git", "-C", selected, "status", "--porcelain=v1"); got != "" {
+		t.Fatalf("reconstructed selected worktree is dirty: %q", got)
+	}
+	if got := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD"); got != siblingHead {
+		t.Fatalf("selected reset changed sibling HEAD: got %s want %s", got, siblingHead)
+	}
+}
+
+func TestNativeSlotResetReconstructionRefusesBranchOwnedBySibling(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	origin := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "remote", "get-url", "origin")
+	opts := NativeOptions{
+		DevkitRoot: devkitRoot, Repo: "ouroboros-ide", Origin: origin,
+		Count: 2, BaseBranch: "main", BranchPrefix: "agent",
+	}
+	if err := SetupNative(opts); err != nil {
+		t.Fatal(err)
+	}
+	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
+	stateRoot := filepath.Join(root, "state")
+	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedRef := "refs/heads/agent1"
+	mustRun(t, "git", "-C", selected, "switch", "--detach")
+	mustRun(t, "git", "-C", sibling, "switch", "agent1")
+	siblingHead := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD")
+	refHead := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef)
+
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Origin: origin,
+		BranchPrefix: "agent", Index: 1, Count: 2,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatalf("stage selected slot while sibling owns branch: %v", err)
+	}
+
+	opts.Index = 1
+	opts.ReconstructSelected = true
+	if err := SetupNative(opts); err == nil {
+		t.Fatal("reconstruction accepted selected branch while a sibling worktree owned it")
+	}
+	if got := readTrim(t, "git", "-C", sibling, "rev-parse", "--abbrev-ref", "HEAD"); got != "agent1" {
+		t.Fatalf("failed reconstruction changed sibling branch to %s", got)
+	}
+	if got := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD"); got != siblingHead {
+		t.Fatalf("failed reconstruction changed sibling HEAD: got %s want %s", got, siblingHead)
+	}
+	if got := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef); got != refHead {
+		t.Fatalf("failed reconstruction changed sibling-owned ref: got %s want %s", got, refHead)
 	}
 }
 

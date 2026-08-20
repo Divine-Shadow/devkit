@@ -923,11 +923,6 @@ type NativeResetPlan struct {
 	protectedRoots []string
 	mountPoints    []string
 	quarantineName string
-	gitCommonDir   string
-	gitRef         string
-	gitRefOld      string
-	envExecutable  string
-	gitExecutable  string
 }
 
 var (
@@ -1286,9 +1281,6 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 		})
 	}
 
-	gitCommonDir := ""
-	gitRef := ""
-	gitRefOld := ""
 	if info, statErr := os.Lstat(commonDir); statErr == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("package-owned common repository %s must be a real directory", commonDir)
@@ -1314,19 +1306,6 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			})
 			quarantineBoundaries = append(quarantineBoundaries, metadataBoundary)
 		}
-		branchPrefix := strings.TrimSpace(opts.BranchPrefix)
-		if branchPrefix == "" {
-			branchPrefix = "agent"
-		}
-		gitRef = "refs/heads/" + fmt.Sprintf("%s%d", branchPrefix, opts.Index)
-		if err := run(false, envExecutable, envLocalGit("check-ref-format", gitRef)...); err != nil {
-			return nil, fmt.Errorf("validate selected native slot branch ref %s: %w", gitRef, err)
-		}
-		old, result := execx.Capture(context.Background(), envExecutable, envLocalGit("--git-dir", commonDir, "rev-parse", "--verify", gitRef)...)
-		if result.Code == 0 {
-			gitRefOld = strings.TrimSpace(old)
-		}
-		gitCommonDir = commonDir
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect package-owned common repository %s: %w", commonDir, statErr)
 	}
@@ -1359,11 +1338,6 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
 		mountPoints:    append([]string(nil), mountPoints...),
 		quarantineName: quarantineName,
-		gitCommonDir:   gitCommonDir,
-		gitRef:         gitRef,
-		gitRefOld:      gitRefOld,
-		envExecutable:  envExecutable,
-		gitExecutable:  gitExecutable,
 	}, nil
 }
 
@@ -1489,9 +1463,6 @@ func (plan *NativeResetPlan) Apply() error {
 				fmt.Fprintf(os.Stderr, "+ reset-owned %s\n", candidate.path)
 			}
 		}
-		if plan.gitRefOld != "" {
-			fmt.Fprintf(os.Stderr, "+ reset-owned-git-ref %s %s\n", plan.gitCommonDir, plan.gitRef)
-		}
 		return nil
 	}
 	quarantines := map[string]string{}
@@ -1572,15 +1543,6 @@ func (plan *NativeResetPlan) Apply() error {
 			return errors.Join(fmt.Errorf("stage native reset target %s: %w", candidate.path, err), rollbackErr, cleanupErr)
 		}
 		staged = append(staged, stagedNativeResetPath{source: candidate.path, target: target})
-	}
-	if plan.gitRefOld != "" {
-		envLocalGit := []string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", plan.gitExecutable}
-		args := append(envLocalGit, "--git-dir", plan.gitCommonDir, "update-ref", "-d", plan.gitRef, plan.gitRefOld)
-		if err := run(false, plan.envExecutable, args...); err != nil {
-			rollbackErr := rollbackNativeResetStaging(staged)
-			cleanupErr := cleanupEmptyQuarantines()
-			return errors.Join(fmt.Errorf("remove selected native slot branch %s: %w", plan.gitRef, err), rollbackErr, cleanupErr)
-		}
 	}
 	for _, quarantine := range quarantines {
 		if err := removeNativeResetQuarantine(quarantine); err != nil {
