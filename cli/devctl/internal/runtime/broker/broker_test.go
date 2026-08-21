@@ -2,11 +2,40 @@ package broker
 
 import (
 	"context"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+const brokerTestHelperMode = "DEVKIT_BROKER_TEST_HELPER"
+
+func TestMain(m *testing.M) {
+	switch os.Getenv(brokerTestHelperMode) {
+	case "sleep":
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "listen":
+		path := strings.TrimPrefix(os.Getenv("BROKER_LISTEN"), "unix://")
+		listener, err := net.Listen("unix", path)
+		if err != nil {
+			os.Exit(2)
+		}
+		defer listener.Close()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				os.Exit(0)
+			}
+			_ = conn.Close()
+		}
+	}
+	os.Exit(m.Run())
+}
 
 func TestNormalizeDefaults(t *testing.T) {
 	cfg := Normalize(Config{DevkitRoot: "/home/user/dev/devkit"})
@@ -127,6 +156,196 @@ func TestInspectReportsStalePID(t *testing.T) {
 	}
 	if !status.StaleState {
 		t.Fatalf("expected stale state: %#v", status)
+	}
+}
+
+func TestInspectRejectsReusedLivePID(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := Config{StateRoot: tmp, Socket: filepath.Join(tmp, "broker.sock")}
+	state := State{PID: os.Getpid(), Binary: "/not/postgres-broker", Socket: cfg.Socket}
+	if err := writeState(cfg, state); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	status, err := Inspect(cfg)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if status.Running {
+		t.Fatalf("reused pid was reported as a running broker: %#v", status)
+	}
+	if !status.StaleState || !strings.Contains(status.Message, "different process") {
+		t.Fatalf("reused pid was not classified as stale identity: %#v", status)
+	}
+}
+
+func TestStartIgnoresReusedPIDAndStartsBroker(t *testing.T) {
+	tmp := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	cfg := Config{
+		StateRoot:    tmp,
+		Socket:       filepath.Join(tmp, "broker.sock"),
+		Binary:       executable,
+		StartTimeout: 2 * time.Second,
+	}
+	if err := writeState(cfg, State{PID: os.Getpid(), Binary: "/not/postgres-broker", Socket: cfg.Socket}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	t.Setenv(brokerTestHelperMode, "listen")
+
+	status, err := Start(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !status.Running || !status.SocketExists {
+		t.Fatalf("broker was not started after pid reuse: %#v", status)
+	}
+	if status.PID == os.Getpid() {
+		t.Fatalf("reused pid %d remained broker authority", status.PID)
+	}
+	if _, err := Stop(cfg, false); err != nil {
+		t.Fatalf("stop replacement broker: %v", err)
+	}
+}
+
+func TestStartDoesNotSignalSameBinaryForDifferentBrokerSocket(t *testing.T) {
+	tmp := t.TempDir()
+	foreignSocket := filepath.Join(tmp, "foreign.sock")
+	foreign := startBrokerTestHelper(t, "listen", "BROKER_LISTEN=unix://"+foreignSocket)
+	waitForBrokerTestSocket(t, foreignSocket)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	cfg := Config{
+		StateRoot:    filepath.Join(tmp, "state"),
+		Socket:       filepath.Join(tmp, "broker.sock"),
+		Binary:       executable,
+		StartTimeout: 2 * time.Second,
+	}
+	if err := os.MkdirAll(cfg.StateRoot, 0o700); err != nil {
+		t.Fatalf("mkdir state root: %v", err)
+	}
+	if err := writeState(cfg, State{PID: foreign.Process.Pid, Binary: executable, Socket: cfg.Socket}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	t.Setenv(brokerTestHelperMode, "listen")
+
+	status, err := Start(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !status.Running || !status.SocketExists {
+		t.Fatalf("replacement broker is not ready: %#v", status)
+	}
+	if !processRunning(foreign.Process.Pid) || !socketAcceptsConnections(foreignSocket) {
+		t.Fatalf("same-binary foreign broker pid %d was disturbed", foreign.Process.Pid)
+	}
+	if _, err := Stop(cfg, false); err != nil {
+		t.Fatalf("stop replacement broker: %v", err)
+	}
+}
+
+func TestInspectRejectsManagedProcessWithoutLiveSocket(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := Config{StateRoot: tmp, Socket: filepath.Join(tmp, "broker.sock")}
+	process := startBrokerTestHelper(t, "sleep", "BROKER_LISTEN=unix://"+cfg.Socket)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	if err := writeState(cfg, State{PID: process.Process.Pid, Binary: executable, Socket: cfg.Socket}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	status, err := Inspect(cfg)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if status.Running {
+		t.Fatalf("managed process without a live socket was reported running: %#v", status)
+	}
+	if !status.StaleState || !strings.Contains(status.Message, "not accepting connections") {
+		t.Fatalf("dead socket was not classified as stale: %#v", status)
+	}
+}
+
+func TestStartReplacesManagedProcessWithDeadSocket(t *testing.T) {
+	tmp := t.TempDir()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	cfg := Config{
+		StateRoot:    tmp,
+		Socket:       filepath.Join(tmp, "broker.sock"),
+		Binary:       executable,
+		StartTimeout: 2 * time.Second,
+	}
+	stale := startBrokerTestHelper(t, "sleep", "BROKER_LISTEN=unix://"+cfg.Socket)
+	if err := writeState(cfg, State{PID: stale.Process.Pid, Binary: executable, Socket: cfg.Socket}); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	t.Setenv(brokerTestHelperMode, "listen")
+
+	status, err := Start(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !status.Running || !status.SocketExists {
+		t.Fatalf("replacement broker is not ready: %#v", status)
+	}
+	if status.PID == stale.Process.Pid {
+		t.Fatalf("stale broker pid %d was reused", status.PID)
+	}
+	if processRunning(stale.Process.Pid) {
+		t.Fatalf("stale managed broker pid %d remains alive", stale.Process.Pid)
+	}
+	if _, err := Stop(cfg, false); err != nil {
+		t.Fatalf("stop replacement broker: %v", err)
+	}
+}
+
+func startBrokerTestHelper(t *testing.T, mode string, extraEnv ...string) *exec.Cmd {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test executable: %v", err)
+	}
+	cmd := exec.Command(executable)
+	cmd.Env = append(os.Environ(), brokerTestHelperMode+"="+mode)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start broker test helper: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		if processRunning(cmd.Process.Pid) {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+	})
+	return cmd
+}
+
+func waitForBrokerTestSocket(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !socketAcceptsConnections(path) {
+		if time.Now().After(deadline) {
+			t.Fatalf("broker test socket %s did not become ready", path)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

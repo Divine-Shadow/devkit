@@ -196,12 +196,6 @@ func Inspect(c Config) (Status, error) {
 		StateFile: StateFile(c),
 		LogPath:   LogPath(c),
 	}
-	if info, err := os.Stat(c.Socket); err == nil {
-		status.SocketExists = info.Mode()&os.ModeSocket != 0
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return status, err
-	}
-
 	data, err := os.ReadFile(status.StateFile)
 	if err == nil {
 		var state State
@@ -215,6 +209,11 @@ func Inspect(c Config) (Status, error) {
 			}
 		}
 	}
+	if info, err := os.Stat(status.Socket); err == nil {
+		status.SocketExists = info.Mode()&os.ModeSocket != 0
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return status, err
+	}
 
 	pid, err := readPID(status.PIDFile)
 	if err != nil {
@@ -227,13 +226,23 @@ func Inspect(c Config) (Status, error) {
 		return status, nil
 	}
 	status.PID = pid
-	if processRunning(pid) {
-		status.Running = true
-		status.Message = "broker is running"
+	if !processRunning(pid) {
+		status.StaleState = true
+		status.Message = "broker pid file is stale"
 		return status, nil
 	}
-	status.StaleState = true
-	status.Message = "broker pid file is stale"
+	if !managedProcess(status) {
+		status.StaleState = true
+		status.Message = "broker pid belongs to a different process"
+		return status, nil
+	}
+	if !socketAcceptsConnections(status.Socket) {
+		status.StaleState = true
+		status.Message = "broker process is running but its socket is not accepting connections"
+		return status, nil
+	}
+	status.Running = true
+	status.Message = "broker is running"
 	return status, nil
 }
 
@@ -262,6 +271,11 @@ func Start(ctx context.Context, c Config, dryRun bool) (Status, error) {
 		return status, err
 	}
 	status.Command = []string{binary}
+	if processRunning(status.PID) && managedProcess(status) {
+		if err := terminateManagedProcess(status); err != nil {
+			return status, fmt.Errorf("stop unresponsive managed postgres-broker: %w", err)
+		}
+	}
 
 	if err := os.MkdirAll(c.StateRoot, 0o700); err != nil {
 		return status, fmt.Errorf("mkdir broker state root %s: %w", c.StateRoot, err)
@@ -323,6 +337,17 @@ func Stop(c Config, dryRun bool) (Status, error) {
 		if dryRun {
 			status.Message = "dry run: broker is not running"
 			return status, nil
+		}
+		if processRunning(status.PID) {
+			if !managedProcess(status) {
+				return status, fmt.Errorf("refusing to stop unmanaged process %d; remove stale state under %s after inspection", status.PID, c.StateRoot)
+			}
+			if err := terminateManagedProcess(status); err != nil {
+				return status, err
+			}
+		}
+		if socketAcceptsConnections(status.Socket) {
+			return status, fmt.Errorf("refusing to remove active unmanaged broker socket %s", status.Socket)
 		}
 		_ = cleanupState(c)
 		status.Message = "broker is not running"
@@ -397,25 +422,53 @@ func processRunning(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+func terminateManagedProcess(status Status) error {
+	if !managedProcess(status) {
+		return fmt.Errorf("refusing to stop unmanaged process %d", status.PID)
+	}
+	if err := syscall.Kill(status.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("stop broker pid %d: %w", status.PID, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for processRunning(status.PID) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !processRunning(status.PID) {
+		return nil
+	}
+	if err := syscall.Kill(status.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("kill unresponsive broker pid %d: %w", status.PID, err)
+	}
+	deadline = time.Now().Add(1 * time.Second)
+	for processRunning(status.PID) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if processRunning(status.PID) {
+		return fmt.Errorf("broker pid %d remained alive after SIGKILL", status.PID)
+	}
+	return nil
+}
+
 func managedProcess(status Status) bool {
-	if status.PID < 1 || status.State == nil || strings.TrimSpace(status.State.Binary) == "" {
+	if status.PID < 1 || status.State == nil || status.State.PID != status.PID ||
+		strings.TrimSpace(status.State.Binary) == "" || strings.TrimSpace(status.State.Socket) == "" {
 		return false
 	}
 	exe, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(status.PID), "exe"))
-	if err == nil {
-		if exe == status.State.Binary {
-			return true
-		}
-		if filepath.Base(exe) == filepath.Base(status.State.Binary) && strings.Contains(filepath.Base(exe), "postgres-broker") {
-			return true
-		}
+	if err != nil || filepath.Clean(exe) != filepath.Clean(status.State.Binary) {
+		return false
 	}
-	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(status.PID), "cmdline"))
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(status.PID), "environ"))
 	if err != nil {
 		return false
 	}
-	cmdline := strings.ReplaceAll(string(data), "\x00", " ")
-	return strings.Contains(cmdline, status.State.Binary) || strings.Contains(cmdline, "postgres-broker")
+	want := "BROKER_LISTEN=unix://" + status.State.Socket
+	for _, entry := range strings.Split(string(data), "\x00") {
+		if entry == want {
+			return true
+		}
+	}
+	return false
 }
 
 func removeStaleSocket(path string) error {
@@ -435,6 +488,15 @@ func removeStaleSocket(path string) error {
 		return fmt.Errorf("broker socket %s already accepts connections; refusing to replace it", path)
 	}
 	return os.Remove(path)
+}
+
+func socketAcceptsConnections(path string) bool {
+	conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func waitForSocket(path string, timeout time.Duration) error {
