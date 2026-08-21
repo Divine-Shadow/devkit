@@ -144,15 +144,25 @@
           pkgsPlaywright,
         }:
         let
-          shell = self.devShells.${pkgs.system}.dev-all;
+          # The installed launcher is shared by every admitted native overlay,
+          # so its closure must include overlay-specific tools as well as the
+          # default dev-all toolset. Keep this list explicit and gate each
+          # admitted runtime at the executable boundary below.
+          admittedRuntimeShells = [
+            self.devShells.${pkgs.system}.dev-all
+            self.devShells.${pkgs.system}.pokeemerald
+          ];
           runtimeInputs =
             [
               pkgs.bashInteractive
               pkgs.curl
               pkgs.nodejs_22
             ]
-            ++ (shell.nativeBuildInputs or [ ])
-            ++ (shell.buildInputs or [ ]);
+            ++ builtins.concatLists (map
+              (shell:
+                (shell.nativeBuildInputs or [ ])
+                ++ (shell.buildInputs or [ ]))
+              admittedRuntimeShells);
           packageNamed =
             name:
             let
@@ -865,7 +875,7 @@
                 for tool in \
                   bash git ssh curl docker go java sbt node npm purs spago \
                   vite netlify playwright deno aws make gcc mgba-headless \
-                  timeout base64
+                  arm-none-eabi-gcc arm-none-eabi-as timeout base64
                 do
                   command -v "$tool" >/dev/null || {
                     echo "immutable runtime is missing declared tool: $tool" >&2
