@@ -664,6 +664,7 @@ func TestPackagedAdmittedNativeOverlaysDeclareAbsoluteGeometry(t *testing.T) {
 		"dev-all":             true,
 		"dev-workspace":       true,
 		"ouroboros-terraform": true,
+		"pokeemerald":         true,
 	}
 	seen := map[string]bool{}
 	for _, entry := range entries {

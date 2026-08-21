@@ -673,10 +673,13 @@
               test -f ${devctl}/overlays/dev-workspace/devkit.yaml
               test -f ${devctl}/overlays/ouroboros-terraform/flake.nix
               test -f ${devctl}/overlays/ouroboros-terraform/devkit.yaml
+              test -f ${devctl}/overlays/pokeemerald/flake.nix
+              test -f ${devctl}/overlays/pokeemerald/runtime.nix
+              test -f ${devctl}/overlays/pokeemerald/devkit.yaml
               test -r ${devctl}/kit/proxy/allowlist.txt
               grep -Fx 'ssh.github.com' ${devctl}/kit/proxy/allowlist.txt
               grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
-              for overlay in dev-all dev-workspace ouroboros-terraform; do
+              for overlay in dev-all dev-workspace ouroboros-terraform pokeemerald; do
                 grep -Fx '  host_root: /home/bayesartre/dev' ${devctl}/overlays/$overlay/devkit.yaml
                 grep -Fx '  worktree_root: /home/bayesartre/dev/agent-worktrees' ${devctl}/overlays/$overlay/devkit.yaml
                 grep -Fx '  state_root: /home/bayesartre/dev/.devkit/native-agents' ${devctl}/overlays/$overlay/devkit.yaml
@@ -745,6 +748,35 @@
               grep -Fx \
                 "      command: codex --version | grep -q '0.144.0'" \
                 ${devctl}/overlays/ouroboros-terraform/devkit.yaml
+
+              pokeemerald_plan="$TMPDIR/installed-pokeemerald-plan.json"
+              env -i \
+                HOME="$TMPDIR/home" \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${devctl}/kit/bin/devctl -p pokeemerald native plan \
+                  --repo pokeemerald --index 1 --format json > "$pokeemerald_plan"
+              ${pkgs.jq}/bin/jq -e \
+                --arg devctl '${devctl}' \
+                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
+                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
+                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
+                 .sandbox_state_root == "/agent-state" and
+                 .mount_policy_identity == "devkit/workspace-egress/v3" and
+                 .windows_mounts_visible == false and
+                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/pokeemerald-agent1-workspace-egress.sock" and
+                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
+                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/pokeemerald" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/pokeemerald" and
+                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/pokeemerald-agent1/home" and
+                 .agent.sandbox_home == "/agent-state/pokeemerald-agent1/home" and
+                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
+                 (tostring | contains("/nix/store/.devkit/") | not)' \
+                "$pokeemerald_plan"
+              grep -Fx \
+                '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald.git' \
+                ${devctl}/overlays/pokeemerald/devkit.yaml
 
               # Exercise the real installed dev-workspace package path from an
               # empty environment.  The protected controller files are exact
@@ -818,6 +850,7 @@
               trap - EXIT
               mkdir -p "$out"
               cp "$plan" "$out/installed-plan.json"
+              cp "$pokeemerald_plan" "$out/installed-pokeemerald-plan.json"
               cp "$workspace_plan" "$out/installed-dev-workspace-plan.json"
               printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
             '';

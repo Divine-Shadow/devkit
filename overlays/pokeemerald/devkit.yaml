@@ -2,6 +2,7 @@ workspace: ../../../pokeemerald
 service: dev-agent
 defaults:
   repo: pokeemerald
+  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald.git
   agents: 1
   base_branch: master
   branch_prefix: agent
@@ -10,6 +11,19 @@ runtime:
   codex_version: 0.144.0
   core_check: make modern
   notes: GBA build workspace; current warm hook is intentionally no-op.
+native:
+  # This packaged overlay keeps runtime authority in /nix/store while all
+  # mutable checkout, home, and proxy state remains in the declared workspace.
+  host_root: /home/bayesartre/dev
+  worktree_root: /home/bayesartre/dev/agent-worktrees
+  state_root: /home/bayesartre/dev/.devkit/native-agents
+  worktree_container_root: /workspaces/dev/agent-worktrees
+  state_container_root: /agent-state
+  required_isolation_profile: workspace-egress
+  isolation_profiles:
+    workspace-egress:
+      filesystem: workspace-only
+      egress_allowlist: ../../kit/proxy/allowlist.txt
 readiness:
   default_mode: runtime-only
   runtime_checks:
