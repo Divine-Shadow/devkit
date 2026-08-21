@@ -319,6 +319,16 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	})
 	profile := writeControllerProfileManifest(t, manifestPath, base.Agent.HostWorktree, filepath.Join(root, "wsl-nix-lease"))
 	t.Setenv(ManagementControllerProfileEnvironment, ManagementControllerProfileIdentity)
+	profile.Targets.ControllerGUI = ManagementControllerPrimaryGUI
+	if err := validateManagementControllerProfile(profile); err != nil {
+		t.Fatalf("manifest-selected primary Management GUI was rejected: %v", err)
+	}
+	profile.Targets.ControllerGUI = "shadow-throne-management-unmanaged"
+	if err := validateManagementControllerProfile(profile); err == nil ||
+		!strings.Contains(err.Error(), "compiled inventory identities") {
+		t.Fatalf("uncompiled Management GUI was not rejected: %v", err)
+	}
+	profile.Targets.ControllerGUI = ManagementControllerGUI
 
 	p, err := Build(BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot},

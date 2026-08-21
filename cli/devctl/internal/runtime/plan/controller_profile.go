@@ -29,6 +29,7 @@ const (
 	ManagementControllerWSLNixLogicalRoot   = "/workspaces/dev/wsl-nix"
 	ManagementControllerNode                = "shadow-throne"
 	ManagementControllerGUI                 = "shadow-throne-management-2"
+	ManagementControllerPrimaryGUI          = "shadow-throne-management"
 	controllerOperationStateDirectory       = "/var/lib/fleet-controller-operation"
 	controllerProductAgentSocket            = "/run/fleet-product-agent-lifecycle/control.sock"
 	controllerProductAgentOperation         = "cycle-test"
@@ -371,7 +372,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return fmt.Errorf("Management controller inventories do not use the package-owned projection paths")
 	}
 	if profile.Targets.Controller != ManagementControllerNode ||
-		profile.Targets.ControllerGUI != ManagementControllerGUI ||
+		!validManagementControllerGUI(profile.Targets.ControllerGUI) ||
 		profile.Targets.ProductAgentHost != ManagementControllerNode {
 		return fmt.Errorf("Management controller targets do not match the compiled inventory identities")
 	}
@@ -438,6 +439,10 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return err
 	}
 	return nil
+}
+
+func validManagementControllerGUI(target string) bool {
+	return target == ManagementControllerPrimaryGUI || target == ManagementControllerGUI
 }
 
 func validateControllerRemoteProductGUI(remote ControllerProfileRemoteProductGUI) error {
