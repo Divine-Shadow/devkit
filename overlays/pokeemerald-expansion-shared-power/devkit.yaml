@@ -1,0 +1,57 @@
+workspace: ../../../pokeemerald-expansion-shared-power
+service: dev-agent
+defaults:
+  repo: pokeemerald-expansion-shared-power
+  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald-pret.git
+  agents: 2
+  base_branch: main
+  branch_prefix: agent
+runtime:
+  flake: ./overlays/pokeemerald-expansion-shared-power#default
+  codex_version: 0.144.0
+  core_check: make modern
+  notes: Shared Power pokeemerald-expansion workspace; current warm hook is intentionally no-op.
+native:
+  host_root: /home/bayesartre/dev
+  worktree_root: /home/bayesartre/dev/agent-worktrees
+  state_root: /home/bayesartre/dev/.devkit/native-agents
+  worktree_container_root: /workspaces/dev/agent-worktrees
+  state_container_root: /agent-state
+  agent_state_prefix: pokeemerald
+  required_isolation_profile: workspace-egress
+  isolation_profiles:
+    workspace-egress:
+      filesystem: workspace-only
+      egress_allowlist: ../../kit/proxy/allowlist.txt
+readiness:
+  default_mode: runtime-only
+  runtime_checks:
+    - name: required-tools
+      command: |
+        for tool in git ssh curl docker make arm-none-eabi-gcc arm-none-eabi-as mgba-headless; do
+          command -v "$tool" >/dev/null || { echo "missing required runtime tool: $tool" >&2; exit 127; }
+        done
+    - name: docker-client
+      command: docker --version >/dev/null
+    - name: gba-toolchain
+      command: arm-none-eabi-gcc --version >/dev/null && arm-none-eabi-as --version >/dev/null && mgba-headless --help 2>&1 | grep -q -- --script
+  repo_checks:
+    - name: core-check
+      command: make modern
+env:
+  PATH: /workspace/.local/bin:${PATH}
+hooks:
+  warm: |
+    set -euo pipefail
+    mkdir -p /workspace/.local/bin
+    if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      ln -sf "$(command -v python3)" /workspace/.local/bin/python
+    fi
+    echo "no-op"
+  maintain: |
+    set -euo pipefail
+    mkdir -p /workspace/.local/bin
+    if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+      ln -sf "$(command -v python3)" /workspace/.local/bin/python
+    fi
+    echo "no-op"

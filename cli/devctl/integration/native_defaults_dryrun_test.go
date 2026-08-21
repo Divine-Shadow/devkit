@@ -364,6 +364,7 @@ func TestFlakeBackedNonDevAllTopLevelAliasesUseNativeDryRun(t *testing.T) {
 		{project: "ouroboros-static-front-end", repo: "ouroboros-static-front-end", flake: "./overlays/ouroboros-static-front-end#default"},
 		{project: "ouroboros-terraform", repo: "ouroboros-terraform", flake: "./overlays/ouroboros-terraform#default"},
 		{project: "pokeemerald", repo: "pokeemerald", flake: "./overlays/pokeemerald#default"},
+		{project: "pokeemerald-expansion-shared-power", repo: "pokeemerald-expansion-shared-power", flake: "./overlays/pokeemerald-expansion-shared-power#default"},
 	}
 	commands := [][]string{
 		{"up"},

@@ -96,11 +96,15 @@ func NormalizeReadinessMode(value string) (string, bool) {
 type Native struct {
 	// HostRoot is the source-declared mutable workspace root. Installed
 	// runtimes must not derive mutable state from their immutable package path.
-	HostRoot                 string                      `yaml:"host_root"`
-	WorktreeRoot             string                      `yaml:"worktree_root"`
-	StateRoot                string                      `yaml:"state_root"`
-	WorktreeContainerRoot    string                      `yaml:"worktree_container_root"`
-	StateContainerRoot       string                      `yaml:"state_container_root"`
+	HostRoot              string `yaml:"host_root"`
+	WorktreeRoot          string `yaml:"worktree_root"`
+	StateRoot             string `yaml:"state_root"`
+	WorktreeContainerRoot string `yaml:"worktree_container_root"`
+	StateContainerRoot    string `yaml:"state_container_root"`
+	// AgentStatePrefix lets a source-owned profile retain an established Codex
+	// home/state identity while using a distinct project/profile name. It must
+	// be a single path component and is never accepted from lifecycle CLI args.
+	AgentStatePrefix         string                      `yaml:"agent_state_prefix"`
 	RequiredIsolationProfile string                      `yaml:"required_isolation_profile"`
 	IsolationProfiles        map[string]IsolationProfile `yaml:"isolation_profiles"`
 }

@@ -62,6 +62,43 @@ func TestResolvePathsUsesConfiguredRoots(t *testing.T) {
 	}
 }
 
+func TestResolvePathsUsesSourceDeclaredAgentStatePrefix(t *testing.T) {
+	got, err := ResolvePaths(PathConfig{
+		DevkitRoot:        "/home/me/dev/devkit",
+		Project:           "pokeemerald-expansion-shared-power",
+		Repo:              "pokeemerald-expansion-shared-power",
+		Index:             2,
+		AgentStatePrefix:  "pokeemerald",
+		DedicatedWorktree: true,
+	})
+	if err != nil {
+		t.Fatalf("ResolvePaths: %v", err)
+	}
+	if got.HostWorktree != "/home/me/dev/agent-worktrees/agent2/pokeemerald-expansion-shared-power" {
+		t.Fatalf("host worktree = %q", got.HostWorktree)
+	}
+	if got.HostHome != "/home/me/dev/.devkit/native-agents/pokeemerald-agent2/home" {
+		t.Fatalf("host home = %q", got.HostHome)
+	}
+	if got.SandboxHome != "/agent-state/pokeemerald-agent2/home" {
+		t.Fatalf("sandbox home = %q", got.SandboxHome)
+	}
+}
+
+func TestResolvePathsRejectsUnsafeAgentStatePrefix(t *testing.T) {
+	for _, prefix := range []string{"../pokeemerald", "nested/pokeemerald", ".", ".."} {
+		_, err := ResolvePaths(PathConfig{
+			DevkitRoot:       "/home/me/dev/devkit",
+			Project:          "pokeemerald-expansion-shared-power",
+			Repo:             "pokeemerald-expansion-shared-power",
+			AgentStatePrefix: prefix,
+		})
+		if err == nil {
+			t.Fatalf("unsafe agent state prefix %q was accepted", prefix)
+		}
+	}
+}
+
 func TestResolvePathsWorkspaceRootRepo(t *testing.T) {
 	got, err := ResolvePaths(PathConfig{
 		DevkitRoot:        "/home/me/dev/devkit",

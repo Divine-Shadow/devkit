@@ -536,6 +536,7 @@
           ouroIntegration = import ./overlays/ouro-integration/runtime.nix runtimeArgs;
           ouroborosStaticFrontEnd = import ./overlays/ouroboros-static-front-end/runtime.nix runtimeArgs;
           pokeemerald = import ./overlays/pokeemerald/runtime.nix runtimeArgs;
+          pokeemeraldSharedPower = import ./overlays/pokeemerald-expansion-shared-power/runtime.nix runtimeArgs;
         in
         {
           default = devAll;
@@ -552,6 +553,7 @@
           ouro-integration = ouroIntegration;
           ouroboros-static-front-end = ouroborosStaticFrontEnd;
           pokeemerald = pokeemerald;
+          pokeemerald-expansion-shared-power = pokeemeraldSharedPower;
 
           runtime-test-agent = mkShell "runtime-test-agent" (with pkgs; [
             bashInteractive
@@ -686,10 +688,13 @@
               test -f ${devctl}/overlays/pokeemerald/flake.nix
               test -f ${devctl}/overlays/pokeemerald/runtime.nix
               test -f ${devctl}/overlays/pokeemerald/devkit.yaml
+              test -f ${devctl}/overlays/pokeemerald-expansion-shared-power/flake.nix
+              test -f ${devctl}/overlays/pokeemerald-expansion-shared-power/runtime.nix
+              test -f ${devctl}/overlays/pokeemerald-expansion-shared-power/devkit.yaml
               test -r ${devctl}/kit/proxy/allowlist.txt
               grep -Fx 'ssh.github.com' ${devctl}/kit/proxy/allowlist.txt
               grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
-              for overlay in dev-all dev-workspace ouroboros-terraform pokeemerald; do
+              for overlay in dev-all dev-workspace ouroboros-terraform pokeemerald pokeemerald-expansion-shared-power; do
                 grep -Fx '  host_root: /home/bayesartre/dev' ${devctl}/overlays/$overlay/devkit.yaml
                 grep -Fx '  worktree_root: /home/bayesartre/dev/agent-worktrees' ${devctl}/overlays/$overlay/devkit.yaml
                 grep -Fx '  state_root: /home/bayesartre/dev/.devkit/native-agents' ${devctl}/overlays/$overlay/devkit.yaml
@@ -788,6 +793,52 @@
                 '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald.git' \
                 ${devctl}/overlays/pokeemerald/devkit.yaml
 
+              shared_power_plan="$TMPDIR/installed-pokeemerald-shared-power-plan.json"
+              env -i \
+                HOME="$TMPDIR/home" \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${devctl}/kit/bin/devctl -p pokeemerald-expansion-shared-power native plan \
+                  --repo pokeemerald-expansion-shared-power --index 1 --format json > "$shared_power_plan"
+              ${pkgs.jq}/bin/jq -e \
+                --arg devctl '${devctl}' \
+                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
+                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
+                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
+                 .sandbox_state_root == "/agent-state" and
+                 .mount_policy_identity == "devkit/workspace-egress/v3" and
+                 .windows_mounts_visible == false and
+                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/pokeemerald-agent1-workspace-egress.sock" and
+                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
+                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/pokeemerald-expansion-shared-power" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/pokeemerald-expansion-shared-power" and
+                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/pokeemerald-agent1/home" and
+                 .agent.sandbox_home == "/agent-state/pokeemerald-agent1/home" and
+                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
+                 (tostring | contains("/nix/store/.devkit/") | not)' \
+                "$shared_power_plan"
+              grep -Fx \
+                '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald-pret.git' \
+                ${devctl}/overlays/pokeemerald-expansion-shared-power/devkit.yaml
+              grep -Fx \
+                '  agent_state_prefix: pokeemerald' \
+                ${devctl}/overlays/pokeemerald-expansion-shared-power/devkit.yaml
+              shared_power_plan_a2="$TMPDIR/installed-pokeemerald-shared-power-a2-plan.json"
+              env -i \
+                HOME="$TMPDIR/home" \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${devctl}/kit/bin/devctl -p pokeemerald-expansion-shared-power native plan \
+                  --repo pokeemerald-expansion-shared-power --index 2 --format json > "$shared_power_plan_a2"
+              ${pkgs.jq}/bin/jq -e \
+                '.agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent2/pokeemerald-expansion-shared-power" and
+                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent2/pokeemerald-expansion-shared-power" and
+                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/pokeemerald-agent2/home" and
+                 .agent.sandbox_home == "/agent-state/pokeemerald-agent2/home"' \
+                "$shared_power_plan_a2"
+
               # Exercise the real installed dev-workspace package path from an
               # empty environment.  The protected controller files are exact
               # read-only mount capabilities; this nested namespace supplies
@@ -861,6 +912,8 @@
               mkdir -p "$out"
               cp "$plan" "$out/installed-plan.json"
               cp "$pokeemerald_plan" "$out/installed-pokeemerald-plan.json"
+              cp "$shared_power_plan" "$out/installed-pokeemerald-shared-power-plan.json"
+              cp "$shared_power_plan_a2" "$out/installed-pokeemerald-shared-power-a2-plan.json"
               cp "$workspace_plan" "$out/installed-dev-workspace-plan.json"
               printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
             '';

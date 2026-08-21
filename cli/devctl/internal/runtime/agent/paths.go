@@ -18,6 +18,7 @@ type PathConfig struct {
 	StateRoot             string
 	WorktreeContainerRoot string
 	StateContainerRoot    string
+	AgentStatePrefix      string
 	DedicatedWorktree     bool
 }
 
@@ -68,7 +69,14 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 	sandboxStateRoot := cleanContainerRoot(cfg.StateContainerRoot, "/agent-state")
 
 	agentDir := fmt.Sprintf("agent%d", index)
-	agentName := fmt.Sprintf("%s-agent%d", project, index)
+	agentStatePrefix := strings.TrimSpace(cfg.AgentStatePrefix)
+	if agentStatePrefix == "" {
+		agentStatePrefix = project
+	}
+	if agentStatePrefix == "." || agentStatePrefix == ".." || filepath.Base(agentStatePrefix) != agentStatePrefix {
+		return Paths{}, fmt.Errorf("native agent state prefix must be one path component: %q", cfg.AgentStatePrefix)
+	}
+	agentName := fmt.Sprintf("%s-agent%d", agentStatePrefix, index)
 
 	hostWorktree := filepath.Join(devRoot, repo)
 	sandboxWorktree := filepath.Join("/workspaces/dev", repo)

@@ -84,6 +84,7 @@ type BuildOptions struct {
 	StateRoot             string
 	WorktreeContainerRoot string
 	StateContainerRoot    string
+	AgentStatePrefix      string
 	BaseBranch            string
 	BranchPrefix          string
 	BrokerEndpoint        string
@@ -157,6 +158,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		StateRoot:             opts.StateRoot,
 		WorktreeContainerRoot: opts.WorktreeContainerRoot,
 		StateContainerRoot:    opts.StateContainerRoot,
+		AgentStatePrefix:      opts.AgentStatePrefix,
 		DedicatedWorktree:     true,
 	})
 	if err != nil {
@@ -215,7 +217,11 @@ func Build(opts BuildOptions) (Plan, error) {
 			return Plan{}, fmt.Errorf("workspace-egress isolation requires an egress allowlist")
 		}
 		if proxySocket == "" {
-			agentName := agent.ID{Project: project, Index: index, Repo: repo}.Name()
+			agentProject := strings.TrimSpace(opts.AgentStatePrefix)
+			if agentProject == "" {
+				agentProject = project
+			}
+			agentName := agent.ID{Project: agentProject, Index: index, Repo: repo}.Name()
 			proxySocket = filepath.Join(paths.DevRoot, ".devkit", "native-egress", agentName+"-"+IsolationProfileWorkspaceEgress+".sock")
 		}
 	}

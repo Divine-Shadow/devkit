@@ -661,10 +661,11 @@ func TestPackagedAdmittedNativeOverlaysDeclareAbsoluteGeometry(t *testing.T) {
 		t.Fatalf("read packaged overlays: %v", err)
 	}
 	wantAdmitted := map[string]bool{
-		"dev-all":             true,
-		"dev-workspace":       true,
-		"ouroboros-terraform": true,
-		"pokeemerald":         true,
+		"dev-all":                            true,
+		"dev-workspace":                      true,
+		"ouroboros-terraform":                true,
+		"pokeemerald":                        true,
+		"pokeemerald-expansion-shared-power": true,
 	}
 	seen := map[string]bool{}
 	for _, entry := range entries {

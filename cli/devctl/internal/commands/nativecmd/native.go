@@ -1145,6 +1145,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		StateRoot:             resolveNativeRoot(hostRoot, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
 		WorktreeContainerRoot: firstNonEmpty(parsed.worktreeContainerRoot, cfg.Native.WorktreeContainerRoot),
 		StateContainerRoot:    firstNonEmpty(parsed.agentStateContainerRoot, cfg.Native.StateContainerRoot),
+		AgentStatePrefix:      strings.TrimSpace(cfg.Native.AgentStatePrefix),
 		BaseBranch:            strings.TrimSpace(parsed.baseBranch),
 		BranchPrefix:          strings.TrimSpace(parsed.branchPrefix),
 		BrokerEndpoint:        brokerCfg.Socket,
@@ -1197,6 +1198,9 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	}
 	if strings.TrimSpace(opts.StateContainerRoot) == "" {
 		opts.StateContainerRoot = strings.TrimSpace(cfg.Native.StateContainerRoot)
+	}
+	if strings.TrimSpace(opts.AgentStatePrefix) == "" {
+		opts.AgentStatePrefix = strings.TrimSpace(cfg.Native.AgentStatePrefix)
 	}
 	if strings.TrimSpace(opts.BrokerEndpoint) == "" {
 		opts.BrokerEndpoint = resolveNativeRoot(hostRoot, cfg.Broker.Socket)

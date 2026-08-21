@@ -24,6 +24,7 @@ func TestFlakeBackedOverlaysDeclareReadinessContract(t *testing.T) {
 		"ouroboros-static-front-end",
 		"ouroboros-terraform",
 		"pokeemerald",
+		"pokeemerald-expansion-shared-power",
 	}
 	for _, overlay := range overlays {
 		t.Run(overlay, func(t *testing.T) {
