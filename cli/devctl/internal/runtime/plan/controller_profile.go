@@ -128,6 +128,14 @@ type ControllerProfileProductAgentLifecycle struct {
 	NoFollow           bool   `json:"noFollow"`
 }
 
+type ControllerProfileFleetRecovery struct {
+	Controller     string `json:"controller"`
+	Target         string `json:"target"`
+	PackagePath    string `json:"packagePath"`
+	ExecutablePath string `json:"executablePath"`
+	SourceRevision string `json:"sourceRevision"`
+}
+
 type ControllerProfileNixOSDeployment struct {
 	SocketPath    string `json:"socketPath"`
 	Operation     string `json:"operation"`
@@ -282,6 +290,7 @@ type ManagementControllerProfile struct {
 	MountPolicyIdentity   string                                 `json:"mountPolicyIdentity"`
 	OperationHandle       ControllerProfileOperationHandle       `json:"operationHandle"`
 	ProductAgentLifecycle ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
+	FleetRecovery         ControllerProfileFleetRecovery         `json:"fleetRecovery"`
 	NixOSDeployment       ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
 	SourceRoots           ControllerProfileSourceRoots           `json:"sourceRoots"`
 	Inventories           ControllerProfileInventories           `json:"inventories"`
@@ -411,6 +420,9 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	if err := validateControllerStoreExecutable("Product-agent lifecycle", productAgent.Executable); err != nil {
 		return err
 	}
+	if err := validateControllerFleetRecovery(profile); err != nil {
+		return err
+	}
 	deployment := profile.NixOSDeployment
 	if filepath.Clean(deployment.SocketPath) != controllerNixOSDeploymentSocket ||
 		deployment.Operation != controllerNixOSDeploymentOperation ||
@@ -437,6 +449,47 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}
 	if err := validateControllerStoreFile("SSH config", profile.SourceAcquisition.SSHConfigPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateControllerFleetRecovery(profile ManagementControllerProfile) error {
+	recovery := profile.FleetRecovery
+	if recovery.Controller == "" || recovery.Controller != profile.Targets.Controller ||
+		!validControllerAuthorityToken(recovery.Target) ||
+		!validControllerGitRevision(recovery.SourceRevision) {
+		return fmt.Errorf("Management controller Fleet recovery identity is invalid")
+	}
+
+	storeRoot := filepath.Clean(ControllerProfileStoreRoot)
+	packagePath := filepath.Clean(strings.TrimSpace(recovery.PackagePath))
+	executablePath := filepath.Clean(strings.TrimSpace(recovery.ExecutablePath))
+	packageRel, err := filepath.Rel(storeRoot, packagePath)
+	if err != nil || recovery.PackagePath != packagePath || packageRel == "." || packageRel == ".." ||
+		strings.HasPrefix(packageRel, ".."+string(filepath.Separator)) ||
+		strings.Contains(packageRel, string(filepath.Separator)) {
+		return fmt.Errorf("Management controller Fleet recovery package %s is not an immutable store package", packagePath)
+	}
+	packageInfo, err := os.Lstat(packagePath)
+	if err != nil || packageInfo.Mode()&os.ModeSymlink != 0 || !packageInfo.IsDir() {
+		return fmt.Errorf("Management controller Fleet recovery package %s is unavailable or not a real directory", packagePath)
+	}
+	executableRel, err := filepath.Rel(packagePath, executablePath)
+	if err != nil || recovery.ExecutablePath != executablePath || executableRel == "." || executableRel == ".." ||
+		strings.HasPrefix(executableRel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("Management controller Fleet recovery executable %s is outside its package", executablePath)
+	}
+	if err := validateControllerStoreExecutable("Fleet recovery", executablePath); err != nil {
+		return err
+	}
+	resolvedExecutable, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		return fmt.Errorf("resolve Management controller Fleet recovery executable %s: %w", executablePath, err)
+	}
+	resolvedRel, err := filepath.Rel(packagePath, filepath.Clean(resolvedExecutable))
+	if err != nil || resolvedRel == "." || resolvedRel == ".." ||
+		strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("Management controller Fleet recovery executable %s resolves outside its package", executablePath)
 	}
 	return nil
 }

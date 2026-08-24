@@ -114,6 +114,13 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Group:              "product-agent-operators",
 			NoFollow:           true,
 		},
+		FleetRecovery: ControllerProfileFleetRecovery{
+			Controller:     ManagementControllerNode,
+			Target:         "manifest-selected-station",
+			PackagePath:    filepath.Join(ControllerProfileStoreRoot, "fleet-recovery"),
+			ExecutablePath: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-recovery", "bin", "devops-fleet-recovery")),
+			SourceRevision: strings.Repeat("d", 40),
+		},
 		NixOSDeployment: ControllerProfileNixOSDeployment{
 			SocketPath:    controllerNixOSDeploymentSocket,
 			Operation:     controllerNixOSDeploymentOperation,
@@ -199,6 +206,28 @@ func TestManagementControllerProfileRecognizesV7CodexPermissionsAndRemoteGUI(t *
 	}
 	if decoded.CodexPermissions.Mode != "custom" || decoded.RemoteProductGUI.SchemaVersion != controllerRemoteProductGUISchema {
 		t.Fatalf("v7 controller fields decoded incorrectly: %#v", decoded)
+	}
+}
+
+func TestManagementControllerProfileRecognizesTypedFleetRecovery(t *testing.T) {
+	var profile ManagementControllerProfile
+	decoder := json.NewDecoder(strings.NewReader(`{
+		"fleetRecovery": {
+			"controller": "shadow-throne",
+			"target": "manifest-selected-station",
+			"packagePath": "/nix/store/example-fleet-recovery",
+			"executablePath": "/nix/store/example-fleet-recovery/bin/devops-fleet-recovery",
+			"sourceRevision": "dce48fd684d298616940ec72615326b43cbb6319"
+		}
+	}`))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&profile); err != nil {
+		t.Fatalf("typed Fleet recovery profile field rejected: %v", err)
+	}
+	if profile.FleetRecovery.Controller != ManagementControllerNode ||
+		profile.FleetRecovery.Target != "manifest-selected-station" ||
+		profile.FleetRecovery.ExecutablePath != "/nix/store/example-fleet-recovery/bin/devops-fleet-recovery" {
+		t.Fatalf("typed Fleet recovery profile decoded incorrectly: %#v", profile.FleetRecovery)
 	}
 }
 
@@ -329,6 +358,61 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 		t.Fatalf("uncompiled Management GUI was not rejected: %v", err)
 	}
 	profile.Targets.ControllerGUI = ManagementControllerGUI
+	if profile.FleetRecovery.Target != "manifest-selected-station" {
+		t.Fatalf("generic manifest-selected Fleet recovery target was not preserved: %#v", profile.FleetRecovery)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ManagementControllerProfile)
+	}{
+		{
+			name: "controller mismatch",
+			mutate: func(candidate *ManagementControllerProfile) {
+				candidate.FleetRecovery.Controller = "other-controller"
+			},
+		},
+		{
+			name: "unsafe target token",
+			mutate: func(candidate *ManagementControllerProfile) {
+				candidate.FleetRecovery.Target = "station,other"
+			},
+		},
+		{
+			name: "mutable package path",
+			mutate: func(candidate *ManagementControllerProfile) {
+				candidate.FleetRecovery.PackagePath = filepath.Join(root, "mutable-fleet-recovery")
+			},
+		},
+		{
+			name: "nested store package path",
+			mutate: func(candidate *ManagementControllerProfile) {
+				candidate.FleetRecovery.PackagePath = filepath.Join(ControllerProfileStoreRoot, "owner", "fleet-recovery")
+				candidate.FleetRecovery.ExecutablePath = filepath.Join(candidate.FleetRecovery.PackagePath, "bin", "devops-fleet-recovery")
+			},
+		},
+		{
+			name: "executable outside package",
+			mutate: func(candidate *ManagementControllerProfile) {
+				candidate.FleetRecovery.ExecutablePath = candidate.Broker.Executable
+			},
+		},
+		{
+			name: "malformed source revision",
+			mutate: func(candidate *ManagementControllerProfile) {
+				candidate.FleetRecovery.SourceRevision = strings.Repeat("D", 40)
+			},
+		},
+	} {
+		t.Run("rejects "+testCase.name, func(t *testing.T) {
+			candidate := profile
+			testCase.mutate(&candidate)
+			if err := validateManagementControllerProfile(candidate); err == nil ||
+				!strings.Contains(err.Error(), "Fleet recovery") {
+				t.Fatalf("invalid Fleet recovery identity passed: %#v err=%v", candidate.FleetRecovery, err)
+			}
+		})
+	}
 
 	p, err := Build(BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot},

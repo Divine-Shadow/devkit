@@ -330,6 +330,13 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T)
 		Group:              "product-agent-operators",
 		NoFollow:           true,
 	}
+	profile.FleetRecovery = nativeplan.ControllerProfileFleetRecovery{
+		Controller:     nativeplan.ManagementControllerNode,
+		Target:         "manifest-selected-station",
+		PackagePath:    filepath.Join(operationStoreRoot, "fleet-recovery"),
+		ExecutablePath: writeExecutable(filepath.Join(operationStoreRoot, "fleet-recovery", "bin", "devops-fleet-recovery")),
+		SourceRevision: strings.Repeat("f", 40),
+	}
 	profile.NixOSDeployment = nativeplan.ControllerProfileNixOSDeployment{
 		SocketPath:    "/run/fleet-nixos-deploy-effect/control.sock",
 		Operation:     "nixos.deploy-closure",
