@@ -35,6 +35,7 @@ const (
 	controllerProductAgentOperation         = "cycle-test"
 	controllerProductAgentRequestSchema     = "fleet-control/product-agent-local-request/v1"
 	controllerProductAgentEventSchema       = "fleet-control/product-agent-local-event/v1"
+	controllerFleetRecoveryTarget           = "glados"
 	controllerNixOSDeploymentSocket         = "/run/fleet-nixos-deploy-effect/control.sock"
 	controllerNixOSDeploymentOperation      = "nixos.deploy-closure"
 	controllerNixOSDeploymentRequestSchema  = "fleet-control/nixos-deploy-local-request/v1"
@@ -126,6 +127,14 @@ type ControllerProfileProductAgentLifecycle struct {
 	Owner              string `json:"owner"`
 	Group              string `json:"group"`
 	NoFollow           bool   `json:"noFollow"`
+}
+
+type ControllerProfileFleetRecovery struct {
+	Controller     string `json:"controller"`
+	Target         string `json:"target"`
+	PackagePath    string `json:"packagePath"`
+	ExecutablePath string `json:"executablePath"`
+	SourceRevision string `json:"sourceRevision"`
 }
 
 type ControllerProfileNixOSDeployment struct {
@@ -282,6 +291,7 @@ type ManagementControllerProfile struct {
 	MountPolicyIdentity   string                                 `json:"mountPolicyIdentity"`
 	OperationHandle       ControllerProfileOperationHandle       `json:"operationHandle"`
 	ProductAgentLifecycle ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
+	FleetRecovery         ControllerProfileFleetRecovery         `json:"fleetRecovery"`
 	NixOSDeployment       ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
 	SourceRoots           ControllerProfileSourceRoots           `json:"sourceRoots"`
 	Inventories           ControllerProfileInventories           `json:"inventories"`
@@ -409,6 +419,20 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return fmt.Errorf("Management controller Product-agent lifecycle does not match the compiled fail-closed contract")
 	}
 	if err := validateControllerStoreExecutable("Product-agent lifecycle", productAgent.Executable); err != nil {
+		return err
+	}
+	fleetRecovery := profile.FleetRecovery
+	if fleetRecovery.Controller != ManagementControllerNode || fleetRecovery.Target != controllerFleetRecoveryTarget ||
+		!validControllerGitRevision(fleetRecovery.SourceRevision) {
+		return fmt.Errorf("Management controller Fleet recovery identity does not match the compiled contract")
+	}
+	packagePath := filepath.Clean(strings.TrimSpace(fleetRecovery.PackagePath))
+	executablePath := filepath.Clean(strings.TrimSpace(fleetRecovery.ExecutablePath))
+	rel, err := filepath.Rel(packagePath, executablePath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("Management controller Fleet recovery executable is outside its package")
+	}
+	if err := validateControllerStoreExecutable("Fleet recovery", executablePath); err != nil {
 		return err
 	}
 	deployment := profile.NixOSDeployment

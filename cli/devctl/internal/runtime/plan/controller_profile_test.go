@@ -114,6 +114,13 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Group:              "product-agent-operators",
 			NoFollow:           true,
 		},
+		FleetRecovery: ControllerProfileFleetRecovery{
+			Controller:     ManagementControllerNode,
+			Target:         controllerFleetRecoveryTarget,
+			PackagePath:    filepath.Join(ControllerProfileStoreRoot, "fleet-recovery"),
+			ExecutablePath: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-recovery", "bin", "devops-fleet-recovery")),
+			SourceRevision: strings.Repeat("d", 40),
+		},
 		NixOSDeployment: ControllerProfileNixOSDeployment{
 			SocketPath:    controllerNixOSDeploymentSocket,
 			Operation:     controllerNixOSDeploymentOperation,
@@ -199,6 +206,28 @@ func TestManagementControllerProfileRecognizesV7CodexPermissionsAndRemoteGUI(t *
 	}
 	if decoded.CodexPermissions.Mode != "custom" || decoded.RemoteProductGUI.SchemaVersion != controllerRemoteProductGUISchema {
 		t.Fatalf("v7 controller fields decoded incorrectly: %#v", decoded)
+	}
+}
+
+func TestManagementControllerProfileRecognizesTypedFleetRecovery(t *testing.T) {
+	var profile ManagementControllerProfile
+	decoder := json.NewDecoder(strings.NewReader(`{
+		"fleetRecovery": {
+			"controller": "shadow-throne",
+			"target": "glados",
+			"packagePath": "/nix/store/example-fleet-recovery",
+			"executablePath": "/nix/store/example-fleet-recovery/bin/devops-fleet-recovery",
+			"sourceRevision": "dce48fd684d298616940ec72615326b43cbb6319"
+		}
+	}`))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&profile); err != nil {
+		t.Fatalf("typed Fleet recovery profile field rejected: %v", err)
+	}
+	if profile.FleetRecovery.Controller != ManagementControllerNode ||
+		profile.FleetRecovery.Target != controllerFleetRecoveryTarget ||
+		profile.FleetRecovery.ExecutablePath != "/nix/store/example-fleet-recovery/bin/devops-fleet-recovery" {
+		t.Fatalf("typed Fleet recovery profile decoded incorrectly: %#v", profile.FleetRecovery)
 	}
 }
 
