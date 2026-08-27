@@ -143,6 +143,10 @@ func TestNativeWholeResetRejectsActiveProcessInEveryDeclaredSlotBeforeEffects(t 
 					return nil
 				},
 				stopSessions: func() { effects = append(effects, "stop-sessions") },
+				snapshotHistory: func() error {
+					effects = append(effects, "snapshot-history")
+					return nil
+				},
 				applyPlan: func() error {
 					effects = append(effects, "apply-plan")
 					return nil
@@ -171,6 +175,10 @@ func TestNativeWholeResetNoProcessPathReachesExistingPlan(t *testing.T) {
 			return nil
 		},
 		stopSessions: func() { events = append(events, "stop-sessions") },
+		snapshotHistory: func() error {
+			events = append(events, "snapshot-history")
+			return nil
+		},
 		applyPlan: func() error {
 			events = append(events, "apply-plan")
 			return nil
@@ -179,7 +187,7 @@ func TestNativeWholeResetNoProcessPathReachesExistingPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"inspect", "lifecycle-down", "stop-sessions", "inspect", "apply-plan"}
+	want := []string{"inspect", "lifecycle-down", "stop-sessions", "inspect", "snapshot-history", "inspect", "apply-plan"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("whole reset events = %v, want %v", events, want)
 	}
@@ -203,6 +211,10 @@ func TestNativeWholeResetProcessAppearingBetweenScansBlocksDisposal(t *testing.T
 		stopSessions: func() {
 			effects = append(effects, "stop-sessions")
 			writeWholeResetTestProcess(t, pid, identities[2])
+		},
+		snapshotHistory: func() error {
+			effects = append(effects, "snapshot-history")
+			return nil
 		},
 		applyPlan: func() error {
 			effects = append(effects, "apply-plan")
@@ -271,6 +283,10 @@ func TestNativeWholeResetProductionLockWrapsScansAndApply(t *testing.T) {
 				return nil
 			},
 			stopSessions: func() { assertHeld("session stop") },
+			snapshotHistory: func() error {
+				assertHeld("history snapshot")
+				return nil
+			},
 			applyPlan: func() error {
 				assertHeld("plan apply")
 				return nil
@@ -280,8 +296,8 @@ func TestNativeWholeResetProductionLockWrapsScansAndApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inspections != 2 {
-		t.Fatalf("slot inspections = %d, want 2", inspections)
+	if inspections != 3 {
+		t.Fatalf("slot inspections = %d, want 3", inspections)
 	}
 	reacquired, err := acquireNativeWholeResetLock(coordinationRoot, "dev-all", false)
 	if err != nil {
@@ -327,7 +343,10 @@ func TestNativeWholeResetDryRunPlanLeavesOwnedPathsUntouched(t *testing.T) {
 		inspectSlots:  func() error { return nil },
 		lifecycleDown: func() error { return nil },
 		stopSessions:  func() {},
-		applyPlan:     plan.Apply,
+		snapshotHistory: func() error {
+			return nil
+		},
+		applyPlan: plan.Apply,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -337,5 +356,70 @@ func TestNativeWholeResetDryRunPlanLeavesOwnedPathsUntouched(t *testing.T) {
 	}
 	if _, err := os.Lstat(coordinationRoot); !os.IsNotExist(err) {
 		t.Fatalf("dry-run created lock root: %v", err)
+	}
+}
+
+func TestNativeWholeResetSnapshotFailurePreventsDestructiveApply(t *testing.T) {
+	var events []string
+	err := executeNativeWholeResetBoundary(nativeWholeResetBoundary{
+		inspectSlots: func() error {
+			events = append(events, "inspect")
+			return nil
+		},
+		lifecycleDown: func() error {
+			events = append(events, "lifecycle-down")
+			return nil
+		},
+		stopSessions: func() { events = append(events, "stop-sessions") },
+		snapshotHistory: func() error {
+			events = append(events, "snapshot-history")
+			return fmt.Errorf("snapshot failed")
+		},
+		applyPlan: func() error {
+			events = append(events, "apply-plan")
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "snapshot failed") {
+		t.Fatalf("snapshot failure = %v", err)
+	}
+	want := []string{"inspect", "lifecycle-down", "stop-sessions", "inspect", "snapshot-history"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("snapshot failure events = %v, want %v", events, want)
+	}
+}
+
+func TestNativeWholeResetProcessAppearingDuringSnapshotPreventsDestructiveApply(t *testing.T) {
+	var events []string
+	inspections := 0
+	err := executeNativeWholeResetBoundary(nativeWholeResetBoundary{
+		inspectSlots: func() error {
+			inspections++
+			events = append(events, fmt.Sprintf("inspect-%d", inspections))
+			if inspections == 3 {
+				return fmt.Errorf("process appeared")
+			}
+			return nil
+		},
+		lifecycleDown: func() error {
+			events = append(events, "lifecycle-down")
+			return nil
+		},
+		stopSessions: func() { events = append(events, "stop-sessions") },
+		snapshotHistory: func() error {
+			events = append(events, "snapshot-history")
+			return nil
+		},
+		applyPlan: func() error {
+			events = append(events, "apply-plan")
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "process appeared") {
+		t.Fatalf("post-history process failure = %v", err)
+	}
+	want := []string{"inspect-1", "lifecycle-down", "stop-sessions", "inspect-2", "snapshot-history", "inspect-3"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("post-history process events = %v, want %v", events, want)
 	}
 }

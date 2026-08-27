@@ -1428,10 +1428,15 @@ func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr err
 		return err
 	}
 	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
+	historyCustodyRoot, err := nativeHistoryCustodyRoot(planOpts.StateRoot, ctx.Project)
+	if err != nil {
+		return err
+	}
 	protectedRoots := []string{
 		ctx.Paths.Root,
 		ctx.Paths.RuntimeAuthorityRoot,
 		filepath.Join(hostRoot, repo),
+		historyCustodyRoot,
 	}
 	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
 	resetOptions := wtx.NativeResetOptions{
@@ -1468,7 +1473,10 @@ func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr err
 				return lifecycleDown(ctx, parsed)
 			},
 			stopSessions: stopSessions,
-			applyPlan:    resetPlan.Apply,
+			snapshotHistory: func() error {
+				return captureNativeWholeHistory(ctx.Project, slotIdentities, planOpts.StateRoot, ctx.DryRun)
+			},
+			applyPlan: resetPlan.Apply,
 		}); err != nil {
 			return err
 		}

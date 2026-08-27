@@ -4,6 +4,11 @@ Principles
 - Single path: use `kit/scripts/devkit` as the canonical entrypoint. It execs the compiled CLI at `kit/bin/devctl`.
 - No fallbacks: wrappers must not silently fall back to alternative scripts or binaries. If the binary is missing, fail loudly with a clear message and instructions to build it.
 - Minimal wrappers: keep shell wrappers as thin exec shims only; no hidden logic.
+- Human-authored Codex GUI conversation content and goals are durable authority.
+  The package-owned selected-slot and whole-prefix `dev-all` resets must finish
+  the source-derived cold history snapshot before deleting a Codex home. Never
+  add a bypass, manual SQLite copy, automatic restore/import, or retention
+  pruning to the reset path.
 - Product artifacts are composed outside Devkit. Devkit must not choose a
   Product revision, acquire Product source to build a runtime, derive Product
   JARs, or publish a parallel runtime identity. It exposes the generic

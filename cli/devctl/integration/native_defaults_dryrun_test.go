@@ -61,6 +61,10 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqliteExecutable, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 is supplied by the Nix test closure")
+	}
 	bin := filepath.Join(t.TempDir(), "runtime", "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
@@ -77,6 +81,7 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 			"-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=" + knownHosts,
 			"-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=" + envExecutable,
 			"-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=" + gitExecutable,
+			"-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=" + sqliteExecutable,
 		}, " "),
 	)
 	args = append(args, "-o", bin, "./")
@@ -1164,6 +1169,7 @@ func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	worktreeRoot := t.TempDir()
 	root := filepath.Join(base, "devkit")
 	packageDevctl := filepath.Join(root, "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(packageDevctl), 0o755); err != nil {
@@ -1181,6 +1187,7 @@ func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.
 	allowlistPath := filepath.Join(root, "kit", "proxy", "allowlist.txt")
 	brokerSocket := filepath.Join(base, ".devkit", "native-broker", "broker.sock")
 	remoteRepo := filepath.Join(base, "remote.git")
+	sandboxWorktreeRoot := filepath.ToSlash(filepath.Join("/integration-devkit", filepath.Base(base), "agent-worktrees"))
 	overlay := fmt.Sprintf(`
 defaults:
   repo: ouroboros-ide
@@ -1200,16 +1207,16 @@ broker:
   upstream: unix:///fixture-docker.sock
 native:
   host_root: %s
-  worktree_root: agent-worktrees
+  worktree_root: %s
   state_root: .devkit/native-agents
-  worktree_container_root: /workspaces/dev/agent-worktrees
+  worktree_container_root: %s
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
   isolation_profiles:
     workspace-egress:
       filesystem: workspace-only
       egress_allowlist: %s
-`, remoteRepo, brokerSocket, base, allowlistPath)
+`, remoteRepo, brokerSocket, base, worktreeRoot, sandboxWorktreeRoot, allowlistPath)
 	overlayPath := filepath.Join(root, "overlays", "dev-all", "devkit.yaml")
 	if err := os.MkdirAll(filepath.Dir(overlayPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -1305,13 +1312,13 @@ while [ "$#" -gt 0 ]; do
         /workspaces/dev/.devkit/ouro8-governance-env.sh) governance_env="$source" ;;
         /workspaces/dev/.devkit/ouro8-governance-repo-env.json) governance_catalog="$source" ;;
         /workspaces/dev/.devkit/governance-control-plane) governance_state="$source" ;;
-        /workspaces/dev/agent-worktrees/agent*/ouroboros-ide)
+		*/agent-worktrees/agent*/ouroboros-ide)
           case "$source" in
             */agent-worktrees/agent*/ouroboros-ide) host_worktree="$source" ;;
           esac
           ;;
-        /workspaces/dev/agent-worktrees/agent*/ouroboros-ide/.devhome-agent*|\
-        /workspaces/dev/agent-worktrees/agent*/.devhome-agent*) host_home="$source" ;;
+		*/agent-worktrees/agent*/ouroboros-ide/.devhome-agent*|\
+		*/agent-worktrees/agent*/.devhome-agent*) host_home="$source" ;;
       esac
       shift 3
       ;;
@@ -1389,7 +1396,7 @@ fi
 	if err := os.WriteFile(resolverSource, []byte("nameserver 192.0.2.53\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	staleHome := filepath.Join(base, "agent-worktrees", "agent2", "ouroboros-ide", ".devhome-agent2")
+	staleHome := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide", ".devhome-agent2")
 	if err := os.MkdirAll(staleHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1434,9 +1441,9 @@ fi
 		t.Fatalf("failed reset did not dispose stale package-owned payload: %v", readErr)
 	}
 	for _, path := range []string{
-		filepath.Join(base, "agent-worktrees", "agent1"),
-		filepath.Join(base, "agent-worktrees", "agent3"),
-		filepath.Join(base, "agent-worktrees", ".devkit", "git", "ouroboros-ide.git"),
+		filepath.Join(worktreeRoot, "agent1"),
+		filepath.Join(worktreeRoot, "agent3"),
+		filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git"),
 		brokerSocket,
 		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
 		filepath.Join(base, ".devkit", "native-broker", "broker.json"),
@@ -1445,7 +1452,7 @@ fi
 			t.Fatalf("failed reset left package lifecycle residue %s: %v", path, statErr)
 		}
 	}
-	partialBootstrap, err := filepath.Glob(filepath.Join(base, "agent-worktrees", ".devkit", "git", ".ouroboros-ide.bootstrap-*"))
+	partialBootstrap, err := filepath.Glob(filepath.Join(worktreeRoot, ".devkit", "git", ".ouroboros-ide.bootstrap-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1461,7 +1468,7 @@ fi
 	}
 
 	t.Run("fresh bootstrap JSON reserves stdout and preserves sibling state", func(t *testing.T) {
-		worktreesRoot := filepath.Join(base, "agent-worktrees")
+		worktreesRoot := worktreeRoot
 		siblingHome := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
 		siblingState := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
 		for _, path := range []string{siblingHome, siblingState} {
@@ -1556,7 +1563,7 @@ fi
 			t.Fatalf("installed reset omitted accepted readiness %q:\n%s", want, output)
 		}
 	}
-	worktreesRoot := filepath.Join(base, "agent-worktrees")
+	worktreesRoot := worktreeRoot
 	wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
 	wantCodexConfig, err := os.ReadFile(filepath.Join(base, ".devkit", "nix-codex-config.toml"))
 	if err != nil {

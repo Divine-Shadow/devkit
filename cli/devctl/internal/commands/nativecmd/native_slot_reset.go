@@ -93,6 +93,35 @@ type nativeSlotProcessPlan struct {
 	dryRun   bool
 }
 
+type nativeSlotDestructiveBoundary struct {
+	stopSelected    func() error
+	inspectIdle     func() error
+	snapshotHistory func() error
+	applyPlan       func() error
+}
+
+// executeNativeSlotDestructiveBoundary keeps the selected-slot deletion gate
+// explicit and independently testable. The same process identity is re-read
+// after stop and after the cold snapshot before the reset plan may delete it.
+func executeNativeSlotDestructiveBoundary(boundary nativeSlotDestructiveBoundary) error {
+	if boundary.stopSelected == nil || boundary.inspectIdle == nil || boundary.snapshotHistory == nil || boundary.applyPlan == nil {
+		return fmt.Errorf("selected native slot destructive boundary is incomplete")
+	}
+	if err := boundary.stopSelected(); err != nil {
+		return err
+	}
+	if err := boundary.inspectIdle(); err != nil {
+		return fmt.Errorf("selected native slot post-stop process recheck: %w", err)
+	}
+	if err := boundary.snapshotHistory(); err != nil {
+		return fmt.Errorf("selected native slot Codex GUI history custody: %w", err)
+	}
+	if err := boundary.inspectIdle(); err != nil {
+		return fmt.Errorf("selected native slot post-history process recheck: %w", err)
+	}
+	return boundary.applyPlan()
+}
+
 type nativeProc struct {
 	pid     int
 	ppid    int
@@ -739,10 +768,15 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
+	historyCustodyRoot, err := nativeHistoryCustodyRoot(opts.StateRoot, ctx.Project)
+	if err != nil {
+		return err
+	}
 	protectedRoots := []string{
 		ctx.Paths.Root,
 		ctx.Paths.RuntimeAuthorityRoot,
 		filepath.Join(resolveNativeHostRoot(ctx.Paths.Root, cfg), declaredRepo),
+		historyCustodyRoot,
 	}
 	protectedRoots = append(protectedRoots, ctx.Paths.OverlayPaths...)
 	resetOptions := wtx.NativeSlotResetOptions{
@@ -801,21 +835,27 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
-	if err := processPlan.Stop(); err != nil {
-		return err
-	}
-	// Re-scan after shutdown so a process that appeared during the bounded stop
-	// window blocks disposal rather than racing the selected path removal.
-	if !ctx.DryRun {
-		postStop, err := planNativeSlotProcesses(processIdentity, false)
+	inspectIdle := func() error {
+		if ctx.DryRun {
+			return nil
+		}
+		observed, err := planNativeSlotProcesses(processIdentity, false)
 		if err != nil {
 			return err
 		}
-		if len(postStop.pids) != 0 {
-			return fmt.Errorf("selected native slot acquired new processes during reset preflight: %v", postStop.pids)
+		if len(observed.pids) != 0 {
+			return fmt.Errorf("selected native slot acquired new processes: %v", observed.pids)
 		}
+		return nil
 	}
-	if err := resetPlan.Apply(); err != nil {
+	if err := executeNativeSlotDestructiveBoundary(nativeSlotDestructiveBoundary{
+		stopSelected: processPlan.Stop,
+		inspectIdle:  inspectIdle,
+		snapshotHistory: func() error {
+			return captureNativeSlotHistory(ctx.Project, "selected-slot-reset", processIdentity, opts.StateRoot, ctx.DryRun)
+		},
+		applyPlan: resetPlan.Apply,
+	}); err != nil {
 		return err
 	}
 

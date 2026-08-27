@@ -70,17 +70,18 @@ func requireSourceDerivedNativeSlotsIdle(identities []nativeSlotProcessIdentity)
 }
 
 type nativeWholeResetBoundary struct {
-	inspectSlots  func() error
-	lifecycleDown func() error
-	stopSessions  func()
-	applyPlan     func() error
+	inspectSlots    func() error
+	lifecycleDown   func() error
+	stopSessions    func()
+	snapshotHistory func() error
+	applyPlan       func() error
 }
 
 // executeNativeWholeResetBoundary keeps the destructive ordering explicit and
-// testable. The second scan closes the lifecycle/session-stop window before
-// the already-preflighted filesystem plan is allowed to apply.
+// testable. History is captured only after the post-stop scan, and a final scan
+// closes the capture window before the filesystem plan may apply.
 func executeNativeWholeResetBoundary(boundary nativeWholeResetBoundary) error {
-	if boundary.inspectSlots == nil || boundary.lifecycleDown == nil || boundary.applyPlan == nil {
+	if boundary.inspectSlots == nil || boundary.lifecycleDown == nil || boundary.snapshotHistory == nil || boundary.applyPlan == nil {
 		return fmt.Errorf("native destructive reset safety boundary is incomplete")
 	}
 	if err := boundary.inspectSlots(); err != nil {
@@ -94,6 +95,12 @@ func executeNativeWholeResetBoundary(boundary nativeWholeResetBoundary) error {
 	}
 	if err := boundary.inspectSlots(); err != nil {
 		return fmt.Errorf("native destructive reset post-stop process recheck: %w", err)
+	}
+	if err := boundary.snapshotHistory(); err != nil {
+		return fmt.Errorf("native destructive reset Codex GUI history custody: %w", err)
+	}
+	if err := boundary.inspectSlots(); err != nil {
+		return fmt.Errorf("native destructive reset post-history process recheck: %w", err)
 	}
 	return boundary.applyPlan()
 }

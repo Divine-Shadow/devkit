@@ -70,6 +70,7 @@
           pkgs,
           sshExecutable,
           knownHostsFile,
+          sqliteExecutable,
           tags ? [ ],
         }:
         pkgs.buildGoModule {
@@ -88,6 +89,7 @@
             "-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=${knownHostsFile}"
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
             "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
+            "-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=${sqliteExecutable}"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"
@@ -105,6 +107,7 @@
           inherit pkgs;
           sshExecutable = "${pkgs.openssh}/bin/ssh";
           knownHostsFile = githubSSHKnownHosts;
+          sqliteExecutable = "${pkgs.sqlite}/bin/sqlite3";
         };
       mkDevctlGoTests =
         pkgs:
@@ -119,6 +122,7 @@
           nativeCheckInputs = [
             pkgs.git
             pkgs.openssh
+            pkgs.sqlite
           ];
           doCheck = true;
           checkPhase = ''
@@ -660,6 +664,23 @@
               mkdir -p "$out"
               printf '%s\n' '${pkgs.openssh}/bin/ssh' > "$out/ssh-executable"
               cp '${githubSSHKnownHosts}' "$out/github-ssh-known-hosts"
+              cp ${closure}/store-paths "$out/store-paths"
+            '';
+
+          devctl-sqlite-executable-authority =
+            let
+              devctl = mkProductionDevctl pkgs;
+              closure = pkgs.closureInfo {
+                rootPaths = [ devctl ];
+              };
+            in
+            pkgs.runCommand "devkit-devctl-sqlite-executable-authority" {
+              nativeBuildInputs = [ pkgs.gnugrep ];
+            } ''
+              grep -aqF '${pkgs.sqlite}/bin/sqlite3' ${devctl}/kit/bin/devctl
+              grep -qFx '${pkgs.sqlite}' ${closure}/store-paths
+              mkdir -p "$out"
+              printf '%s\n' '${pkgs.sqlite}/bin/sqlite3' > "$out/sqlite-executable"
               cp ${closure}/store-paths "$out/store-paths"
             '';
 
