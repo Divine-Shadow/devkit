@@ -132,6 +132,7 @@ type lifecycleArgs struct {
 	proxySocket             string
 	isolationProfile        string
 	egressAllowlist         string
+	workspaceRoot           string
 	worktreeRoot            string
 	agentStateRoot          string
 	worktreeContainerRoot   string
@@ -158,6 +159,7 @@ type topExecArgs struct {
 	proxySocket             string
 	isolationProfile        string
 	egressAllowlist         string
+	workspaceRoot           string
 	worktreeRoot            string
 	agentStateRoot          string
 	worktreeContainerRoot   string
@@ -394,6 +396,12 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			}
 			parsed.opts.WorktreeRoot = ctx.Args[i+1]
 			i++
+		case "--workspace-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--workspace-root requires a value")
+			}
+			parsed.opts.WorkspaceRoot = ctx.Args[i+1]
+			i++
 		case "--state-root":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--state-root requires a value")
@@ -611,6 +619,12 @@ func parseLifecycleArgs(ctx *cmdregistry.Context) (lifecycleArgs, error) {
 				return parsed, fmt.Errorf("--worktree-root requires a value")
 			}
 			parsed.worktreeRoot = ctx.Args[i+1]
+			i++
+		case "--workspace-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--workspace-root requires a value")
+			}
+			parsed.workspaceRoot = ctx.Args[i+1]
 			i++
 		case "--agent-state-root":
 			if i+1 >= len(ctx.Args) {
@@ -900,6 +914,12 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.worktreeRoot = ctx.Args[i+1]
 			i++
+		case "--workspace-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--workspace-root requires a value")
+			}
+			parsed.workspaceRoot = ctx.Args[i+1]
+			i++
 		case "--agent-state-root":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--agent-state-root requires a value")
@@ -934,6 +954,7 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		proxySocket:             parsed.proxySocket,
 		isolationProfile:        parsed.isolationProfile,
 		egressAllowlist:         parsed.egressAllowlist,
+		workspaceRoot:           parsed.workspaceRoot,
 		worktreeRoot:            parsed.worktreeRoot,
 		agentStateRoot:          parsed.agentStateRoot,
 		worktreeContainerRoot:   parsed.worktreeContainerRoot,
@@ -1141,6 +1162,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		RuntimeLauncher:       strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER")),
 		BubblewrapBinary:      strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY")),
 		Launcher:              "bubblewrap",
+		WorkspaceRoot:         strings.TrimSpace(parsed.workspaceRoot),
 		WorktreeRoot:          resolveNativeRoot(hostRoot, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
 		StateRoot:             resolveNativeRoot(hostRoot, firstNonEmpty(parsed.agentStateRoot, cfg.Native.StateRoot)),
 		WorktreeContainerRoot: firstNonEmpty(parsed.worktreeContainerRoot, cfg.Native.WorktreeContainerRoot),

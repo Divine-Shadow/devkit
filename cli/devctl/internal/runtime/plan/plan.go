@@ -43,6 +43,8 @@ type Plan struct {
 	DevkitHostRoot       string            `json:"devkit_host_root"`
 	RuntimeAuthorityRoot string            `json:"runtime_authority_root"`
 	DevkitSandboxRoot    string            `json:"devkit_sandbox_root"`
+	HostWorkspaceRoot    string            `json:"host_workspace_root,omitempty"`
+	SandboxWorkspaceRoot string            `json:"sandbox_workspace_root,omitempty"`
 	HostWorktreeRoot     string            `json:"host_worktree_root"`
 	HostStateRoot        string            `json:"host_state_root"`
 	SandboxWorktreeRoot  string            `json:"sandbox_worktree_root"`
@@ -80,6 +82,7 @@ type BuildOptions struct {
 	RuntimeLauncher       string
 	BubblewrapBinary      string
 	Launcher              string
+	WorkspaceRoot         string
 	WorktreeRoot          string
 	StateRoot             string
 	WorktreeContainerRoot string
@@ -164,7 +167,13 @@ func Build(opts BuildOptions) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
+	workspaceRoot, err := validateManagementWorkspaceRoot(opts.WorkspaceRoot, project, repo, index, paths)
+	if err != nil {
+		return Plan{}, err
+	}
+	if workspaceRoot != "" {
+		paths.SandboxWorktree = filepath.Join("/workspaces/dev", filepath.Base(paths.HostWorktree))
+	} else if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
 		if project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) {
 			suffix := fmt.Sprintf(".devhome-agent%d", index)
@@ -211,6 +220,9 @@ func Build(opts BuildOptions) (Plan, error) {
 	egressAllowlist := strings.TrimSpace(opts.EgressAllowlist)
 	if isolationProfile == "" && egressAllowlist != "" {
 		return Plan{}, fmt.Errorf("egress allowlist requires an isolation profile")
+	}
+	if workspaceRoot != "" && isolationProfile != IsolationProfileWorkspaceEgress {
+		return Plan{}, fmt.Errorf("Management workspace root requires workspace-egress isolation")
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
 		if egressAllowlist == "" {
@@ -336,6 +348,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			project,
 			index,
 			repo,
+			workspaceRoot,
 			opts.Paths.Root,
 			runtimeAuthorityRoot,
 			broker,
@@ -347,6 +360,11 @@ func Build(opts BuildOptions) (Plan, error) {
 		}
 		if err := validateWorkspaceEgressMountPolicy(binds, egressAllowlist); err != nil {
 			return Plan{}, err
+		}
+		if workspaceRoot != "" {
+			if err := validateManagementWorkspaceRootBinds(binds, workspaceRoot, paths); err != nil {
+				return Plan{}, err
+			}
 		}
 		for _, bind := range binds {
 			if bind.Source == WorkspaceControllerExecSocket &&
@@ -368,7 +386,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	windowsMountsVisible := true
 	if isolationProfile == IsolationProfileWorkspaceEgress {
 		mountPolicyIdentity = "devkit/workspace-egress/v3"
-		if controllerProfile != nil {
+		if controllerProfile != nil || workspaceRoot != "" {
 			mountPolicyIdentity = ManagementControllerMountPolicyIdentity
 		}
 		windowsMountsVisible = false
@@ -411,6 +429,13 @@ func Build(opts BuildOptions) (Plan, error) {
 		DevkitHostRoot:       opts.Paths.Root,
 		RuntimeAuthorityRoot: runtimeAuthorityRoot,
 		DevkitSandboxRoot:    filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
+		HostWorkspaceRoot:    workspaceRoot,
+		SandboxWorkspaceRoot: func() string {
+			if workspaceRoot == "" {
+				return ""
+			}
+			return "/workspaces/dev"
+		}(),
 		HostWorktreeRoot:     paths.HostWorktreeRoot,
 		HostStateRoot:        paths.HostStateRoot,
 		SandboxWorktreeRoot:  paths.SandboxWorktreeRoot,
@@ -498,7 +523,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
+func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -514,7 +539,11 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 		binds = append(binds, Bind{Source: source, Target: target, Mode: mode, Required: required})
 	}
 	add(paths.HostWorktree, "/workspace", "rw", true)
-	add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
+	if workspaceRoot == "" {
+		add(paths.HostWorktree, paths.SandboxWorktree, "rw", true)
+	} else {
+		add(workspaceRoot, "/workspaces/dev", "rw", true)
+	}
 	// TI4 stable project alias is opt-in and exact.
 	canonicalTI4 := filepath.Join(paths.HostWorktreeRoot, "agent1", "ti4-calculator")
 	if repo == "ti4-calculator" && filepath.Clean(paths.HostWorktree) == filepath.Clean(canonicalTI4) {
@@ -531,6 +560,12 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 		return nil, err
 	}
 	for _, bind := range additionalBinds {
+		if workspaceRoot != "" {
+			// The lane root already contains every source this Management
+			// consumer may see. Compatibility projections owned by another
+			// lane must not cross that boundary.
+			continue
+		}
 		add(bind.Source, bind.Target, bind.Mode, bind.Required)
 	}
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
@@ -546,6 +581,9 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 		// consume those exact files; they must not depend on a broad
 		// /workspaces/dev bind or regenerate a second identity in the consumer.
 		hostRuntimeSupportRoot := filepath.Join(paths.DevRoot, ".devkit")
+		if workspaceRoot != "" {
+			hostRuntimeSupportRoot = filepath.Join(workspaceRoot, ".devkit")
+		}
 		sandboxRuntimeSupportRoot := filepath.Join("/workspaces/dev", ".devkit")
 		add(
 			filepath.Join(hostRuntimeSupportRoot, "ouro8-governance-env.sh"),
@@ -573,6 +611,12 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 		)
 	}
 	for _, bind := range gitMetadataBinds(paths.HostWorktree, paths.SandboxWorktree) {
+		if workspaceRoot != "" && !pathWithinRoot(workspaceRoot, bind.Source) {
+			return nil, fmt.Errorf("Management workspace root rejects Git metadata outside the lane root: %s", bind.Source)
+		}
+		if workspaceRoot != "" {
+			continue
+		}
 		add(bind.Source, bind.Target, bind.Mode, bind.Required)
 	}
 	add("/nix/store", "/nix/store", "ro", true)
@@ -595,7 +639,11 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, de
 			add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
 		}
 		if controllerProfile != nil {
-			add(controllerProfile.SourceRoots.WSLNix.BackingPath, controllerProfile.SourceRoots.WSLNix.LogicalPath, "rw", true)
+			activeWSLNixRoot := controllerProfile.SourceRoots.WSLNix
+			if workspaceRoot != "" {
+				activeWSLNixRoot.BackingPath = filepath.Join(workspaceRoot, "wsl-nix")
+			}
+			add(activeWSLNixRoot.BackingPath, activeWSLNixRoot.LogicalPath, "rw", true)
 			add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
 			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", true)
 			add(WorkspaceControllerOperationIdentity, WorkspaceControllerOperationIdentity, "ro", true)
@@ -620,13 +668,96 @@ func IsGovernedRuntimePlan(project, repo string) bool {
 }
 
 func validateWorkspaceEgressMountPolicy(binds []Bind, egressAllowlist string) error {
-	if isWindowsFilesystemPath(egressAllowlist) {
+	if isMntFilesystemPath(egressAllowlist) || isWindowsFilesystemPath(egressAllowlist) {
 		return fmt.Errorf("workspace-egress isolation rejects Windows-mounted egress allowlist: %s", egressAllowlist)
 	}
 	for _, bind := range binds {
-		if isWindowsFilesystemPath(bind.Source) || isWindowsFilesystemPath(bind.Target) {
+		if isMntFilesystemPath(bind.Source) || isMntFilesystemPath(bind.Target) ||
+			isWindowsFilesystemPath(bind.Source) || isWindowsFilesystemPath(bind.Target) {
 			return fmt.Errorf("workspace-egress isolation rejects Windows-mounted bind %s -> %s", bind.Source, bind.Target)
 		}
+	}
+	return nil
+}
+
+func isMntFilesystemPath(value string) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimSpace(value)))
+	return cleaned == "/mnt" || strings.HasPrefix(cleaned, "/mnt/")
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	root = filepath.Clean(strings.TrimSpace(root))
+	candidate = filepath.Clean(strings.TrimSpace(candidate))
+	if root == "" || root == "." || candidate == "" || candidate == "." {
+		return false
+	}
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func validateManagementWorkspaceRoot(value, project, repo string, index int, paths agent.Paths) (string, error) {
+	workspaceRoot := strings.TrimSpace(value)
+	if workspaceRoot == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
+		return "", fmt.Errorf("Management workspace root must be absolute and canonical: %s", value)
+	}
+	if isMntFilesystemPath(workspaceRoot) || isWindowsFilesystemPath(workspaceRoot) {
+		return "", fmt.Errorf("Management workspace root rejects /mnt paths: %s", workspaceRoot)
+	}
+	if project != "dev-workspace" || repo != "shadow-throne-management" || (index != 1 && index != 2) {
+		return "", fmt.Errorf("workspace root is restricted to Dev Workspace 1 and 2 Management lanes")
+	}
+	expected := filepath.Join(filepath.Clean(paths.HostWorktreeRoot), fmt.Sprintf("agent%d", index))
+	if workspaceRoot == filepath.Clean(paths.DevRoot) || workspaceRoot == filepath.Clean(paths.HostWorktreeRoot) || workspaceRoot != expected {
+		return "", fmt.Errorf("Management workspace root must be the exact selected lane root %s: %s", expected, workspaceRoot)
+	}
+	if filepath.Dir(filepath.Clean(paths.HostWorktree)) != workspaceRoot || filepath.Base(filepath.Clean(paths.HostWorktree)) != repo {
+		return "", fmt.Errorf("Management host worktree must be an immediate child of workspace root %s: %s", workspaceRoot, paths.HostWorktree)
+	}
+	sandboxWorktree, ok := projectSandboxPath(paths.HostWorktree, workspaceRoot, "/workspaces/dev")
+	if !ok || sandboxWorktree != "/workspaces/dev/shadow-throne-management" {
+		return "", fmt.Errorf("Management host worktree does not project to /workspaces/dev/shadow-throne-management")
+	}
+	for _, path := range []string{workspaceRoot, paths.HostWorktree} {
+		if _, err := os.Lstat(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("inspect Management workspace geometry %s: %w", path, err)
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve Management workspace geometry %s: %w", path, err)
+		}
+		if filepath.Clean(resolved) != filepath.Clean(path) {
+			return "", fmt.Errorf("Management workspace geometry rejects symlinked path %s -> %s", path, resolved)
+		}
+	}
+	return workspaceRoot, nil
+}
+
+func validateManagementWorkspaceRootBinds(binds []Bind, workspaceRoot string, paths agent.Paths) error {
+	rootBinds := 0
+	for _, bind := range binds {
+		cleanTarget := filepath.Clean(bind.Target)
+		if cleanTarget == "/workspaces/dev" {
+			rootBinds++
+			if filepath.Clean(bind.Source) != workspaceRoot || bind.Mode != "rw" || !bind.Required {
+				return fmt.Errorf("Management workspace projection must bind only %s read-write at /workspaces/dev", workspaceRoot)
+			}
+		}
+		if filepath.Clean(bind.Source) == filepath.Clean(paths.DevRoot) || filepath.Clean(bind.Source) == filepath.Clean(paths.HostWorktreeRoot) {
+			return fmt.Errorf("Management workspace projection rejects wholesale parent bind %s -> %s", bind.Source, bind.Target)
+		}
+		if bind.Mode == "rw" && pathWithinRoot("/workspaces/dev", cleanTarget) && cleanTarget != "/workspaces/dev" &&
+			!pathWithinRoot(workspaceRoot, bind.Source) {
+			return fmt.Errorf("Management workspace projection rejects writable cross-lane bind %s -> %s", bind.Source, bind.Target)
+		}
+	}
+	if rootBinds != 1 {
+		return fmt.Errorf("Management workspace projection requires exactly one lane-root bind at /workspaces/dev")
 	}
 	return nil
 }

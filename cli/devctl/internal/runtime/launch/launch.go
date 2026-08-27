@@ -653,6 +653,9 @@ func sandboxPathToHost(p nativeplan.Plan, sandboxPath string) (string, bool) {
 	}
 	const workspaceRoot = "/workspaces/dev"
 	if rel, err := filepath.Rel(workspaceRoot, sandboxPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if strings.TrimSpace(p.HostWorkspaceRoot) != "" {
+			return filepath.Join(p.HostWorkspaceRoot, rel), true
+		}
 		return filepath.Join(filepath.Dir(p.DevkitHostRoot), rel), true
 	}
 	return "", false

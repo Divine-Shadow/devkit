@@ -883,21 +883,39 @@
                   DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
                   DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
                   ${devctl}/kit/bin/devctl -p dev-workspace native plan \
-                    --repo shadow-throne-management --index 2 --format json > "$workspace_plan"
+                    --repo shadow-throne-management \
+                    --index 2 \
+                    --workspace-root /home/bayesartre/dev/control-plane-worktrees/agent2 \
+                    --worktree-root /home/bayesartre/dev/control-plane-worktrees \
+                    --format json > "$workspace_plan"
               ${pkgs.jq}/bin/jq -e \
                 --arg devctl '${devctl}' \
-                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
+                '.host_workspace_root == "/home/bayesartre/dev/control-plane-worktrees/agent2" and
+                 .sandbox_workspace_root == "/workspaces/dev" and
+                 .host_worktree_root == "/home/bayesartre/dev/control-plane-worktrees" and
                  .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
                  .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
                  .sandbox_state_root == "/agent-state" and
                  .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
                  .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/dev-workspace-agent2-workspace-egress.sock" and
                  .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent2/shadow-throne-management" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent2/shadow-throne-management" and
+                 .agent.host_worktree == "/home/bayesartre/dev/control-plane-worktrees/agent2/shadow-throne-management" and
+                 .agent.sandbox_worktree == "/workspaces/dev/shadow-throne-management" and
                  .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/dev-workspace-agent2/home" and
                  .agent.sandbox_home == "/agent-state/dev-workspace-agent2/home" and
+                 .mount_policy_identity == "devkit/workspace-egress/v4" and
+                 .windows_mounts_visible == false and
                  .env.FLEET_EXEC_TRANSPORT_HANDLE == "required" and
+                 any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2" and
+                               .target == "/workspaces/dev" and
+                               .mode == "rw" and .required == true) and
+                 any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2/.devkit/governance-control-plane" and
+                               .target == "/workspaces/dev/.devkit/governance-control-plane" and
+                               .mode == "rw" and .required == true) and
+                 all(.binds[]; .source != "/home/bayesartre/dev" and
+                               .source != "/home/bayesartre/dev/control-plane-worktrees" and
+                               ((.source | startswith("/mnt")) | not) and
+                               ((.target | startswith("/mnt")) | not)) and
                  any(.binds[]; .source == "/run/fleet-controller-exec/control.sock" and
                                .target == "/run/fleet-controller-exec/control.sock" and
                                .mode == "ro" and .required == true) and

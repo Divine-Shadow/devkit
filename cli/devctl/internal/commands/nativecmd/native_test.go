@@ -57,6 +57,56 @@ func TestParseTopExecArgsRecognizesManagedAppServerBeforeSeparator(t *testing.T)
 	}
 }
 
+func TestWorkspaceRootTranslationAcrossNativeCommands(t *testing.T) {
+	const workspaceRoot = "/home/bayesartre/dev/control-plane-worktrees/agent2"
+	plan, err := parsePlanArgs(&cmdregistry.Context{Args: []string{
+		"plan", "--workspace-root", workspaceRoot,
+	}}, false, false)
+	if err != nil || plan.opts.WorkspaceRoot != workspaceRoot {
+		t.Fatalf("native plan workspace root = %q, %v", plan.opts.WorkspaceRoot, err)
+	}
+	lifecycle, err := parseLifecycleArgs(&cmdregistry.Context{Args: []string{
+		"--workspace-root", workspaceRoot,
+	}})
+	if err != nil || lifecycle.workspaceRoot != workspaceRoot {
+		t.Fatalf("lifecycle workspace root = %q, %v", lifecycle.workspaceRoot, err)
+	}
+	execArgs, err := parseTopExecArgs(&cmdregistry.Context{Args: []string{
+		"2", "--workspace-root", workspaceRoot, "--", "git", "status",
+	}}, false)
+	if err != nil || execArgs.workspaceRoot != workspaceRoot {
+		t.Fatalf("exec workspace root = %q, %v", execArgs.workspaceRoot, err)
+	}
+	opts := lifecyclePlanOptions(
+		&cmdregistry.Context{Project: "dev-workspace", Paths: devkitpaths.Paths{Root: "/nix/store/example-devkit"}},
+		config.OverlayConfig{Native: config.Native{HostRoot: "/home/bayesartre/dev"}},
+		lifecycleArgs{workspaceRoot: workspaceRoot},
+		"shadow-throne-management",
+		runtimebroker.Config{Socket: "/tmp/broker.sock"},
+	)
+	if opts.WorkspaceRoot != workspaceRoot {
+		t.Fatalf("lifecycle planner workspace root = %q", opts.WorkspaceRoot)
+	}
+	for _, args := range [][]string{
+		{"plan", "--workspace-root"},
+		{"--workspace-root"},
+		{"2", "--workspace-root"},
+	} {
+		var parseErr error
+		switch args[0] {
+		case "plan":
+			_, parseErr = parsePlanArgs(&cmdregistry.Context{Args: args}, false, false)
+		case "2":
+			_, parseErr = parseTopExecArgs(&cmdregistry.Context{Args: args}, false)
+		default:
+			_, parseErr = parseLifecycleArgs(&cmdregistry.Context{Args: args})
+		}
+		if parseErr == nil {
+			t.Fatalf("missing workspace root value was accepted: %#v", args)
+		}
+	}
+}
+
 func TestManagedAppServerRequiresDedicatedGUIServiceIdentity(t *testing.T) {
 	if managedAppServerServiceIdentity != "fleet-gui-shadow-throne-management-2.service" {
 		t.Fatalf("managed app-server service identity = %q", managedAppServerServiceIdentity)

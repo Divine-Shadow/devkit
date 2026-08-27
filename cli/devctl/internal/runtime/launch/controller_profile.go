@@ -115,8 +115,12 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 	}
 	activeManagementRoot := profile.SourceRoots.Management
 	activeManagementRoot.BackingPath = p.Agent.HostWorktree
+	activeWSLNixRoot := profile.SourceRoots.WSLNix
+	if strings.TrimSpace(p.HostWorkspaceRoot) != "" {
+		activeWSLNixRoot.BackingPath = filepath.Join(filepath.Clean(p.HostWorkspaceRoot), "wsl-nix")
+	}
 	for _, expected := range []nativeplan.Bind{
-		{Source: profile.SourceRoots.WSLNix.BackingPath, Target: profile.SourceRoots.WSLNix.LogicalPath, Mode: "rw", Required: true},
+		{Source: activeWSLNixRoot.BackingPath, Target: activeWSLNixRoot.LogicalPath, Mode: "rw", Required: true},
 		{Source: nativeplan.ManagementControllerProfileManifestPath, Target: nativeplan.ManagementControllerProfileManifestPath, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerOperationSocket, Target: nativeplan.WorkspaceControllerOperationSocket, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerOperationIdentity, Target: nativeplan.WorkspaceControllerOperationIdentity, Mode: "ro", Required: true},
@@ -128,7 +132,7 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 	if err := validateControllerSourceWorktree("active Management", activeManagementRoot); err != nil {
 		return err
 	}
-	if err := validateControllerSourceWorktree("WSL/Nix", profile.SourceRoots.WSLNix); err != nil {
+	if err := validateControllerSourceWorktree("WSL/Nix", activeWSLNixRoot); err != nil {
 		return err
 	}
 	return validateControllerOperationIdentity(profile)

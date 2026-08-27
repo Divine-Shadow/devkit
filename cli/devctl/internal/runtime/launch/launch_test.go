@@ -53,6 +53,20 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestSandboxPathToHostUsesDeclaredWorkspaceRoot(t *testing.T) {
+	p := nativeplan.Plan{
+		DevkitHostRoot:    "/nix/store/example-devkit",
+		HostWorkspaceRoot: "/home/bayesartre/dev/control-plane-worktrees/agent2",
+	}
+	host, ok := sandboxPathToHost(p, "/workspaces/dev/wsl-nix/.cache/coursier")
+	if !ok || host != "/home/bayesartre/dev/control-plane-worktrees/agent2/wsl-nix/.cache/coursier" {
+		t.Fatalf("sandbox workspace translation = %q, %t", host, ok)
+	}
+	if _, ok := sandboxPathToHost(p, "/workspaces/other"); ok {
+		t.Fatal("path outside the workspace projection was translated")
+	}
+}
+
 func TestConfigureWorktreeGitSSHUsesPackageGitUnderHostilePath(t *testing.T) {
 	worktree := filepath.Join(t.TempDir(), "worktree")
 	gitExecutable := gitauthority.Executable()

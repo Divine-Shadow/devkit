@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"devkit/cli/devctl/internal/devkitpaths"
+	"devkit/cli/devctl/internal/runtime/agent"
 )
 
 func TestBuildDevAllPlan(t *testing.T) {
@@ -158,6 +159,238 @@ func TestWorkspaceEgressReportsMountPolicyAndRejectsWindowsMounts(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), "rejects Windows-mounted") {
 		t.Fatalf("Windows mount must fail closed, got %v", err)
+	}
+}
+
+func TestManagementWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
+	t.Setenv(ManagementControllerProfileEnvironment, "")
+	for _, index := range []int{1, 2} {
+		t.Run(fmt.Sprintf("agent%d", index), func(t *testing.T) {
+			devRoot := t.TempDir()
+			devkitRoot := filepath.Join(devRoot, "devkit")
+			worktreeRoot := filepath.Join(devRoot, "control-plane-worktrees")
+			workspaceRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index))
+			hostWorktree := filepath.Join(workspaceRoot, "shadow-throne-management")
+			for _, dir := range []string{devkitRoot, hostWorktree} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			p, err := Build(BuildOptions{
+				Paths:            devkitpaths.Paths{Root: devkitRoot},
+				Project:          "dev-workspace",
+				Index:            index,
+				Repo:             "shadow-throne-management",
+				WorkspaceRoot:    workspaceRoot,
+				WorktreeRoot:     worktreeRoot,
+				IsolationProfile: IsolationProfileWorkspaceEgress,
+				EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.HostWorkspaceRoot != workspaceRoot || p.SandboxWorkspaceRoot != "/workspaces/dev" {
+				t.Fatalf("workspace projection = host %q sandbox %q", p.HostWorkspaceRoot, p.SandboxWorkspaceRoot)
+			}
+			if p.Agent.HostWorktree != hostWorktree || p.Agent.SandboxWorktree != "/workspaces/dev/shadow-throne-management" {
+				t.Fatalf("worktree projection = host %q sandbox %q", p.Agent.HostWorktree, p.Agent.SandboxWorktree)
+			}
+			if p.MountPolicyIdentity != ManagementControllerMountPolicyIdentity || p.WindowsMountsVisible {
+				t.Fatalf("mount identity = %q windows=%t", p.MountPolicyIdentity, p.WindowsMountsVisible)
+			}
+			if !hasExactBind(p.Binds, Bind{Source: workspaceRoot, Target: "/workspaces/dev", Mode: "rw", Required: true}) ||
+				!hasExactBind(p.Binds, Bind{Source: hostWorktree, Target: "/workspace", Mode: "rw", Required: true}) {
+				t.Fatalf("missing exact lane/workspace binds: %#v", p.Binds)
+			}
+			for _, target := range []string{
+				"/workspaces/dev/.devkit/ouro8-governance-env.sh",
+				"/workspaces/dev/.devkit/ouro8-governance-repo-env.json",
+				"/workspaces/dev/.devkit/governance-control-plane",
+			} {
+				found := false
+				for _, bind := range p.Binds {
+					if bind.Target == target {
+						found = true
+						if !pathWithinRoot(workspaceRoot, bind.Source) {
+							t.Fatalf("runtime support source escaped lane root: %#v", bind)
+						}
+					}
+				}
+				if !found {
+					t.Fatalf("missing lane-local runtime support target %s: %#v", target, p.Binds)
+				}
+			}
+			for _, bind := range p.Binds {
+				if bind.Source == devRoot || bind.Source == worktreeRoot ||
+					(bind.Source == hostWorktree && bind.Target == "/workspaces/dev/shadow-throne-management") {
+					t.Fatalf("lane plan retained broad or redundant bind: %#v", bind)
+				}
+			}
+		})
+	}
+}
+
+func TestManagementWorkspaceRootFailsClosed(t *testing.T) {
+	t.Setenv(ManagementControllerProfileEnvironment, "")
+	devRoot := t.TempDir()
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktreeRoot := filepath.Join(devRoot, "control-plane-worktrees")
+	workspaceRoot := filepath.Join(worktreeRoot, "agent1")
+	hostWorktree := filepath.Join(workspaceRoot, "shadow-throne-management")
+	for _, dir := range []string{devkitRoot, hostWorktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-workspace",
+		Index:            1,
+		Repo:             "shadow-throne-management",
+		WorkspaceRoot:    workspaceRoot,
+		WorktreeRoot:     worktreeRoot,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+	}
+
+	for name, mutate := range map[string]func(BuildOptions) BuildOptions{
+		"non-canonical": func(opts BuildOptions) BuildOptions {
+			opts.WorkspaceRoot += string(filepath.Separator) + ".." + string(filepath.Separator) + "agent1"
+			return opts
+		},
+		"shared dev root": func(opts BuildOptions) BuildOptions {
+			opts.WorkspaceRoot = devRoot
+			return opts
+		},
+		"wholesale worktree parent": func(opts BuildOptions) BuildOptions {
+			opts.WorkspaceRoot = worktreeRoot
+			return opts
+		},
+		"other lane": func(opts BuildOptions) BuildOptions {
+			opts.WorkspaceRoot = filepath.Join(worktreeRoot, "agent2")
+			return opts
+		},
+		"other project": func(opts BuildOptions) BuildOptions {
+			opts.Project = "dev-all"
+			return opts
+		},
+		"other repo": func(opts BuildOptions) BuildOptions {
+			opts.Repo = "wsl-nix"
+			return opts
+		},
+		"other agent": func(opts BuildOptions) BuildOptions {
+			opts.Index = 3
+			opts.WorkspaceRoot = filepath.Join(worktreeRoot, "agent3")
+			return opts
+		},
+		"without workspace egress": func(opts BuildOptions) BuildOptions {
+			opts.IsolationProfile = ""
+			opts.EgressAllowlist = ""
+			return opts
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Build(mutate(base)); err == nil {
+				t.Fatalf("%s workspace root was accepted", name)
+			}
+		})
+	}
+
+	mnt := base
+	mnt.Paths.Root = "/mnt/c/dev/devkit"
+	mnt.WorktreeRoot = "/mnt/c/dev/control-plane-worktrees"
+	mnt.WorkspaceRoot = "/mnt/c/dev/control-plane-worktrees/agent1"
+	if _, err := Build(mnt); err == nil || !strings.Contains(err.Error(), "rejects /mnt") {
+		t.Fatalf("/mnt workspace root was accepted: %v", err)
+	}
+}
+
+func TestManagementWorkspaceRootRejectsSymlinkEscapeAndExternalGitMetadata(t *testing.T) {
+	t.Setenv(ManagementControllerProfileEnvironment, "")
+	devRoot := t.TempDir()
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktreeRoot := filepath.Join(devRoot, "control-plane-worktrees")
+	workspaceRoot := filepath.Join(worktreeRoot, "agent1")
+	external := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(workspaceRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, workspaceRoot); err != nil {
+		t.Fatal(err)
+	}
+	opts := BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-workspace",
+		Index:            1,
+		Repo:             "shadow-throne-management",
+		WorkspaceRoot:    workspaceRoot,
+		WorktreeRoot:     worktreeRoot,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+	}
+	if _, err := Build(opts); err == nil || !strings.Contains(err.Error(), "rejects symlinked path") {
+		t.Fatalf("symlinked lane root was accepted: %v", err)
+	}
+	if err := os.Remove(workspaceRoot); err != nil {
+		t.Fatal(err)
+	}
+	hostWorktree := filepath.Join(workspaceRoot, "shadow-throne-management")
+	if err := os.MkdirAll(hostWorktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(external, "git", "worktrees", "management")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(opts); err == nil || !strings.Contains(err.Error(), "Git metadata outside the lane root") {
+		t.Fatalf("external Git metadata was accepted: %v", err)
+	}
+}
+
+func TestManagementWorkspaceRootDerivesActiveWSLNixSourceFromSelectedLane(t *testing.T) {
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "control-plane-worktrees", "agent2")
+	paths := agent.Paths{
+		DevRoot:          root,
+		HostWorktreeRoot: filepath.Join(root, "control-plane-worktrees"),
+		HostWorktree:     filepath.Join(workspaceRoot, "shadow-throne-management"),
+		HostHome:         filepath.Join(root, ".devkit", "native-agents", "dev-workspace-agent2", "home"),
+		SandboxHome:      "/agent-state/dev-workspace-agent2/home",
+		SandboxWorktree:  "/workspaces/dev/shadow-throne-management",
+	}
+	profile := &ManagementControllerProfile{
+		SourceRoots: ControllerProfileSourceRoots{
+			WSLNix: ControllerProfileSourceRoot{
+				LogicalPath: "/workspaces/dev/wsl-nix",
+				BackingPath: filepath.Join(root, "control-plane-worktrees", "agent1", "wsl-nix"),
+			},
+		},
+	}
+	binds, err := workspaceEgressBinds(
+		paths,
+		"dev-workspace",
+		2,
+		"shadow-throne-management",
+		workspaceRoot,
+		filepath.Join(root, "devkit"),
+		filepath.Join(root, "devkit"),
+		filepath.Join(root, ".devkit", "native-broker", "broker.sock"),
+		filepath.Join(root, ".devkit", "native-agents", "dev-workspace-agent2", "resolv.conf"),
+		profile,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Bind{Source: filepath.Join(workspaceRoot, "wsl-nix"), Target: "/workspaces/dev/wsl-nix", Mode: "rw", Required: true}
+	if !hasExactBind(binds, want) {
+		t.Fatalf("missing active lane WSL/Nix bind %#v in %#v", want, binds)
+	}
+	if hasBind(binds, profile.SourceRoots.WSLNix.BackingPath, "/workspaces/dev/wsl-nix") {
+		t.Fatalf("selected W2 lane retained W1 WSL/Nix source: %#v", binds)
 	}
 }
 
