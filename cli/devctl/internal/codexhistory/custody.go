@@ -1,6 +1,7 @@
 package codexhistory
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
@@ -85,8 +86,11 @@ type sourceFile struct {
 }
 
 type sqliteRollout struct {
+	ThreadID    string `json:"thread_id"`
 	RolloutPath string `json:"rollout_path"`
 }
+
+var availableSpaceCheck = requireAvailableSpace
 
 func CustodyRoot(stateRoot, project string) (string, error) {
 	stateRoot = strings.TrimSpace(stateRoot)
@@ -144,7 +148,7 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 	if err != nil {
 		return result, err
 	}
-	if err := requireAvailableSpace(agentRoot, requiredBytes); err != nil {
+	if err := availableSpaceCheck(agentRoot, requiredBytes); err != nil {
 		return result, err
 	}
 
@@ -521,6 +525,9 @@ func validateSQLiteAndRollouts(sqliteExecutable, payloadRoot string, files map[s
 			if _, ok := files[historyRel]; !ok {
 				return 0, fmt.Errorf("GUI rollout reference is missing from resumable history: %s", rollout.RolloutPath)
 			}
+			if err := validateGUIRolloutJSONL(payloadRoot, historyRel, rollout.ThreadID); err != nil {
+				return 0, err
+			}
 			guiRollouts++
 		}
 	}
@@ -560,6 +567,20 @@ func requireAvailableSpace(path string, required int64) error {
 	return nil
 }
 
+// SetAvailableSpaceCheckForTesting replaces the preflight storage check for a
+// single-process test and returns a function that restores the prior check.
+// Production callers must not override the source-defined capacity check.
+func SetAvailableSpaceCheckForTesting(check func(string, int64) error) func() {
+	if check == nil {
+		panic("nil Codex GUI history available-space check")
+	}
+	previous := availableSpaceCheck
+	availableSpaceCheck = check
+	return func() {
+		availableSpaceCheck = previous
+	}
+}
+
 func sqliteQuickCheck(executable, database string) error {
 	command := exec.Command(executable, "-readonly", "-batch", "-noheader", database, "PRAGMA query_only=ON; PRAGMA quick_check;")
 	var stderr bytes.Buffer
@@ -574,8 +595,68 @@ func sqliteQuickCheck(executable, database string) error {
 	return nil
 }
 
+func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) error {
+	parts := strings.Split(rel, "/")
+	if len(parts) < 2 || (parts[0] != "sessions" && parts[0] != "archived_sessions" && parts[0] != "rollouts") || filepath.Ext(rel) != ".jsonl" {
+		return fmt.Errorf("GUI rollout reference is not a resumable JSONL history file: %s", rel)
+	}
+	if strings.TrimSpace(threadID) == "" {
+		return fmt.Errorf("GUI rollout reference has an empty thread identity: %s", rel)
+	}
+	file, err := os.Open(filepath.Join(payloadRoot, filepath.FromSlash(rel)))
+	if err != nil {
+		return fmt.Errorf("open captured GUI rollout %s: %w", rel, err)
+	}
+	defer file.Close()
+
+	type rolloutEnvelope struct {
+		Type    string `json:"type"`
+		Payload struct {
+			ID string `json:"id"`
+		} `json:"payload"`
+	}
+	reader := bufio.NewReader(file)
+	records := 0
+	lineNumber := 0
+	matchingSessionMeta := false
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			lineNumber++
+			trimmed := bytes.TrimSpace(line)
+			if len(trimmed) == 0 {
+				return fmt.Errorf("captured GUI rollout contains an empty JSONL record at %s:%d", rel, lineNumber)
+			}
+			var envelope rolloutEnvelope
+			if err := json.Unmarshal(trimmed, &envelope); err != nil {
+				return fmt.Errorf("captured GUI rollout contains invalid JSON at %s:%d: %w", rel, lineNumber, err)
+			}
+			records++
+			if envelope.Type == "session_meta" {
+				if envelope.Payload.ID != threadID {
+					return fmt.Errorf("captured GUI rollout session identity mismatch at %s:%d", rel, lineNumber)
+				}
+				matchingSessionMeta = true
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("read captured GUI rollout %s: %w", rel, readErr)
+		}
+	}
+	if records == 0 {
+		return fmt.Errorf("captured GUI rollout is empty: %s", rel)
+	}
+	if !matchingSessionMeta {
+		return fmt.Errorf("captured GUI rollout has no matching session_meta identity: %s", rel)
+	}
+	return nil
+}
+
 func sqliteGUIRollouts(executable, database string) ([]sqliteRollout, error) {
-	query := "PRAGMA query_only=ON; SELECT rollout_path FROM threads WHERE source = 'vscode' ORDER BY id;"
+	query := "PRAGMA query_only=ON; SELECT id AS thread_id, rollout_path FROM threads WHERE source = 'vscode' ORDER BY id;"
 	command := exec.Command(executable, "-readonly", "-batch", "-json", database, query)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr

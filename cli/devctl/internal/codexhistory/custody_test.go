@@ -3,6 +3,7 @@ package codexhistory
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -152,7 +153,7 @@ func TestCaptureStoresOnlyValidatedResumableGUIHistory(t *testing.T) {
 	sandboxRollout := filepath.ToSlash(filepath.Join(fixture.options.SandboxHome, ".codex", filepath.FromSlash(sessionRel)))
 	stateDatabase := createStateDatabase(t, fixture, sandboxRollout)
 	runSQLite(t, fixture.sqlite, filepath.Join(fixture.codexRoot, "goals_1.sqlite"), "CREATE TABLE thread_goals (thread_id TEXT PRIMARY KEY, goal TEXT); INSERT INTO thread_goals VALUES ('gui-thread', 'durable goal');")
-	writeTestFile(t, filepath.Join(fixture.codexRoot, filepath.FromSlash(sessionRel)), "{\"type\":\"session_meta\"}\n")
+	writeTestFile(t, filepath.Join(fixture.codexRoot, filepath.FromSlash(sessionRel)), "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n{\"type\":\"event\",\"payload\":{}}\n")
 	writeTestFile(t, filepath.Join(fixture.codexRoot, "archived_sessions", "archived.jsonl"), "archived\n")
 	writeTestFile(t, filepath.Join(fixture.codexRoot, "rollouts", "legacy.jsonl"), "rollout\n")
 	writeTestFile(t, filepath.Join(fixture.codexRoot, "shell_snapshots", "shell.sh"), "export SAFE=1\n")
@@ -247,6 +248,44 @@ func TestCaptureRefusesMissingGUIRolloutWithoutCompletedGeneration(t *testing.T)
 	}
 }
 
+func TestCaptureRefusesNonResumableGUIRolloutPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		rel      string
+		contents string
+		want     string
+	}{
+		{name: "empty", rel: "sessions/empty.jsonl", contents: "", want: "rollout is empty"},
+		{name: "truncated-json", rel: "sessions/truncated.jsonl", contents: "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n{", want: "invalid JSON"},
+		{name: "wrong-history-type", rel: "shell_snapshots/shell.sh", contents: "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n", want: "not a resumable JSONL history file"},
+		{name: "wrong-thread", rel: "sessions/wrong-thread.jsonl", contents: "{\"type\":\"session_meta\",\"payload\":{\"id\":\"other-thread\"}}\n", want: "session identity mismatch"},
+		{name: "missing-session-meta", rel: "rollouts/no-meta.jsonl", contents: "{\"type\":\"event\",\"payload\":{}}\n", want: "no matching session_meta identity"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCaptureFixture(t)
+			rollout := filepath.ToSlash(filepath.Join(fixture.options.SandboxHome, ".codex", filepath.FromSlash(test.rel)))
+			createStateDatabase(t, fixture, rollout)
+			writeTestFile(t, filepath.Join(fixture.codexRoot, filepath.FromSlash(test.rel)), test.contents)
+			_, err := Capture(fixture.options)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("rollout validation error = %v, want %q", err, test.want)
+			}
+			custodyRoot, rootErr := CustodyRoot(fixture.options.StateRoot, fixture.options.Project)
+			if rootErr != nil {
+				t.Fatal(rootErr)
+			}
+			entries, readErr := os.ReadDir(filepath.Join(custodyRoot, "agent1"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("invalid rollout left generation residue: %v", entries)
+			}
+		})
+	}
+}
+
 func TestCaptureRefusesCorruptSQLite(t *testing.T) {
 	fixture := newCaptureFixture(t)
 	writeTestFile(t, filepath.Join(fixture.codexRoot, "state_5.sqlite"), "not a sqlite database")
@@ -334,6 +373,36 @@ func TestCaptureWriteFailureLeavesSourceAndNoGeneration(t *testing.T) {
 	data, readErr := os.ReadFile(sourcePath)
 	if readErr != nil || string(data) != "preserve\n" {
 		t.Fatalf("source changed after write failure: %q, %v", data, readErr)
+	}
+}
+
+func TestCapturePreflightENOSPCLeavesNoGeneration(t *testing.T) {
+	fixture := newCaptureFixture(t)
+	sourcePath := filepath.Join(fixture.codexRoot, "sessions", "turn.jsonl")
+	writeTestFile(t, sourcePath, "{\"type\":\"event\",\"payload\":{}}\n")
+	restore := SetAvailableSpaceCheckForTesting(func(string, int64) error {
+		return fmt.Errorf("deterministic storage exhaustion: %w", syscall.ENOSPC)
+	})
+	t.Cleanup(restore)
+
+	_, err := Capture(fixture.options)
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("preflight storage failure = %v", err)
+	}
+	data, readErr := os.ReadFile(sourcePath)
+	if readErr != nil || string(data) != "{\"type\":\"event\",\"payload\":{}}\n" {
+		t.Fatalf("source changed after ENOSPC: %q, %v", data, readErr)
+	}
+	custodyRoot, rootErr := CustodyRoot(fixture.options.StateRoot, fixture.options.Project)
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(custodyRoot, "agent1"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ENOSPC left committed or staging generation: %v", entries)
 	}
 }
 
