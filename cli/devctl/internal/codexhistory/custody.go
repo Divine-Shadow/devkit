@@ -567,10 +567,13 @@ func requireAvailableSpace(path string, required int64) error {
 	return nil
 }
 
-// SetAvailableSpaceCheckForTesting replaces the preflight storage check for a
-// single-process test and returns a function that restores the prior check.
-// Production callers must not override the source-defined capacity check.
+// SetAvailableSpaceCheckForTesting is unavailable to production binaries. In a
+// Go test binary it replaces the preflight storage check and returns a function
+// that restores the prior check.
 func SetAvailableSpaceCheckForTesting(check func(string, int64) error) func() {
+	if !strings.HasSuffix(filepath.Base(os.Args[0]), ".test") {
+		panic("Codex GUI history capacity override is available only to Go test binaries")
+	}
 	if check == nil {
 		panic("nil Codex GUI history available-space check")
 	}
