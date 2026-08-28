@@ -172,6 +172,13 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 				PathRule: "remoteProductGUI.targets[].configPath", RegularFile: true,
 			},
 		},
+		LinuxDesktopAuth: ControllerProfileLinuxDesktopAuth{
+			TargetID:         managementControllerLinuxDesktopTarget,
+			CodexHome:        managementControllerLinuxDesktopHome,
+			SocketName:       managementControllerLinuxDesktopSocket,
+			ServiceName:      managementControllerLinuxDesktopService,
+			ReloadExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "codex-linux-desktop-reload", "bin", "codex-linux-desktop-reload")),
+		},
 	}
 	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
@@ -206,6 +213,63 @@ func TestManagementControllerProfileRecognizesV7CodexPermissionsAndRemoteGUI(t *
 	}
 	if decoded.CodexPermissions.Mode != "custom" || decoded.RemoteProductGUI.SchemaVersion != controllerRemoteProductGUISchema {
 		t.Fatalf("v7 controller fields decoded incorrectly: %#v", decoded)
+	}
+}
+
+func TestManagementControllerProfileRecognizesAndValidatesLinuxDesktopAuth(t *testing.T) {
+	root := t.TempDir()
+	previousStoreRoot := ControllerProfileStoreRoot
+	ControllerProfileStoreRoot = filepath.Join(root, "nix", "store")
+	t.Cleanup(func() { ControllerProfileStoreRoot = previousStoreRoot })
+	reloadExecutable := filepath.Join(ControllerProfileStoreRoot, "codex-linux-desktop-reload", "bin", "codex-linux-desktop-reload")
+	if err := os.MkdirAll(filepath.Dir(reloadExecutable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reloadExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	auth := ControllerProfileLinuxDesktopAuth{
+		TargetID:         managementControllerLinuxDesktopTarget,
+		CodexHome:        managementControllerLinuxDesktopHome,
+		SocketName:       managementControllerLinuxDesktopSocket,
+		ServiceName:      managementControllerLinuxDesktopService,
+		ReloadExecutable: reloadExecutable,
+	}
+	if err := validateControllerLinuxDesktopAuth(ControllerProfileLinuxDesktopAuth{}); err != nil {
+		t.Fatalf("older v7 profile without Linux Desktop auth was rejected: %v", err)
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ControllerProfileLinuxDesktopAuth)
+	}{
+		{name: "target", mutate: func(candidate *ControllerProfileLinuxDesktopAuth) { candidate.TargetID = "other" }},
+		{name: "home", mutate: func(candidate *ControllerProfileLinuxDesktopAuth) { candidate.CodexHome = "/tmp/codex" }},
+		{name: "socket", mutate: func(candidate *ControllerProfileLinuxDesktopAuth) { candidate.SocketName = "other.sock" }},
+		{name: "service", mutate: func(candidate *ControllerProfileLinuxDesktopAuth) { candidate.ServiceName = "other.service" }},
+		{name: "reload executable", mutate: func(candidate *ControllerProfileLinuxDesktopAuth) { candidate.ReloadExecutable = "/tmp/reload" }},
+	} {
+		t.Run("rejects "+testCase.name, func(t *testing.T) {
+			candidate := auth
+			testCase.mutate(&candidate)
+			if err := validateControllerLinuxDesktopAuth(candidate); err == nil {
+				t.Fatalf("invalid Linux Desktop auth passed: %#v", candidate)
+			}
+		})
+	}
+	if err := validateControllerLinuxDesktopAuth(auth); err != nil {
+		t.Fatalf("valid Linux Desktop auth rejected: %v", err)
+	}
+	data, err := json.Marshal(struct {
+		LinuxDesktopAuth ControllerProfileLinuxDesktopAuth `json:"linuxDesktopAuth"`
+	}{LinuxDesktopAuth: auth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ManagementControllerProfile
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatalf("Linux Desktop auth field rejected: %v", err)
 	}
 }
 

@@ -30,6 +30,10 @@ const (
 	ManagementControllerNode                = "shadow-throne"
 	ManagementControllerGUI                 = "shadow-throne-management-2"
 	ManagementControllerPrimaryGUI          = "shadow-throne-management"
+	managementControllerLinuxDesktopTarget  = "shadow-throne-linux-desktop"
+	managementControllerLinuxDesktopHome    = "/var/lib/codex-linux-desktop/home/.codex"
+	managementControllerLinuxDesktopSocket  = "linux-desktop-auth.sock"
+	managementControllerLinuxDesktopService = "codex-linux-desktop.service"
 	controllerOperationStateDirectory       = "/var/lib/fleet-controller-operation"
 	controllerProductAgentSocket            = "/run/fleet-product-agent-lifecycle/control.sock"
 	controllerProductAgentOperation         = "cycle-test"
@@ -284,6 +288,14 @@ type ControllerProfileCodexPermissions struct {
 	TargetProjection  ControllerProfileCodexTargetProjection `json:"targetProjection"`
 }
 
+type ControllerProfileLinuxDesktopAuth struct {
+	TargetID         string `json:"targetId"`
+	CodexHome        string `json:"codexHome"`
+	SocketName       string `json:"socketName"`
+	ServiceName      string `json:"serviceName"`
+	ReloadExecutable string `json:"reloadExecutable"`
+}
+
 type ManagementControllerProfile struct {
 	SchemaVersion         string                                 `json:"schemaVersion"`
 	ProfileIdentity       string                                 `json:"profileIdentity"`
@@ -303,6 +315,7 @@ type ManagementControllerProfile struct {
 	SensitiveOutputEgress ControllerProfileSensitiveOutputEgress `json:"sensitiveOutputEgress"`
 	RemoteProductGUI      ControllerProfileRemoteProductGUI      `json:"remoteProductGUI"`
 	CodexPermissions      ControllerProfileCodexPermissions      `json:"codexPermissions"`
+	LinuxDesktopAuth      ControllerProfileLinuxDesktopAuth      `json:"linuxDesktopAuth"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
@@ -389,6 +402,9 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return err
 	}
 	if err := validateControllerCodexPermissions(profile.CodexPermissions); err != nil {
+		return err
+	}
+	if err := validateControllerLinuxDesktopAuth(profile.LinuxDesktopAuth); err != nil {
 		return err
 	}
 	if profile.Schemas != (ControllerProfileSchemas{
@@ -626,6 +642,26 @@ func validateControllerCodexPermissions(permissions ControllerProfileCodexPermis
 	}
 	if actual != permissions.SourceSHA256 {
 		return fmt.Errorf("Codex permission source SHA-256 = %q, want %q", actual, permissions.SourceSHA256)
+	}
+	return nil
+}
+
+func validateControllerLinuxDesktopAuth(auth ControllerProfileLinuxDesktopAuth) error {
+	// The field was added within profile schema v7. Continue to accept older v7
+	// manifests that predate it, while validating the complete compiled contract
+	// whenever the field is present.
+	if auth == (ControllerProfileLinuxDesktopAuth{}) {
+		return nil
+	}
+	if auth.TargetID != managementControllerLinuxDesktopTarget ||
+		filepath.Clean(auth.CodexHome) != managementControllerLinuxDesktopHome ||
+		auth.CodexHome != managementControllerLinuxDesktopHome ||
+		auth.SocketName != managementControllerLinuxDesktopSocket ||
+		auth.ServiceName != managementControllerLinuxDesktopService {
+		return fmt.Errorf("Management controller Linux Desktop auth does not match the compiled contract")
+	}
+	if err := validateControllerStoreExecutable("Linux Desktop auth reload", auth.ReloadExecutable); err != nil {
+		return err
 	}
 	return nil
 }
