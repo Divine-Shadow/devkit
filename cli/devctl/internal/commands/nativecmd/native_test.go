@@ -1302,6 +1302,13 @@ func TestNativeSlotWorkspaceRootConstrainsButDoesNotDeriveLifecycleGeometry(t *t
 		})
 	}
 
+	missingRoot := filepath.Join(root, "missing-agent5")
+	missingPlan := selectedPlan
+	missingPlan.Agent.HostWorktree = filepath.Join(missingRoot, "ouroboros-ide")
+	if _, err := validateNativeSlotWorkspaceRoot(missingRoot, missingPlan); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("missing workspace root error = %v", err)
+	}
+
 	realRoot := filepath.Join(root, "real-agent4")
 	if err := os.Mkdir(realRoot, 0o700); err != nil {
 		t.Fatal(err)

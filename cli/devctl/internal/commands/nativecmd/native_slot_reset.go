@@ -140,7 +140,7 @@ func validateNativeSlotWorkspaceRoot(value string, selectedPlan nativeplan.Plan)
 		current = filepath.Join(current, component)
 		info, err := os.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
-			break
+			return "", fmt.Errorf("native reset workspace root component does not exist: %s", current)
 		}
 		if err != nil {
 			return "", fmt.Errorf("inspect native reset workspace root component %s: %w", current, err)
