@@ -1202,10 +1202,11 @@ func TestNativeSlotResetDisposesOnlySelectedSlot(t *testing.T) {
 	stateRoot := filepath.Join(root, "owned-state")
 	selectedWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
 	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	selectedCustody := filepath.Join(worktreeRoot, "agent1", ".devkit", "codex-gui-history", "dev-all")
 	siblingWorktree := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
 	siblingHome := filepath.Join(worktreeRoot, "agent2", ".devhome-agent2")
 	siblingState := filepath.Join(stateRoot, "dev-all-agent2")
-	for _, path := range []string{selectedWorktree, selectedState, siblingWorktree, siblingHome, siblingState} {
+	for _, path := range []string{selectedWorktree, selectedState, selectedCustody, siblingWorktree, siblingHome, siblingState} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -1237,6 +1238,9 @@ func TestNativeSlotResetDisposesOnlySelectedSlot(t *testing.T) {
 		if err != nil || string(data) != path+"\n" {
 			t.Fatalf("sibling path changed %s: %q %v", path, data, err)
 		}
+	}
+	if data, err := os.ReadFile(filepath.Join(selectedCustody, "sentinel")); err != nil || string(data) != selectedCustody+"\n" {
+		t.Fatalf("selected lane custody changed %s: %q %v", selectedCustody, data, err)
 	}
 }
 

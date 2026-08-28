@@ -90,17 +90,24 @@ func TestSelectedNativeSlotResetPreflightENOSPCNeverApplies(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(stateRoot), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	hostHome := filepath.Join(root, "agent-worktrees", "agent1", ".devhome-agent1")
+	workspaceRoot := filepath.Join(root, "agent-worktrees", "agent1")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	hostHome := filepath.Join(workspaceRoot, ".devhome-agent1")
+	if err := os.MkdirAll(hostWorktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(hostHome, ".codex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	options := codexhistory.SnapshotOptions{
-		Project:     "dev-all",
-		ResetKind:   "selected-slot-reset",
-		AgentIndex:  1,
-		HostHome:    hostHome,
-		SandboxHome: "/workspaces/dev/agent-worktrees/agent1/.devhome-agent1",
-		StateRoot:   stateRoot,
+		Project:       "dev-all",
+		ResetKind:     "selected-slot-reset",
+		AgentIndex:    1,
+		HostWorktree:  hostWorktree,
+		HostHome:      hostHome,
+		SandboxHome:   "/workspaces/dev/agent-worktrees/agent1/.devhome-agent1",
+		StateRoot:     stateRoot,
+		WorkspaceRoot: workspaceRoot,
 	}
 
 	var events []string
@@ -130,7 +137,7 @@ func TestSelectedNativeSlotResetPreflightENOSPCNeverApplies(t *testing.T) {
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("ENOSPC reset events = %v, want %v", events, want)
 	}
-	custodyRoot, rootErr := codexhistory.CustodyRoot(stateRoot, "dev-all")
+	custodyRoot, rootErr := codexhistory.WorkspaceCustodyRoot(workspaceRoot, "dev-all")
 	if rootErr != nil {
 		t.Fatal(rootErr)
 	}

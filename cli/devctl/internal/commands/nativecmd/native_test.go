@@ -1173,25 +1173,147 @@ func TestRegisterTopLevelLifecycleAndNativeNamespace(t *testing.T) {
 	}
 }
 
-func TestParseNativeSlotResetArgsAcceptsOnlyRepoIndexAndFormat(t *testing.T) {
+func TestParseNativeSlotResetArgsRequiresExactTypedLaneInterface(t *testing.T) {
+	workspaceRoot := "/home/bayesartre/dev/agent-worktrees/agent2"
 	parsed, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: []string{
-		"reset", "--repo", "ouroboros-ide", "--index", "2", "--format", "json",
+		"reset", "--repo", "ouroboros-ide", "--index", "2",
+		"--workspace-root", workspaceRoot, "--format", "json",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.repo != "ouroboros-ide" || parsed.index != 2 || parsed.format != "json" {
+	if parsed.repo != "ouroboros-ide" || parsed.index != 2 ||
+		parsed.workspaceRoot != workspaceRoot || parsed.format != "json" {
 		t.Fatalf("parsed = %#v", parsed)
 	}
 	for _, args := range [][]string{
-		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--worktree-root", "/tmp/escape"},
-		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--agent-state-root", "/tmp/escape"},
-		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--base-branch", "other"},
-		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--proxy-socket", "/tmp/proxy"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--worktree-root", "/tmp/escape"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--agent-state-root", "/tmp/escape"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--base-branch", "other"},
+		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--proxy-socket", "/tmp/proxy"},
 	} {
 		if _, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: args}); err == nil || !strings.Contains(err.Error(), "rejects caller lifecycle override") {
 			t.Fatalf("args %v error = %v", args, err)
 		}
+	}
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing-workspace-root",
+			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--format", "json"},
+			want: "requires --workspace-root",
+		},
+		{
+			name: "missing-json-format",
+			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot},
+			want: "requires --format json",
+		},
+		{
+			name: "text-format",
+			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "text"},
+			want: "--format must be json",
+		},
+		{
+			name: "duplicate-workspace-root",
+			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--workspace-root", workspaceRoot, "--format", "json"},
+			want: "rejects duplicate option --workspace-root",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: test.args}); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("args %v error = %v, want %q", test.args, err, test.want)
+			}
+		})
+	}
+}
+
+func TestNativeSlotWorkspaceRootConstrainsButDoesNotDeriveLifecycleGeometry(t *testing.T) {
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "agent-worktrees")
+	workspaceRoot := filepath.Join(worktreeRoot, "agent3")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	if err := os.MkdirAll(hostWorktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	selectedPlan := nativeplan.Plan{
+		DevkitHostRoot:   filepath.Join(root, "devkit"),
+		HostWorktreeRoot: worktreeRoot,
+		HostStateRoot:    filepath.Join(root, ".devkit", "native-agents"),
+		Agent: nativeagent.Spec{
+			HostWorktree: hostWorktree,
+			HostHome:     filepath.Join(workspaceRoot, ".devhome-agent3"),
+		},
+	}
+	got, err := validateNativeSlotWorkspaceRoot(workspaceRoot, selectedPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != workspaceRoot {
+		t.Fatalf("validated workspace root = %s, want %s", got, workspaceRoot)
+	}
+	if selectedPlan.HostWorkspaceRoot != "" {
+		t.Fatalf("caller constraint became lifecycle authority: %#v", selectedPlan)
+	}
+
+	for _, test := range []struct {
+		name string
+		root string
+		plan nativeplan.Plan
+		want string
+	}{
+		{
+			name: "wrong-lane",
+			root: filepath.Join(worktreeRoot, "agent2"),
+			plan: selectedPlan,
+			want: "selected source-derived worktree parent",
+		},
+		{
+			name: "shared-collection",
+			root: worktreeRoot,
+			plan: selectedPlan,
+			want: "shared collection root",
+		},
+		{
+			name: "shared-dev-root",
+			root: "/home/bayesartre/dev",
+			plan: selectedPlan,
+			want: "unsafe or shared",
+		},
+		{
+			name: "windows-mount",
+			root: "/mnt/c/Users/operator/dev",
+			plan: selectedPlan,
+			want: "unsafe or shared",
+		},
+		{
+			name: "noncanonical",
+			root: workspaceRoot + "/../agent3",
+			plan: selectedPlan,
+			want: "absolute and canonical",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := validateNativeSlotWorkspaceRoot(test.root, test.plan); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("workspace root %s error = %v, want %q", test.root, err, test.want)
+			}
+		})
+	}
+
+	realRoot := filepath.Join(root, "real-agent4")
+	if err := os.Mkdir(realRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	symlinkRoot := filepath.Join(root, "agent4")
+	if err := os.Symlink(realRoot, symlinkRoot); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPlan := selectedPlan
+	symlinkPlan.Agent.HostWorktree = filepath.Join(symlinkRoot, "ouroboros-ide")
+	if _, err := validateNativeSlotWorkspaceRoot(symlinkRoot, symlinkPlan); err == nil || !strings.Contains(err.Error(), "traverses a symlink") {
+		t.Fatalf("symlink workspace root error = %v", err)
 	}
 }
 

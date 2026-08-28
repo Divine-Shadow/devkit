@@ -29,22 +29,30 @@ import (
 )
 
 type nativeSlotResetArgs struct {
-	repo   string
-	index  int
-	format string
+	repo          string
+	index         int
+	workspaceRoot string
+	format        string
 }
 
 func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, error) {
-	parsed := nativeSlotResetArgs{format: "text"}
+	parsed := nativeSlotResetArgs{}
+	seen := map[string]bool{}
 	for i := 1; i < len(ctx.Args); i++ {
+		option := ctx.Args[i]
+		if seen[option] {
+			return parsed, fmt.Errorf("native reset rejects duplicate option %s", option)
+		}
 		switch ctx.Args[i] {
 		case "--repo":
+			seen[option] = true
 			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
 				return parsed, fmt.Errorf("--repo requires a value")
 			}
 			parsed.repo = strings.TrimSpace(ctx.Args[i+1])
 			i++
 		case "--index":
+			seen[option] = true
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--index requires a value")
 			}
@@ -54,13 +62,24 @@ func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, er
 			}
 			parsed.index = index
 			i++
+		case "--workspace-root":
+			seen[option] = true
+			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
+				return parsed, fmt.Errorf("--workspace-root requires a value")
+			}
+			parsed.workspaceRoot = strings.TrimSpace(ctx.Args[i+1])
+			if parsed.workspaceRoot == "" {
+				return parsed, fmt.Errorf("--workspace-root requires a value")
+			}
+			i++
 		case "--format":
-			if i+1 >= len(ctx.Args) {
+			seen[option] = true
+			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
 				return parsed, fmt.Errorf("--format requires a value")
 			}
 			parsed.format = strings.TrimSpace(ctx.Args[i+1])
-			if parsed.format != "text" && parsed.format != "json" {
-				return parsed, fmt.Errorf("--format must be text or json")
+			if parsed.format != "json" {
+				return parsed, fmt.Errorf("--format must be json")
 			}
 			i++
 		default:
@@ -73,7 +92,67 @@ func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, er
 	if parsed.index < 1 {
 		return parsed, fmt.Errorf("native reset requires --index")
 	}
+	if parsed.workspaceRoot == "" {
+		return parsed, fmt.Errorf("native reset requires --workspace-root")
+	}
+	if parsed.format != "json" {
+		return parsed, fmt.Errorf("native reset requires --format json")
+	}
 	return parsed, nil
+}
+
+func validateNativeSlotWorkspaceRoot(value string, selectedPlan nativeplan.Plan) (string, error) {
+	workspaceRoot := strings.TrimSpace(value)
+	if workspaceRoot == "" || !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
+		return "", fmt.Errorf("native reset workspace root must be absolute and canonical: %s", value)
+	}
+	slashRoot := filepath.ToSlash(workspaceRoot)
+	if workspaceRoot == string(filepath.Separator) ||
+		workspaceRoot == "/home/bayesartre/dev" ||
+		slashRoot == "/mnt" ||
+		strings.HasPrefix(slashRoot, "/mnt/") {
+		return "", fmt.Errorf("native reset workspace root is unsafe or shared: %s", workspaceRoot)
+	}
+	sharedRoots := []string{
+		selectedPlan.DevkitHostRoot,
+		selectedPlan.RuntimeAuthorityRoot,
+		selectedPlan.HostWorktreeRoot,
+		selectedPlan.HostStateRoot,
+		filepath.Dir(filepath.Clean(selectedPlan.HostWorktreeRoot)),
+		filepath.Dir(filepath.Clean(selectedPlan.HostStateRoot)),
+	}
+	for _, shared := range sharedRoots {
+		shared = filepath.Clean(strings.TrimSpace(shared))
+		if shared != "" && shared != "." && workspaceRoot == shared {
+			return "", fmt.Errorf("native reset workspace root rejects shared collection root %s", workspaceRoot)
+		}
+	}
+	expected := filepath.Dir(filepath.Clean(selectedPlan.Agent.HostWorktree))
+	if workspaceRoot != expected {
+		return "", fmt.Errorf("native reset workspace root must equal the selected source-derived worktree parent %s: %s", expected, workspaceRoot)
+	}
+	current := string(filepath.Separator)
+	relative := strings.TrimPrefix(workspaceRoot, current)
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect native reset workspace root component %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("native reset workspace root traverses a symlink or junction: %s", current)
+		}
+		if current == workspaceRoot && !info.IsDir() {
+			return "", fmt.Errorf("native reset workspace root must be a real directory: %s", workspaceRoot)
+		}
+	}
+	return workspaceRoot, nil
 }
 
 type nativeSlotProcessIdentity struct {
@@ -759,6 +838,14 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
+	// The caller must name the exact selected lane so a route/inventory
+	// mismatch fails before effects. It never feeds lifecycle planning: source
+	// configuration remains the sole authority for the worktree, home, state,
+	// branch, and runtime geometry.
+	workspaceRoot, err := validateNativeSlotWorkspaceRoot(parsed.workspaceRoot, selectedPlan)
+	if err != nil {
+		return err
+	}
 	expectedManifest, err := nativeplan.BuildManifest(opts, count)
 	if err != nil {
 		return err
@@ -768,7 +855,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
-	historyCustodyRoot, err := nativeHistoryCustodyRoot(opts.StateRoot, ctx.Project)
+	historyCustodyRoot, err := nativeWorkspaceHistoryCustodyRoot(workspaceRoot, ctx.Project)
 	if err != nil {
 		return err
 	}
@@ -852,7 +939,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		stopSelected: processPlan.Stop,
 		inspectIdle:  inspectIdle,
 		snapshotHistory: func() error {
-			return captureNativeSlotHistory(ctx.Project, "selected-slot-reset", processIdentity, opts.StateRoot, ctx.DryRun)
+			return captureNativeSlotHistory(ctx.Project, "selected-slot-reset", processIdentity, opts.StateRoot, workspaceRoot, ctx.DryRun)
 		},
 		applyPlan: resetPlan.Apply,
 	}); err != nil {
@@ -919,6 +1006,9 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		opts.Index = parsed.index
 		selectedPlan, err = nativeplan.BuildDevAll(opts)
 		if err != nil {
+			return cleanupFailedSlot(err)
+		}
+		if _, err := validateNativeSlotWorkspaceRoot(parsed.workspaceRoot, selectedPlan); err != nil {
 			return cleanupFailedSlot(err)
 		}
 		activeManifest, err := nativeplan.BuildManifest(opts, count)

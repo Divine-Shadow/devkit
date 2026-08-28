@@ -37,19 +37,26 @@ func newCaptureFixture(t *testing.T) captureFixture {
 	if err := os.MkdirAll(filepath.Dir(stateRoot), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	hostHome := filepath.Join(root, "agent-worktrees", "agent1", ".devhome-agent1")
+	workspaceRoot := filepath.Join(root, "agent-worktrees", "agent1")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	hostHome := filepath.Join(workspaceRoot, ".devhome-agent1")
 	codexRoot := filepath.Join(hostHome, ".codex")
+	if err := os.MkdirAll(hostWorktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(codexRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return captureFixture{
 		options: SnapshotOptions{
-			Project:     "dev-all",
-			ResetKind:   "selected-slot-reset",
-			AgentIndex:  1,
-			HostHome:    hostHome,
-			SandboxHome: "/workspaces/dev/agent-worktrees/agent1/.devhome-agent1",
-			StateRoot:   stateRoot,
+			Project:       "dev-all",
+			ResetKind:     "selected-slot-reset",
+			AgentIndex:    1,
+			HostWorktree:  hostWorktree,
+			HostHome:      hostHome,
+			SandboxHome:   "/workspaces/dev/agent-worktrees/agent1/.devhome-agent1",
+			StateRoot:     stateRoot,
+			WorkspaceRoot: workspaceRoot,
 		},
 		codexRoot: codexRoot,
 		sqlite:    sqlite,
@@ -235,7 +242,7 @@ func TestCaptureRefusesMissingGUIRolloutWithoutCompletedGeneration(t *testing.T)
 	if err == nil || !strings.Contains(err.Error(), "missing from resumable history") {
 		t.Fatalf("missing rollout error = %v", err)
 	}
-	agentRoot, rootErr := CustodyRoot(fixture.options.StateRoot, fixture.options.Project)
+	agentRoot, rootErr := WorkspaceCustodyRoot(fixture.options.WorkspaceRoot, fixture.options.Project)
 	if rootErr != nil {
 		t.Fatal(rootErr)
 	}
@@ -271,7 +278,7 @@ func TestCaptureRefusesNonResumableGUIRolloutPayload(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("rollout validation error = %v, want %q", err, test.want)
 			}
-			custodyRoot, rootErr := CustodyRoot(fixture.options.StateRoot, fixture.options.Project)
+			custodyRoot, rootErr := WorkspaceCustodyRoot(fixture.options.WorkspaceRoot, fixture.options.Project)
 			if rootErr != nil {
 				t.Fatal(rootErr)
 			}
@@ -361,7 +368,10 @@ func TestCaptureWriteFailureLeavesSourceAndNoGeneration(t *testing.T) {
 	fixture := newCaptureFixture(t)
 	sourcePath := filepath.Join(fixture.codexRoot, "sessions", "turn.jsonl")
 	writeTestFile(t, sourcePath, "preserve\n")
-	privateRoot := filepath.Dir(fixture.options.StateRoot)
+	privateRoot := filepath.Join(fixture.options.WorkspaceRoot, ".devkit")
+	if err := os.Mkdir(privateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(privateRoot, 0o500); err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +403,7 @@ func TestCapturePreflightENOSPCLeavesNoGeneration(t *testing.T) {
 	if readErr != nil || string(data) != "{\"type\":\"event\",\"payload\":{}}\n" {
 		t.Fatalf("source changed after ENOSPC: %q, %v", data, readErr)
 	}
-	custodyRoot, rootErr := CustodyRoot(fixture.options.StateRoot, fixture.options.Project)
+	custodyRoot, rootErr := WorkspaceCustodyRoot(fixture.options.WorkspaceRoot, fixture.options.Project)
 	if rootErr != nil {
 		t.Fatal(rootErr)
 	}
@@ -460,5 +470,40 @@ func TestCaptureRequiredBytesIncludesSQLiteValidationCopy(t *testing.T) {
 	want := int64(1<<20) + 2*100 + 2*200 + 300
 	if got != want {
 		t.Fatalf("required bytes = %d, want %d", got, want)
+	}
+}
+
+func TestWorkspaceCustodyRootIsLaneLocalAndOutsideResetOwnedPaths(t *testing.T) {
+	root := t.TempDir()
+	firstWorkspace := filepath.Join(root, "agent-worktrees", "agent1")
+	secondWorkspace := filepath.Join(root, "agent-worktrees", "agent2")
+	first, err := WorkspaceCustodyRoot(firstWorkspace, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := WorkspaceCustodyRoot(secondWorkspace, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("lane custody roots collided: %s", first)
+	}
+	if want := filepath.Join(firstWorkspace, ".devkit", "codex-gui-history", "dev-all"); first != want {
+		t.Fatalf("first custody root = %s, want %s", first, want)
+	}
+	for _, owned := range []string{
+		filepath.Join(firstWorkspace, "ouroboros-ide"),
+		filepath.Join(firstWorkspace, ".devhome-agent1"),
+	} {
+		if pathsOverlap(first, owned) {
+			t.Fatalf("lane custody root %s overlaps reset-owned path %s", first, owned)
+		}
+	}
+	legacy, err := CustodyRoot(filepath.Join(root, ".devkit", "native-agents"), "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(root, ".devkit", "codex-gui-history", "dev-all"); legacy != want {
+		t.Fatalf("legacy whole-reset custody root = %s, want %s", legacy, want)
 	}
 }

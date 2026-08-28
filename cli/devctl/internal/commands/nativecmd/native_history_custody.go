@@ -11,20 +11,26 @@ func nativeHistoryCustodyRoot(stateRoot, project string) (string, error) {
 	return codexhistory.CustodyRoot(stateRoot, project)
 }
 
+func nativeWorkspaceHistoryCustodyRoot(workspaceRoot, project string) (string, error) {
+	return codexhistory.WorkspaceCustodyRoot(workspaceRoot, project)
+}
+
 func captureNativeSlotHistory(
 	project, resetKind string,
 	identity nativeSlotProcessIdentity,
-	stateRoot string,
+	stateRoot, workspaceRoot string,
 	dryRun bool,
 ) error {
 	result, err := codexhistory.Capture(codexhistory.SnapshotOptions{
-		Project:     project,
-		ResetKind:   resetKind,
-		AgentIndex:  identity.index,
-		HostHome:    identity.hostHome,
-		SandboxHome: identity.sandboxHome,
-		StateRoot:   stateRoot,
-		DryRun:      dryRun,
+		Project:       project,
+		ResetKind:     resetKind,
+		AgentIndex:    identity.index,
+		HostWorktree:  identity.hostWorktree,
+		HostHome:      identity.hostHome,
+		SandboxHome:   identity.sandboxHome,
+		StateRoot:     stateRoot,
+		WorkspaceRoot: workspaceRoot,
+		DryRun:        dryRun,
 	})
 	if err != nil {
 		return err
@@ -52,7 +58,7 @@ func captureNativeWholeHistory(
 	dryRun bool,
 ) error {
 	for _, identity := range identities {
-		if err := captureNativeSlotHistory(project, "whole-prefix-reset", identity, stateRoot, dryRun); err != nil {
+		if err := captureNativeSlotHistory(project, "whole-prefix-reset", identity, stateRoot, "", dryRun); err != nil {
 			return fmt.Errorf("capture source-declared native slot index %d: %w", identity.index, err)
 		}
 	}

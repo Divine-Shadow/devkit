@@ -35,13 +35,15 @@ var historyDirectories = map[string]struct{}{
 }
 
 type SnapshotOptions struct {
-	Project     string
-	ResetKind   string
-	AgentIndex  int
-	HostHome    string
-	SandboxHome string
-	StateRoot   string
-	DryRun      bool
+	Project       string
+	ResetKind     string
+	AgentIndex    int
+	HostWorktree  string
+	HostHome      string
+	SandboxHome   string
+	StateRoot     string
+	WorkspaceRoot string
+	DryRun        bool
 }
 
 type Result struct {
@@ -104,18 +106,42 @@ func CustodyRoot(stateRoot, project string) (string, error) {
 	return filepath.Join(filepath.Dir(filepath.Clean(stateRoot)), "codex-gui-history", project), nil
 }
 
+func WorkspaceCustodyRoot(workspaceRoot, project string) (string, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	project = strings.TrimSpace(project)
+	if workspaceRoot == "" || !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
+		return "", fmt.Errorf("Codex GUI history custody requires an absolute canonical workspace root")
+	}
+	if project == "" || project != filepath.Base(project) {
+		return "", fmt.Errorf("Codex GUI history custody requires one exact project name")
+	}
+	return filepath.Join(workspaceRoot, ".devkit", "codex-gui-history", project), nil
+}
+
 func Capture(options SnapshotOptions) (result Result, retErr error) {
 	if err := validateOptions(options); err != nil {
 		return result, err
 	}
-	custodyProjectRoot, err := CustodyRoot(options.StateRoot, options.Project)
+	var custodyProjectRoot string
+	var err error
+	if strings.TrimSpace(options.WorkspaceRoot) != "" {
+		custodyProjectRoot, err = WorkspaceCustodyRoot(options.WorkspaceRoot, options.Project)
+	} else {
+		custodyProjectRoot, err = CustodyRoot(options.StateRoot, options.Project)
+	}
 	if err != nil {
 		return result, err
 	}
+	hostWorktree := filepath.Clean(options.HostWorktree)
 	hostHome := filepath.Clean(options.HostHome)
 	hostCodex := filepath.Join(hostHome, ".codex")
-	if pathsOverlap(custodyProjectRoot, hostHome) {
-		return result, fmt.Errorf("Codex GUI history custody root overlaps the reset-owned home")
+	for name, ownedRoot := range map[string]string{
+		"worktree": hostWorktree,
+		"home":     hostHome,
+	} {
+		if pathsOverlap(custodyProjectRoot, ownedRoot) {
+			return result, fmt.Errorf("Codex GUI history custody root overlaps the reset-owned %s", name)
+		}
 	}
 
 	files, directories, exists, err := enumerateHistory(hostCodex)
@@ -133,6 +159,11 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 	sqliteExecutable, err := sqliteauthority.Package()
 	if err != nil {
 		return result, err
+	}
+	if strings.TrimSpace(options.WorkspaceRoot) != "" {
+		if err := ensurePrivateDirectory(filepath.Join(filepath.Clean(options.WorkspaceRoot), ".devkit")); err != nil {
+			return result, err
+		}
 	}
 	if err := ensurePrivateDirectory(filepath.Dir(custodyProjectRoot)); err != nil {
 		return result, err
@@ -272,10 +303,19 @@ func validateOptions(options SnapshotOptions) error {
 		return fmt.Errorf("Codex GUI history custody requires a positive agent index")
 	}
 	for name, value := range map[string]string{
-		"host home": options.HostHome, "sandbox home": options.SandboxHome, "state root": options.StateRoot,
+		"host worktree": options.HostWorktree,
+		"host home":     options.HostHome, "sandbox home": options.SandboxHome, "state root": options.StateRoot,
 	} {
 		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) {
 			return fmt.Errorf("Codex GUI history custody %s must be absolute", name)
+		}
+	}
+	if workspaceRoot := strings.TrimSpace(options.WorkspaceRoot); workspaceRoot != "" {
+		if !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
+			return fmt.Errorf("Codex GUI history custody workspace root must be absolute and canonical")
+		}
+		if filepath.Dir(filepath.Clean(options.HostWorktree)) != workspaceRoot {
+			return fmt.Errorf("Codex GUI history custody workspace root must own the selected worktree parent")
 		}
 	}
 	return nil
