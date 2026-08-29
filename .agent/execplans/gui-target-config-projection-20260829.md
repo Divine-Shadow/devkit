@@ -44,10 +44,11 @@ can reconstruct the selected slot without touching retained or active lanes.
   proof and structured diagnostics.
 - [x] Add adversarial symlink, foreign-owner, pathname-race, unknown-field,
   trailing-JSON, growth, residue, and retained-lane tests.
-- [x] Run focused tests, complete `go test`, focused `go vet`, formatting, and
-  `git diff --check` at bounded scheduler priority.
-- [ ] Rebase the complete committed candidate onto current `origin/master`,
-  rerun the complete suite, and publish by compare-and-swap.
+- [x] Rebase the complete committed candidate onto `origin/master` at
+  `7fa979e9828a5286fd68e16a052143fcae35ab62`, retaining its Product-lane
+  runtime-support, Git-metadata, isolated-root, and Codex-home fixes.
+- [x] Run the complete post-rebase `go test` suite, focused `go vet`, formatting,
+  and `git diff --check` at bounded scheduler priority.
 - [ ] Pin and deploy the published Devkit source through WSL-Nix, then prove a
   real target's effective config origin and isolation.
 
@@ -91,6 +92,14 @@ profile bytes/hash/owner/mode, and no visibility or mutation of another lane.
   field or foreign authority even when lane absence checks were correct.
 - The shrink algorithm's lane, Git, and process proofs were otherwise strong;
   the repair preserves that logic and hardens only its input authority.
+- Four upstream commits added Product-lane isolation in the same planner.
+  The rebase had one mechanical `Plan` struct conflict; the resolved type keeps
+  both upstream `HostRuntimeSupportRoot` and the new `GUITargetConfig`, while
+  the generalized upstream isolated-workspace validator remains authoritative.
+- The first compare-and-swap correctly rejected after `origin/master` advanced
+  from `8fdb3ce54143ed0b291ba212b12acefa10be3fe8` to
+  `7fa979e9828a5286fd68e16a052143fcae35ab62`. The candidate then rebased cleanly
+  over the added isolated Product Codex-home projection and reran every gate.
 
 ## Decision Log
 
@@ -105,7 +114,18 @@ profile bytes/hash/owner/mode, and no visibility or mutation of another lane.
 
 ## Outcomes & Retrospective
 
-The source candidate now provides a single target-bound writer and a bounded,
-monotone stale-manifest transition. It receives no Linux-hub delivery credit
-until the published package is deployed and a real member passes task
+The rebased implementation commit is
+`e3d4e0d354394941cdf089898e31841345e4194e`. It provides a single target-bound
+writer and a bounded, monotone stale-manifest transition while preserving the
+upstream Product-lane projections. Post-rebase verification passed:
+
+    TMPDIR=/tmp GOMAXPROCS=2 nice -n 19 ionice -c3 go test -p 2 ./...
+    TMPDIR=/tmp GOMAXPROCS=2 nice -n 19 ionice -c3 go vet ./internal/runtime/plan ./internal/runtime/launch ./internal/commands/nativecmd
+    gofmt -l <all changed Go files>
+    git diff --check origin/master..HEAD
+
+The final source publication boundary is a fetch plus compare-and-swap update
+of `origin/master` containing this outcome record and the implementation
+commit. The source work still receives no Linux-hub delivery credit until the
+published package is deployed and a real member passes task
 create/list/read/restart and effective-configuration verification.
