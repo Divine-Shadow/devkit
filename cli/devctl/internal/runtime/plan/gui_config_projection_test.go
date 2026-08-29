@@ -78,6 +78,13 @@ func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
 	if p.GUITargetConfig == nil || *p.GUITargetConfig != want {
 		t.Fatalf("selected GUI config = %#v, want %#v", p.GUITargetConfig, want)
 	}
+	manifest, err := BuildManifest(opts, 4)
+	if err != nil {
+		t.Fatalf("Build shared manifest from GUI-selected options: %v", err)
+	}
+	if manifest.Count != 4 || manifest.Agents[1].ID.Index != opts.Index {
+		t.Fatalf("shared manifest geometry = %#v", manifest)
+	}
 	if text := RenderText(p); !strings.Contains(text, "gui_target_id: "+record.TargetID) ||
 		!strings.Contains(text, "gui_config_profile: "+record.ConfigProfile) ||
 		!strings.Contains(text, "gui_config_source_sha256: "+record.SourceSHA256) {

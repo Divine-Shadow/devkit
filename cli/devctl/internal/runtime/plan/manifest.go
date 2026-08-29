@@ -14,6 +14,10 @@ func BuildManifest(opts BuildOptions, count int) (agent.Manifest, error) {
 	for i := 1; i <= count; i++ {
 		next := opts
 		next.Index = i
+		// A GUI target projection belongs only to the selected execution plan.
+		// The shared all-slot manifest records lifecycle geometry, so replaying
+		// one target's projection while enumerating sibling indexes is invalid.
+		next.GUITargetID = ""
 		p, err := BuildDevAll(next)
 		if err != nil {
 			return agent.Manifest{}, err
