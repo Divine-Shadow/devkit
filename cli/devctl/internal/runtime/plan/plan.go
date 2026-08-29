@@ -174,6 +174,9 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if workspaceRoot != "" {
 		paths.SandboxWorktree = filepath.Join("/workspaces/dev", filepath.Base(paths.HostWorktree))
+		if sandboxHome, ok := projectSandboxPath(paths.HostHome, workspaceRoot, "/workspaces/dev"); ok {
+			paths.SandboxHome = sandboxHome
+		}
 	} else if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
 		if project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) {

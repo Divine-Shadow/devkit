@@ -275,6 +275,11 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 	if p.Agent.HostWorktree != hostWorktree || p.Agent.SandboxWorktree != "/workspaces/dev/ouroboros-ide" {
 		t.Fatalf("worktree projection = host %q sandbox %q", p.Agent.HostWorktree, p.Agent.SandboxWorktree)
 	}
+	if p.Agent.SandboxHome != "/workspaces/dev/.devhome-agent4" ||
+		p.Env["HOME"] != "/workspaces/dev/.devhome-agent4" ||
+		p.Env["CODEX_HOME"] != "/workspaces/dev/.devhome-agent4/.codex" {
+		t.Fatalf("isolated Product home projection = sandbox %q env %#v", p.Agent.SandboxHome, p.Env)
+	}
 	if p.MountPolicyIdentity != ManagementControllerMountPolicyIdentity || p.WindowsMountsVisible {
 		t.Fatalf("mount identity = %q windows=%t", p.MountPolicyIdentity, p.WindowsMountsVisible)
 	}
@@ -316,6 +321,34 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
 	}); err == nil {
 		t.Fatal("mismatched Product lane root was accepted")
+	}
+}
+
+func TestProductWorkspaceRootProjectsNestedAgentOneHome(t *testing.T) {
+	devRoot := t.TempDir()
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktreeRoot := filepath.Join(devRoot, "agent-worktrees")
+	workspaceRoot := filepath.Join(worktreeRoot, "agent1")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	if err := os.MkdirAll(hostWorktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            1,
+		Repo:             "ouroboros-ide",
+		WorkspaceRoot:    workspaceRoot,
+		WorktreeRoot:     worktreeRoot,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Agent.SandboxHome != "/workspaces/dev/ouroboros-ide/.devhome-agent1" ||
+		p.Env["CODEX_HOME"] != "/workspaces/dev/ouroboros-ide/.devhome-agent1/.codex" {
+		t.Fatalf("agent1 isolated home projection = sandbox %q env %#v", p.Agent.SandboxHome, p.Env)
 	}
 }
 
