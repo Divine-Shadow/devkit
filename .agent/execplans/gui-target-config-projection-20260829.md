@@ -76,6 +76,10 @@ can reconstruct the selected slot without touching retained or active lanes.
 - [x] Pass focused crash/adversarial tests, full `go test ./... -count=1`,
   `nix flake check --no-build`, the packaged `devctl-go-tests` check, and the
   runtime bundle/tools/shell checks with at most two Nix jobs and two cores.
+- [x] Publish the custody-aware implementation by exact compare-and-swap from
+  `14e83243e145d69e01269589cce5011f909b6ae4` to
+  `8103bd8bb6bc4b60fb97e254997d7b06129471a0`, then fetch and prove the remote
+  `master` ref equals the candidate.
 - [ ] Pin and deploy the published Devkit source through WSL-Nix, then prove a
   real target's effective config origin and isolation.
 
@@ -176,7 +180,9 @@ upstream Product-lane projections. Post-rebase verification passed:
 The original source publication boundary completed with expected remote ref
 `7fa979e9828a5286fd68e16a052143fcae35ab62`, candidate
 `beca5b996a62b34b610de792ac204b4eabc963ca`, and an exact post-push remote
-readback match. The current custody-aware retirement correction is validated
-but not yet published. Neither source generation receives Linux-hub delivery
-credit until the published package is deployed and a real member passes task
-create/list/read/restart and effective-configuration verification.
+readback match. The custody-aware retirement implementation is published at
+`8103bd8bb6bc4b60fb97e254997d7b06129471a0`; its publication boundary used
+expected remote ref `14e83243e145d69e01269589cce5011f909b6ae4` and exact post-push readback.
+Neither source generation receives Linux-hub delivery credit until the package
+is deployed and a real member passes task create/list/read/restart and
+effective-configuration verification.
