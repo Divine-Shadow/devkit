@@ -221,6 +221,7 @@ type ControllerProfileRemoteProductGUITarget struct {
 	SocketName            string                                     `json:"socketName"`
 	Station               string                                     `json:"station"`
 	Transport             ControllerProfileRemoteProductGUITransport `json:"transport"`
+	WorkspaceRoot         string                                     `json:"workspaceRoot"`
 	Worktree              ControllerProfilePathPair                  `json:"worktree"`
 }
 
@@ -539,6 +540,17 @@ func validateControllerRemoteProductGUI(remote ControllerProfileRemoteProductGUI
 			if !filepath.IsAbs(path) || strings.HasPrefix(filepath.ToSlash(path), "/mnt/") {
 				return fmt.Errorf("Management controller remote Product GUI target %q %s path is invalid", target.ID, label)
 			}
+		}
+		workspaceRoot := strings.TrimSpace(target.WorkspaceRoot)
+		if workspaceRoot == "" || target.WorkspaceRoot != workspaceRoot ||
+			!filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot ||
+			workspaceRoot == string(filepath.Separator) || workspaceRoot == "/home/bayesartre/dev" ||
+			isMntFilesystemPath(workspaceRoot) || isWindowsFilesystemPath(workspaceRoot) {
+			return fmt.Errorf("Management controller remote Product GUI target %q workspace root is invalid", target.ID)
+		}
+		if filepath.Dir(filepath.Clean(target.Worktree.Host)) != workspaceRoot ||
+			!pathWithinRoot(workspaceRoot, target.Home.Host) {
+			return fmt.Errorf("Management controller remote Product GUI target %q workspace root does not contain its declared worktree and home", target.ID)
 		}
 		if filepath.Clean(target.RemoteCodexHome) != filepath.Join(filepath.Clean(target.Home.Remote), ".codex") ||
 			filepath.Clean(target.ConfigPath) != filepath.Join(filepath.Clean(target.RemoteCodexHome), "config.toml") {

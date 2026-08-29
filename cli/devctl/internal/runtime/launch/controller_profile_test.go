@@ -348,12 +348,14 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T)
 		Group:         "fleet-deployment-operators",
 		NoFollow:      true,
 	}
-	remoteHome := filepath.Join(base.Agent.HostHome, ".codex")
+	remoteWorkspaceRoot := filepath.Dir(base.Agent.HostWorktree)
+	remoteHostHome := filepath.Join(remoteWorkspaceRoot, ".devhome-agent2")
+	remoteHome := filepath.Join(remoteHostHome, ".codex")
 	profile.RemoteProductGUI = nativeplan.ControllerProfileRemoteProductGUI{
 		SchemaVersion: "wsl-nix/remote-product-gui-authority/v2",
 		Targets: []nativeplan.ControllerProfileRemoteProductGUITarget{{
 			Agent: 2, ConfigPath: filepath.Join(remoteHome, "config.toml"), GovernanceWorkspaceID: "agent2",
-			Home: nativeplan.ControllerProfilePathPair{Host: base.Agent.HostHome, Remote: base.Agent.HostHome},
+			Home: nativeplan.ControllerProfilePathPair{Host: remoteHostHome, Remote: remoteHostHome},
 			ID:   "test-2", Kind: "devkit-agent", RemoteCodexHome: remoteHome,
 			RuntimeProfile: "dev-all", SocketName: "a2-app.sock", Station: "test",
 			Transport: nativeplan.ControllerProfileRemoteProductGUITransport{
@@ -362,7 +364,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T)
 				ServerHostKeyFingerprint: "SHA256:test", User: nativeplan.ManagementControllerIdentityExpectedOwner,
 				WorkerAlias: "test-nix",
 			},
-			Worktree: nativeplan.ControllerProfilePathPair{Host: base.Agent.HostWorktree, Remote: base.Agent.HostWorktree},
+			WorkspaceRoot: remoteWorkspaceRoot,
+			Worktree:      nativeplan.ControllerProfilePathPair{Host: base.Agent.HostWorktree, Remote: base.Agent.HostWorktree},
 		}},
 		Transport: nativeplan.ControllerProfileRemoteProductGUIAuthorityTransport{
 			ProtectedIdentityHandles: []nativeplan.ControllerProfileProtectedIdentityHandle{{

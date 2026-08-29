@@ -145,7 +145,8 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 					ServerHostKeyFingerprint: "SHA256:test", User: ManagementControllerIdentityExpectedOwner,
 					WorkerAlias: "test-nix",
 				},
-				Worktree: ControllerProfilePathPair{Host: remoteWorktree, Remote: remoteWorktree},
+				WorkspaceRoot: managementRoot,
+				Worktree:      ControllerProfilePathPair{Host: remoteWorktree, Remote: remoteWorktree},
 			}},
 			Transport: ControllerProfileRemoteProductGUIAuthorityTransport{
 				ProtectedIdentityHandles: []ControllerProfileProtectedIdentityHandle{{
@@ -424,6 +425,66 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	profile.Targets.ControllerGUI = ManagementControllerGUI
 	if profile.FleetRecovery.Target != "manifest-selected-station" {
 		t.Fatalf("generic manifest-selected Fleet recovery target was not preserved: %#v", profile.FleetRecovery)
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ControllerProfileRemoteProductGUITarget)
+	}{
+		{
+			name: "missing workspace root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.WorkspaceRoot = ""
+			},
+		},
+		{
+			name: "shared workspace root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.WorkspaceRoot = "/home/bayesartre/dev"
+			},
+		},
+		{
+			name: "filesystem root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.WorkspaceRoot = "/"
+			},
+		},
+		{
+			name: "noncanonical workspace root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.WorkspaceRoot += "/../" + filepath.Base(target.WorkspaceRoot)
+			},
+		},
+		{
+			name: "Windows-mounted workspace root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.WorkspaceRoot = "/mnt/c/workspaces/agent1"
+			},
+		},
+		{
+			name: "worktree outside workspace root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.Worktree.Host = filepath.Join(filepath.Dir(target.WorkspaceRoot), "other", "ouroboros-ide")
+			},
+		},
+		{
+			name: "home outside workspace root",
+			mutate: func(target *ControllerProfileRemoteProductGUITarget) {
+				target.Home.Host = filepath.Join(filepath.Dir(target.WorkspaceRoot), "other", "home")
+			},
+		},
+	} {
+		t.Run("rejects remote Product GUI "+testCase.name, func(t *testing.T) {
+			candidate := profile
+			candidate.RemoteProductGUI.Targets = append(
+				[]ControllerProfileRemoteProductGUITarget(nil),
+				profile.RemoteProductGUI.Targets...,
+			)
+			testCase.mutate(&candidate.RemoteProductGUI.Targets[0])
+			if err := validateManagementControllerProfile(candidate); err == nil ||
+				!strings.Contains(err.Error(), "workspace root") {
+				t.Fatalf("invalid remote Product GUI workspace root passed: %#v err=%v", candidate.RemoteProductGUI.Targets[0], err)
+			}
+		})
 	}
 
 	for _, testCase := range []struct {
