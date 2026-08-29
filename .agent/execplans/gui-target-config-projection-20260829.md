@@ -49,6 +49,11 @@ can reconstruct the selected slot without touching retained or active lanes.
   runtime-support, Git-metadata, isolated-root, and Codex-home fixes.
 - [x] Run the complete post-rebase `go test` suite, focused `go vet`, formatting,
   and `git diff --check` at bounded scheduler priority.
+- [x] Publish the implementation and validation record by exact
+  compare-and-swap from
+  `7fa979e9828a5286fd68e16a052143fcae35ab62` to
+  `beca5b996a62b34b610de792ac204b4eabc963ca`, then fetch and verify the remote
+  ref equals the candidate.
 - [ ] Pin and deploy the published Devkit source through WSL-Nix, then prove a
   real target's effective config origin and isolation.
 
@@ -124,8 +129,9 @@ upstream Product-lane projections. Post-rebase verification passed:
     gofmt -l <all changed Go files>
     git diff --check origin/master..HEAD
 
-The final source publication boundary is a fetch plus compare-and-swap update
-of `origin/master` containing this outcome record and the implementation
-commit. The source work still receives no Linux-hub delivery credit until the
-published package is deployed and a real member passes task
+The source publication boundary completed with expected remote ref
+`7fa979e9828a5286fd68e16a052143fcae35ab62`, candidate
+`beca5b996a62b34b610de792ac204b4eabc963ca`, and an exact post-push remote
+readback match. The source work still receives no Linux-hub delivery credit
+until the published package is deployed and a real member passes task
 create/list/read/restart and effective-configuration verification.
