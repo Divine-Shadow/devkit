@@ -67,6 +67,64 @@ func TestSandboxPathToHostUsesDeclaredWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestEnsureIsolatedProductRuntimeSupportProjectsOnlySelectedLane(t *testing.T) {
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "dev", ".devkit")
+	workspaceRoot := filepath.Join(root, "dev", "agent-worktrees", "agent4")
+	if err := os.MkdirAll(sourceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wantFiles := map[string]string{
+		"ouro8-governance-env.sh":        "export TEST_RUNTIME=1\n",
+		"ouro8-governance-repo-env.json": "{\"workspace\":\"fixture\"}\n",
+	}
+	for name, content := range wantFiles {
+		if err := os.WriteFile(filepath.Join(sourceRoot, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := nativeplan.Plan{
+		Agent:                  agent.Spec{ID: agent.ID{Project: "dev-all", Index: 4, Repo: "ouroboros-ide"}},
+		HostRuntimeSupportRoot: sourceRoot,
+		HostWorkspaceRoot:      workspaceRoot,
+	}
+	if err := ensureIsolatedProductRuntimeSupport(p); err != nil {
+		t.Fatal(err)
+	}
+	targetRoot := filepath.Join(workspaceRoot, ".devkit")
+	for name, want := range wantFiles {
+		path := filepath.Join(targetRoot, name)
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("runtime support %s = %q, %v; want %q", name, got, err, want)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat runtime support %s: %v", name, err)
+		}
+		if info.Mode().Perm() != 0o644 {
+			t.Fatalf("runtime support %s mode = %v", name, info.Mode().Perm())
+		}
+	}
+	stateInfo, err := os.Stat(filepath.Join(targetRoot, "governance-control-plane"))
+	if err != nil || !stateInfo.IsDir() || stateInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("governance state root = %#v, %v", stateInfo, err)
+	}
+
+	if err := os.RemoveAll(targetRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), targetRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureIsolatedProductRuntimeSupport(p); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("symlinked lane runtime root was accepted: %v", err)
+	}
+}
+
 func TestConfigureWorktreeGitSSHUsesPackageGitUnderHostilePath(t *testing.T) {
 	worktree := filepath.Join(t.TempDir(), "worktree")
 	gitExecutable := gitauthority.Executable()

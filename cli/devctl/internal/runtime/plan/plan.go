@@ -39,35 +39,36 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
-	Agent                agent.Spec        `json:"agent"`
-	DevkitHostRoot       string            `json:"devkit_host_root"`
-	RuntimeAuthorityRoot string            `json:"runtime_authority_root"`
-	DevkitSandboxRoot    string            `json:"devkit_sandbox_root"`
-	HostWorkspaceRoot    string            `json:"host_workspace_root,omitempty"`
-	SandboxWorkspaceRoot string            `json:"sandbox_workspace_root,omitempty"`
-	HostWorktreeRoot     string            `json:"host_worktree_root"`
-	HostStateRoot        string            `json:"host_state_root"`
-	SandboxWorktreeRoot  string            `json:"sandbox_worktree_root"`
-	SandboxStateRoot     string            `json:"sandbox_state_root"`
-	Flake                string            `json:"flake"`
-	FlakeInputOverrides  map[string]string `json:"flake_input_overrides,omitempty"`
-	RuntimeLauncher      string            `json:"runtime_launcher"`
-	BubblewrapBinary     string            `json:"bubblewrap_binary"`
-	Launcher             string            `json:"launcher"`
-	LauncherArgs         []string          `json:"launcher_args"`
-	IsolationProfile     string            `json:"isolation_profile,omitempty"`
-	MountPolicyIdentity  string            `json:"mount_policy_identity"`
-	WindowsMountsVisible bool              `json:"windows_mounts_visible"`
-	ControllerProfile    string            `json:"controller_profile,omitempty"`
-	ControllerManifest   string            `json:"controller_manifest,omitempty"`
-	Binds                []Bind            `json:"binds"`
-	Env                  map[string]string `json:"env"`
-	Proxy                ProxyConfig       `json:"proxy"`
-	DNS                  DNSConfig         `json:"dns"`
-	BrokerEndpoint       string            `json:"broker_endpoint"`
-	DirectDockerSocket   bool              `json:"direct_docker_socket"`
-	ResourceLimits       ResourceLimits    `json:"resource_limits"`
-	Notes                []string          `json:"notes,omitempty"`
+	Agent                  agent.Spec        `json:"agent"`
+	DevkitHostRoot         string            `json:"devkit_host_root"`
+	RuntimeAuthorityRoot   string            `json:"runtime_authority_root"`
+	DevkitSandboxRoot      string            `json:"devkit_sandbox_root"`
+	HostRuntimeSupportRoot string            `json:"host_runtime_support_root"`
+	HostWorkspaceRoot      string            `json:"host_workspace_root,omitempty"`
+	SandboxWorkspaceRoot   string            `json:"sandbox_workspace_root,omitempty"`
+	HostWorktreeRoot       string            `json:"host_worktree_root"`
+	HostStateRoot          string            `json:"host_state_root"`
+	SandboxWorktreeRoot    string            `json:"sandbox_worktree_root"`
+	SandboxStateRoot       string            `json:"sandbox_state_root"`
+	Flake                  string            `json:"flake"`
+	FlakeInputOverrides    map[string]string `json:"flake_input_overrides,omitempty"`
+	RuntimeLauncher        string            `json:"runtime_launcher"`
+	BubblewrapBinary       string            `json:"bubblewrap_binary"`
+	Launcher               string            `json:"launcher"`
+	LauncherArgs           []string          `json:"launcher_args"`
+	IsolationProfile       string            `json:"isolation_profile,omitempty"`
+	MountPolicyIdentity    string            `json:"mount_policy_identity"`
+	WindowsMountsVisible   bool              `json:"windows_mounts_visible"`
+	ControllerProfile      string            `json:"controller_profile,omitempty"`
+	ControllerManifest     string            `json:"controller_manifest,omitempty"`
+	Binds                  []Bind            `json:"binds"`
+	Env                    map[string]string `json:"env"`
+	Proxy                  ProxyConfig       `json:"proxy"`
+	DNS                    DNSConfig         `json:"dns"`
+	BrokerEndpoint         string            `json:"broker_endpoint"`
+	DirectDockerSocket     bool              `json:"direct_docker_socket"`
+	ResourceLimits         ResourceLimits    `json:"resource_limits"`
+	Notes                  []string          `json:"notes,omitempty"`
 }
 
 type BuildOptions struct {
@@ -426,10 +427,11 @@ func Build(opts BuildOptions) (Plan, error) {
 			StateRoot:        paths.HostAgentStateRoot,
 			SandboxStateRoot: paths.SandboxAgentStateRoot,
 		},
-		DevkitHostRoot:       opts.Paths.Root,
-		RuntimeAuthorityRoot: runtimeAuthorityRoot,
-		DevkitSandboxRoot:    filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
-		HostWorkspaceRoot:    workspaceRoot,
+		DevkitHostRoot:         opts.Paths.Root,
+		RuntimeAuthorityRoot:   runtimeAuthorityRoot,
+		DevkitSandboxRoot:      filepath.Join("/workspaces/dev", filepath.Base(opts.Paths.Root)),
+		HostRuntimeSupportRoot: filepath.Join(paths.DevRoot, ".devkit"),
+		HostWorkspaceRoot:      workspaceRoot,
 		SandboxWorkspaceRoot: func() string {
 			if workspaceRoot == "" {
 				return ""

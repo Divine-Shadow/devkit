@@ -50,6 +50,9 @@ func Prepare(p nativeplan.Plan) error {
 	if err := requireGitWorktree(p.Agent.HostWorktree); err != nil {
 		return err
 	}
+	if err := ensureIsolatedProductRuntimeSupport(p); err != nil {
+		return err
+	}
 	if err := validateManagementControllerProfilePlan(p); err != nil {
 		return err
 	}
@@ -120,6 +123,106 @@ func Prepare(p nativeplan.Plan) error {
 			return fmt.Errorf("required bind source %s: %w", bind.Source, err)
 		}
 	}
+	return nil
+}
+
+func ensureIsolatedProductRuntimeSupport(p nativeplan.Plan) error {
+	if p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" ||
+		strings.TrimSpace(p.HostWorkspaceRoot) == "" {
+		return nil
+	}
+	sourceRoot := filepath.Clean(strings.TrimSpace(p.HostRuntimeSupportRoot))
+	workspaceRoot := filepath.Clean(strings.TrimSpace(p.HostWorkspaceRoot))
+	if !filepath.IsAbs(sourceRoot) || !filepath.IsAbs(workspaceRoot) {
+		return fmt.Errorf("isolated Product runtime support roots must be absolute")
+	}
+	targetRoot := filepath.Join(workspaceRoot, ".devkit")
+	if info, err := os.Lstat(targetRoot); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("isolated Product runtime support root must be a real directory: %s", targetRoot)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect isolated Product runtime support root %s: %w", targetRoot, err)
+	} else if err := os.MkdirAll(targetRoot, 0o700); err != nil {
+		return fmt.Errorf("create isolated Product runtime support root %s: %w", targetRoot, err)
+	}
+	if resolved, err := filepath.EvalSymlinks(targetRoot); err != nil || filepath.Clean(resolved) != targetRoot {
+		return fmt.Errorf("isolated Product runtime support root rejects symlinked geometry: %s", targetRoot)
+	}
+	if err := os.Chmod(targetRoot, 0o700); err != nil {
+		return fmt.Errorf("chmod isolated Product runtime support root %s: %w", targetRoot, err)
+	}
+	for _, name := range []string{"ouro8-governance-env.sh", "ouro8-governance-repo-env.json"} {
+		if err := copyIsolatedProductRuntimeSupportFile(filepath.Join(sourceRoot, name), filepath.Join(targetRoot, name)); err != nil {
+			return err
+		}
+	}
+	stateRoot := filepath.Join(targetRoot, "governance-control-plane")
+	if info, err := os.Lstat(stateRoot); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("isolated Product governance state root must be a real directory: %s", stateRoot)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect isolated Product governance state root %s: %w", stateRoot, err)
+	} else if err := os.Mkdir(stateRoot, 0o700); err != nil {
+		return fmt.Errorf("create isolated Product governance state root %s: %w", stateRoot, err)
+	}
+	if err := os.Chmod(stateRoot, 0o700); err != nil {
+		return fmt.Errorf("chmod isolated Product governance state root %s: %w", stateRoot, err)
+	}
+	return nil
+}
+
+func copyIsolatedProductRuntimeSupportFile(source, target string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect source-derived Product runtime support %s: %w", source, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("source-derived Product runtime support must be a regular non-symlink file: %s", source)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read source-derived Product runtime support %s: %w", source, err)
+	}
+	if targetInfo, err := os.Lstat(target); err == nil {
+		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.Mode().IsRegular() {
+			return fmt.Errorf("isolated Product runtime support target must be a regular non-symlink file: %s", target)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect isolated Product runtime support target %s: %w", target, err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".product-runtime-support-")
+	if err != nil {
+		return fmt.Errorf("create isolated Product runtime support staging file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod isolated Product runtime support staging file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return fmt.Errorf("write isolated Product runtime support staging file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync isolated Product runtime support staging file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close isolated Product runtime support staging file: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return fmt.Errorf("chmod isolated Product runtime support file: %w", err)
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return fmt.Errorf("install isolated Product runtime support target: %w", err)
+	}
+	committed = true
 	return nil
 }
 
