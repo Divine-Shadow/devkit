@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"devkit/cli/devctl/internal/config"
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
+	nativelaunch "devkit/cli/devctl/internal/runtime/launch"
+	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
 
@@ -113,6 +116,8 @@ func TestGitIdentityForRepoCommandUsesIdentityValues(t *testing.T) {
 
 func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
+	sandboxHome := "/agent-state/test-agent/home"
+	plan := nativeplan.Plan{Agent: nativeagent.Spec{HostHome: home, SandboxHome: sandboxHome}}
 	sshDir := filepath.Join(home, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -120,7 +125,7 @@ func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sshDir, "id_ed25519"), []byte("key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeNativeSSHConfig(home, home, nil); err != nil {
+	if err := nativelaunch.WriteGitSSHConfigForPlan(plan, nil); err != nil {
 		t.Fatalf("write default config: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(sshDir, "config"))
@@ -130,11 +135,11 @@ func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 	text := string(data)
 	if !strings.Contains(text, "Host github.com ssh.github.com") ||
 		!strings.Contains(text, "StrictHostKeyChecking yes") ||
-		!strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+		!strings.Contains(text, filepath.Join(sandboxHome, ".ssh", "id_ed25519")) {
 		t.Fatalf("default config missing github host/default key:\n%s", text)
 	}
 
-	if err := writeNativeSSHConfig(home, home, []string{"work_key"}); err != nil {
+	if err := nativelaunch.WriteGitSSHConfigForPlan(plan, []string{"work_key"}); err != nil {
 		t.Fatalf("write custom config: %v", err)
 	}
 	data, err = os.ReadFile(filepath.Join(sshDir, "config"))
@@ -142,7 +147,7 @@ func TestWriteNativeSSHConfigUsesDefaultAndCustomIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	text = string(data)
-	if !strings.Contains(text, filepath.Join(home, ".ssh", "work_key")) || strings.Contains(text, filepath.Join(home, ".ssh", "id_ed25519")) {
+	if !strings.Contains(text, filepath.Join(sandboxHome, ".ssh", "work_key")) || strings.Contains(text, filepath.Join(sandboxHome, ".ssh", "id_ed25519")) {
 		t.Fatalf("custom config did not use only custom key:\n%s", text)
 	}
 }

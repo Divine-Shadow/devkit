@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -407,14 +406,7 @@ func ensureGitSSHConfig(p nativeplan.Plan, sshAuthority sshauthority.Authority) 
 	if err != nil {
 		return err
 	}
-	proxyCommand := ""
-	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
-		proxyCommand, err = gitManagedProxyCommand(p)
-		if err != nil {
-			return err
-		}
-	}
-	if err := writeGitSSHConfigWithProxyCommand(hostHome, sandboxHome, identityNames, proxyCommand); err != nil {
+	if err := WriteGitSSHConfigForPlan(p, identityNames); err != nil {
 		return err
 	}
 	if err := runGitConfigFile(filepath.Join(hostHome, ".gitconfig"), "core.sshCommand", sshCommand); err != nil {
@@ -522,14 +514,22 @@ func existingSSHIdentities(sshDir string) []string {
 	return names
 }
 
-func WriteGitSSHConfig(hostHome, configHome string, identityNames []string) error {
-	return writeGitSSHConfig(hostHome, configHome, identityNames, "")
-}
-
-func writeGitSSHConfig(hostHome, configHome string, identityNames []string, proxyURL string) error {
+// WriteGitSSHConfigForPlan renders the package-owned Git SSH configuration
+// using the plan's host write location, sandbox-visible identity paths, and
+// managed workspace-egress connector.
+func WriteGitSSHConfigForPlan(p nativeplan.Plan, identityNames []string) error {
+	hostHome := strings.TrimSpace(p.Agent.HostHome)
+	configHome := strings.TrimSpace(p.Agent.SandboxHome)
+	if hostHome == "" || configHome == "" {
+		return nil
+	}
 	proxyCommand := ""
-	if parsed, err := url.Parse(strings.TrimSpace(proxyURL)); err == nil && parsed.Scheme == "http" && parsed.Host != "" {
-		proxyCommand = "nc -X connect -x " + parsed.Host + " %h %p"
+	if p.IsolationProfile == nativeplan.IsolationProfileWorkspaceEgress {
+		var err error
+		proxyCommand, err = gitManagedProxyCommand(p)
+		if err != nil {
+			return err
+		}
 	}
 	return writeGitSSHConfigWithProxyCommand(hostHome, configHome, identityNames, proxyCommand)
 }
@@ -556,14 +556,6 @@ func writeGitSSHConfigWithProxyCommand(hostHome, configHome string, identityName
 		return err
 	}
 	return nil
-}
-
-func buildGitSSHConfig(configHome string, identityNames []string, proxyURL string) string {
-	proxyCommand := ""
-	if parsed, err := url.Parse(strings.TrimSpace(proxyURL)); err == nil && parsed.Scheme == "http" && parsed.Host != "" {
-		proxyCommand = "nc -X connect -x " + parsed.Host + " %h %p"
-	}
-	return buildGitSSHConfigWithProxyCommand(configHome, identityNames, proxyCommand)
 }
 
 func buildGitSSHConfigWithProxyCommand(configHome string, identityNames []string, proxyCommand string) string {

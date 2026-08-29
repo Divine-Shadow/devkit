@@ -1402,6 +1402,59 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	}
 }
 
+func TestWriteGitSSHConfigForPlanUsesManagedUnixConnectorAndSandboxIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	hostHome := filepath.Join(tmp, "agent-home")
+	writeTestFile(t, filepath.Join(hostHome, ".ssh", "work_key"), "private")
+	runtimeRoot := filepath.Join(tmp, "runtime-authority")
+	devctlPath := filepath.Join(runtimeRoot, "kit", "bin", "devctl")
+	writeTestFile(t, devctlPath, "#!/bin/sh\nexit 99\n")
+	if err := os.Chmod(devctlPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sandboxHome := "/agent-state/ouroboros-ide-agent1/home"
+	socketPath := filepath.Join(tmp, "native-egress", "ouroboros-ide-agent1.sock")
+	p := nativeplan.Plan{
+		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		RuntimeAuthorityRoot: runtimeRoot,
+		Agent: agent.Spec{
+			ID:          agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
+			HostHome:    hostHome,
+			SandboxHome: sandboxHome,
+		},
+		Proxy: nativeplan.ProxyConfig{
+			HTTPProxy:  "http://127.0.0.1:18888",
+			UnixSocket: socketPath,
+		},
+	}
+
+	if err := WriteGitSSHConfigForPlan(p, []string{"work_key"}); err != nil {
+		t.Fatalf("WriteGitSSHConfigForPlan: %v", err)
+	}
+	cfg := readTestFile(t, filepath.Join(hostHome, ".ssh", "config"))
+	for _, want := range []string{
+		"Host github.com ssh.github.com",
+		"  HostName ssh.github.com",
+		"  Port 443",
+		"  ProxyCommand '" + devctlPath + "' -p 'dev-all' native proxy-connect --socket '" + socketPath + "' --target %h:%p",
+		"  IdentityFile " + filepath.Join(sandboxHome, ".ssh", "work_key"),
+		"  StrictHostKeyChecking yes",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Fatalf("plan-aware SSH config missing %q:\n%s", want, cfg)
+		}
+	}
+	for _, forbidden := range []string{
+		"ProxyCommand nc ",
+		"127.0.0.1:18888",
+		filepath.Join(hostHome, ".ssh", "work_key"),
+	} {
+		if strings.Contains(cfg, forbidden) {
+			t.Fatalf("plan-aware SSH config retained forbidden transport or identity %q:\n%s", forbidden, cfg)
+		}
+	}
+}
+
 func TestEnsureGitSSHConfigPreservesManagedUnixConnectorForWorkspaceEgress(t *testing.T) {
 	tmp := t.TempDir()
 	hostHome := filepath.Join(tmp, "agent-home")

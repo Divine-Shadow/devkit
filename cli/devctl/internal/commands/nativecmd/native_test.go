@@ -860,6 +860,31 @@ func TestRealPackagedDevWorkspaceOverlayKeepsMutableGeometryOutsideRuntimeAuthor
 	}
 }
 
+func TestBuildAgentPlanKeepsWorkspaceEgressAuthority(t *testing.T) {
+	root := devkitSourceRootForNativeTest(t)
+	ctx := &cmdregistry.Context{
+		Project: "dev-workspace",
+		Paths: devkitpaths.Paths{
+			Root:                 root,
+			RuntimeAuthorityRoot: root,
+			OverlayPaths:         []string{filepath.Join(root, "overlays")},
+		},
+	}
+	p, err := BuildAgentPlan(ctx, ".", 1)
+	if err != nil {
+		t.Fatalf("BuildAgentPlan: %v", err)
+	}
+	if p.IsolationProfile != nativeplan.IsolationProfileWorkspaceEgress {
+		t.Fatalf("isolation profile = %q", p.IsolationProfile)
+	}
+	if p.RuntimeAuthorityRoot != root {
+		t.Fatalf("runtime authority root = %q, want %q", p.RuntimeAuthorityRoot, root)
+	}
+	if !filepath.IsAbs(p.Proxy.UnixSocket) || !strings.Contains(p.Proxy.UnixSocket, "dev-workspace-agent1-workspace-egress.sock") {
+		t.Fatalf("managed egress socket = %q", p.Proxy.UnixSocket)
+	}
+}
+
 func TestInstalledPackageNativeGeometryRejectsMissingOrRelativeHostRoot(t *testing.T) {
 	packageRoot := "/nix/store/example-devkit-devctl"
 	ctx := &cmdregistry.Context{

@@ -36,6 +36,7 @@ import (
 	runner "devkit/cli/devctl/internal/runner"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativelaunch "devkit/cli/devctl/internal/runtime/launch"
+	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 	"devkit/cli/devctl/internal/tmuxutil"
 	wtx "devkit/cli/devctl/internal/worktrees"
@@ -1155,7 +1156,11 @@ exit 0`
 			}
 		}
 		repo := readDefaultRepo(project, paths)
-		seedNativeSSH(dryRun, paths, project, repo, mustAtoi(idx), keyfile)
+		plan, err := nativecmd.BuildAgentPlan(ctx, repo, mustAtoi(idx))
+		if err != nil {
+			die(err.Error())
+		}
+		seedNativeSSH(dryRun, plan, keyfile)
 	case "ssh-test":
 		mustProject(project)
 		if !isNativeRuntime {
@@ -1944,12 +1949,12 @@ func seedNativeCodexAuth(dry bool, paths devkitpaths.Paths, project, repo string
 	}
 }
 
-func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, index int, keyfile string) {
-	resolved, err := nativeResolvedAgentPaths(paths, project, repo, index)
-	if err != nil {
-		die(err.Error())
+func seedNativeSSH(dry bool, plan nativeplan.Plan, keyfile string) {
+	hostHome := strings.TrimSpace(plan.Agent.HostHome)
+	if hostHome == "" {
+		die("native SSH setup requires an agent host home")
 	}
-	sshDir := filepath.Join(resolved.HostHome, ".ssh")
+	sshDir := filepath.Join(hostHome, ".ssh")
 	if dry {
 		fmt.Fprintf(os.Stderr, "+ seed ssh %s\n", sshDir)
 		if strings.TrimSpace(keyfile) != "" {
@@ -1958,7 +1963,7 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 		return
 	}
 	if strings.TrimSpace(keyfile) == "" {
-		if err := nativelaunch.SeedSSH(resolved.HostHome, true); err != nil {
+		if err := nativelaunch.SeedSSH(hostHome, true); err != nil {
 			die(err.Error())
 		}
 		authority, err := sshauthority.Package()
@@ -1968,7 +1973,7 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 		if err := authority.InstallKnownHosts(filepath.Join(sshDir, "known_hosts")); err != nil {
 			die(err.Error())
 		}
-		if err := writeNativeSSHConfig(resolved.HostHome, resolved.HostHome, nil); err != nil {
+		if err := nativelaunch.WriteGitSSHConfigForPlan(plan, nil); err != nil {
 			die(err.Error())
 		}
 		return
@@ -1992,7 +1997,7 @@ func seedNativeSSH(dry bool, paths devkitpaths.Paths, project, repo string, inde
 	if err := authority.InstallKnownHosts(filepath.Join(sshDir, "known_hosts")); err != nil {
 		die(err.Error())
 	}
-	if err := writeNativeSSHConfig(resolved.HostHome, resolved.HostHome, []string{keyName}); err != nil {
+	if err := nativelaunch.WriteGitSSHConfigForPlan(plan, []string{keyName}); err != nil {
 		die(err.Error())
 	}
 }
@@ -2004,35 +2009,6 @@ func copyNativeSSHFile(src, dest string, mode os.FileMode) error {
 	}
 	if err := os.WriteFile(dest, data, mode); err != nil {
 		return fmt.Errorf("write %s: %w", dest, err)
-	}
-	return nil
-}
-
-func writeNativeSSHConfig(hostHome, configHome string, identityNames []string) error {
-	hostHome = strings.TrimSpace(hostHome)
-	if hostHome == "" {
-		return nil
-	}
-	configHome = strings.TrimSpace(configHome)
-	if configHome == "" {
-		configHome = hostHome
-	}
-	sshDir := filepath.Join(hostHome, ".ssh")
-	if len(identityNames) == 0 {
-		for _, name := range []string{"id_ed25519", "id_rsa"} {
-			if _, err := os.Stat(filepath.Join(sshDir, name)); err == nil {
-				identityNames = append(identityNames, name)
-			}
-		}
-	}
-	if len(identityNames) == 0 {
-		return nil
-	}
-	if err := os.MkdirAll(sshDir, 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", sshDir, err)
-	}
-	if err := nativelaunch.WriteGitSSHConfig(hostHome, configHome, identityNames); err != nil {
-		return err
 	}
 	return nil
 }

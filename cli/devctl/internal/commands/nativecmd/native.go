@@ -1101,6 +1101,24 @@ func ensureNativeLifecycleProject(ctx *cmdregistry.Context) error {
 	return nil
 }
 
+// BuildAgentPlan resolves the same source-owned native runtime plan used by
+// lifecycle commands for one agent slot. Callers that materialize runtime
+// configuration must retain this plan instead of reconstructing path-only
+// approximations that lose isolation and proxy authority.
+func BuildAgentPlan(ctx *cmdregistry.Context, repo string, index int) (nativeplan.Plan, error) {
+	parsed := lifecycleArgs{repo: repo}
+	cfg, resolvedRepo, _, baseBranch, branchPrefix, err := lifecycleDefaults(ctx, parsed)
+	if err != nil {
+		return nativeplan.Plan{}, err
+	}
+	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
+	opts := lifecyclePlanOptions(ctx, cfg, parsed, resolvedRepo, brokerCfg)
+	opts.Index = index
+	opts.BaseBranch = baseBranch
+	opts.BranchPrefix = branchPrefix
+	return nativeplan.BuildDevAll(opts)
+}
+
 func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.OverlayConfig, string, int, string, string, error) {
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 	if err != nil {
