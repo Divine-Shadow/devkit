@@ -237,13 +237,25 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 	worktreeRoot := filepath.Join(devRoot, "agent-worktrees")
 	workspaceRoot := filepath.Join(worktreeRoot, "agent4")
 	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
-	for _, dir := range []string{devkitRoot, hostWorktree} {
+	commonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "agent4")
+	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	relativeGitDir, err := filepath.Rel(hostWorktree, worktreeGitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+relativeGitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	p, err := Build(BuildOptions{
+	opts := BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot},
 		Project:          "dev-all",
 		Index:            4,
@@ -252,7 +264,8 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 		WorktreeRoot:     worktreeRoot,
 		IsolationProfile: IsolationProfileWorkspaceEgress,
 		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
-	})
+	}
+	p, err := Build(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,6 +281,24 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 	if !hasExactBind(p.Binds, Bind{Source: workspaceRoot, Target: "/workspaces/dev", Mode: "rw", Required: true}) ||
 		!hasExactBind(p.Binds, Bind{Source: hostWorktree, Target: "/workspace", Mode: "rw", Required: true}) {
 		t.Fatalf("missing exact lane/workspace binds: %#v", p.Binds)
+	}
+	if !hasExactBind(p.Binds, Bind{
+		Source: commonGitDir, Target: "/workspaces/.devkit/git/ouroboros-ide.git", Mode: "rw", Required: true,
+	}) {
+		t.Fatalf("missing exact package-owned common Git metadata bind: %#v", p.Binds)
+	}
+	if err := os.RemoveAll(commonGitDir); err != nil {
+		t.Fatal(err)
+	}
+	externalCommonGitDir := filepath.Join(t.TempDir(), "ouroboros-ide.git")
+	if err := os.MkdirAll(externalCommonGitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalCommonGitDir, commonGitDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(opts); err == nil || !strings.Contains(err.Error(), "Git metadata outside the lane root") {
+		t.Fatalf("symlinked package Git metadata was accepted: %v", err)
 	}
 
 	otherLane := filepath.Join(worktreeRoot, "agent3")

@@ -362,7 +362,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			return Plan{}, err
 		}
 		if workspaceRoot != "" {
-			if err := validateIsolatedWorkspaceRootBinds(binds, workspaceRoot, paths); err != nil {
+			if err := validateIsolatedWorkspaceRootBinds(binds, workspaceRoot, project, repo, paths); err != nil {
 				return Plan{}, err
 			}
 		}
@@ -611,10 +611,14 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 		)
 	}
 	for _, bind := range gitMetadataBinds(paths.HostWorktree, paths.SandboxWorktree) {
-		if workspaceRoot != "" && !pathWithinRoot(workspaceRoot, bind.Source) {
+		packageOwnedProductMetadata := isPackageOwnedProductGitMetadataBind(project, repo, paths, bind)
+		if workspaceRoot != "" && !pathWithinRoot(workspaceRoot, bind.Source) && !packageOwnedProductMetadata {
 			return nil, fmt.Errorf("Management workspace root rejects Git metadata outside the lane root: %s", bind.Source)
 		}
 		if workspaceRoot != "" {
+			if packageOwnedProductMetadata {
+				add(bind.Source, bind.Target, bind.Mode, bind.Required)
+			}
 			continue
 		}
 		add(bind.Source, bind.Target, bind.Mode, bind.Required)
@@ -741,7 +745,7 @@ func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths
 	return workspaceRoot, nil
 }
 
-func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot string, paths agent.Paths) error {
+func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot, project, repo string, paths agent.Paths) error {
 	rootBinds := 0
 	for _, bind := range binds {
 		cleanTarget := filepath.Clean(bind.Target)
@@ -755,7 +759,7 @@ func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot string, path
 			return fmt.Errorf("Management workspace projection rejects wholesale parent bind %s -> %s", bind.Source, bind.Target)
 		}
 		if bind.Mode == "rw" && pathWithinRoot("/workspaces/dev", cleanTarget) && cleanTarget != "/workspaces/dev" &&
-			!pathWithinRoot(workspaceRoot, bind.Source) {
+			!pathWithinRoot(workspaceRoot, bind.Source) && !isPackageOwnedProductGitMetadataBind(project, repo, paths, bind) {
 			return fmt.Errorf("Management workspace projection rejects writable cross-lane bind %s -> %s", bind.Source, bind.Target)
 		}
 	}
@@ -763,6 +767,19 @@ func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot string, path
 		return fmt.Errorf("Management workspace projection requires exactly one lane-root bind at /workspaces/dev")
 	}
 	return nil
+}
+
+func isPackageOwnedProductGitMetadataBind(project, repo string, paths agent.Paths, bind Bind) bool {
+	if project != "dev-all" || repo != "ouroboros-ide" || bind.Mode != "rw" || !bind.Required {
+		return false
+	}
+	expectedSource := filepath.Join(filepath.Clean(paths.HostWorktreeRoot), ".devkit", "git", repo+".git")
+	expectedTarget := filepath.Join("/workspaces", ".devkit", "git", repo+".git")
+	if filepath.Clean(bind.Source) != expectedSource || filepath.Clean(bind.Target) != expectedTarget {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(expectedSource)
+	return err == nil && filepath.Clean(resolved) == expectedSource
 }
 
 func isWindowsFilesystemPath(value string) bool {
