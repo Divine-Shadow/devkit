@@ -499,6 +499,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			return Plan{}, err
 		}
 		p.GUITargetConfig = &projection
+		p.Env[GUITargetIDEnvironment] = projection.TargetID
 	}
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})

@@ -17,6 +17,11 @@ import (
 const (
 	guiCodexConfigProjectionSchema    = "devkit/gui-codex-config-projections/v1"
 	guiCodexConfigProjectionStoreRoot = "/nix/store"
+	// GUITargetIDEnvironment carries the exact inventory-selected GUI target
+	// identity into the sandbox. Logical cwd, hostname, and agent index are not
+	// sufficient selectors because independent namespaces intentionally reuse
+	// those values.
+	GUITargetIDEnvironment = "DEVKIT_GUI_TARGET_ID"
 )
 
 // guiCodexConfigProjectionManifestPath is package-owned authority. It is a

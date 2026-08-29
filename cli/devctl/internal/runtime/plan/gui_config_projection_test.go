@@ -27,6 +27,7 @@ func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
 		Index:   2,
 	}
 	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", "/tmp/hostile-legacy-config.toml")
+	t.Setenv(GUITargetIDEnvironment, "hostile-ambient-target")
 	base, err := Build(opts)
 	if err != nil {
 		t.Fatalf("Build ordinary plan: %v", err)
@@ -36,6 +37,9 @@ func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
 	}
 	if _, ok := base.Env["DEVKIT_CODEX_CONFIG_SOURCE"]; ok {
 		t.Fatalf("ordinary plan propagated hostile legacy config authority: %#v", base.Env)
+	}
+	if _, ok := base.Env[GUITargetIDEnvironment]; ok {
+		t.Fatalf("ordinary plan propagated ambient GUI target identity: %#v", base.Env)
 	}
 	if got, want := guiTargetGeometryForPlan(base).WorkspaceRoot, filepath.Dir(base.Agent.HostWorktree); got != want {
 		t.Fatalf("computed GUI workspace root = %q, want %q", got, want)
@@ -77,6 +81,9 @@ func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
 	}
 	if p.GUITargetConfig == nil || *p.GUITargetConfig != want {
 		t.Fatalf("selected GUI config = %#v, want %#v", p.GUITargetConfig, want)
+	}
+	if got := p.Env[GUITargetIDEnvironment]; got != record.TargetID {
+		t.Fatalf("%s = %q, want inventory-selected %q", GUITargetIDEnvironment, got, record.TargetID)
 	}
 	manifest, err := BuildManifest(opts, 4)
 	if err != nil {
