@@ -884,13 +884,29 @@ func nativeSlotManifestShrinkCommonDir(manifest nativeagent.Manifest) (string, e
 	return filepath.Join(root, ".devkit", "git", repo+".git"), nil
 }
 
-func requireNativeSlotManifestShrinkGitQuiescent(manifest nativeagent.Manifest, spec nativeagent.Spec) error {
+func requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+	allowedQuarantines map[string]bool,
+) error {
 	commonDir, err := nativeSlotManifestShrinkCommonDir(manifest)
 	if err != nil {
 		return err
 	}
+	worktree := filepath.Clean(strings.TrimSpace(spec.HostWorktree))
+	worktreeInfo, worktreeErr := os.Lstat(worktree)
+	worktreeExists := worktreeErr == nil
+	if worktreeErr != nil && !errors.Is(worktreeErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect surplus native slot worktree %s: %w", worktree, worktreeErr)
+	}
+	if worktreeExists && (!worktreeInfo.IsDir() || worktreeInfo.Mode()&os.ModeSymlink != 0) {
+		return fmt.Errorf("surplus native slot worktree must be a real directory: %s", worktree)
+	}
 	info, err := os.Lstat(commonDir)
 	if errors.Is(err, os.ErrNotExist) {
+		if worktreeExists {
+			return fmt.Errorf("surplus native slot %d has a worktree without its package-owned common Git repository", spec.ID.Index)
+		}
 		return nil
 	}
 	if err != nil {
@@ -900,14 +916,33 @@ func requireNativeSlotManifestShrinkGitQuiescent(manifest nativeagent.Manifest, 
 		return fmt.Errorf("surplus native slot common Git repository must be a real directory: %s", commonDir)
 	}
 
-	expectedGitFile := filepath.Join(filepath.Clean(spec.HostWorktree), ".git")
+	for _, lockPath := range []string{
+		filepath.Join(commonDir, "index.lock"),
+		filepath.Join(commonDir, "packed-refs.lock"),
+		filepath.Join(commonDir, "shallow.lock"),
+	} {
+		if _, err := os.Lstat(lockPath); err == nil {
+			return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, lockPath)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect surplus native slot Git transaction lock %s: %w", lockPath, err)
+		}
+	}
+
+	expectedGitFile := filepath.Join(worktree, ".git")
 	metadataRoot := filepath.Join(commonDir, "worktrees")
 	entries, err := os.ReadDir(metadataRoot)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("enumerate surplus native slot Git metadata %s: %w", metadataRoot, err)
 	}
+	matchingMetadata := ""
 	for _, entry := range entries {
 		metadata := filepath.Join(metadataRoot, entry.Name())
+		if allowedQuarantines[metadata] {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), fmt.Sprintf(".devkit-reset-%s-agent%d-", manifest.Project, spec.ID.Index)) {
+			return fmt.Errorf("surplus native slot %d has Git transaction quarantine residue %s", spec.ID.Index, metadata)
+		}
 		metadataInfo, statErr := os.Lstat(metadata)
 		if statErr != nil {
 			return fmt.Errorf("inspect surplus native slot Git metadata %s: %w", metadata, statErr)
@@ -924,7 +959,24 @@ func requireNativeSlotManifestShrinkGitQuiescent(manifest nativeagent.Manifest, 
 			candidate = filepath.Clean(filepath.Join(metadata, candidate))
 		}
 		if candidate == expectedGitFile {
-			return fmt.Errorf("surplus native slot %d still has registered Git worktree metadata %s", spec.ID.Index, metadata)
+			if matchingMetadata != "" {
+				return fmt.Errorf("surplus native slot %d has multiple registered Git worktree metadata entries", spec.ID.Index)
+			}
+			matchingMetadata = metadata
+		}
+	}
+	if worktreeExists && matchingMetadata == "" {
+		return fmt.Errorf("surplus native slot %d worktree is not registered in the package-owned common Git repository", spec.ID.Index)
+	}
+	if !worktreeExists && matchingMetadata != "" {
+		return fmt.Errorf("surplus native slot %d has registered Git worktree metadata without its worktree: %s", spec.ID.Index, matchingMetadata)
+	}
+	if matchingMetadata != "" {
+		metadataLock := filepath.Join(matchingMetadata, "index.lock")
+		if _, err := os.Lstat(metadataLock); err == nil {
+			return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, metadataLock)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect surplus native slot Git transaction lock %s: %w", metadataLock, err)
 		}
 	}
 
@@ -940,6 +992,9 @@ func requireNativeSlotManifestShrinkGitQuiescent(manifest nativeagent.Manifest, 
 	git := gitauthority.Executable()
 	_, showRef := execx.Capture(context.Background(), git, "--git-dir", commonDir, "show-ref", "--verify", "--quiet", branchRef)
 	if showRef.Code == 1 {
+		if worktreeExists {
+			return fmt.Errorf("surplus native slot %d worktree has no exact local branch %s", spec.ID.Index, branchRef)
+		}
 		return nil
 	}
 	if showRef.Code != 0 {
@@ -973,7 +1028,40 @@ func requireNativeSlotManifestShrinkGitQuiescent(manifest nativeagent.Manifest, 
 			baseRef,
 		)
 	}
+	if worktreeExists {
+		gitFile, err := os.Lstat(expectedGitFile)
+		if err != nil {
+			return fmt.Errorf("inspect surplus native slot %d Git link %s: %w", spec.ID.Index, expectedGitFile, err)
+		}
+		if !gitFile.Mode().IsRegular() || gitFile.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("surplus native slot %d Git link must be a regular non-symlink file", spec.ID.Index)
+		}
+		head, headResult := execx.Capture(context.Background(), git, "-C", worktree, "symbolic-ref", "--quiet", "HEAD")
+		if headResult.Code != 0 || strings.TrimSpace(head) != branchRef {
+			return fmt.Errorf(
+				"surplus native slot %d must be checked out on exact branch %s",
+				spec.ID.Index,
+				branchRef,
+			)
+		}
+		status, statusResult := execx.Capture(
+			context.Background(),
+			git,
+			"-C", worktree,
+			"status", "--porcelain=v1", "--untracked-files=all",
+		)
+		if statusResult.Code != 0 {
+			return fmt.Errorf("inspect surplus native slot %d Git status: git exit %d", spec.ID.Index, statusResult.Code)
+		}
+		if strings.TrimSpace(status) != "" {
+			return fmt.Errorf("surplus native slot %d worktree is dirty", spec.ID.Index)
+		}
+	}
 	return nil
+}
+
+func requireNativeSlotManifestShrinkGitQuiescent(manifest nativeagent.Manifest, spec nativeagent.Spec) error {
+	return requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(manifest, spec, nil)
 }
 
 func requireNativeSlotManifestShrinkAbsentWithPlanner(
@@ -1008,11 +1096,15 @@ func requireNativeSlotManifestShrinkAbsentWithPlanner(
 	}
 
 	socketPath := filepath.Join(filepath.Clean(spec.HostHome), ".codex", fmt.Sprintf("a%d-app.sock", spec.ID.Index))
+	if _, err := os.Lstat(socketPath); err == nil {
+		return fmt.Errorf("surplus native slot %d still has app-server socket residue at %s", spec.ID.Index, socketPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect surplus native slot %d app-server socket %s: %w", spec.ID.Index, socketPath, err)
+	}
 	paths := []struct {
 		name string
 		path string
 	}{
-		{name: "app-server socket", path: socketPath},
 		{name: "worktree/Git custody", path: spec.HostWorktree},
 		{name: "home", path: spec.HostHome},
 		{name: "state", path: spec.StateRoot},
@@ -1022,8 +1114,10 @@ func requireNativeSlotManifestShrinkAbsentWithPlanner(
 		if path == "" || !filepath.IsAbs(path) {
 			return fmt.Errorf("surplus native slot %d %s path must be absolute", spec.ID.Index, candidate.name)
 		}
-		if _, err := os.Lstat(path); err == nil {
-			return fmt.Errorf("surplus native slot %d still has %s residue at %s", spec.ID.Index, candidate.name, path)
+		if info, err := os.Lstat(path); err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("surplus native slot %d %s must be a real directory: %s", spec.ID.Index, candidate.name, path)
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("inspect surplus native slot %d %s %s: %w", spec.ID.Index, candidate.name, path, err)
 		}
@@ -1052,15 +1146,23 @@ func requireNativeSlotManifestShrinkAbsentWithPlanner(
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("enumerate surplus native slot %d parent %s: %w", spec.ID.Index, agentRoot, err)
 	}
-	if len(entries) != 0 {
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
+	allowed := map[string]bool{filepath.Base(filepath.Clean(spec.HostWorktree)): true}
+	hostHome := filepath.Clean(spec.HostHome)
+	if filepath.Dir(hostHome) == agentRoot {
+		allowed[filepath.Base(hostHome)] = true
+	}
+	var opaque []string
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			opaque = append(opaque, entry.Name())
 		}
+	}
+	if len(opaque) != 0 {
+		sort.Strings(opaque)
 		return fmt.Errorf(
 			"surplus native slot %d parent contains transaction, lock, or opaque residue: %s",
 			spec.ID.Index,
-			strings.Join(names, ","),
+			strings.Join(opaque, ","),
 		)
 	}
 	if err := requireNativeSlotManifestShrinkGitQuiescent(manifest, spec); err != nil {
@@ -1077,9 +1179,29 @@ func reconcileNativeSlotManifestShrink(
 	path string,
 	expected nativeagent.Manifest,
 	opts nativeplan.BuildOptions,
+	resetOptions wtx.NativeSlotResetOptions,
 	dryRun bool,
 ) (bool, error) {
 	existed, actual, err := readNativeSlotManifest(path)
+	if err != nil || !existed {
+		return existed, err
+	}
+	recovered, err := recoverNativeManifestShrinkTransaction(path, actual, expected, opts, resetOptions, dryRun)
+	if err != nil {
+		return false, err
+	}
+	if recovered {
+		fmt.Fprintf(
+			os.Stderr,
+			"native_manifest_shrink status=recovered expected_count=%d manifest=%s\n",
+			expected.Count,
+			path,
+		)
+		return true, nil
+	}
+	// Recovery may have rolled back a prepared pre-CAS transaction. Re-read the
+	// manifest rather than relying on the value observed before recovery.
+	existed, actual, err = readNativeSlotManifest(path)
 	if err != nil || !existed {
 		return existed, err
 	}
@@ -1094,9 +1216,23 @@ func reconcileNativeSlotManifestShrink(
 	if err != nil {
 		return false, fmt.Errorf("shared native manifest %s does not match the source-derived all-slot geometry: %w", path, err)
 	}
+	// Validate the entire suffix before any history, quarantine, or manifest
+	// effect. A late dirty/ahead/active lane therefore prevents every retirement.
 	for _, spec := range surplus {
 		if err := requireNativeSlotManifestShrinkAbsent(actual, spec); err != nil {
 			return false, fmt.Errorf("refuse shared native manifest shrink: %w", err)
+		}
+	}
+	plans, err := planNativeManifestShrinkSurplus(actual, surplus, resetOptions, dryRun)
+	if err != nil {
+		return false, err
+	}
+	if err := captureNativeManifestShrinkHistory(actual, surplus, dryRun); err != nil {
+		return false, err
+	}
+	for _, spec := range surplus {
+		if err := requireNativeSlotManifestShrinkAbsent(actual, spec); err != nil {
+			return false, fmt.Errorf("refuse shared native manifest shrink recheck: %w", err)
 		}
 	}
 	stableExists, stableActual, err := readNativeSlotManifest(path)
@@ -1106,38 +1242,104 @@ func reconcileNativeSlotManifestShrink(
 	if !stableExists || !reflect.DeepEqual(stableActual, actual) {
 		return false, fmt.Errorf("shared native manifest changed during shrink preflight")
 	}
-	for _, spec := range surplus {
-		if err := requireNativeSlotManifestShrinkAbsent(actual, spec); err != nil {
-			return false, fmt.Errorf("refuse shared native manifest shrink recheck: %w", err)
+	if dryRun {
+		for _, plan := range plans {
+			transaction, err := plan.Stage()
+			if err != nil {
+				return false, err
+			}
+			if err := transaction.Commit(); err != nil {
+				return false, err
+			}
 		}
-	}
-	if err := nativeagent.WriteManifest(path, expected, dryRun); err != nil {
-		return false, fmt.Errorf("install source-derived shrunken native manifest: %w", err)
-	}
-	if !dryRun {
-		verified, installed, err := readNativeSlotManifest(path)
-		if err != nil {
+		if err := compareAndSwapNativeSlotManifest(path, actual, expected, true); err != nil {
 			return false, err
 		}
-		if !verified || !reflect.DeepEqual(installed, expected) {
-			return false, fmt.Errorf("source-derived shrunken native manifest did not verify after atomic installation")
+		fmt.Fprintf(
+			os.Stderr,
+			"native_manifest_shrink status=planned prior_count=%d expected_count=%d retired_indices=%s manifest=%s\n",
+			actual.Count,
+			expected.Count,
+			nativeManifestShrinkIndices(surplus),
+			path,
+		)
+		return true, nil
+	}
+
+	transactions := make([]*wtx.NativeResetTransaction, 0, len(plans))
+	for index, plan := range plans {
+		transaction, err := plan.PrepareTransaction()
+		if err != nil {
+			return false, fmt.Errorf("prepare surplus native slot %d retirement: %w", surplus[index].ID.Index, err)
+		}
+		transactions = append(transactions, transaction)
+	}
+	journal := nativeManifestShrinkJournal(path, actual, expected, surplus)
+	for _, transaction := range transactions {
+		journal.SlotTransactions = append(journal.SlotTransactions, transaction.State())
+	}
+	transactionPath := nativeManifestShrinkTransactionPath(path)
+	rollbackPreCAS := func(cause error) error {
+		rollbackErr := rollbackNativeManifestShrinkTransactions(transactions)
+		if rollbackErr == nil {
+			if err := removeNativeManifestShrinkTransaction(transactionPath); err != nil {
+				rollbackErr = err
+			}
+		}
+		if rollbackErr != nil {
+			return errors.Join(
+				cause,
+				fmt.Errorf("pre-CAS rollback incomplete; typed recovery retained at %s: %w", transactionPath, rollbackErr),
+			)
+		}
+		return cause
+	}
+	if err := writeNativeManifestShrinkTransaction(transactionPath, journal); err != nil {
+		return false, rollbackPreCAS(fmt.Errorf("persist prepared native manifest shrink transaction: %w", err))
+	}
+	for index, transaction := range transactions {
+		if err := transaction.StagePrepared(); err != nil {
+			return false, rollbackPreCAS(fmt.Errorf(
+				"stage prepared surplus native slot %d retirement: %w",
+				surplus[index].ID.Index,
+				err,
+			))
 		}
 	}
-	indices := make([]string, 0, len(surplus))
+	stagedState := mergeNativeManifestShrinkTransactionStates(journal.SlotTransactions)
 	for _, spec := range surplus {
-		indices = append(indices, strconv.Itoa(spec.ID.Index))
+		if err := requireNativeSlotManifestShrinkStaged(actual, spec, stagedState); err != nil {
+			return false, rollbackPreCAS(fmt.Errorf("verify staged surplus native slot %d retirement: %w", spec.ID.Index, err))
+		}
 	}
-	status := "complete"
-	if dryRun {
-		status = "planned"
+	if err := compareAndSwapNativeSlotManifest(path, actual, expected, false); err != nil {
+		return false, rollbackPreCAS(err)
+	}
+	journal.Status = "committed"
+	if err := writeNativeManifestShrinkTransaction(transactionPath, journal); err != nil {
+		return false, fmt.Errorf(
+			"manifest CAS committed but typed cleanup receipt could not advance; recover from %s: %w",
+			transactionPath,
+			err,
+		)
+	}
+	if err := commitNativeManifestShrinkTransactions(transactions); err != nil {
+		return false, fmt.Errorf("post-CAS surplus native slot cleanup failed; typed recovery retained at %s: %w", transactionPath, err)
+	}
+	for _, spec := range surplus {
+		if err := requireNativeSlotManifestShrinkStaged(actual, spec, wtx.NativeResetTransactionState{}); err != nil {
+			return false, fmt.Errorf("strict surplus native slot %d absence postcondition failed; typed recovery retained at %s: %w", spec.ID.Index, transactionPath, err)
+		}
+	}
+	if err := removeNativeManifestShrinkTransaction(transactionPath); err != nil {
+		return false, err
 	}
 	fmt.Fprintf(
 		os.Stderr,
-		"native_manifest_shrink status=%s prior_count=%d expected_count=%d retired_absent_indices=%s manifest=%s\n",
-		status,
+		"native_manifest_shrink status=complete prior_count=%d expected_count=%d retired_indices=%s manifest=%s\n",
 		actual.Count,
 		expected.Count,
-		strings.Join(indices, ","),
+		nativeManifestShrinkIndices(surplus),
 		path,
 	)
 	return true, nil
@@ -1268,6 +1470,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		manifestPath,
 		expectedManifest,
 		opts,
+		resetOptions,
 		ctx.DryRun,
 	)
 	if err != nil {

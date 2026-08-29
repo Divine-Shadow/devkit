@@ -14,6 +14,7 @@ import (
 	"devkit/cli/devctl/internal/devkitpaths"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	wtx "devkit/cli/devctl/internal/worktrees"
 )
 
 type nativeSlotManifestShrinkFixture struct {
@@ -21,10 +22,39 @@ type nativeSlotManifestShrinkFixture struct {
 	actual   nativeagent.Manifest
 	expected nativeagent.Manifest
 	path     string
+	origin   string
+}
+
+func nativeSlotManifestShrinkResetOptions(fixture nativeSlotManifestShrinkFixture) wtx.NativeSlotResetOptions {
+	origin := fixture.origin
+	if origin == "" {
+		origin = "file:///nonexistent/source-derived-origin.git"
+	}
+	return wtx.NativeSlotResetOptions{
+		Project:      fixture.actual.Project,
+		Repo:         fixture.actual.Repo,
+		Origin:       origin,
+		BranchPrefix: fixture.actual.BranchPrefix,
+		Count:        fixture.actual.Count,
+		WorktreeRoot: fixture.actual.HostWorktreeRoot,
+		StateRoot:    fixture.actual.HostStateRoot,
+	}
 }
 
 func newNativeSlotManifestShrinkFixture(t *testing.T, actualCount, expectedCount int) nativeSlotManifestShrinkFixture {
 	t.Helper()
+	previousCapture := captureNativeManifestShrinkSlotHistory
+	captureNativeManifestShrinkSlotHistory = func(
+		_ string,
+		_ string,
+		_ nativeSlotProcessIdentity,
+		_ string,
+		_ string,
+		_ bool,
+	) error {
+		return nil
+	}
+	t.Cleanup(func() { captureNativeManifestShrinkSlotHistory = previousCapture })
 	root, err := os.MkdirTemp("/tmp", "devkit-shrink-")
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +201,7 @@ func TestNativeSlotManifestShrinkTransitionAcceptsOnlyAbsentCanonicalSuffix(t *t
 		retainedSentinels[sentinel] = content
 	}
 
-	existed, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, false)
+	existed, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +262,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGrowthAndGeometryDrift(t *test
 	})
 }
 
-func TestNativeSlotManifestShrinkTransitionRejectsEverySurplusFilesystemResidue(t *testing.T) {
+func TestNativeSlotManifestShrinkTransitionRejectsUnsafeSurplusFilesystemResidue(t *testing.T) {
 	tests := []struct {
 		name   string
 		create func(t *testing.T, fixture nativeSlotManifestShrinkFixture, spec nativeagent.Spec)
@@ -249,27 +279,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsEverySurplusFilesystemResidue(
 					t.Fatal(err)
 				}
 			},
-			want: "worktree/Git custody",
-		},
-		{
-			name: "home",
-			create: func(t *testing.T, _ nativeSlotManifestShrinkFixture, spec nativeagent.Spec) {
-				t.Helper()
-				if err := os.MkdirAll(spec.HostHome, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "home residue",
-		},
-		{
-			name: "state",
-			create: func(t *testing.T, _ nativeSlotManifestShrinkFixture, spec nativeagent.Spec) {
-				t.Helper()
-				if err := os.MkdirAll(spec.StateRoot, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "state residue",
+			want: "without its package-owned common Git repository",
 		},
 		{
 			name: "transaction-lock",
@@ -301,7 +311,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsEverySurplusFilesystemResidue(
 			fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
 			spec := fixture.actual.Agents[3]
 			test.create(t, fixture, spec)
-			if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, false); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("residue rejection = %v, want %q", err, test.want)
 			}
 			if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
@@ -324,7 +334,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsSocketAndProcessRaces(t *testi
 			t.Fatal(err)
 		}
 		defer listener.Close()
-		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, false); err == nil || !strings.Contains(err.Error(), "app-server socket") {
+		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false); err == nil || !strings.Contains(err.Error(), "app-server socket") {
 			t.Fatalf("socket rejection = %v", err)
 		}
 	})
@@ -384,7 +394,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGitMetadataLockAndAheadCommit(
 		if err := os.WriteFile(filepath.Join(metadata, "gitdir"), []byte(filepath.Join(spec.HostWorktree, ".git")+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, false); err == nil || !strings.Contains(err.Error(), "registered Git worktree metadata") {
+		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false); err == nil || !strings.Contains(err.Error(), "registered Git worktree metadata without its worktree") {
 			t.Fatalf("Git metadata rejection = %v", err)
 		}
 	})
@@ -402,7 +412,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGitMetadataLockAndAheadCommit(
 		if err := os.WriteFile(lockPath, []byte("held\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, false); err == nil || !strings.Contains(err.Error(), "Git transaction lock residue") {
+		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false); err == nil || !strings.Contains(err.Error(), "Git transaction lock residue") {
 			t.Fatalf("Git lock rejection = %v", err)
 		}
 	})
@@ -443,7 +453,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGitMetadataLockAndAheadCommit(
 		runNativeSlotManifestShrinkGit(t, git, "-C", seed, "commit", "-m", "unique lane4")
 		runNativeSlotManifestShrinkGit(t, git, "-C", seed, "push", "origin", "HEAD:refs/heads/agent4")
 
-		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, false); err == nil || !strings.Contains(err.Error(), "not contained in refs/remotes/origin/main") {
+		if _, err := reconcileNativeSlotManifestShrink(fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false); err == nil || !strings.Contains(err.Error(), "not contained in refs/remotes/origin/main") {
 			t.Fatalf("unique commit rejection = %v", err)
 		}
 	})

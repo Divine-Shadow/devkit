@@ -25,9 +25,16 @@ can reconstruct the selected slot without touching retained or active lanes.
   noncanonical path, foreign owner, wrong hash, wrong geometry, or pathname
   replacement fails before other target-home mutation.
 - A stale native manifest may transition only from canonical `1..M` to
-  canonical `1..N`, `N < M`, with the retained prefix exactly equal and every
-  surplus lane proven twice to have no processes, sockets, worktree, home,
-  state, locks, Git metadata, branch custody, or unpublished commits.
+  canonical `1..N`, `N < M`, with the retained prefix exactly equal. Every
+  present surplus lane must be idle, clean, on its exact source-derived branch,
+  registered only in the package-owned common Git repository, and have no
+  commits outside `origin/<base>`. Its cold GUI history is captured before any
+  custody path is moved.
+- Surplus retirement is a journal-before-effects transaction. The exact
+  source-to-quarantine mapping is durably recorded before the first rename;
+  pre-CAS failure rolls every lane back, post-CAS failure retains typed cleanup
+  state, and retry may resume only mappings re-derived from the current opaque
+  reset plan. Journal JSON never grants new filesystem authority.
 - Unknown JSON fields, trailing JSON, symlinked/nonregular manifests, growth,
   non-suffix changes, and concurrent residue fail closed.
 - No active business lane is stopped or rewritten by this source writer.
@@ -54,6 +61,21 @@ can reconstruct the selected slot without touching retained or active lanes.
   `7fa979e9828a5286fd68e16a052143fcae35ab62` to
   `beca5b996a62b34b610de792ac204b4eabc963ca`, then fetch and verify the remote
   ref equals the candidate.
+- [x] Deploy the descendant workspace-root profile contract at published
+  Devkit `14e83243e145d69e01269589cce5011f909b6ae4`; typed reconstruction then
+  exposed one obsolete, clean slot suffix that the original absence-only
+  transition could classify but not retire.
+- [x] Implement custody-aware surplus retirement by reusing the exact
+  selected-slot reset planner, preserving cold history outside the retired
+  lane, and making manifest replacement a strict locked compare-and-swap.
+- [x] Reject the first green implementation after independent review found
+  renames preceding the durable journal and an over-broad recovery-source
+  allowance. The corrected transaction prepares and persists exact mappings
+  before effects and revalidates every recovery source, target, mount, and Git
+  metadata identity before mutation.
+- [x] Pass focused crash/adversarial tests, full `go test ./... -count=1`,
+  `nix flake check --no-build`, the packaged `devctl-go-tests` check, and the
+  runtime bundle/tools/shell checks with at most two Nix jobs and two cores.
 - [ ] Pin and deploy the published Devkit source through WSL-Nix, then prove a
   real target's effective config origin and isolation.
 
@@ -71,9 +93,14 @@ identity and content.
 
 `native_slot_reset.go` owns the stale-manifest transition under the existing
 reset lock. It strictly decodes the current manifest from a regular no-follow
-handle, proves the only difference is a surplus suffix, runs the full absence
-proof twice, and atomically installs the expected manifest before continuing
-the selected-slot reset.
+handle and proves the only geometry difference is a canonical surplus suffix.
+For a present surplus lane it proves idle process/socket state, exact Git
+registration and branch, a clean index/worktree, and zero commits outside the
+source-derived remote base. It captures cold history into global state-root
+custody, prepares exact reset mappings through `worktrees.NativeResetPlan`,
+persists the typed shrink journal, stages all lanes, compare-and-swaps the
+manifest, and only then commits quarantine cleanup. The manifest package uses
+one no-follow flock for every writer and fsyncs the parent after installation.
 
 ## Verification
 
@@ -105,6 +132,16 @@ profile bytes/hash/owner/mode, and no visibility or mutation of another lane.
   from `8fdb3ce54143ed0b291ba212b12acefa10be3fe8` to
   `7fa979e9828a5286fd68e16a052143fcae35ab62`. The candidate then rebased cleanly
   over the added isolated Product Codex-home projection and reran every gate.
+- A real Drtalos reconstruction demonstrated that an absence-only shrink is
+  not a capacity-decrease operation: slot 3 was idle, clean, fully contained in
+  the remote base, and still correctly rejected because its worktree, home,
+  state, and linked-worktree metadata remained present.
+- Normal-path tests initially passed a two-phase retirement that was not
+  reboot-safe. A crash after `Stage` but before journal installation could
+  strand random quarantines with the old manifest, and recovery accepted any
+  missing source under one validated boundary. Independent review caught both
+  before publication; crash-before-first-effect, crash-after-first-rename,
+  arbitrary-source, and cross-boundary recovery tests now cover them.
 
 ## Decision Log
 
@@ -116,6 +153,13 @@ profile bytes/hash/owner/mode, and no visibility or mutation of another lane.
 - 2026-08-29: Admit one suffix-only manifest shrink as a source transition,
   not a general reconciliation algorithm. All other drift remains a typed
   failure.
+- 2026-08-29: Treat a clean, idle, base-contained surplus suffix as disposable
+  execution custody only after cold history capture. Preserve branch refs and
+  refuse dirty, ahead, detached, foreign-metadata, locked, active, or opaque
+  lanes.
+- 2026-08-29: Journal exact plan-derived mappings before the first destructive
+  rename. A prepared transaction rolls back while the prior manifest remains;
+  a committed/replacement-manifest transaction can only finish cleanup.
 
 ## Outcomes & Retrospective
 
@@ -129,9 +173,10 @@ upstream Product-lane projections. Post-rebase verification passed:
     gofmt -l <all changed Go files>
     git diff --check origin/master..HEAD
 
-The source publication boundary completed with expected remote ref
+The original source publication boundary completed with expected remote ref
 `7fa979e9828a5286fd68e16a052143fcae35ab62`, candidate
 `beca5b996a62b34b610de792ac204b4eabc963ca`, and an exact post-push remote
-readback match. The source work still receives no Linux-hub delivery credit
-until the published package is deployed and a real member passes task
+readback match. The current custody-aware retirement correction is validated
+but not yet published. Neither source generation receives Linux-hub delivery
+credit until the published package is deployed and a real member passes task
 create/list/read/restart and effective-configuration verification.

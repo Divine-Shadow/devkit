@@ -296,7 +296,9 @@ func validateOptions(options SnapshotOptions) error {
 	if strings.TrimSpace(options.Project) != "dev-all" {
 		return fmt.Errorf("Codex GUI history custody is restricted to the exact dev-all project")
 	}
-	if options.ResetKind != "selected-slot-reset" && options.ResetKind != "whole-prefix-reset" {
+	if options.ResetKind != "selected-slot-reset" &&
+		options.ResetKind != "whole-prefix-reset" &&
+		options.ResetKind != "manifest-shrink-retirement" {
 		return fmt.Errorf("Codex GUI history custody reset kind is not source-declared")
 	}
 	if options.AgentIndex < 1 {
