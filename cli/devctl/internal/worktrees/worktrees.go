@@ -232,6 +232,42 @@ func rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir string) error {
 	return nil
 }
 
+// EnsurePortableNativeGitdir migrates an existing package-owned linked
+// worktree away from an absolute Git metadata pointer before an isolated exec
+// plan is built. Older native lanes may retain the consumer-visible
+// /workspaces/dev alias even though it resolves to the package-owned metadata
+// beneath worktreesRoot. rewriteNativeGitdir performs the full ownership,
+// commondir, and reverse-pointer validation before changing any file.
+func EnsurePortableNativeGitdir(wt, worktreesRoot, repo string) error {
+	gitFile := filepath.Join(wt, ".git")
+	info, err := os.Lstat(gitFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("inspect native worktree gitdir %s: %w", gitFile, err)
+	}
+	if info.IsDir() {
+		return nil
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("native worktree gitdir %s must be a regular file", gitFile)
+	}
+	gitdir, err := readGitdirPointer(gitFile)
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(gitdir) {
+		return nil
+	}
+	repo = strings.TrimSpace(repo)
+	if repo == "" || filepath.Base(repo) != repo {
+		return fmt.Errorf("native worktree repository name is invalid: %s", repo)
+	}
+	repoCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", repo+".git")
+	return rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir)
+}
+
 func ensureNativeLinkedWorktreeNonBare(wt, envExecutable string, envLocalGit func(...string) []string, dryRun bool) error {
 	gitFile := filepath.Join(wt, ".git")
 	if dryRun {

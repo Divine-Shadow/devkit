@@ -823,6 +823,80 @@ func TestRewriteNativeGitdirRejectsForeignCommondirTraversal(t *testing.T) {
 	}
 }
 
+func TestEnsurePortableNativeGitdirMigratesConsumerAlias(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	worktreeRoot := filepath.Join(root, "agent-worktrees")
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Count:        1,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+		WorktreeRoot: worktreeRoot,
+	}); err != nil {
+		t.Fatalf("prepare native worktree: %v", err)
+	}
+	worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	gitdirValue, err := readGitdirPointer(filepath.Join(worktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitdir, err := canonicalMetadataPath(worktree, gitdirValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerWorktreeRoot := filepath.Join(root, "workspaces", "dev", "agent-worktrees")
+	if err := os.MkdirAll(filepath.Dir(consumerWorktreeRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(worktreeRoot, consumerWorktreeRoot); err != nil {
+		t.Fatal(err)
+	}
+	relativeGitdir, err := filepath.Rel(worktreeRoot, gitdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumerGitdir := filepath.Join(consumerWorktreeRoot, relativeGitdir)
+	consumerCommonDir := filepath.Join(consumerWorktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	consumerGitFile := filepath.Join(consumerWorktreeRoot, "agent1", "ouroboros-ide", ".git")
+	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+consumerGitdir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(consumerCommonDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "gitdir"), []byte(consumerGitFile+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsurePortableNativeGitdir(worktree, worktreeRoot, "ouroboros-ide"); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"worktree":  filepath.Join(worktree, ".git"),
+		"commondir": filepath.Join(gitdir, "commondir"),
+		"reverse":   filepath.Join(gitdir, "gitdir"),
+	} {
+		value, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(value)), "gitdir:"))
+		if filepath.IsAbs(trimmed) {
+			t.Fatalf("%s metadata remained absolute: %q", name, value)
+		}
+	}
+	if got := strings.TrimSpace(readTrim(t, "git", "-C", worktree, "status", "--porcelain=v1")); got != "" {
+		t.Fatalf("migrated worktree is dirty: %s", got)
+	}
+}
+
 func TestSetupNativeRejectsStaleCommonRepositoryWithoutOwnershipMarker(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")

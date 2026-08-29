@@ -2098,6 +2098,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
+	if err := ensurePortableProductExecGitdir(parsed.opts); err != nil {
+		return err
+	}
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
@@ -2147,6 +2150,27 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return runCommandPreservingExit(cmd)
+}
+
+func ensurePortableProductExecGitdir(opts nativeplan.BuildOptions) error {
+	if strings.TrimSpace(opts.Project) != "dev-all" ||
+		strings.TrimSpace(opts.Repo) != "ouroboros-ide" ||
+		strings.TrimSpace(opts.WorkspaceRoot) == "" {
+		return nil
+	}
+	worktreeRoot := filepath.Clean(strings.TrimSpace(opts.WorktreeRoot))
+	workspaceRoot := filepath.Clean(strings.TrimSpace(opts.WorkspaceRoot))
+	if worktreeRoot == "." || opts.Index < 1 {
+		return nil
+	}
+	expectedWorkspaceRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", opts.Index))
+	if workspaceRoot != expectedWorkspaceRoot {
+		// The planner owns the authoritative geometry error. Do not touch a
+		// worktree selected by an invalid lane-root claim.
+		return nil
+	}
+	hostWorktree := filepath.Join(expectedWorkspaceRoot, "ouroboros-ide")
+	return wtx.EnsurePortableNativeGitdir(hostWorktree, worktreeRoot, "ouroboros-ide")
 }
 
 func runCommandPreservingExit(cmd *exec.Cmd) error {
