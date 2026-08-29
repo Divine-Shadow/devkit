@@ -313,9 +313,13 @@ func Build(opts BuildOptions) (Plan, error) {
 		"JAVA_TOOL_OPTIONS":            javaToolOptions,
 		"TESTCONTAINERS_RYUK_DISABLED": "true",
 		"DEVKIT_NATIVE_AGENT":          fmt.Sprintf("%d", index),
-		"AWS_CONFIG_FILE":              filepath.Join(paths.SandboxHome, ".aws", "config"),
-		"AWS_SHARED_CREDENTIALS_FILE":  filepath.Join(paths.SandboxHome, ".aws", "credentials"),
-		"AWS_SDK_LOAD_CONFIG":          "1",
+		// Reserve the GUI target claim for every sandbox. Ordinary plans
+		// explicitly erase hostile ambient state; an inventory-validated GUI
+		// selection replaces this sentinel below.
+		GUITargetIDEnvironment:        "",
+		"AWS_CONFIG_FILE":             filepath.Join(paths.SandboxHome, ".aws", "config"),
+		"AWS_SHARED_CREDENTIALS_FILE": filepath.Join(paths.SandboxHome, ".aws", "credentials"),
+		"AWS_SDK_LOAD_CONFIG":         "1",
 	}
 	if IsGovernedRuntimePlan(project, repo) {
 		if brokerBinary := strings.TrimSpace(opts.BrokerBinary); brokerBinary != "" {

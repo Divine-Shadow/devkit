@@ -38,8 +38,8 @@ func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
 	if _, ok := base.Env["DEVKIT_CODEX_CONFIG_SOURCE"]; ok {
 		t.Fatalf("ordinary plan propagated hostile legacy config authority: %#v", base.Env)
 	}
-	if _, ok := base.Env[GUITargetIDEnvironment]; ok {
-		t.Fatalf("ordinary plan propagated ambient GUI target identity: %#v", base.Env)
+	if got, ok := base.Env[GUITargetIDEnvironment]; !ok || got != "" {
+		t.Fatalf("ordinary plan did not erase ambient GUI target identity: %#v", base.Env)
 	}
 	if got, want := guiTargetGeometryForPlan(base).WorkspaceRoot, filepath.Dir(base.Agent.HostWorktree); got != want {
 		t.Fatalf("computed GUI workspace root = %q, want %q", got, want)

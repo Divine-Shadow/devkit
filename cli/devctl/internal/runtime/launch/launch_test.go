@@ -763,6 +763,7 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
 		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/.cache/shared/coursier'",
 		"'--setenv' 'DOCKER_HOST' 'unix://" + brokerSocket + "'",
+		"'--setenv' 'DEVKIT_GUI_TARGET_ID' ''",
 		"'--setenv' 'OURO_NIX_SANDBOX' '1'",
 		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
 		"'--setenv' 'TMPDIR' '/tmp'",
@@ -781,6 +782,9 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export OURO_NIX_SANDBOX='1'") {
 		t.Fatalf("agent shell does not export Nix sandbox marker:\n%#v", cmd.Args)
+	}
+	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export DEVKIT_GUI_TARGET_ID=''") {
+		t.Fatalf("agent shell does not erase ambient GUI target identity:\n%#v", cmd.Args)
 	}
 	if !strings.Contains(cmd.Args[len(cmd.Args)-1], "export SBT_BOOT_DIR='/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1/.sbt/boot'") {
 		t.Fatalf("agent shell does not export per-agent SBT boot dir:\n%#v", cmd.Args)
@@ -809,6 +813,25 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 	if strings.Contains(joined, "/var/run/docker.sock") {
 		t.Fatalf("native launcher must not expose /var/run/docker.sock:\n%s", joined)
+	}
+	p.Env[nativeplan.GUITargetIDEnvironment] = "hostile-ambient-target"
+	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil || !strings.Contains(err.Error(), "undeclared GUI target identity") {
+		t.Fatalf("ordinary launcher accepted hostile GUI target identity: %v", err)
+	}
+	p.GUITargetConfig = &nativeplan.GUITargetConfigProjection{TargetID: "inventory-target"}
+	p.Env[nativeplan.GUITargetIDEnvironment] = "inventory-target"
+	selected, err := BuildBubblewrap(p, []string{"true"})
+	if err != nil {
+		t.Fatalf("GUI launcher rejected matching target identity: %v", err)
+	}
+	selectedJoined := ShellString(selected)
+	if !strings.Contains(selectedJoined, "'--setenv' 'DEVKIT_GUI_TARGET_ID' 'inventory-target'") ||
+		!strings.Contains(selected.Args[len(selected.Args)-1], "export DEVKIT_GUI_TARGET_ID='inventory-target'") {
+		t.Fatalf("GUI launcher did not carry exact validated target identity:\n%s", selectedJoined)
+	}
+	p.Env[nativeplan.GUITargetIDEnvironment] = "hostile-ambient-target"
+	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil || !strings.Contains(err.Error(), "does not match validated projection") {
+		t.Fatalf("GUI launcher accepted mismatched target identity: %v", err)
 	}
 }
 

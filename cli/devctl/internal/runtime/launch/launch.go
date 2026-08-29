@@ -2180,6 +2180,23 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 	if err := validateManagementControllerProfilePlan(p); err != nil {
 		return Command{}, err
 	}
+	launchEnv := make(map[string]string, len(p.Env)+1)
+	for key, value := range p.Env {
+		launchEnv[key] = value
+	}
+	guiTargetID, hasGUITargetID := launchEnv[nativeplan.GUITargetIDEnvironment]
+	if p.GUITargetConfig == nil {
+		if hasGUITargetID && guiTargetID != "" {
+			return Command{}, fmt.Errorf("ordinary sandbox carries undeclared GUI target identity %q", guiTargetID)
+		}
+		launchEnv[nativeplan.GUITargetIDEnvironment] = ""
+	} else if !hasGUITargetID || guiTargetID != p.GUITargetConfig.TargetID {
+		return Command{}, fmt.Errorf(
+			"GUI target environment identity %q does not match validated projection %q",
+			guiTargetID,
+			p.GUITargetConfig.TargetID,
+		)
+	}
 	if strings.TrimSpace(p.DevkitSandboxRoot) == "" {
 		return Command{}, fmt.Errorf("devkit sandbox root is empty")
 	}
@@ -2299,13 +2316,13 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 	args = append(args, bindArgs...)
 	args = append(args, symlinkArgs...)
 
-	keys := make([]string, 0, len(p.Env))
-	for key := range p.Env {
+	keys := make([]string, 0, len(launchEnv))
+	for key := range launchEnv {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		args = append(args, "--setenv", key, p.Env[key])
+		args = append(args, "--setenv", key, launchEnv[key])
 	}
 
 	args = append(args, "--chdir", p.DevkitSandboxRoot)
@@ -2330,7 +2347,7 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 		return Command{}, fmt.Errorf("immutable native bubblewrap binary is not executable: %s", bubblewrapBinary)
 	}
 	runtimeArgs := []string{runtimeLauncher}
-	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, p.Env, false)...)
+	runtimeArgs = append(runtimeArgs, shellCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, p.Agent.SandboxWorktree, command, p.Proxy, launchEnv, false)...)
 	if strings.TrimSpace(p.Proxy.UnixSocket) != "" {
 		args = append(args, "/run/current-system/sw/bin/bash", "-lc", outerProxyRuntimeCommand(p.DevkitSandboxRoot, p.Agent.ID.Project, runtimeArgs, p.Proxy))
 	} else {
