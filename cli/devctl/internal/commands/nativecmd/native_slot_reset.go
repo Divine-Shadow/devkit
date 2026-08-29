@@ -32,6 +32,7 @@ type nativeSlotResetArgs struct {
 	repo          string
 	index         int
 	workspaceRoot string
+	guiTargetID   string
 	format        string
 }
 
@@ -70,6 +71,16 @@ func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, er
 			parsed.workspaceRoot = strings.TrimSpace(ctx.Args[i+1])
 			if parsed.workspaceRoot == "" {
 				return parsed, fmt.Errorf("--workspace-root requires a value")
+			}
+			i++
+		case "--gui-target-id":
+			seen[option] = true
+			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
+				return parsed, fmt.Errorf("--gui-target-id requires a value")
+			}
+			parsed.guiTargetID = strings.TrimSpace(ctx.Args[i+1])
+			if parsed.guiTargetID == "" || parsed.guiTargetID != ctx.Args[i+1] {
+				return parsed, fmt.Errorf("--gui-target-id must be non-empty and canonical")
 			}
 			i++
 		case "--format":
@@ -1176,7 +1187,12 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if branchPrefix == "" {
 		branchPrefix = "agent"
 	}
-	lifecycleParsed := lifecycleArgs{repo: declaredRepo, baseBranch: baseBranch, branchPrefix: branchPrefix}
+	lifecycleParsed := lifecycleArgs{
+		repo:         declaredRepo,
+		baseBranch:   baseBranch,
+		branchPrefix: branchPrefix,
+		guiTargetID:  parsed.guiTargetID,
+	}
 	if err := applyLifecycleReadinessMode(&lifecycleParsed, cfg); err != nil {
 		return err
 	}

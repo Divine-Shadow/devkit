@@ -1233,13 +1233,13 @@ func TestParseNativeSlotResetArgsRequiresExactTypedLaneInterface(t *testing.T) {
 	workspaceRoot := "/home/bayesartre/dev/agent-worktrees/agent2"
 	parsed, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: []string{
 		"reset", "--repo", "ouroboros-ide", "--index", "2",
-		"--workspace-root", workspaceRoot, "--format", "json",
+		"--workspace-root", workspaceRoot, "--gui-target-id", "shadow-4", "--format", "json",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if parsed.repo != "ouroboros-ide" || parsed.index != 2 ||
-		parsed.workspaceRoot != workspaceRoot || parsed.format != "json" {
+		parsed.workspaceRoot != workspaceRoot || parsed.guiTargetID != "shadow-4" || parsed.format != "json" {
 		t.Fatalf("parsed = %#v", parsed)
 	}
 	for _, args := range [][]string{
@@ -1276,6 +1276,16 @@ func TestParseNativeSlotResetArgsRequiresExactTypedLaneInterface(t *testing.T) {
 			name: "duplicate-workspace-root",
 			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--workspace-root", workspaceRoot, "--format", "json"},
 			want: "rejects duplicate option --workspace-root",
+		},
+		{
+			name: "empty-gui-target-id",
+			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--gui-target-id", " ", "--format", "json"},
+			want: "--gui-target-id must be non-empty and canonical",
+		},
+		{
+			name: "duplicate-gui-target-id",
+			args: []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--gui-target-id", "shadow-4", "--gui-target-id", "shadow-4", "--format", "json"},
+			want: "rejects duplicate option --gui-target-id",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
