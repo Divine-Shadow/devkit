@@ -319,6 +319,9 @@ func validateOptions(options SnapshotOptions) error {
 		if filepath.Dir(filepath.Clean(options.HostWorktree)) != workspaceRoot {
 			return fmt.Errorf("Codex GUI history custody workspace root must own the selected worktree parent")
 		}
+		if _, err := workspaceProjectedCodexRoot(options); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -724,7 +727,18 @@ func rolloutRelativePath(raw string, options SnapshotOptions) (string, error) {
 	if path == "." || !filepath.IsAbs(path) {
 		return "", fmt.Errorf("GUI rollout reference is not absolute: %s", raw)
 	}
-	for _, root := range []string{filepath.Join(options.SandboxHome, ".codex"), filepath.Join(options.HostHome, ".codex")} {
+	roots := []string{
+		filepath.Join(options.SandboxHome, ".codex"),
+		filepath.Join(options.HostHome, ".codex"),
+	}
+	projectedRoot, err := workspaceProjectedCodexRoot(options)
+	if err != nil {
+		return "", err
+	}
+	if projectedRoot != "" {
+		roots = append(roots, projectedRoot)
+	}
+	for _, root := range roots {
 		root = filepath.Clean(root)
 		rel, err := filepath.Rel(root, path)
 		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
@@ -732,6 +746,22 @@ func rolloutRelativePath(raw string, options SnapshotOptions) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("GUI rollout reference escapes the source-derived Codex home: %s", raw)
+}
+
+func workspaceProjectedCodexRoot(options SnapshotOptions) (string, error) {
+	workspaceRoot := filepath.Clean(strings.TrimSpace(options.WorkspaceRoot))
+	if workspaceRoot == "." {
+		return "", nil
+	}
+	hostHome := filepath.Clean(strings.TrimSpace(options.HostHome))
+	relativeHome, err := filepath.Rel(workspaceRoot, hostHome)
+	if err != nil ||
+		relativeHome == "." ||
+		relativeHome == ".." ||
+		strings.HasPrefix(relativeHome, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("Codex GUI history custody host home must be contained by the selected workspace root")
+	}
+	return filepath.Join("/workspaces/dev", relativeHome, ".codex"), nil
 }
 
 func ensurePrivateDirectory(path string) error {

@@ -234,6 +234,41 @@ func TestCaptureStoresOnlyValidatedResumableGUIHistory(t *testing.T) {
 	}
 }
 
+func TestCaptureAcceptsWorkspaceProjectedGUIRolloutReference(t *testing.T) {
+	fixture := newCaptureFixture(t)
+	projectedCodexRoot, err := workspaceProjectedCodexRoot(fixture.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/workspaces/dev/.devhome-agent1/.codex"; projectedCodexRoot != want {
+		t.Fatalf("projected Codex root = %s, want %s", projectedCodexRoot, want)
+	}
+	rolloutRel := "archived_sessions/rollout-gui-thread.jsonl"
+	createStateDatabase(t, fixture, filepath.ToSlash(filepath.Join(projectedCodexRoot, filepath.FromSlash(rolloutRel))))
+	writeTestFile(
+		t,
+		filepath.Join(fixture.codexRoot, filepath.FromSlash(rolloutRel)),
+		"{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n",
+	)
+
+	result, err := Capture(fixture.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "captured" || result.GUIRollouts != 1 {
+		t.Fatalf("workspace-projected capture result = %+v", result)
+	}
+}
+
+func TestCaptureRejectsHostHomeOutsideWorkspaceProjection(t *testing.T) {
+	fixture := newCaptureFixture(t)
+	fixture.options.HostHome = filepath.Join(filepath.Dir(fixture.options.WorkspaceRoot), "foreign-home")
+	_, err := Capture(fixture.options)
+	if err == nil || !strings.Contains(err.Error(), "host home must be contained by the selected workspace root") {
+		t.Fatalf("outside host home error = %v", err)
+	}
+}
+
 func TestCaptureRefusesMissingGUIRolloutWithoutCompletedGeneration(t *testing.T) {
 	fixture := newCaptureFixture(t)
 	missing := filepath.ToSlash(filepath.Join(fixture.options.SandboxHome, ".codex", "sessions", "missing.jsonl"))
