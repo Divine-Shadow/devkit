@@ -1565,10 +1565,6 @@ fi
 	}
 	worktreesRoot := worktreeRoot
 	wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
-	wantCodexConfig, err := os.ReadFile(filepath.Join(base, ".devkit", "nix-codex-config.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	for index := 1; index <= 3; index++ {
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
 		gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
@@ -1608,9 +1604,8 @@ fi
 		if index == 1 {
 			hostHome = filepath.Join(worktree, ".devhome-agent1")
 		}
-		gotCodexConfig, err := os.ReadFile(filepath.Join(hostHome, ".codex", "config.toml"))
-		if err != nil || string(gotCodexConfig) != string(wantCodexConfig) {
-			t.Fatalf("agent%d did not materialize the exact Nix-authored Codex config: %q %v", index, gotCodexConfig, err)
+		if _, err := os.Lstat(filepath.Join(hostHome, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("agent%d ordinary reset trusted hostile DEVKIT_CODEX_CONFIG_SOURCE: %v", index, err)
 		}
 	}
 	if _, err := os.Lstat(staleMarker); !errors.Is(err, os.ErrNotExist) {
@@ -2334,8 +2329,8 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 				if index == 1 {
 					hostHome = filepath.Join(worktree, ".devhome-agent1")
 				}
-				if _, err := os.Stat(filepath.Join(hostHome, ".codex", "config.toml")); err != nil {
-					t.Fatalf("agent%d package app-server configuration is absent: %v", index, err)
+				if _, err := os.Lstat(filepath.Join(hostHome, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("agent%d ordinary installed runtime trusted hostile DEVKIT_CODEX_CONFIG_SOURCE: %v", index, err)
 				}
 				sandboxWorktree := filepath.Join(
 					"/workspaces/dev/agent-worktrees",

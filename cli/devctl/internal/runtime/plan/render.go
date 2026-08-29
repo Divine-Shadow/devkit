@@ -31,6 +31,12 @@ func RenderText(p Plan) string {
 	fmt.Fprintf(&b, "host_home: %s\n", p.Agent.HostHome)
 	fmt.Fprintf(&b, "sandbox_home: %s\n", p.Agent.SandboxHome)
 	fmt.Fprintf(&b, "state_root: %s\n", p.Agent.StateRoot)
+	if p.GUITargetConfig != nil {
+		fmt.Fprintf(&b, "gui_target_id: %s\n", p.GUITargetConfig.TargetID)
+		fmt.Fprintf(&b, "gui_config_profile: %s\n", p.GUITargetConfig.ConfigProfile)
+		fmt.Fprintf(&b, "gui_config_source: %s\n", p.GUITargetConfig.Source)
+		fmt.Fprintf(&b, "gui_config_source_sha256: %s\n", p.GUITargetConfig.SourceSHA256)
+	}
 	fmt.Fprintf(&b, "broker_endpoint: %s\n", p.BrokerEndpoint)
 	fmt.Fprintf(&b, "direct_docker_socket: %t\n", p.DirectDockerSocket)
 	fmt.Fprintf(&b, "proxy: %s\n", p.Proxy.HTTPProxy)

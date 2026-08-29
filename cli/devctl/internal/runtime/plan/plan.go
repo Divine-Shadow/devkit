@@ -39,36 +39,37 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
-	Agent                  agent.Spec        `json:"agent"`
-	DevkitHostRoot         string            `json:"devkit_host_root"`
-	RuntimeAuthorityRoot   string            `json:"runtime_authority_root"`
-	DevkitSandboxRoot      string            `json:"devkit_sandbox_root"`
-	HostRuntimeSupportRoot string            `json:"host_runtime_support_root"`
-	HostWorkspaceRoot      string            `json:"host_workspace_root,omitempty"`
-	SandboxWorkspaceRoot   string            `json:"sandbox_workspace_root,omitempty"`
-	HostWorktreeRoot       string            `json:"host_worktree_root"`
-	HostStateRoot          string            `json:"host_state_root"`
-	SandboxWorktreeRoot    string            `json:"sandbox_worktree_root"`
-	SandboxStateRoot       string            `json:"sandbox_state_root"`
-	Flake                  string            `json:"flake"`
-	FlakeInputOverrides    map[string]string `json:"flake_input_overrides,omitempty"`
-	RuntimeLauncher        string            `json:"runtime_launcher"`
-	BubblewrapBinary       string            `json:"bubblewrap_binary"`
-	Launcher               string            `json:"launcher"`
-	LauncherArgs           []string          `json:"launcher_args"`
-	IsolationProfile       string            `json:"isolation_profile,omitempty"`
-	MountPolicyIdentity    string            `json:"mount_policy_identity"`
-	WindowsMountsVisible   bool              `json:"windows_mounts_visible"`
-	ControllerProfile      string            `json:"controller_profile,omitempty"`
-	ControllerManifest     string            `json:"controller_manifest,omitempty"`
-	Binds                  []Bind            `json:"binds"`
-	Env                    map[string]string `json:"env"`
-	Proxy                  ProxyConfig       `json:"proxy"`
-	DNS                    DNSConfig         `json:"dns"`
-	BrokerEndpoint         string            `json:"broker_endpoint"`
-	DirectDockerSocket     bool              `json:"direct_docker_socket"`
-	ResourceLimits         ResourceLimits    `json:"resource_limits"`
-	Notes                  []string          `json:"notes,omitempty"`
+	Agent                  agent.Spec                 `json:"agent"`
+	GUITargetConfig        *GUITargetConfigProjection `json:"gui_target_config,omitempty"`
+	DevkitHostRoot         string                     `json:"devkit_host_root"`
+	RuntimeAuthorityRoot   string                     `json:"runtime_authority_root"`
+	DevkitSandboxRoot      string                     `json:"devkit_sandbox_root"`
+	HostRuntimeSupportRoot string                     `json:"host_runtime_support_root"`
+	HostWorkspaceRoot      string                     `json:"host_workspace_root,omitempty"`
+	SandboxWorkspaceRoot   string                     `json:"sandbox_workspace_root,omitempty"`
+	HostWorktreeRoot       string                     `json:"host_worktree_root"`
+	HostStateRoot          string                     `json:"host_state_root"`
+	SandboxWorktreeRoot    string                     `json:"sandbox_worktree_root"`
+	SandboxStateRoot       string                     `json:"sandbox_state_root"`
+	Flake                  string                     `json:"flake"`
+	FlakeInputOverrides    map[string]string          `json:"flake_input_overrides,omitempty"`
+	RuntimeLauncher        string                     `json:"runtime_launcher"`
+	BubblewrapBinary       string                     `json:"bubblewrap_binary"`
+	Launcher               string                     `json:"launcher"`
+	LauncherArgs           []string                   `json:"launcher_args"`
+	IsolationProfile       string                     `json:"isolation_profile,omitempty"`
+	MountPolicyIdentity    string                     `json:"mount_policy_identity"`
+	WindowsMountsVisible   bool                       `json:"windows_mounts_visible"`
+	ControllerProfile      string                     `json:"controller_profile,omitempty"`
+	ControllerManifest     string                     `json:"controller_manifest,omitempty"`
+	Binds                  []Bind                     `json:"binds"`
+	Env                    map[string]string          `json:"env"`
+	Proxy                  ProxyConfig                `json:"proxy"`
+	DNS                    DNSConfig                  `json:"dns"`
+	BrokerEndpoint         string                     `json:"broker_endpoint"`
+	DirectDockerSocket     bool                       `json:"direct_docker_socket"`
+	ResourceLimits         ResourceLimits             `json:"resource_limits"`
+	Notes                  []string                   `json:"notes,omitempty"`
 }
 
 type BuildOptions struct {
@@ -77,6 +78,7 @@ type BuildOptions struct {
 	Project               string
 	Index                 int
 	Repo                  string
+	GUITargetID           string
 	Flake                 string
 	FlakeInputOverrides   map[string]string
 	BrokerBinary          string
@@ -486,6 +488,17 @@ func Build(opts BuildOptions) (Plan, error) {
 			Pids:   "1024",
 		},
 		Notes: notes,
+	}
+	if opts.GUITargetID != "" {
+		guiTargetID := strings.TrimSpace(opts.GUITargetID)
+		if guiTargetID == "" || guiTargetID != opts.GUITargetID {
+			return Plan{}, fmt.Errorf("GUI target ID must be non-empty and canonical")
+		}
+		projection, err := loadGUITargetConfigProjection(guiTargetID, guiTargetGeometryForPlan(p))
+		if err != nil {
+			return Plan{}, err
+		}
+		p.GUITargetConfig = &projection
 	}
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})

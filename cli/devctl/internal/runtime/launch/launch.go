@@ -59,6 +59,13 @@ func Prepare(p nativeplan.Plan) error {
 	if err := validateProductGovernanceEnvironmentPlan(p); err != nil {
 		return err
 	}
+	// A selected GUI config is the first mutation beneath HostHome. Its
+	// handle-based projection rejects symlinked or foreign-owned destination
+	// components before the ordinary runtime directory preparation can follow
+	// or populate them.
+	if err := SeedCodexConfig(p); err != nil {
+		return err
+	}
 	for _, dir := range []string{p.Agent.HostHome, p.Agent.StateRoot} {
 		if strings.TrimSpace(dir) == "" {
 			continue
@@ -80,9 +87,6 @@ func Prepare(p nativeplan.Plan) error {
 		}
 	}
 	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
-		return err
-	}
-	if err := SeedCodexConfig(p.Agent.HostHome); err != nil {
 		return err
 	}
 	if err := ensureCodexShellHook(p); err != nil {
@@ -1683,86 +1687,330 @@ func SeedCodexAuth(hostHome string, force bool) error {
 	return nil
 }
 
-// SeedCodexConfig materializes the Nix-authored Codex configuration selected
-// by the controller into a consumer home. The source is runtime authority; a
-// freshly reconstructed home must not depend on a prior activation having
-// happened to populate the same path.
-func SeedCodexConfig(hostHome string) error {
+// SeedCodexConfig materializes only the immutable GUI-target config selected
+// while the plan was built. Ordinary native plans have no selection and do
+// not seed config, regardless of hostile legacy ambient environment.
+func SeedCodexConfig(p nativeplan.Plan) error {
+	if p.GUITargetConfig == nil {
+		return nil
+	}
+	data, err := nativeplan.ReadValidatedGUITargetConfigSource(p)
+	if err != nil {
+		return err
+	}
+	return seedCodexConfigData(p.Agent.HostHome, data)
+}
+
+func seedCodexConfigData(hostHome string, data []byte) error {
+	rawHostHome := hostHome
 	hostHome = strings.TrimSpace(hostHome)
-	if hostHome == "" {
-		return nil
-	}
-	src := strings.TrimSpace(os.Getenv("DEVKIT_CODEX_CONFIG_SOURCE"))
-	if src == "" {
-		return nil
-	}
-	if !filepath.IsAbs(src) {
-		return fmt.Errorf("Codex config source must be absolute: %s", src)
-	}
-	info, err := os.Lstat(src)
-	if err != nil {
-		return fmt.Errorf("inspect Codex config source %s: %w", src, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("Codex config source %s must be a regular non-symlink file", src)
-	}
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return fmt.Errorf("read Codex config source %s: %w", src, err)
+	if hostHome == "" || hostHome != rawHostHome || !filepath.IsAbs(hostHome) || filepath.Clean(hostHome) != hostHome || hostHome == string(filepath.Separator) {
+		return fmt.Errorf("GUI target host home must be an absolute canonical path: %s", hostHome)
 	}
 	if len(data) == 0 {
-		return fmt.Errorf("Codex config source %s is empty", src)
+		return fmt.Errorf("Codex config source data is empty")
 	}
-	targetDir := filepath.Join(hostHome, ".codex")
-	target := filepath.Join(targetDir, "config.toml")
-	if err := os.MkdirAll(targetDir, 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", targetDir, err)
+	return seedCodexConfigDataForUID(hostHome, data, os.Geteuid())
+}
+
+type projectedConfigFileIdentity struct {
+	device uint64
+	inode  uint64
+}
+
+func seedCodexConfigDataForUID(hostHome string, data []byte, expectedUID int) error {
+	home, err := openOrCreateCanonicalOwnedDirectory(hostHome, expectedUID, 0o700)
+	if err != nil {
+		return fmt.Errorf("prepare GUI target host home %s: %w", hostHome, err)
 	}
-	if current, err := os.Lstat(target); err == nil {
-		if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() {
-			return fmt.Errorf("Codex config target %s must be a regular non-symlink file", target)
+	defer home.Close()
+	codexDirPath := filepath.Join(hostHome, ".codex")
+	codexDir, err := openOrCreateOwnedDirectoryAt(home, ".codex", codexDirPath, expectedUID, 0o700)
+	if err != nil {
+		return err
+	}
+	defer codexDir.Close()
+
+	const targetName = "config.toml"
+	target := filepath.Join(codexDirPath, targetName)
+	current, err := openRegularFileAtNoFollow(codexDir, targetName, target)
+	if err == nil {
+		identity, uid, statErr := openedFileIdentityAndUID(current)
+		if statErr != nil {
+			_ = current.Close()
+			return fmt.Errorf("inspect Codex config target %s: %w", target, statErr)
 		}
-		existing, readErr := os.ReadFile(target)
+		if uid != expectedUID {
+			_ = current.Close()
+			return fmt.Errorf("Codex config target %s is owned by uid %d, want %d", target, uid, expectedUID)
+		}
+		existing, readErr := io.ReadAll(current)
 		if readErr != nil {
+			_ = current.Close()
 			return fmt.Errorf("read Codex config target %s: %w", target, readErr)
 		}
-		if string(existing) == string(data) {
-			if err := os.Chmod(target, 0o600); err != nil {
+		if bytes.Equal(existing, data) {
+			if err := syscall.Fchmod(int(current.Fd()), 0o600); err != nil {
+				_ = current.Close()
 				return fmt.Errorf("chmod Codex config target %s: %w", target, err)
 			}
-			return nil
+			if err := current.Sync(); err != nil {
+				_ = current.Close()
+				return fmt.Errorf("sync Codex config target %s: %w", target, err)
+			}
+			if err := current.Close(); err != nil {
+				return fmt.Errorf("close Codex config target %s: %w", target, err)
+			}
+			return verifyProjectedCodexConfigAt(codexDir, targetName, target, data, expectedUID, &identity)
+		}
+		if err := current.Close(); err != nil {
+			return fmt.Errorf("close Codex config target %s: %w", target, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect Codex config target %s: %w", target, err)
+		return err
 	}
-	tmp, err := os.CreateTemp(targetDir, ".config.toml.new-")
-	if err != nil {
-		return fmt.Errorf("create Codex config staging file: %w", err)
+
+	var staging *os.File
+	var stagingName string
+	for attempt := 0; attempt < 16; attempt++ {
+		stagingName = fmt.Sprintf(".config.toml.new-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), attempt)
+		fd, openErr := syscall.Openat(
+			int(codexDir.Fd()),
+			stagingName,
+			syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_CLOEXEC|syscall.O_NOFOLLOW,
+			0o600,
+		)
+		if errors.Is(openErr, syscall.EEXIST) {
+			continue
+		}
+		if openErr != nil {
+			return fmt.Errorf("create Codex config staging file beside %s: %w", target, openErr)
+		}
+		staging = os.NewFile(uintptr(fd), stagingName)
+		if staging == nil {
+			_ = syscall.Close(fd)
+			return fmt.Errorf("create Codex config staging file beside %s: invalid file descriptor", target)
+		}
+		break
 	}
-	tmpPath := tmp.Name()
+	if staging == nil {
+		return fmt.Errorf("create unique Codex config staging file beside %s", target)
+	}
 	committed := false
 	defer func() {
-		_ = tmp.Close()
+		_ = staging.Close()
 		if !committed {
-			_ = os.Remove(tmpPath)
+			_ = syscall.Unlinkat(int(codexDir.Fd()), stagingName)
 		}
 	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		return fmt.Errorf("chmod Codex config staging file %s: %w", tmpPath, err)
+	if err := syscall.Fchmod(int(staging.Fd()), 0o600); err != nil {
+		return fmt.Errorf("chmod Codex config staging file %s: %w", stagingName, err)
 	}
-	if _, err := tmp.Write(data); err != nil {
-		return fmt.Errorf("write Codex config staging file %s: %w", tmpPath, err)
+	stagingIdentity, stagingUID, err := openedFileIdentityAndUID(staging)
+	if err != nil {
+		return fmt.Errorf("inspect Codex config staging file %s: %w", stagingName, err)
 	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("sync Codex config staging file %s: %w", tmpPath, err)
+	if stagingUID != expectedUID {
+		return fmt.Errorf("Codex config staging file %s is owned by uid %d, want %d", stagingName, stagingUID, expectedUID)
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close Codex config staging file %s: %w", tmpPath, err)
+	if _, err := staging.Write(data); err != nil {
+		return fmt.Errorf("write Codex config staging file %s: %w", stagingName, err)
 	}
-	if err := os.Rename(tmpPath, target); err != nil {
-		return fmt.Errorf("install Codex config target %s: %w", target, err)
+	if err := staging.Sync(); err != nil {
+		return fmt.Errorf("sync Codex config staging file %s: %w", stagingName, err)
+	}
+	if err := staging.Close(); err != nil {
+		return fmt.Errorf("close Codex config staging file %s: %w", stagingName, err)
+	}
+	if err := syscall.Renameat(int(codexDir.Fd()), stagingName, int(codexDir.Fd()), targetName); err != nil {
+		return fmt.Errorf("install Codex config target %s atomically: %w", target, err)
 	}
 	committed = true
+	if err := codexDir.Sync(); err != nil {
+		return fmt.Errorf("sync Codex config directory %s: %w", codexDirPath, err)
+	}
+	return verifyProjectedCodexConfigAt(codexDir, targetName, target, data, expectedUID, &stagingIdentity)
+}
+
+func openOrCreateCanonicalOwnedDirectory(path string, expectedUID int, mode os.FileMode) (*os.File, error) {
+	parentPath := filepath.Dir(path)
+	base := filepath.Base(path)
+	parent, err := openCanonicalDirectoryNoFollow(parentPath)
+	if err != nil {
+		return nil, err
+	}
+	defer parent.Close()
+	directory, err := openDirectoryAtNoFollow(parent, base)
+	if errors.Is(err, os.ErrNotExist) {
+		_, parentUID, statErr := openedFileIdentityAndUID(parent)
+		if statErr != nil {
+			return nil, fmt.Errorf("inspect parent directory %s: %w", parentPath, statErr)
+		}
+		if parentUID != expectedUID {
+			return nil, fmt.Errorf("refuse to create %s beneath parent owned by uid %d, want %d", path, parentUID, expectedUID)
+		}
+		if err := syscall.Mkdirat(int(parent.Fd()), base, uint32(mode.Perm())); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return nil, fmt.Errorf("mkdir %s: %w", path, err)
+		}
+		directory, err = openDirectoryAtNoFollow(parent, base)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open directory %s without following links: %w", path, err)
+	}
+	if err := requireOwnedDirectory(directory, path, expectedUID, mode); err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	return directory, nil
+}
+
+func openOrCreateOwnedDirectoryAt(parent *os.File, name, path string, expectedUID int, mode os.FileMode) (*os.File, error) {
+	directory, err := openDirectoryAtNoFollow(parent, name)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := syscall.Mkdirat(int(parent.Fd()), name, uint32(mode.Perm())); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return nil, fmt.Errorf("mkdir %s: %w", path, err)
+		}
+		directory, err = openDirectoryAtNoFollow(parent, name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open directory %s without following links: %w", path, err)
+	}
+	if err := requireOwnedDirectory(directory, path, expectedUID, mode); err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	return directory, nil
+}
+
+func openCanonicalDirectoryNoFollow(path string) (*os.File, error) {
+	rawPath := path
+	path = strings.TrimSpace(path)
+	if path == "" || path != rawPath || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, fmt.Errorf("directory path must be absolute and canonical: %s", path)
+	}
+	rootFD, err := syscall.Open(string(filepath.Separator), syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open filesystem root: %w", err)
+	}
+	current := os.NewFile(uintptr(rootFD), string(filepath.Separator))
+	if current == nil {
+		_ = syscall.Close(rootFD)
+		return nil, fmt.Errorf("open filesystem root: invalid file descriptor")
+	}
+	if path == string(filepath.Separator) {
+		return current, nil
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator)) {
+		if component == "" || component == "." || component == ".." {
+			_ = current.Close()
+			return nil, fmt.Errorf("directory path has a non-canonical component: %s", path)
+		}
+		nextFD, openErr := syscall.Openat(int(current.Fd()), component, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+		_ = current.Close()
+		if openErr != nil {
+			return nil, fmt.Errorf("open directory component %q without following links: %w", component, openErr)
+		}
+		current = os.NewFile(uintptr(nextFD), component)
+		if current == nil {
+			_ = syscall.Close(nextFD)
+			return nil, fmt.Errorf("open directory component %q: invalid file descriptor", component)
+		}
+	}
+	return current, nil
+}
+
+func openDirectoryAtNoFollow(parent *os.File, name string) (*os.File, error) {
+	fd, err := syscall.Openat(int(parent.Fd()), name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "openat", Path: name, Err: err}
+	}
+	directory := os.NewFile(uintptr(fd), name)
+	if directory == nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("openat %s: invalid file descriptor", name)
+	}
+	return directory, nil
+}
+
+func requireOwnedDirectory(directory *os.File, path string, expectedUID int, mode os.FileMode) error {
+	_, uid, err := openedFileIdentityAndUID(directory)
+	if err != nil {
+		return fmt.Errorf("inspect directory %s: %w", path, err)
+	}
+	if uid != expectedUID {
+		return fmt.Errorf("directory %s is owned by uid %d, want %d", path, uid, expectedUID)
+	}
+	if err := syscall.Fchmod(int(directory.Fd()), uint32(mode.Perm())); err != nil {
+		return fmt.Errorf("chmod directory %s: %w", path, err)
+	}
+	return nil
+}
+
+func openRegularFileAtNoFollow(parent *os.File, name, path string) (*os.File, error) {
+	fd, err := syscall.Openat(int(parent.Fd()), name, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("Codex config target %s must be a regular non-symlink file", path)
+		}
+		return nil, &os.PathError{Op: "openat", Path: path, Err: err}
+	}
+	file := os.NewFile(uintptr(fd), path)
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return nil, statErr
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("Codex config target %s must be a regular non-symlink file", path)
+	}
+	return file, nil
+}
+
+func openedFileIdentityAndUID(file *os.File) (projectedConfigFileIdentity, int, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return projectedConfigFileIdentity{}, 0, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return projectedConfigFileIdentity{}, 0, fmt.Errorf("filesystem stat identity is unavailable")
+	}
+	return projectedConfigFileIdentity{device: uint64(stat.Dev), inode: stat.Ino}, int(stat.Uid), nil
+}
+
+func verifyProjectedCodexConfigAt(parent *os.File, name, path string, want []byte, expectedUID int, expectedIdentity *projectedConfigFileIdentity) error {
+	installed, err := openRegularFileAtNoFollow(parent, name, path)
+	if err != nil {
+		return fmt.Errorf("verify Codex config target %s: %w", path, err)
+	}
+	defer installed.Close()
+	identity, uid, err := openedFileIdentityAndUID(installed)
+	if err != nil {
+		return fmt.Errorf("verify Codex config target %s identity: %w", path, err)
+	}
+	if expectedIdentity != nil && identity != *expectedIdentity {
+		return fmt.Errorf("Codex config target %s changed identity during installation", path)
+	}
+	if uid != expectedUID {
+		return fmt.Errorf("Codex config target %s is owned by uid %d, want %d", path, uid, expectedUID)
+	}
+	info, err := installed.Stat()
+	if err != nil {
+		return fmt.Errorf("verify Codex config target %s mode: %w", path, err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("Codex config target %s mode is %04o, want 0600", path, info.Mode().Perm())
+	}
+	actual, err := io.ReadAll(installed)
+	if err != nil {
+		return fmt.Errorf("verify Codex config target %s bytes: %w", path, err)
+	}
+	wantDigest := sha256.Sum256(want)
+	actualDigest := sha256.Sum256(actual)
+	if !bytes.Equal(actual, want) || actualDigest != wantDigest {
+		return fmt.Errorf("Codex config target %s bytes or SHA-256 do not match the immutable source", path)
+	}
 	return nil
 }
 

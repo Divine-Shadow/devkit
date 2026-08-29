@@ -57,6 +57,62 @@ func TestParseTopExecArgsRecognizesManagedAppServerBeforeSeparator(t *testing.T)
 	}
 }
 
+func TestGUITargetIDPropagatesAcrossNativePlanAndExec(t *testing.T) {
+	const targetID = "shadow-throne-management-2"
+	plan, err := parsePlanArgs(&cmdregistry.Context{Args: []string{
+		"plan", "--gui-target-id", targetID,
+	}}, false, false)
+	if err != nil || plan.opts.GUITargetID != targetID {
+		t.Fatalf("native plan GUI target = %q, %v", plan.opts.GUITargetID, err)
+	}
+	nativeExec, err := parsePlanArgs(&cmdregistry.Context{Args: []string{
+		"exec", "--gui-target-id", targetID, "--", "codex", "app-server",
+	}}, true, false)
+	if err != nil || nativeExec.opts.GUITargetID != targetID {
+		t.Fatalf("native exec GUI target = %q, %v", nativeExec.opts.GUITargetID, err)
+	}
+	topExec, err := parseTopExecArgs(&cmdregistry.Context{Args: []string{
+		"2", "--gui-target-id", targetID, "--", "codex", "app-server",
+	}}, false)
+	if err != nil || topExec.guiTargetID != targetID {
+		t.Fatalf("top-level exec GUI target = %q, %v", topExec.guiTargetID, err)
+	}
+	opts := lifecyclePlanOptions(
+		&cmdregistry.Context{Project: "dev-workspace", Paths: devkitpaths.Paths{Root: "/nix/store/example-devkit"}},
+		config.OverlayConfig{Native: config.Native{HostRoot: "/home/bayesartre/dev"}},
+		lifecycleArgs{guiTargetID: topExec.guiTargetID},
+		"shadow-throne-management",
+		runtimebroker.Config{Socket: "/tmp/broker.sock"},
+	)
+	if opts.GUITargetID != targetID {
+		t.Fatalf("top-level exec planner GUI target = %q", opts.GUITargetID)
+	}
+}
+
+func TestGUITargetIDFlagIsCanonicalAndHasNoSourceOrProfileCompanion(t *testing.T) {
+	for _, args := range [][]string{
+		{"plan", "--gui-target-id"},
+		{"plan", "--gui-target-id", " "},
+		{"plan", "--gui-target-id", "one", "--gui-target-id", "two"},
+		{"readiness", "--gui-target-id", "one"},
+		{"plan", "--config-profile", "management"},
+		{"plan", "--config-source", "/nix/store/hostile"},
+	} {
+		if _, err := parsePlanArgs(&cmdregistry.Context{Args: args}, false, args[0] == "readiness"); err == nil {
+			t.Fatalf("invalid GUI target authority was accepted: %#v", args)
+		}
+	}
+	for _, args := range [][]string{
+		{"2", "--gui-target-id"},
+		{"2", "--gui-target-id", " "},
+		{"2", "--gui-target-id", "one", "--gui-target-id", "two"},
+	} {
+		if _, err := parseTopExecArgs(&cmdregistry.Context{Args: args}, false); err == nil {
+			t.Fatalf("invalid top-level GUI target authority was accepted: %#v", args)
+		}
+	}
+}
+
 func TestWorkspaceRootTranslationAcrossNativeCommands(t *testing.T) {
 	const workspaceRoot = "/home/bayesartre/dev/control-plane-worktrees/agent2"
 	plan, err := parsePlanArgs(&cmdregistry.Context{Args: []string{

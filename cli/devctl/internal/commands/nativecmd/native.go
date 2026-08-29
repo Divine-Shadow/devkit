@@ -121,6 +121,7 @@ func managedAppServerServiceOwnedWithCgroup(service, invocationID, cgroup string
 
 type lifecycleArgs struct {
 	repo                    string
+	guiTargetID             string
 	flake                   string
 	count                   int
 	format                  string
@@ -153,6 +154,7 @@ type lifecycleArgs struct {
 type topExecArgs struct {
 	index                   int
 	repo                    string
+	guiTargetID             string
 	flake                   string
 	brokerSocket            string
 	proxy                   string
@@ -325,6 +327,22 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 				return parsed, fmt.Errorf("--index must be a positive integer")
 			}
 			parsed.opts.Index = idx
+			i++
+		case "--gui-target-id":
+			if ctx.Args[0] != "plan" && ctx.Args[0] != "exec" {
+				return parsed, fmt.Errorf("--gui-target-id is only valid for native plan and native exec")
+			}
+			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
+				return parsed, fmt.Errorf("--gui-target-id requires a value")
+			}
+			value := strings.TrimSpace(ctx.Args[i+1])
+			if value == "" || value != ctx.Args[i+1] {
+				return parsed, fmt.Errorf("--gui-target-id must be non-empty and canonical")
+			}
+			if parsed.opts.GUITargetID != "" {
+				return parsed, fmt.Errorf("--gui-target-id may be specified only once")
+			}
+			parsed.opts.GUITargetID = value
 			i++
 		case "--flake":
 			if i+1 >= len(ctx.Args) {
@@ -872,6 +890,19 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.repo = ctx.Args[i+1]
 			i++
+		case "--gui-target-id":
+			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
+				return parsed, fmt.Errorf("--gui-target-id requires a value")
+			}
+			value := strings.TrimSpace(ctx.Args[i+1])
+			if value == "" || value != ctx.Args[i+1] {
+				return parsed, fmt.Errorf("--gui-target-id must be non-empty and canonical")
+			}
+			if parsed.guiTargetID != "" {
+				return parsed, fmt.Errorf("--gui-target-id may be specified only once")
+			}
+			parsed.guiTargetID = value
+			i++
 		case "--flake":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--flake requires a value")
@@ -948,6 +979,7 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	}
 	lifecycleParsed := lifecycleArgs{
 		repo:                    parsed.repo,
+		guiTargetID:             parsed.guiTargetID,
 		flake:                   parsed.flake,
 		brokerSocket:            parsed.brokerSocket,
 		proxy:                   parsed.proxy,
@@ -1156,6 +1188,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		HostRoot:              hostRoot,
 		Project:               ctx.Project,
 		Repo:                  repo,
+		GUITargetID:           parsed.guiTargetID,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
 		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides),
 		BrokerBinary:          brokerCfg.Binary,

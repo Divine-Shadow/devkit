@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 
 	"devkit/cli/devctl/internal/devkitpaths"
@@ -645,18 +647,18 @@ func TestPrepareRefusesForeignManagementSkillPaths(t *testing.T) {
 	}
 }
 
-func TestDevWorkspaceRuntimeExportsNestedCodexConfigSource(t *testing.T) {
+func TestDevWorkspaceRuntimeDoesNotExportAmbientCodexConfigAuthority(t *testing.T) {
 	root := devkitRootFromPackage(t)
 	runtimeNix := readTestFile(t, filepath.Join(root, "overlays", "dev-workspace", "runtime.nix"))
 	for _, want := range []string{
 		`pkgs.python3Packages.pyyaml`,
-		`[ -n "''${CODEX_HOME:-}" ]`,
-		`[ -r "$CODEX_HOME/config.toml" ]`,
-		`export DEVKIT_CODEX_CONFIG_SOURCE="$CODEX_HOME/config.toml"`,
 	} {
 		if !strings.Contains(runtimeNix, want) {
 			t.Fatalf("dev-workspace runtime missing %q:\n%s", want, runtimeNix)
 		}
+	}
+	if strings.Contains(runtimeNix, "DEVKIT_CODEX_CONFIG_SOURCE") {
+		t.Fatalf("dev-workspace runtime retained ambient Codex config authority:\n%s", runtimeNix)
 	}
 }
 
@@ -1515,59 +1517,151 @@ func TestSeedSSHSeedsOnlyCallerIdentityAndNeverCallerKnownHosts(t *testing.T) {
 	}
 }
 
-func TestSeedCodexConfigMaterializesAndRefreshesNixAuthoredSource(t *testing.T) {
+func TestSeedCodexConfigDataAtomicallyMaterializesAndRefreshes0600Target(t *testing.T) {
 	root := t.TempDir()
-	source := filepath.Join(root, "nix-store", "codex-config.toml")
-	first := "# source = nixos-wsl codex config\nmodel_provider = \"openai\"\n"
-	writeTestFile(t, source, first)
-	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", source)
 	home := filepath.Join(root, "consumer-home")
-
-	if err := SeedCodexConfig(home); err != nil {
-		t.Fatalf("SeedCodexConfig first materialization: %v", err)
+	first := []byte("# source = immutable GUI config\nmodel_provider = \"openai\"\n")
+	if err := seedCodexConfigData(home, first); err != nil {
+		t.Fatalf("first materialization: %v", err)
 	}
 	target := filepath.Join(home, ".codex", "config.toml")
-	if got := readTestFile(t, target); got != first {
+	if got := readTestFile(t, target); got != string(first) {
 		t.Fatalf("materialized Codex config = %q, want %q", got, first)
 	}
 	if info, err := os.Lstat(target); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
 		t.Fatalf("materialized Codex config mode = %v error=%v", info, err)
+	} else if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+		t.Fatalf("materialized Codex config owner = %#v, want uid %d", info.Sys(), os.Geteuid())
 	}
 
-	second := first + "[profiles.openai]\nmodel_provider = \"openai\"\n"
-	if err := os.WriteFile(source, []byte(second), 0o600); err != nil {
-		t.Fatal(err)
+	second := append(append([]byte{}, first...), []byte("[profiles.openai]\nmodel_provider = \"openai\"\n")...)
+	if err := seedCodexConfigData(home, second); err != nil {
+		t.Fatalf("atomic refresh: %v", err)
 	}
-	if err := SeedCodexConfig(home); err != nil {
-		t.Fatalf("SeedCodexConfig refresh: %v", err)
-	}
-	if got := readTestFile(t, target); got != second {
+	if got := readTestFile(t, target); got != string(second) {
 		t.Fatalf("refreshed Codex config = %q, want %q", got, second)
+	}
+	if matches, err := filepath.Glob(filepath.Join(home, ".codex", ".config.toml.new-*")); err != nil || len(matches) != 0 {
+		t.Fatalf("atomic refresh staging residue = %#v, %v", matches, err)
 	}
 }
 
-func TestSeedCodexConfigRejectsRelativeSymlinkAndNonRegularSources(t *testing.T) {
-	home := filepath.Join(t.TempDir(), "consumer-home")
-	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", "relative-config.toml")
-	if err := SeedCodexConfig(home); err == nil || !strings.Contains(err.Error(), "must be absolute") {
-		t.Fatalf("relative config source error = %v", err)
-	}
+func TestSeedCodexConfigDataRejectsSymlinkedDestinationParents(t *testing.T) {
+	data := []byte("# immutable GUI config\n")
+	t.Run("host-home", func(t *testing.T) {
+		root := t.TempDir()
+		realHome := filepath.Join(root, "real-home")
+		if err := os.Mkdir(realHome, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		linkedHome := filepath.Join(root, "linked-home")
+		if err := os.Symlink(realHome, linkedHome); err != nil {
+			t.Fatal(err)
+		}
+		if err := seedCodexConfigData(linkedHome, data); err == nil || !strings.Contains(err.Error(), "without following links") {
+			t.Fatalf("symlinked host home rejection = %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(realHome, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("symlinked host home was mutated: %v", err)
+		}
+	})
 
-	root := t.TempDir()
-	realSource := filepath.Join(root, "real-config.toml")
-	writeTestFile(t, realSource, "model_provider = \"openai\"\n")
-	symlinkSource := filepath.Join(root, "config-link.toml")
-	if err := os.Symlink(realSource, symlinkSource); err != nil {
+	t.Run("codex-directory", func(t *testing.T) {
+		root := t.TempDir()
+		home := filepath.Join(root, "home")
+		outside := filepath.Join(root, "outside")
+		if err := os.Mkdir(home, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(outside, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+		if err := seedCodexConfigData(home, data); err == nil || !strings.Contains(err.Error(), "without following links") {
+			t.Fatalf("symlinked .codex rejection = %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(outside, "config.toml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("symlinked .codex target was mutated: %v", err)
+		}
+	})
+}
+
+func TestSeedCodexConfigDataRejectsForeignOwnedDestination(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", symlinkSource)
-	if err := SeedCodexConfig(home); err == nil || !strings.Contains(err.Error(), "regular non-symlink") {
-		t.Fatalf("symlink config source error = %v", err)
+	foreignUID := os.Geteuid() + 1
+	err := seedCodexConfigDataForUID(home, []byte("# immutable GUI config\n"), foreignUID)
+	if err == nil || !strings.Contains(err.Error(), "owned by uid") {
+		t.Fatalf("foreign-owner rejection = %v", err)
 	}
+	if _, err := os.Lstat(filepath.Join(home, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("foreign-owned destination was mutated: %v", err)
+	}
+}
 
-	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", root)
-	if err := SeedCodexConfig(home); err == nil || !strings.Contains(err.Error(), "regular non-symlink") {
-		t.Fatalf("directory config source error = %v", err)
+func TestSeedCodexConfigDataRejectsNonCanonicalHostHome(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	nonCanonical := home + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(home)
+	if err := seedCodexConfigData(nonCanonical, []byte("# immutable GUI config\n")); err == nil || !strings.Contains(err.Error(), "absolute canonical") {
+		t.Fatalf("non-canonical host home rejection = %v", err)
+	}
+}
+
+func TestProjectedCodexConfigVerificationRejectsSameBytePathReplacement(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	data := []byte("# immutable GUI config\n")
+	if err := seedCodexConfigData(home, data); err != nil {
+		t.Fatal(err)
+	}
+	codexPath := filepath.Join(home, ".codex")
+	target := filepath.Join(codexPath, "config.toml")
+	original, err := os.Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _, err := openedFileIdentityAndUID(original)
+	if closeErr := original.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, target+".original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.Open(codexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	if err := verifyProjectedCodexConfigAt(directory, "config.toml", target, data, os.Geteuid(), &identity); err == nil || !strings.Contains(err.Error(), "changed identity") {
+		t.Fatalf("same-byte path replacement verification = %v", err)
+	}
+}
+
+func TestSeedCodexConfigIgnoresHostileLegacyAmbientSourceForOrdinaryPlan(t *testing.T) {
+	root := t.TempDir()
+	hostile := filepath.Join(root, "hostile-config.toml")
+	writeTestFile(t, hostile, "hostile = true\n")
+	t.Setenv("DEVKIT_CODEX_CONFIG_SOURCE", hostile)
+	home := filepath.Join(root, "consumer-home")
+	p := nativeplan.Plan{Agent: agent.Spec{HostHome: home}}
+	if err := SeedCodexConfig(p); err != nil {
+		t.Fatalf("ordinary plan config seeding: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy ambient source was materialized: %v", err)
 	}
 }
 

@@ -57,6 +57,9 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [GUI Target Configuration Projection](execplans/gui-target-config-projection-20260829.md):
+  project one immutable inventory-selected Codex config during the exact GUI
+  target launch and admit only a proven suffix-only stale slot-manifest shrink.
 - [Management Fleet Exec Handle](execplans/management-fleet-exec-handle.md):
   keep workspace-egress network-isolated while projecting only the
   source-derived Nix-owned handle for the existing exact-station Fleet effect.
