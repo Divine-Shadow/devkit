@@ -1000,7 +1000,7 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleParsed)
 	opts := lifecyclePlanOptions(ctx, cfg, lifecycleParsed, repo, brokerCfg)
 	opts.Index = parsed.index
-	p, err := nativeplan.BuildDevAll(opts)
+	p, err := buildDevAllForExec(opts)
 	if err != nil {
 		return err
 	}
@@ -2098,10 +2098,7 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
-	if err := ensurePortableProductExecGitdir(parsed.opts); err != nil {
-		return err
-	}
-	p, err := nativeplan.BuildDevAll(parsed.opts)
+	p, err := buildDevAllForExec(parsed.opts)
 	if err != nil {
 		return err
 	}
@@ -2171,6 +2168,13 @@ func ensurePortableProductExecGitdir(opts nativeplan.BuildOptions) error {
 	}
 	hostWorktree := filepath.Join(expectedWorkspaceRoot, "ouroboros-ide")
 	return wtx.EnsurePortableNativeGitdir(hostWorktree, worktreeRoot, "ouroboros-ide")
+}
+
+func buildDevAllForExec(opts nativeplan.BuildOptions) (nativeplan.Plan, error) {
+	if err := ensurePortableProductExecGitdir(opts); err != nil {
+		return nativeplan.Plan{}, err
+	}
+	return nativeplan.BuildDevAll(opts)
 }
 
 func runCommandPreservingExit(cmd *exec.Cmd) error {

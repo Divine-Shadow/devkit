@@ -29,9 +29,16 @@ the exact `dev-all`/`ouroboros-ide` selected lane is eligible. The migration is
 idempotent and becomes a no-op once metadata is relative, which keeps the live
 filesystem aligned with the source-defined bootstrap invariant.
 
+Both the explicit `native exec` surface and the supported top-level `exec`
+compatibility surface use the same pre-plan helper. Fleet GUI launchers use the
+top-level surface, so leaving either entrypoint outside that helper would make
+the source contract depend on command spelling.
+
 ## safety_checks
 
 - Do not mutate plan, readiness, Management, or non-Product invocations.
+- Route both supported Product exec entrypoints through the same guarded
+  pre-plan migration.
 - Require the exact selected workspace root before considering a write.
 - Require regular `.git` metadata and the existing package-owned common-dir,
   worktree-dir, and reverse-pointer validation before rewriting.
