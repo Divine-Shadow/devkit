@@ -231,6 +231,63 @@ func TestManagementWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 	}
 }
 
+func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
+	devRoot := t.TempDir()
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktreeRoot := filepath.Join(devRoot, "agent-worktrees")
+	workspaceRoot := filepath.Join(worktreeRoot, "agent4")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	for _, dir := range []string{devkitRoot, hostWorktree} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            4,
+		Repo:             "ouroboros-ide",
+		WorkspaceRoot:    workspaceRoot,
+		WorktreeRoot:     worktreeRoot,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.HostWorkspaceRoot != workspaceRoot || p.SandboxWorkspaceRoot != "/workspaces/dev" {
+		t.Fatalf("workspace projection = host %q sandbox %q", p.HostWorkspaceRoot, p.SandboxWorkspaceRoot)
+	}
+	if p.Agent.HostWorktree != hostWorktree || p.Agent.SandboxWorktree != "/workspaces/dev/ouroboros-ide" {
+		t.Fatalf("worktree projection = host %q sandbox %q", p.Agent.HostWorktree, p.Agent.SandboxWorktree)
+	}
+	if p.MountPolicyIdentity != ManagementControllerMountPolicyIdentity || p.WindowsMountsVisible {
+		t.Fatalf("mount identity = %q windows=%t", p.MountPolicyIdentity, p.WindowsMountsVisible)
+	}
+	if !hasExactBind(p.Binds, Bind{Source: workspaceRoot, Target: "/workspaces/dev", Mode: "rw", Required: true}) ||
+		!hasExactBind(p.Binds, Bind{Source: hostWorktree, Target: "/workspace", Mode: "rw", Required: true}) {
+		t.Fatalf("missing exact lane/workspace binds: %#v", p.Binds)
+	}
+
+	otherLane := filepath.Join(worktreeRoot, "agent3")
+	if err := os.MkdirAll(filepath.Join(otherLane, "ouroboros-ide"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            4,
+		Repo:             "ouroboros-ide",
+		WorkspaceRoot:    otherLane,
+		WorktreeRoot:     worktreeRoot,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+	}); err == nil {
+		t.Fatal("mismatched Product lane root was accepted")
+	}
+}
+
 func TestManagementWorkspaceRootFailsClosed(t *testing.T) {
 	t.Setenv(ManagementControllerProfileEnvironment, "")
 	devRoot := t.TempDir()

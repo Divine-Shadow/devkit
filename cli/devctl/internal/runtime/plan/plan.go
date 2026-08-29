@@ -167,7 +167,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	workspaceRoot, err := validateManagementWorkspaceRoot(opts.WorkspaceRoot, project, repo, index, paths)
+	workspaceRoot, err := validateIsolatedWorkspaceRoot(opts.WorkspaceRoot, project, repo, index, paths)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -362,7 +362,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			return Plan{}, err
 		}
 		if workspaceRoot != "" {
-			if err := validateManagementWorkspaceRootBinds(binds, workspaceRoot, paths); err != nil {
+			if err := validateIsolatedWorkspaceRootBinds(binds, workspaceRoot, paths); err != nil {
 				return Plan{}, err
 			}
 		}
@@ -695,7 +695,7 @@ func pathWithinRoot(root, candidate string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func validateManagementWorkspaceRoot(value, project, repo string, index int, paths agent.Paths) (string, error) {
+func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths agent.Paths) (string, error) {
 	workspaceRoot := strings.TrimSpace(value)
 	if workspaceRoot == "" {
 		return "", nil
@@ -706,8 +706,10 @@ func validateManagementWorkspaceRoot(value, project, repo string, index int, pat
 	if isMntFilesystemPath(workspaceRoot) || isWindowsFilesystemPath(workspaceRoot) {
 		return "", fmt.Errorf("Management workspace root rejects /mnt paths: %s", workspaceRoot)
 	}
-	if project != "dev-workspace" || repo != "shadow-throne-management" || (index != 1 && index != 2) {
-		return "", fmt.Errorf("workspace root is restricted to Dev Workspace 1 and 2 Management lanes")
+	managementLane := project == "dev-workspace" && repo == "shadow-throne-management" && (index == 1 || index == 2)
+	productLane := project == "dev-all" && repo == "ouroboros-ide"
+	if !managementLane && !productLane {
+		return "", fmt.Errorf("workspace root is restricted to declared Management controller or dev-all Product lanes")
 	}
 	expected := filepath.Join(filepath.Clean(paths.HostWorktreeRoot), fmt.Sprintf("agent%d", index))
 	if workspaceRoot == filepath.Clean(paths.DevRoot) || workspaceRoot == filepath.Clean(paths.HostWorktreeRoot) || workspaceRoot != expected {
@@ -717,8 +719,9 @@ func validateManagementWorkspaceRoot(value, project, repo string, index int, pat
 		return "", fmt.Errorf("Management host worktree must be an immediate child of workspace root %s: %s", workspaceRoot, paths.HostWorktree)
 	}
 	sandboxWorktree, ok := projectSandboxPath(paths.HostWorktree, workspaceRoot, "/workspaces/dev")
-	if !ok || sandboxWorktree != "/workspaces/dev/shadow-throne-management" {
-		return "", fmt.Errorf("Management host worktree does not project to /workspaces/dev/shadow-throne-management")
+	expectedSandboxWorktree := filepath.Join("/workspaces/dev", repo)
+	if !ok || sandboxWorktree != expectedSandboxWorktree {
+		return "", fmt.Errorf("host worktree does not project to %s", expectedSandboxWorktree)
 	}
 	for _, path := range []string{workspaceRoot, paths.HostWorktree} {
 		if _, err := os.Lstat(path); err != nil {
@@ -738,7 +741,7 @@ func validateManagementWorkspaceRoot(value, project, repo string, index int, pat
 	return workspaceRoot, nil
 }
 
-func validateManagementWorkspaceRootBinds(binds []Bind, workspaceRoot string, paths agent.Paths) error {
+func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot string, paths agent.Paths) error {
 	rootBinds := 0
 	for _, bind := range binds {
 		cleanTarget := filepath.Clean(bind.Target)
