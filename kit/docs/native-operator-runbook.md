@@ -62,6 +62,47 @@ kit/scripts/devkit -p dev-all status --repo ouroboros-ide --ready
 `scale` updates native manifests and preserves per-agent state under the native
 state root.
 
+## Git Lane Custody And Migration
+
+Every prepared native lane owns a separate bare common repository:
+
+```text
+<worktree-root>/.devkit/git/agentN/<repo>.git
+```
+
+The marker in that directory binds the repository, source-declared origin, and
+`agentN` identity. Git refs, linked-worktree registrations, index files, and
+transaction locks therefore remain inside one execution lane. Relative `.git`,
+`commondir`, and reverse `gitdir` pointers keep the complete lane topology
+portable when the worktree root is projected at another sandbox path.
+
+Older installations may still have lanes linked to the legacy shared path
+`<worktree-root>/.devkit/git/<repo>.git`. Migrate one idle lane through the
+selected-slot reset boundary:
+
+```bash
+kit/scripts/devkit -p dev-all native reset --repo ouroboros-ide --index 1
+```
+
+That reset creates the selected lane's new common repository. It leaves the
+legacy common repository, sibling worktrees, refs, locks, and processes
+unchanged, so an active legacy agent2 can coexist with a reconstructed agent1.
+Repeat only when each remaining lane reaches its own disposable boundary. A
+whole-prefix reset may remove the legacy common repository because that command
+first proves the complete source-declared slot set is idle.
+
+When reducing the declared lane count, let the source-derived manifest-shrink
+transaction retire the old suffix before running another setup or selected-slot
+reset. The shrink transaction deliberately validates indices against the prior
+installed manifest, so it can still retire legacy `agentN` after the new source
+count makes `N` out of range for an ordinary selected reset. For a legacy
+surplus it requires the exact v1 ownership marker, origin, forward `.git` link,
+reverse worktree registration, branch, and clean/no-ahead custody. It then
+removes only that surplus worktree, home, and state. The shared legacy common
+repository—including the retired lane's stale registration/ref and every
+retained sibling's metadata and lock domain—remains untouched until all legacy
+lanes have migrated or a proven-idle whole-prefix reset owns it.
+
 ## Down
 
 Stop broker state for the overlay and clean lifecycle metadata:

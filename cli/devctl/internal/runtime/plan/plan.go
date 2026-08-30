@@ -796,13 +796,37 @@ func isPackageOwnedProductGitMetadataBind(project, repo string, paths agent.Path
 	if project != "dev-all" || repo != "ouroboros-ide" || bind.Mode != "rw" || !bind.Required {
 		return false
 	}
-	expectedSource := filepath.Join(filepath.Clean(paths.HostWorktreeRoot), ".devkit", "git", repo+".git")
-	expectedTarget := filepath.Join("/workspaces", ".devkit", "git", repo+".git")
-	if filepath.Clean(bind.Source) != expectedSource || filepath.Clean(bind.Target) != expectedTarget {
+	lane := filepath.Base(filepath.Dir(filepath.Clean(paths.HostWorktree)))
+	laneIndex := strings.TrimPrefix(lane, "agent")
+	if lane == "." || lane == string(filepath.Separator) || laneIndex == "" || laneIndex == lane {
 		return false
 	}
-	resolved, err := filepath.EvalSymlinks(expectedSource)
-	return err == nil && filepath.Clean(resolved) == expectedSource
+	for _, character := range laneIndex {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	pairs := [][2]string{
+		{
+			filepath.Join(filepath.Clean(paths.HostWorktreeRoot), ".devkit", "git", lane, repo+".git"),
+			filepath.Join("/workspaces", ".devkit", "git", lane, repo+".git"),
+		},
+		// Transitional legacy lanes remain runnable until their own
+		// selected-slot reconstruction moves them into the lane-owned pair.
+		{
+			filepath.Join(filepath.Clean(paths.HostWorktreeRoot), ".devkit", "git", repo+".git"),
+			filepath.Join("/workspaces", ".devkit", "git", repo+".git"),
+		},
+	}
+	for _, pair := range pairs {
+		expectedSource, expectedTarget := pair[0], pair[1]
+		if filepath.Clean(bind.Source) != expectedSource || filepath.Clean(bind.Target) != expectedTarget {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(expectedSource)
+		return err == nil && filepath.Clean(resolved) == expectedSource
+	}
+	return false
 }
 
 func isWindowsFilesystemPath(value string) bool {

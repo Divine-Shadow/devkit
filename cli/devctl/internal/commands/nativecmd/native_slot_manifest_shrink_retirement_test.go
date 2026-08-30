@@ -50,6 +50,65 @@ func prepareNativeSlotManifestShrinkGit(
 	return git
 }
 
+func prepareLegacyNativeSlotManifestShrinkGit(
+	t *testing.T,
+	fixture *nativeSlotManifestShrinkFixture,
+) (string, string) {
+	t.Helper()
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is supplied by the Nix test closure")
+	}
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	seed := filepath.Join(t.TempDir(), "seed")
+	runNativeSlotManifestShrinkGit(t, git, "init", "--bare", "--initial-branch=main", origin)
+	runNativeSlotManifestShrinkGit(t, git, "init", "--initial-branch=main", seed)
+	runNativeSlotManifestShrinkGit(t, git, "-C", seed, "config", "user.email", "legacy-shrink-test@example.invalid")
+	runNativeSlotManifestShrinkGit(t, git, "-C", seed, "config", "user.name", "legacy-shrink-test")
+	if err := os.WriteFile(filepath.Join(seed, "tracked.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runNativeSlotManifestShrinkGit(t, git, "-C", seed, "add", "tracked.txt")
+	runNativeSlotManifestShrinkGit(t, git, "-C", seed, "commit", "-m", "base")
+	runNativeSlotManifestShrinkGit(t, git, "-C", seed, "remote", "add", "origin", origin)
+	runNativeSlotManifestShrinkGit(t, git, "-C", seed, "push", "-u", "origin", "main")
+
+	legacyCommonDir, err := nativeSlotManifestShrinkLegacyCommonDir(fixture.actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyCommonDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runNativeSlotManifestShrinkGit(t, git, "clone", "--bare", origin, legacyCommonDir)
+	runNativeSlotManifestShrinkGit(t, git, "--git-dir", legacyCommonDir, "config", "worktree.useRelativePaths", "true")
+	runNativeSlotManifestShrinkGit(t, git, "--git-dir", legacyCommonDir, "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	marker := fmt.Sprintf(
+		"schema=devkit/native-owned-common-repository/v1\nrepository=%s\norigin=%s\n",
+		fixture.actual.Repo,
+		origin,
+	)
+	if err := os.WriteFile(filepath.Join(legacyCommonDir, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range fixture.actual.Agents {
+		if err := os.MkdirAll(filepath.Dir(spec.HostWorktree), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		branch := fixture.actual.BranchPrefix + fmt.Sprint(spec.ID.Index)
+		runNativeSlotManifestShrinkGit(
+			t,
+			git,
+			"--git-dir", legacyCommonDir,
+			"worktree", "add", spec.HostWorktree,
+			"-b", branch,
+			"origin/"+fixture.actual.BaseBranch,
+		)
+	}
+	fixture.origin = origin
+	return git, legacyCommonDir
+}
+
 func materializeNativeSlotDisposableState(t *testing.T, spec nativeagent.Spec) {
 	t.Helper()
 	for _, path := range []string{spec.HostHome, spec.StateRoot} {
@@ -140,6 +199,131 @@ func TestNativeSlotManifestShrinkRetiresCleanRealGitSuffixAtomically(t *testing.
 	}
 	if !reflect.DeepEqual(captured, []int{4, 5}) {
 		t.Fatalf("idempotent replay captured history again: %v", captured)
+	}
+}
+
+func TestNativeSlotManifestShrinkRetiresLegacySurplusWithoutTouchingRetainedCustody(t *testing.T) {
+	fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
+	git, legacyCommonDir := prepareLegacyNativeSlotManifestShrinkGit(t, &fixture)
+	surplus := fixture.actual.Agents[3]
+	materializeNativeSlotDisposableState(t, surplus)
+
+	retained := fixture.actual.Agents[1]
+	retainedMetadataOutput, result := exec.Command(
+		git,
+		"-C", retained.HostWorktree,
+		"rev-parse", "--absolute-git-dir",
+	).CombinedOutput()
+	if result != nil {
+		t.Fatalf("read retained legacy metadata: %v\n%s", result, retainedMetadataOutput)
+	}
+	retainedMetadata := strings.TrimSpace(string(retainedMetadataOutput))
+	retainedFiles := []string{
+		filepath.Join(retainedMetadata, "gitdir"),
+		filepath.Join(retainedMetadata, "commondir"),
+		filepath.Join(retainedMetadata, "HEAD"),
+		filepath.Join(retainedMetadata, "index"),
+		filepath.Join(legacyCommonDir, "devkit-owned-common"),
+		filepath.Join(legacyCommonDir, "refs", "heads", "agent2"),
+	}
+	retainedBefore := make(map[string][]byte, len(retainedFiles))
+	for _, path := range retainedFiles {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read retained legacy custody %s: %v", path, err)
+		}
+		retainedBefore[path] = append([]byte(nil), data...)
+	}
+	retainedSentinel := filepath.Join(retained.HostWorktree, "active-agent2-sentinel")
+	if err := os.WriteFile(retainedSentinel, []byte("retained agent2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retainedLock := filepath.Join(legacyCommonDir, "refs", "heads", "agent2.lock")
+	if err := os.WriteFile(retainedLock, []byte("active sibling lock domain\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retainedBefore[retainedLock] = []byte("active sibling lock domain\n")
+
+	surplusMetadataOutput, result := exec.Command(
+		git,
+		"-C", surplus.HostWorktree,
+		"rev-parse", "--absolute-git-dir",
+	).CombinedOutput()
+	if result != nil {
+		t.Fatalf("read surplus legacy metadata: %v\n%s", result, surplusMetadataOutput)
+	}
+	surplusMetadata := strings.TrimSpace(string(surplusMetadataOutput))
+	surplusReverseBefore, err := os.ReadFile(filepath.Join(surplusMetadata, "gitdir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	surplusRefBefore, err := os.ReadFile(filepath.Join(legacyCommonDir, "refs", "heads", "agent4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reconcileNativeSlotManifestShrink(
+		fixture.path,
+		fixture.expected,
+		fixture.opts,
+		nativeSlotManifestShrinkResetOptions(fixture),
+		false,
+	); err != nil {
+		t.Fatalf("retire exact legacy surplus: %v", err)
+	}
+	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
+		t.Fatalf("installed manifest = %#v, want expected", got)
+	}
+	for _, path := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy surplus path still exists %s: %v", path, err)
+		}
+	}
+	for path, want := range retainedBefore {
+		got, err := os.ReadFile(path)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("legacy retained custody changed at %s: data=%q err=%v", path, got, err)
+		}
+	}
+	if got, err := os.ReadFile(retainedSentinel); err != nil || string(got) != "retained agent2\n" {
+		t.Fatalf("retained legacy worktree changed: data=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(surplusMetadata, "gitdir")); err != nil || !reflect.DeepEqual(got, surplusReverseBefore) {
+		t.Fatalf("legacy shared metadata was pruned or changed: data=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(legacyCommonDir, "refs", "heads", "agent4")); err != nil || !reflect.DeepEqual(got, surplusRefBefore) {
+		t.Fatalf("legacy shared branch was pruned or changed: data=%q err=%v", got, err)
+	}
+}
+
+func TestNativeSlotManifestShrinkRejectsLegacyLookalikeBeforeMutation(t *testing.T) {
+	fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
+	_, legacyCommonDir := prepareLegacyNativeSlotManifestShrinkGit(t, &fixture)
+	surplus := fixture.actual.Agents[3]
+	materializeNativeSlotDisposableState(t, surplus)
+	if err := os.WriteFile(
+		filepath.Join(legacyCommonDir, "devkit-owned-common"),
+		[]byte("schema=devkit/native-owned-common-repository/v1\nrepository=foreign\norigin="+fixture.origin+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconcileNativeSlotManifestShrink(
+		fixture.path,
+		fixture.expected,
+		fixture.opts,
+		nativeSlotManifestShrinkResetOptions(fixture),
+		false,
+	); err == nil || !strings.Contains(err.Error(), "identity does not match") {
+		t.Fatalf("legacy lookalike rejection = %v", err)
+	}
+	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
+		t.Fatalf("legacy lookalike rejection changed manifest")
+	}
+	for _, path := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("legacy lookalike rejection changed %s: %v", path, err)
+		}
 	}
 }
 
@@ -295,6 +479,65 @@ func TestNativeSlotManifestShrinkResumesTypedPostCASCleanup(t *testing.T) {
 	for _, path := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot, transactionPath} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("recovery residue remains %s: %v", path, err)
+		}
+	}
+}
+
+func TestNativeSlotManifestShrinkResumesTypedPostCASCleanupForLegacySurplus(t *testing.T) {
+	fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
+	git, legacyCommonDir := prepareLegacyNativeSlotManifestShrinkGit(t, &fixture)
+	spec := fixture.actual.Agents[3]
+	materializeNativeSlotDisposableState(t, spec)
+	metadataOutput, metadataErr := exec.Command(
+		git,
+		"-C", spec.HostWorktree,
+		"rev-parse", "--absolute-git-dir",
+	).CombinedOutput()
+	if metadataErr != nil {
+		t.Fatalf("read legacy surplus metadata: %v\n%s", metadataErr, metadataOutput)
+	}
+	metadata := strings.TrimSpace(string(metadataOutput))
+	plan, err := wtx.PlanNativeSlotReset(nativeManifestShrinkResetOptions(
+		fixture.actual,
+		spec,
+		nativeSlotManifestShrinkResetOptions(fixture),
+		false,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := plan.Stage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := nativeManifestShrinkJournal(fixture.path, fixture.actual, fixture.expected, []nativeagent.Spec{spec})
+	journal.Status = "committed"
+	journal.SlotTransactions = []wtx.NativeResetTransactionState{transaction.State()}
+	transactionPath := nativeManifestShrinkTransactionPath(fixture.path)
+	if err := writeNativeManifestShrinkTransaction(transactionPath, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := nativeagent.WriteManifest(fixture.path, fixture.expected, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reconcileNativeSlotManifestShrink(
+		fixture.path, fixture.expected, fixture.opts, nativeSlotManifestShrinkResetOptions(fixture), false,
+	); err != nil {
+		t.Fatalf("typed legacy cleanup recovery: %v", err)
+	}
+	for _, path := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot, transactionPath} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy recovery residue remains %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		legacyCommonDir,
+		metadata,
+		filepath.Join(legacyCommonDir, "refs", "heads", "agent4"),
+	} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("legacy recovery mutated shared custody %s: %v", path, err)
 		}
 	}
 }

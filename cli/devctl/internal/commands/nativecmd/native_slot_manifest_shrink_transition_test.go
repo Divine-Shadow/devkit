@@ -345,6 +345,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsSocketAndProcessRaces(t *testi
 		err := requireNativeSlotManifestShrinkAbsentWithPlanner(
 			fixture.actual,
 			spec,
+			"",
 			func(identity nativeSlotProcessIdentity, dryRun bool) (*nativeSlotProcessPlan, error) {
 				return &nativeSlotProcessPlan{identity: identity, pids: []int{4104}, dryRun: dryRun}, nil
 			},
@@ -361,6 +362,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsSocketAndProcessRaces(t *testi
 		err := requireNativeSlotManifestShrinkAbsentWithPlanner(
 			fixture.actual,
 			spec,
+			"",
 			func(identity nativeSlotProcessIdentity, dryRun bool) (*nativeSlotProcessPlan, error) {
 				calls++
 				pids := []int(nil)
@@ -383,7 +385,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGitMetadataLockAndAheadCommit(
 	t.Run("registered-worktree-metadata", func(t *testing.T) {
 		fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
 		spec := fixture.actual.Agents[3]
-		commonDir, err := nativeSlotManifestShrinkCommonDir(fixture.actual)
+		commonDir, err := nativeSlotManifestShrinkCommonDir(fixture.actual, fixture.actual.Agents[3])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -401,7 +403,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGitMetadataLockAndAheadCommit(
 
 	t.Run("branch-transaction-lock", func(t *testing.T) {
 		fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
-		commonDir, err := nativeSlotManifestShrinkCommonDir(fixture.actual)
+		commonDir, err := nativeSlotManifestShrinkCommonDir(fixture.actual, fixture.actual.Agents[3])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -423,7 +425,7 @@ func TestNativeSlotManifestShrinkTransitionRejectsGitMetadataLockAndAheadCommit(
 			t.Skip("git is supplied by the Nix test closure")
 		}
 		fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
-		commonDir, err := nativeSlotManifestShrinkCommonDir(fixture.actual)
+		commonDir, err := nativeSlotManifestShrinkCommonDir(fixture.actual, fixture.actual.Agents[3])
 		if err != nil {
 			t.Fatal(err)
 		}

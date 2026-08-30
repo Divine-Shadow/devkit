@@ -1021,7 +1021,7 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		t.Fatalf("native prepare emitted non-portable commondir: %q", commondir)
 	}
 	commonDir := filepath.Clean(filepath.Join(gitdir, strings.TrimSpace(string(commondir))))
-	wantCommonDir := filepath.Join(isolatedRoot, ".devkit", "git", "test-repo.git")
+	wantCommonDir := filepath.Join(isolatedRoot, ".devkit", "git", "agent1", "test-repo.git")
 	if commonDir != wantCommonDir {
 		t.Fatalf("native prepare common directory = %s, want package-owned %s", commonDir, wantCommonDir)
 	}
@@ -1443,7 +1443,7 @@ fi
 	for _, path := range []string{
 		filepath.Join(worktreeRoot, "agent1"),
 		filepath.Join(worktreeRoot, "agent3"),
-		filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git"),
+		filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git"),
 		brokerSocket,
 		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
 		filepath.Join(base, ".devkit", "native-broker", "broker.json"),
@@ -1452,7 +1452,7 @@ fi
 			t.Fatalf("failed reset left package lifecycle residue %s: %v", path, statErr)
 		}
 	}
-	partialBootstrap, err := filepath.Glob(filepath.Join(worktreeRoot, ".devkit", "git", ".ouroboros-ide.bootstrap-*"))
+	partialBootstrap, err := filepath.Glob(filepath.Join(worktreeRoot, ".devkit", "git", "agent*", ".ouroboros-ide.bootstrap-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1480,7 +1480,7 @@ fi
 			}
 		}
 
-		commonRepo := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
+		commonRepo := filepath.Join(worktreesRoot, ".devkit", "git", "agent1", "ouroboros-ide.git")
 		selectedWorktree := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide")
 		for _, absent := range []string{commonRepo, selectedWorktree} {
 			if _, err := os.Lstat(absent); !errors.Is(err, os.ErrNotExist) {
@@ -1564,8 +1564,8 @@ fi
 		}
 	}
 	worktreesRoot := worktreeRoot
-	wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
 	for index := 1; index <= 3; index++ {
+		wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", fmt.Sprintf("agent%d", index), "ouroboros-ide.git")
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
 		gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
 		if err != nil {
@@ -1616,9 +1616,9 @@ fi
 		t.Fatal(err)
 	}
 	wantConfig := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide", ".devhome-agent1", ".ssh", "config")
-	if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
+	if strings.Count(string(sshInvocations), "git-upload-pack") != 3 ||
 		!strings.Contains(string(sshInvocations), "-F "+wantConfig) {
-		t.Fatalf("reset did not use exactly one package-owned SSH bootstrap:\n%s", sshInvocations)
+		t.Fatalf("reset did not use exactly three lane-owned SSH bootstraps:\n%s", sshInvocations)
 	}
 	manifest := filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json")
 	manifestData, err := os.ReadFile(manifest)
@@ -1637,6 +1637,8 @@ fi
 	// byte and process alone.
 	agent1Worktree := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide")
 	agent2Worktree := filepath.Join(worktreesRoot, "agent2", "ouroboros-ide")
+	agent1CommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "agent1", "ouroboros-ide.git")
+	agent2CommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "agent2", "ouroboros-ide.git")
 	agent2Home := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
 	agent2State := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
 	sharedManifest := filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json")
@@ -1899,16 +1901,15 @@ fi
 			t.Fatalf("failed selected reconstruction left residue %s: %v", path, err)
 		}
 	}
-	selectedRef := exec.Command("git", "--git-dir", wantCommonDir, "rev-parse", "--verify", "refs/heads/agent1")
-	if output, err := selectedRef.CombinedOutput(); err == nil {
-		t.Fatalf("failed selected reconstruction retained poisoned agent1 branch: %s", output)
+	if _, err := os.Lstat(agent1CommonDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed selected reconstruction retained the disposable agent1 common repository: %v", err)
 	}
-	worktreeList := runNativeFixtureCommand(t, "git", "--git-dir", wantCommonDir, "worktree", "list", "--porcelain")
-	if strings.Contains(worktreeList, agent1Worktree) {
-		t.Fatalf("failed selected reconstruction retained selected worktree registration:\n%s", worktreeList)
-	}
-	if output, err := exec.Command("git", "--git-dir", wantCommonDir, "rev-parse", "--verify", "refs/heads/agent2").CombinedOutput(); err != nil {
+	if output, err := exec.Command("git", "--git-dir", agent2CommonDir, "rev-parse", "--verify", "refs/heads/agent2").CombinedOutput(); err != nil {
 		t.Fatalf("failed selected reconstruction removed sibling branch: %v\n%s", err, output)
+	}
+	worktreeList := runNativeFixtureCommand(t, "git", "--git-dir", agent2CommonDir, "worktree", "list", "--porcelain")
+	if !strings.Contains(worktreeList, agent2Worktree) || strings.Contains(worktreeList, agent1Worktree) {
+		t.Fatalf("failed selected reconstruction changed sibling worktree registrations:\n%s", worktreeList)
 	}
 	if err := syscall.Kill(siblingProcess.Process.Pid, 0); err != nil {
 		t.Fatalf("failed selected reconstruction stopped sibling process: %v", err)
@@ -2003,7 +2004,9 @@ fi
 			filepath.Join(base, "agent-worktrees", "agent1"),
 			filepath.Join(base, "agent-worktrees", "agent2"),
 			filepath.Join(base, "agent-worktrees", "agent3"),
-			filepath.Join(base, "agent-worktrees", ".devkit", "git", "ouroboros-ide.git"),
+			filepath.Join(base, "agent-worktrees", ".devkit", "git", "agent1", "ouroboros-ide.git"),
+			filepath.Join(base, "agent-worktrees", ".devkit", "git", "agent2", "ouroboros-ide.git"),
+			filepath.Join(base, "agent-worktrees", ".devkit", "git", "agent3", "ouroboros-ide.git"),
 			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent1"),
 			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2"),
 			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent3"),
@@ -2284,13 +2287,13 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
+			if strings.Count(string(sshInvocations), "git-upload-pack") != 3 ||
 				!strings.Contains(string(sshInvocations), "-F ") {
-				t.Fatalf("installed reset did not use one package-owned Product checkout fetch:\n%s", sshInvocations)
+				t.Fatalf("installed reset did not use three lane-owned Product checkout fetches:\n%s", sshInvocations)
 			}
 			worktreesRoot := filepath.Join(root, "agent-worktrees")
-			wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "ouroboros-ide.git")
 			for index := 1; index <= 3; index++ {
+				wantCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", fmt.Sprintf("agent%d", index), "ouroboros-ide.git")
 				worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
 				if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", worktree, "rev-parse", "HEAD")); got != expectedHead {
 					t.Fatalf("agent%d HEAD = %s, want %s", index, got, expectedHead)
@@ -3052,7 +3055,7 @@ native:
 	for _, residue := range []string{
 		mismatchingSocket,
 		filepath.Join(mismatchingRoot, "agent1", "test-repo"),
-		filepath.Join(mismatchingRoot, ".devkit", "git", "test-repo.git"),
+		filepath.Join(mismatchingRoot, ".devkit", "git", "agent1", "test-repo.git"),
 	} {
 		if _, err := os.Lstat(residue); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("mismatching package host key left bootstrap residue %s: %v", residue, err)

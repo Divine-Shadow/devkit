@@ -9,6 +9,10 @@ Principles
   the source-derived cold history snapshot before deleting a Codex home. Never
   add a bypass, manual SQLite copy, automatic restore/import, or retention
   pruning to the reset path.
+- Native `dev-all` Git custody is lane-local. Fresh and reconstructed lanes use
+  `.devkit/git/agentN/<repo>.git`; selected-slot reset and bootstrap own exactly
+  that lane's common repository. An active sibling retains byte-for-byte
+  custody of its lane common or transitional legacy `.devkit/git/<repo>.git`.
 - Product artifacts are composed outside Devkit. Devkit must not choose a
   Product revision, acquire Product source to build a runtime, derive Product
   JARs, or publish a parallel runtime identity. It exposes the generic

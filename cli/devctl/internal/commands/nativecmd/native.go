@@ -2167,7 +2167,7 @@ func ensurePortableProductExecGitdir(opts nativeplan.BuildOptions) error {
 		return nil
 	}
 	hostWorktree := filepath.Join(expectedWorkspaceRoot, "ouroboros-ide")
-	return wtx.EnsurePortableNativeGitdir(hostWorktree, worktreeRoot, "ouroboros-ide")
+	return wtx.EnsurePortableNativeGitdir(hostWorktree, worktreeRoot, "ouroboros-ide", opts.Index)
 }
 
 func buildDevAllForExec(opts nativeplan.BuildOptions) (nativeplan.Plan, error) {

@@ -22,6 +22,9 @@ The detailed operator runbook is
 Native agents use host worktrees plus sandboxed agent homes:
 
 - Worktrees: `../agent-worktrees/agent<N>/<repo>` by default.
+- Git common repositories:
+  `../agent-worktrees/.devkit/git/agent<N>/<repo>.git`. The ownership marker
+  binds the repository, declared origin, and lane identity.
 - Agent state: `../.devkit/native-agents/<project>-agent<N>`.
 - For `dev-all`, Codex state and SSH config are seeded into the repo-local
   `.devhome-agentN` home so tmux and `codex resume` use the same session files.

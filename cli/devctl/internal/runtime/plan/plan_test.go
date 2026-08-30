@@ -237,7 +237,7 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 	worktreeRoot := filepath.Join(devRoot, "agent-worktrees")
 	workspaceRoot := filepath.Join(worktreeRoot, "agent4")
 	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
-	commonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	commonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "agent4", "ouroboros-ide.git")
 	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "agent4")
 	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -288,7 +288,7 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 		t.Fatalf("missing exact lane/workspace binds: %#v", p.Binds)
 	}
 	if !hasExactBind(p.Binds, Bind{
-		Source: commonGitDir, Target: "/workspaces/.devkit/git/ouroboros-ide.git", Mode: "rw", Required: true,
+		Source: commonGitDir, Target: "/workspaces/.devkit/git/agent4/ouroboros-ide.git", Mode: "rw", Required: true,
 	}) {
 		t.Fatalf("missing exact package-owned common Git metadata bind: %#v", p.Binds)
 	}
@@ -1048,13 +1048,63 @@ func TestBuildDevAllWorkspaceEgressProjectsPreparedRuntimeSupportExactly(t *test
 	}
 }
 
+func TestProductWorkspaceRootKeepsExactLegacyCommonBindDuringSlotMigration(t *testing.T) {
+	devRoot := t.TempDir()
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	worktreeRoot := filepath.Join(devRoot, "agent-worktrees")
+	workspaceRoot := filepath.Join(worktreeRoot, "agent2")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	legacyCommonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	worktreeGitDir := filepath.Join(legacyCommonGitDir, "worktrees", "agent2")
+	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	relativeGitDir, err := filepath.Rel(hostWorktree, worktreeGitDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hostWorktree, ".git"), []byte("gitdir: "+relativeGitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := Build(BuildOptions{
+		Paths:            devkitpaths.Paths{Root: devkitRoot},
+		Project:          "dev-all",
+		Index:            2,
+		Repo:             "ouroboros-ide",
+		WorkspaceRoot:    workspaceRoot,
+		WorktreeRoot:     worktreeRoot,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(devkitRoot, "kit", "proxy", "allowlist.txt"),
+	})
+	if err != nil {
+		t.Fatalf("active legacy lane plan failed during incremental migration: %v", err)
+	}
+	if !hasExactBind(p.Binds, Bind{
+		Source: legacyCommonGitDir, Target: "/workspaces/.devkit/git/ouroboros-ide.git", Mode: "rw", Required: true,
+	}) {
+		t.Fatalf("active legacy lane missing its exact transitional common Git bind: %#v", p.Binds)
+	}
+	for _, bind := range p.Binds {
+		if filepath.Clean(bind.Source) == filepath.Clean(worktreeRoot) ||
+			filepath.Clean(bind.Target) == "/workspaces/dev/agent-worktrees" {
+			t.Fatalf("legacy compatibility broadened the workspace bind: %#v", bind)
+		}
+	}
+}
+
 func TestWorkspaceEgressIsolatedRelativeMetadataUsesNoHostAliases(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
 	devkitRoot := filepath.Join(devRoot, "devkit")
 	worktreeRoot := filepath.Join(root, "isolated-product-a")
 	hostWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
-	commonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	commonGitDir := filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git")
 	worktreeGitDir := filepath.Join(commonGitDir, "worktrees", "isolated-product-a")
 	for _, dir := range []string{devkitRoot, hostWorktree, worktreeGitDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

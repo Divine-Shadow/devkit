@@ -3,6 +3,7 @@ package worktrees
 import (
 	"devkit/cli/devctl/internal/gitauthority"
 	"devkit/cli/devctl/internal/paths"
+	runtimeagent "devkit/cli/devctl/internal/runtime/agent"
 	"errors"
 	"fmt"
 	"os"
@@ -277,6 +278,40 @@ func TestSetupNative_DedicatedWorktreesForEveryAgent(t *testing.T) {
 	if got := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
 		t.Fatalf("primary checkout branch changed to %s", got)
 	}
+	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
+	commonDirs := map[int]string{}
+	for index := 1; index <= 2; index++ {
+		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commonDirs[index] = commonDir
+		marker, err := os.ReadFile(filepath.Join(commonDir, "devkit-owned-common"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(marker), fmt.Sprintf("lane=agent%d\n", index)) {
+			t.Fatalf("agent%d common repository marker lacks lane binding: %s", index, marker)
+		}
+		if got := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", "refs/heads/agent"+fmt.Sprint(index)); got == "" {
+			t.Fatalf("agent%d common repository lacks its branch", index)
+		}
+		other := 3 - index
+		if output, err := exec.Command("git", "--git-dir", commonDir, "show-ref", "--verify", fmt.Sprintf("refs/heads/agent%d", other)).CombinedOutput(); err == nil {
+			t.Fatalf("agent%d common repository contains agent%d branch: %s", index, other, output)
+		}
+	}
+	firstInfo, err := os.Stat(commonDirs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInfo, err := os.Stat(commonDirs[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(firstInfo, secondInfo) {
+		t.Fatalf("native lanes share the same common repository inode: %s", commonDirs[1])
+	}
 }
 
 func TestSetupNativeSelectedReconstructionConvergesFreshCurrentWorktree(t *testing.T) {
@@ -394,7 +429,7 @@ func TestNativeSlotResetReconstructionDiscardsSelectedRefAdvanceAfterPlanning(t 
 	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
 	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
 	siblingHead := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,8 +452,8 @@ func TestNativeSlotResetReconstructionDiscardsSelectedRefAdvanceAfterPlanning(t 
 	if err := plan.Apply(); err != nil {
 		t.Fatalf("reset rejected disposable selected-ref advance %s: %v", advanced, err)
 	}
-	if got := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef); got != advanced {
-		t.Fatalf("reset mutated selected ref before reconstruction: got %s want %s", got, advanced)
+	if _, err := os.Lstat(commonDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("selected reset retained the disposable lane common repository: %v", err)
 	}
 
 	opts.Index = 1
@@ -433,12 +468,15 @@ func TestNativeSlotResetReconstructionDiscardsSelectedRefAdvanceAfterPlanning(t 
 	if got := readTrim(t, "git", "-C", selected, "status", "--porcelain=v1"); got != "" {
 		t.Fatalf("reconstructed selected worktree is dirty: %q", got)
 	}
+	if got, want := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef), readTrim(t, "git", "-C", selected, "rev-parse", "origin/main"); got != want {
+		t.Fatalf("reconstructed selected ref = %s, origin/main = %s", got, want)
+	}
 	if got := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD"); got != siblingHead {
 		t.Fatalf("selected reset changed sibling HEAD: got %s want %s", got, siblingHead)
 	}
 }
 
-func TestNativeSlotResetReconstructionRefusesBranchOwnedBySibling(t *testing.T) {
+func TestNativeSlotResetReconstructionAllowsSameBranchNameInSiblingLane(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -463,17 +501,19 @@ func TestNativeSlotResetReconstructionRefusesBranchOwnedBySibling(t *testing.T) 
 	}
 	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
 	stateRoot := filepath.Join(root, "state")
-	selected := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
 	sibling := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	selectedCommonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingCommonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	selectedRef := "refs/heads/agent1"
-	mustRun(t, "git", "-C", selected, "switch", "--detach")
-	mustRun(t, "git", "-C", sibling, "switch", "agent1")
+	mustRun(t, "git", "-C", sibling, "switch", "-c", "agent1")
 	siblingHead := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD")
-	refHead := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef)
+	siblingRefHead := readTrim(t, "git", "--git-dir", siblingCommonDir, "rev-parse", selectedRef)
 
 	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
 		Project: "dev-all", Repo: "ouroboros-ide", Origin: origin,
@@ -489,17 +529,132 @@ func TestNativeSlotResetReconstructionRefusesBranchOwnedBySibling(t *testing.T) 
 
 	opts.Index = 1
 	opts.ReconstructSelected = true
-	if err := SetupNative(opts); err == nil {
-		t.Fatal("reconstruction accepted selected branch while a sibling worktree owned it")
+	if err := SetupNative(opts); err != nil {
+		t.Fatalf("selected reconstruction collided with the same branch name in a sibling lane: %v", err)
 	}
 	if got := readTrim(t, "git", "-C", sibling, "rev-parse", "--abbrev-ref", "HEAD"); got != "agent1" {
-		t.Fatalf("failed reconstruction changed sibling branch to %s", got)
+		t.Fatalf("selected reconstruction changed sibling branch to %s", got)
 	}
 	if got := readTrim(t, "git", "-C", sibling, "rev-parse", "HEAD"); got != siblingHead {
-		t.Fatalf("failed reconstruction changed sibling HEAD: got %s want %s", got, siblingHead)
+		t.Fatalf("selected reconstruction changed sibling HEAD: got %s want %s", got, siblingHead)
 	}
-	if got := readTrim(t, "git", "--git-dir", commonDir, "rev-parse", selectedRef); got != refHead {
-		t.Fatalf("failed reconstruction changed sibling-owned ref: got %s want %s", got, refHead)
+	if got := readTrim(t, "git", "--git-dir", siblingCommonDir, "rev-parse", selectedRef); got != siblingRefHead {
+		t.Fatalf("selected reconstruction changed sibling-owned ref: got %s want %s", got, siblingRefHead)
+	}
+	if selectedCommonDir == siblingCommonDir {
+		t.Fatalf("selected and sibling lanes share common repository %s", selectedCommonDir)
+	}
+}
+
+func TestNativeSlotResetMigratesAgent1WithoutMutatingActiveLegacyAgent2(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	origin := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "remote", "get-url", "origin")
+	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
+	legacyCommonDir, err := nativeLegacyOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacyCommonDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "clone", "--bare", origin, legacyCommonDir)
+	mustRun(t, "git", "--git-dir", legacyCommonDir, "config", "worktree.useRelativePaths", "true")
+	mustRun(t, "git", "--git-dir", legacyCommonDir, "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	marker, err := nativeLegacyOwnedCommonRepositoryMarker("ouroboros-ide", origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(legacyCommonDir, "devkit-owned-common")
+	if err := os.WriteFile(markerPath, []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	worktrees := map[int]string{}
+	for index := 1; index <= 2; index++ {
+		worktree := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
+		if err := os.MkdirAll(filepath.Dir(worktree), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		branch := fmt.Sprintf("agent%d", index)
+		mustRun(t, "git", "--git-dir", legacyCommonDir, "worktree", "add", worktree, "-b", branch, "origin/main")
+		if err := rewriteNativeGitdir(worktree, worktreeRoot, legacyCommonDir); err != nil {
+			t.Fatal(err)
+		}
+		worktrees[index] = worktree
+	}
+
+	legacyAgent2Gitdir := readTrim(t, "git", "-C", worktrees[2], "rev-parse", "--absolute-git-dir")
+	agent2ReversePath := filepath.Join(legacyAgent2Gitdir, "gitdir")
+	agent2ReverseBefore, err := os.ReadFile(agent2ReversePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent2RefBefore := readTrim(t, "git", "--git-dir", legacyCommonDir, "rev-parse", "refs/heads/agent2")
+	agent2Sentinel := filepath.Join(worktrees[2], "legacy-agent2-remains-active")
+	if err := os.WriteFile(agent2Sentinel, []byte("agent2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyLock := filepath.Join(legacyCommonDir, "refs", "heads", "agent1.lock")
+	if err := os.MkdirAll(filepath.Dir(legacyLock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyLock, []byte("legacy lock sentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Origin: origin,
+		BranchPrefix: "agent", Index: 1, Count: 2,
+		WorktreeRoot: worktreeRoot, StateRoot: filepath.Join(root, "state"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetupNative(NativeOptions{
+		DevkitRoot: devkitRoot, Repo: "ouroboros-ide", Origin: origin,
+		Index: 1, Count: 2, BaseBranch: "main", BranchPrefix: "agent",
+		ReconstructSelected: true,
+	}); err != nil {
+		t.Fatalf("migrate selected agent1 beside active legacy agent2: %v", err)
+	}
+
+	lane1CommonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := nativeWorktreeCommonDirectory(worktrees[1]); err != nil || got != canonicalOrClean(lane1CommonDir) {
+		t.Fatalf("migrated agent1 common directory = %s, want %s", got, lane1CommonDir)
+	}
+	if got := readTrim(t, "git", "--git-dir", legacyCommonDir, "rev-parse", "refs/heads/agent2"); got != agent2RefBefore {
+		t.Fatalf("agent1 migration changed legacy agent2 ref: got %s want %s", got, agent2RefBefore)
+	}
+	if got, err := os.ReadFile(agent2ReversePath); err != nil || string(got) != string(agent2ReverseBefore) {
+		t.Fatalf("agent1 migration changed legacy agent2 metadata: data=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(agent2Sentinel); err != nil || string(got) != "agent2\n" {
+		t.Fatalf("agent1 migration changed active legacy agent2 files: data=%q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(legacyLock); err != nil || string(got) != "legacy lock sentinel\n" {
+		t.Fatalf("agent1 migration changed the legacy lock domain: data=%q err=%v", got, err)
+	}
+	if got, err := nativeWorktreeCommonDirectory(worktrees[2]); err != nil || got != canonicalOrClean(legacyCommonDir) {
+		t.Fatalf("active legacy agent2 common directory = %s, want %s", got, legacyCommonDir)
+	}
+	if got := readTrim(t, "git", "-C", worktrees[2], "status", "--porcelain=v1"); got != "?? legacy-agent2-remains-active" {
+		t.Fatalf("active legacy agent2 status changed unexpectedly: %q", got)
 	}
 }
 
@@ -696,7 +851,7 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 			t.Fatalf("isolated native setup %d failed: %v", index+1, err)
 		}
 		worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
-		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -715,7 +870,7 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 	}
 	commonDirs := make([]string, 0, len(worktreeRoots))
 	for _, worktreeRoot := range worktreeRoots {
-		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -783,7 +938,7 @@ func TestRewriteNativeGitdirRejectsForeignCommondirTraversal(t *testing.T) {
 		t.Fatalf("prepare isolated native worktree: %v", err)
 	}
 	worktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +1018,7 @@ func TestEnsurePortableNativeGitdirMigratesConsumerAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	consumerGitdir := filepath.Join(consumerWorktreeRoot, relativeGitdir)
-	consumerCommonDir := filepath.Join(consumerWorktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	consumerCommonDir := filepath.Join(consumerWorktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git")
 	consumerGitFile := filepath.Join(consumerWorktreeRoot, "agent1", "ouroboros-ide", ".git")
 	if err := os.WriteFile(filepath.Join(worktree, ".git"), []byte("gitdir: "+consumerGitdir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -875,7 +1030,7 @@ func TestEnsurePortableNativeGitdirMigratesConsumerAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := EnsurePortableNativeGitdir(worktree, worktreeRoot, "ouroboros-ide"); err != nil {
+	if err := EnsurePortableNativeGitdir(worktree, worktreeRoot, "ouroboros-ide", 1); err != nil {
 		t.Fatal(err)
 	}
 	for name, path := range map[string]string{
@@ -906,7 +1061,7 @@ func TestSetupNativeRejectsStaleCommonRepositoryWithoutOwnershipMarker(t *testin
 	}
 	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
 	worktreeRoot := filepath.Join(root, "isolated-product")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -932,6 +1087,46 @@ func TestSetupNativeRejectsStaleCommonRepositoryWithoutOwnershipMarker(t *testin
 	}
 }
 
+func TestSetupNativeRejectsCommonRepositoryMarkerFromAnotherLane(t *testing.T) {
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	opts := NativeOptions{
+		DevkitRoot: devkitRoot, Repo: "ouroboros-ide", Count: 1,
+		BaseBranch: "main", BranchPrefix: "agent",
+	}
+	if err := SetupNative(opts); err != nil {
+		t.Fatal(err)
+	}
+	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
+	agent1Common, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent2Common, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(agent2Common), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(agent1Common, agent2Common); err != nil {
+		t.Fatal(err)
+	}
+	opts.Index = 2
+	opts.Count = 2
+	if err := SetupNative(opts); err == nil || !strings.Contains(err.Error(), "identity does not match") {
+		t.Fatalf("agent2 accepted a common repository marked for agent1: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(worktreeRoot, "agent2", "ouroboros-ide")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("foreign lane marker materialized agent2 worktree: %v", err)
+	}
+}
+
 func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
@@ -952,7 +1147,7 @@ func TestSetupNativeFailedFetchCleansPartialOwnedRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	worktreeRoot := filepath.Join(root, "isolated-product")
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1034,7 +1229,7 @@ func TestSetupNativeRejectsAndPreservesPartialWorktreeBeforeBootstrap(t *testing
 	if got, readErr := os.ReadFile(sentinel); readErr != nil || string(got) != "caller-owned partial state\n" {
 		t.Fatalf("partial worktree was mutated: data=%q error=%v", got, readErr)
 	}
-	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if pathErr != nil {
 		t.Fatal(pathErr)
 	}
@@ -1720,6 +1915,325 @@ func TestNativeSlotResetQuarantineFailureIsReclaimableOnSecondReset(t *testing.T
 	}
 }
 
+func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	originalDiscard := nativeResetDiscardTree
+	originalRename := nativeResetRename
+	t.Cleanup(func() {
+		nativeResetMountPoints = originalMountPoints
+		nativeResetDiscardTree = originalDiscard
+		nativeResetRename = originalRename
+	})
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	devkitRoot := filepath.Join(devRoot, "devkit")
+	if err := os.MkdirAll(devkitRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeRepoWithBare(t, root, devRoot, "ouroboros-ide")
+	origin := readTrim(t, "git", "-C", filepath.Join(devRoot, "ouroboros-ide"), "remote", "get-url", "origin")
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	if err := SetupNative(NativeOptions{
+		DevkitRoot:   devkitRoot,
+		Repo:         "ouroboros-ide",
+		Origin:       origin,
+		Count:        1,
+		BaseBranch:   "main",
+		BranchPrefix: "agent",
+		WorktreeRoot: worktreeRoot,
+	}); err != nil {
+		t.Fatalf("materialize v2 native lane: %v", err)
+	}
+
+	agentRoot := filepath.Join(worktreeRoot, "agent1")
+	selectedWorktree := filepath.Join(agentRoot, "ouroboros-ide")
+	selectedHome := filepath.Join(selectedWorktree, ".devhome-agent1")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonBoundary := filepath.Dir(commonDir)
+	manifestPath := runtimeagent.ManifestPath(stateRoot, "dev-all")
+	for _, path := range []string{selectedHome, selectedState, filepath.Dir(manifestPath)} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(selectedHome, "home-sentinel"), []byte("discard\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(selectedState, "state-sentinel"), []byte("discard\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, []byte("manifest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	selectedPlan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Origin: origin, BranchPrefix: "agent",
+		Index: 1, Count: 1, WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatalf("plan v2 selected reset: %v", err)
+	}
+	nativeResetRename = func(oldPath, newPath string) error {
+		if oldPath == selectedState {
+			return &os.PathError{Op: "rename", Path: oldPath, Err: os.ErrPermission}
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	nativeResetDiscardTree = func(path string) error {
+		boundary := filepath.Dir(path)
+		if boundary == stateRoot || boundary == commonBoundary || boundary == selectedState {
+			return &os.PathError{Op: "removeall", Path: path, Err: os.ErrPermission}
+		}
+		return os.RemoveAll(path)
+	}
+	if err := selectedPlan.Apply(); err == nil || !strings.Contains(err.Error(), "discard native reset quarantine") {
+		t.Fatalf("selected reset cleanup failure = %v", err)
+	}
+	nativeResetRename = os.Rename
+	nativeResetDiscardTree = os.RemoveAll
+	prefix := ".devkit-reset-dev-all-agent1-"
+	quarantineByBoundary := map[string]string{}
+	for _, boundary := range []string{stateRoot, commonBoundary, selectedState} {
+		entries, err := os.ReadDir(boundary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var canonical []string
+		for _, entry := range entries {
+			if nativeResetCanonicalTransactionQuarantineName(entry.Name(), prefix) {
+				canonical = append(canonical, filepath.Join(boundary, entry.Name()))
+			}
+		}
+		if len(canonical) != 1 {
+			t.Fatalf("production Apply canonical quarantines under %s = %#v, want one", boundary, canonical)
+		}
+		path := canonical[0]
+		quarantineByBoundary[boundary] = path
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("selected reset did not retain real quarantine at %s: %#v %v", path, info, err)
+		}
+	}
+	nestedEntries, err := os.ReadDir(quarantineByBoundary[selectedState])
+	if err != nil || len(nestedEntries) == 0 {
+		t.Fatalf("rename-denied reset root did not retain its staged payload: %#v %v", nestedEntries, err)
+	}
+
+	lookalikeDirs := []string{
+		filepath.Join(stateRoot, ".devkit-reset-dev-all-agent01-"+strings.Repeat("1", 32)),
+		filepath.Join(stateRoot, ".devkit-reset-dev-all-agent2-"+strings.Repeat("2", 32)),
+		filepath.Join(commonBoundary, prefix+strings.Repeat("g", 32)),
+	}
+	for _, path := range lookalikeDirs {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "preserve"), []byte("lookalike\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	regularFile := filepath.Join(commonBoundary, prefix+strings.Repeat("c", 32))
+	if err := os.WriteFile(regularFile, []byte("regular-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideSentinel := filepath.Join(outside, "preserve")
+	if err := os.WriteFile(outsideSentinel, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	symlinkLookalike := filepath.Join(commonBoundary, prefix+strings.Repeat("b", 32))
+	if err := os.Symlink(outside, symlinkLookalike); err != nil {
+		t.Fatal(err)
+	}
+	allPrefixResidue := filepath.Join(stateRoot, ".devkit-reset-dev-all-all-recovery")
+	legacyResidue := filepath.Join(worktreeRoot, ".devkit-reset-123456")
+	for _, path := range []string{allPrefixResidue, legacyResidue} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	wholeOptions := NativeResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	}
+	protectedOptions := wholeOptions
+	protectedOptions.ProtectedRoots = []string{quarantineByBoundary[stateRoot]}
+	if _, err := PlanNativeReset(protectedOptions); err == nil || !strings.Contains(err.Error(), "overlaps protected root") {
+		t.Fatalf("whole reset canonical-quarantine preflight = %v", err)
+	}
+	if _, err := os.Lstat(manifestPath); err != nil {
+		t.Fatalf("failed preflight changed manifest: %v", err)
+	}
+	if _, err := os.Lstat(quarantineByBoundary[commonBoundary]); err != nil {
+		t.Fatalf("failed preflight changed common quarantine: %v", err)
+	}
+
+	wholePlan, err := PlanNativeReset(wholeOptions)
+	if err != nil {
+		t.Fatalf("plan whole reset recovery: %v", err)
+	}
+	for left := range wholePlan.candidates {
+		for right := left + 1; right < len(wholePlan.candidates); right++ {
+			if nativeResetPathsOverlap(wholePlan.candidates[left].path, wholePlan.candidates[right].path) {
+				t.Fatalf("whole reset retained overlapping candidates %s and %s", wholePlan.candidates[left].path, wholePlan.candidates[right].path)
+			}
+		}
+	}
+	if err := wholePlan.Apply(); err != nil {
+		t.Fatalf("apply whole reset recovery: %v", err)
+	}
+	for _, path := range []string{
+		agentRoot,
+		selectedWorktree,
+		selectedHome,
+		selectedState,
+		commonDir,
+		manifestPath,
+		quarantineByBoundary[stateRoot],
+		quarantineByBoundary[commonBoundary],
+		quarantineByBoundary[selectedState],
+		allPrefixResidue,
+		legacyResidue,
+	} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("whole reset residue survived %s: %v", path, err)
+		}
+	}
+	for _, path := range lookalikeDirs {
+		if got, err := os.ReadFile(filepath.Join(path, "preserve")); err != nil || string(got) != "lookalike\n" {
+			t.Fatalf("lookalike acquired reset authority %s: %q %v", path, got, err)
+		}
+	}
+	if got, err := os.ReadFile(regularFile); err != nil || string(got) != "regular-file\n" {
+		t.Fatalf("regular-file lookalike acquired reset authority: %q %v", got, err)
+	}
+	if info, err := os.Lstat(symlinkLookalike); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink lookalike acquired reset authority: %#v %v", info, err)
+	}
+	if got, err := os.ReadFile(outsideSentinel); err != nil || string(got) != "outside\n" {
+		t.Fatalf("symlink lookalike changed outside target: %q %v", got, err)
+	}
+}
+
+func TestNativeWholeResetRevalidatesDiscoveredSelectedQuarantineDirectoryBeforeEffects(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	agentSentinel := filepath.Join(worktreeRoot, "agent1", "preserve")
+	if err := os.MkdirAll(filepath.Dir(agentSentinel), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentSentinel, []byte("lane\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	quarantine := filepath.Join(stateRoot, ".devkit-reset-dev-all-agent1-"+strings.Repeat("a", 32))
+	if err := os.MkdirAll(quarantine, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanNativeReset(NativeResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(quarantine); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(quarantine, []byte("replacement-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "revalidate native reset boundary") {
+		t.Fatalf("whole reset path-swap result = %v", err)
+	}
+	if got, err := os.ReadFile(agentSentinel); err != nil || string(got) != "lane\n" {
+		t.Fatalf("whole reset performed effects before complete revalidation: %q %v", got, err)
+	}
+}
+
+func TestNativeResetRecoveryRejectsNoncanonicalPersistedQuarantineIdentities(t *testing.T) {
+	originalMountPoints := nativeResetMountPoints
+	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
+	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
+
+	root := t.TempDir()
+	worktreeRoot := filepath.Join(root, "worktrees")
+	stateRoot := filepath.Join(root, "state")
+	selectedWorktree := filepath.Join(worktreeRoot, "agent1", "ouroboros-ide")
+	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
+	for _, path := range []string{selectedWorktree, selectedState} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := PlanNativeSlotReset(NativeSlotResetOptions{
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 1, Count: 1,
+		WorktreeRoot: worktreeRoot, StateRoot: stateRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := plan.PrepareTransaction()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := transaction.State()
+	if len(state.Quarantines) == 0 || len(state.Staged) == 0 {
+		t.Fatal("prepared reset state is empty")
+	}
+	if _, err := ResumeNativeResetTransaction(plan, state); err != nil {
+		t.Fatalf("canonical prepared reset state was rejected: %v", err)
+	}
+
+	prefix := ".devkit-reset-dev-all-agent1-"
+	for name, suffix := range map[string]string{
+		"short-hex":        strings.Repeat("a", 31),
+		"long-hex":         strings.Repeat("a", 33),
+		"uppercase-hex":    strings.Repeat("A", 32),
+		"non-hex":          strings.Repeat("g", 32),
+		"old-temp-decimal": "1234567890",
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := NativeResetTransactionState{
+				Staged:      append([]NativeResetStagedPath(nil), state.Staged...),
+				Quarantines: append([]NativeResetQuarantine(nil), state.Quarantines...),
+			}
+			oldPath := forged.Quarantines[0].Path
+			newPath := filepath.Join(forged.Quarantines[0].Boundary, prefix+suffix)
+			forged.Quarantines[0].Path = newPath
+			for index := range forged.Staged {
+				if filepath.Dir(forged.Staged[index].Target) == oldPath {
+					forged.Staged[index].Target = filepath.Join(newPath, filepath.Base(forged.Staged[index].Target))
+				}
+			}
+			if _, err := ResumeNativeResetTransaction(plan, forged); err == nil ||
+				!strings.Contains(err.Error(), "outside the reconstructed plan") {
+				t.Fatalf("noncanonical persisted quarantine accepted: %v", err)
+			}
+			for _, path := range []string{selectedWorktree, selectedState} {
+				if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+					t.Fatalf("rejected persisted state changed source %s: %#v %v", path, info, err)
+				}
+			}
+		})
+	}
+}
+
 func TestNativeSlotResetFallbackRejectsPathSwapBeforeEnteringReusableRoot(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	originalRename := nativeResetRename
@@ -2042,7 +2556,7 @@ func TestSetupNativeProductCheckoutDoesNotReuseWorktreeAfterFetchFailure(t *test
 	repo := filepath.Join(devRoot, "ouroboros-ide")
 	worktree := filepath.Join(devRoot, paths.AgentWorktreesDir, "agent1", "ouroboros-ide")
 	worktreeRoot := filepath.Join(devRoot, paths.AgentWorktreesDir)
-	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide")
+	commonDir, pathErr := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if pathErr != nil {
 		t.Fatal(pathErr)
 	}
@@ -2050,7 +2564,7 @@ func TestSetupNativeProductCheckoutDoesNotReuseWorktreeAfterFetchFailure(t *test
 	missingOrigin := "ssh://git@fixture.invalid/missing.git"
 	mustRun(t, "git", "-C", repo, "remote", "set-url", "origin", missingOrigin)
 	mustRun(t, "git", "--git-dir", commonDir, "remote", "set-url", "origin", missingOrigin)
-	marker, markerErr := nativeOwnedCommonRepositoryMarker("ouroboros-ide", missingOrigin)
+	marker, markerErr := nativeOwnedCommonRepositoryMarker("ouroboros-ide", missingOrigin, 1)
 	if markerErr != nil {
 		t.Fatal(markerErr)
 	}
@@ -2159,6 +2673,7 @@ func TestSetupNative_FromLinkedSourceWorktreeUsesOwnedPortableCommonRepository(t
 	commonDir, err := nativeOwnedCommonRepositoryPath(
 		filepath.Join(sourceDevRoot, paths.AgentWorktreesDir),
 		"ouroboros-ide-nix-readiness",
+		1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2201,6 +2716,7 @@ func TestSetupNativeSelectedReconstructionRejectsStandaloneAgentCheckoutAsForeig
 	commonDir, pathErr := nativeOwnedCommonRepositoryPath(
 		filepath.Join(devRoot, paths.AgentWorktreesDir),
 		"ouroboros-ide",
+		1,
 	)
 	if pathErr != nil {
 		t.Fatal(pathErr)

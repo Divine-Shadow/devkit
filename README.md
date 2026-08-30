@@ -31,7 +31,13 @@ If `kit/bin/devctl` is missing or not executable, the wrapper fails loudly and p
 
 Each supported overlay declares an overlay-local `runtime.flake` in `overlays/<project>/devkit.yaml`, for example `./overlays/dev-all#default`. The root flake still exposes compatible shells for direct Nix use, but devkit runtime metadata is one flake ref per overlay.
 
-Native agents use per-agent worktrees and state directories under the dev root. The sandbox binds only the host paths needed for the selected plan, seeds Codex and SSH state into the agent home, and exposes OCI API access only through configured broker sockets.
+Native agents use per-agent worktrees and state directories under the dev root.
+Each lane also owns a distinct bare Git common repository at
+`agent-worktrees/.devkit/git/agentN/<repo>.git`, so branch refs, worktree
+registrations, indexes, and Git transaction locks remain lane-local. The
+sandbox binds only the host paths needed for the selected plan, seeds Codex and
+SSH state into the agent home, and exposes OCI API access only through
+configured broker sockets.
 
 `packages.<system>.dev-all-runtime-bundle` is deliberately Product-agnostic.
 It contains the compiled Devkit controller and generic `dev-all` tools,

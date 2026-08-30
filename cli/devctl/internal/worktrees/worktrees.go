@@ -238,7 +238,7 @@ func rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir string) error {
 // /workspaces/dev alias even though it resolves to the package-owned metadata
 // beneath worktreesRoot. rewriteNativeGitdir performs the full ownership,
 // commondir, and reverse-pointer validation before changing any file.
-func EnsurePortableNativeGitdir(wt, worktreesRoot, repo string) error {
+func EnsurePortableNativeGitdir(wt, worktreesRoot, repo string, index int) error {
 	gitFile := filepath.Join(wt, ".git")
 	info, err := os.Lstat(gitFile)
 	if err != nil {
@@ -260,12 +260,51 @@ func EnsurePortableNativeGitdir(wt, worktreesRoot, repo string) error {
 	if !filepath.IsAbs(gitdir) {
 		return nil
 	}
-	repo = strings.TrimSpace(repo)
-	if repo == "" || filepath.Base(repo) != repo {
-		return fmt.Errorf("native worktree repository name is invalid: %s", repo)
+	repoCommonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo, index)
+	if err != nil {
+		return err
 	}
-	repoCommonDir := filepath.Join(worktreesRoot, ".devkit", "git", repo+".git")
+	actualCommonDir, err := nativeWorktreeCommonDirectory(wt)
+	if err != nil {
+		return err
+	}
+	legacyCommonDir, err := nativeLegacyOwnedCommonRepositoryPath(worktreesRoot, repo)
+	if err != nil {
+		return err
+	}
+	canonicalLaneCommon := canonicalOrClean(repoCommonDir)
+	canonicalLegacyCommon := canonicalOrClean(legacyCommonDir)
+	if actualCommonDir != canonicalLaneCommon && actualCommonDir != canonicalLegacyCommon {
+		return fmt.Errorf(
+			"native worktree %s common Git directory %s is neither lane-owned %s nor legacy package-owned %s",
+			canonicalOrClean(wt),
+			actualCommonDir,
+			canonicalLaneCommon,
+			canonicalLegacyCommon,
+		)
+	}
+	repoCommonDir = actualCommonDir
 	return rewriteNativeGitdir(wt, worktreesRoot, repoCommonDir)
+}
+
+func nativeWorktreeCommonDirectory(worktree string) (string, error) {
+	gitdirValue, err := readGitdirPointer(filepath.Join(worktree, ".git"))
+	if err != nil {
+		return "", err
+	}
+	gitdir, err := canonicalMetadataPath(worktree, gitdirValue)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize native worktree gitdir %s: %w", worktree, err)
+	}
+	commondirValue, err := readPlainMetadataPath(filepath.Join(gitdir, "commondir"))
+	if err != nil {
+		return "", err
+	}
+	commonDir, err := canonicalMetadataPath(gitdir, commondirValue)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize native worktree commondir %s: %w", worktree, err)
+	}
+	return commonDir, nil
 }
 
 func ensureNativeLinkedWorktreeNonBare(wt, envExecutable string, envLocalGit func(...string) []string, dryRun bool) error {
@@ -606,9 +645,27 @@ func Setup(devkitRoot, repo string, n int, baseBranch, branchPrefix string, dry 
 	return nil
 }
 
-const nativeOwnedCommonRepositorySchema = "devkit/native-owned-common-repository/v1"
+const (
+	nativeLegacyOwnedCommonRepositorySchema = "devkit/native-owned-common-repository/v1"
+	nativeOwnedCommonRepositorySchema       = "devkit/native-owned-common-repository/v2"
+)
 
-func nativeOwnedCommonRepositoryPath(worktreesRoot, repo string) (string, error) {
+func nativeOwnedCommonRepositoryPath(worktreesRoot, repo string, index int) (string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || repo == "." || filepath.IsAbs(repo) || filepath.Clean(repo) != repo || filepath.Base(repo) != repo {
+		return "", fmt.Errorf("native repository name %q cannot select a package-owned common repository path", repo)
+	}
+	if index < 1 {
+		return "", fmt.Errorf("native lane index %d cannot select a package-owned common repository path", index)
+	}
+	root, err := filepath.Abs(filepath.Clean(strings.TrimSpace(worktreesRoot)))
+	if err != nil {
+		return "", fmt.Errorf("resolve native worktree root %s: %w", worktreesRoot, err)
+	}
+	return filepath.Join(root, ".devkit", "git", fmt.Sprintf("agent%d", index), repo+".git"), nil
+}
+
+func nativeLegacyOwnedCommonRepositoryPath(worktreesRoot, repo string) (string, error) {
 	repo = strings.TrimSpace(repo)
 	if repo == "" || repo == "." || filepath.IsAbs(repo) || filepath.Clean(repo) != repo || filepath.Base(repo) != repo {
 		return "", fmt.Errorf("native repository name %q cannot select a package-owned common repository path", repo)
@@ -620,7 +677,25 @@ func nativeOwnedCommonRepositoryPath(worktreesRoot, repo string) (string, error)
 	return filepath.Join(root, ".devkit", "git", repo+".git"), nil
 }
 
-func nativeOwnedCommonRepositoryMarker(repo, remoteURL string) (string, error) {
+func nativeOwnedCommonRepositoryMarker(repo, remoteURL string, index int) (string, error) {
+	for label, value := range map[string]string{"repository": repo, "origin": remoteURL} {
+		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n\x00") {
+			return "", fmt.Errorf("native %s identity is invalid", label)
+		}
+	}
+	if index < 1 {
+		return "", fmt.Errorf("native lane identity agent%d is invalid", index)
+	}
+	return fmt.Sprintf(
+		"schema=%s\nrepository=%s\norigin=%s\nlane=agent%d\n",
+		nativeOwnedCommonRepositorySchema,
+		repo,
+		remoteURL,
+		index,
+	), nil
+}
+
+func nativeLegacyOwnedCommonRepositoryMarker(repo, remoteURL string) (string, error) {
 	for label, value := range map[string]string{"repository": repo, "origin": remoteURL} {
 		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n\x00") {
 			return "", fmt.Errorf("native %s identity is invalid", label)
@@ -628,7 +703,7 @@ func nativeOwnedCommonRepositoryMarker(repo, remoteURL string) (string, error) {
 	}
 	return fmt.Sprintf(
 		"schema=%s\nrepository=%s\norigin=%s\n",
-		nativeOwnedCommonRepositorySchema,
+		nativeLegacyOwnedCommonRepositorySchema,
 		repo,
 		remoteURL,
 	), nil
@@ -643,7 +718,31 @@ func captureNativeGit(envExecutable string, args []string) (string, error) {
 }
 
 func validateNativeOwnedCommonRepository(
+	worktreesRoot, commonDir, repo, remoteURL string, index int,
+	envExecutable string,
+	envLocalGit func(...string) []string,
+) error {
+	expectedMarker, err := nativeOwnedCommonRepositoryMarker(repo, remoteURL, index)
+	if err != nil {
+		return err
+	}
+	return validateNativeCommonRepository(worktreesRoot, commonDir, repo, remoteURL, expectedMarker, envExecutable, envLocalGit)
+}
+
+func validateNativeLegacyOwnedCommonRepository(
 	worktreesRoot, commonDir, repo, remoteURL string,
+	envExecutable string,
+	envLocalGit func(...string) []string,
+) error {
+	expectedMarker, err := nativeLegacyOwnedCommonRepositoryMarker(repo, remoteURL)
+	if err != nil {
+		return err
+	}
+	return validateNativeCommonRepository(worktreesRoot, commonDir, repo, remoteURL, expectedMarker, envExecutable, envLocalGit)
+}
+
+func validateNativeCommonRepository(
+	worktreesRoot, commonDir, repo, remoteURL, expectedMarker string,
 	envExecutable string,
 	envLocalGit func(...string) []string,
 ) error {
@@ -664,10 +763,6 @@ func validateNativeOwnedCommonRepository(
 	}
 	if !pathWithinRoot(canonicalRoot, canonicalCommon) {
 		return fmt.Errorf("package-owned common repository %s escapes worktree root %s", canonicalCommon, canonicalRoot)
-	}
-	expectedMarker, err := nativeOwnedCommonRepositoryMarker(repo, remoteURL)
-	if err != nil {
-		return err
 	}
 	markerPath := filepath.Join(commonDir, "devkit-owned-common")
 	marker, err := os.ReadFile(markerPath)
@@ -692,17 +787,17 @@ func validateNativeOwnedCommonRepository(
 }
 
 func ensureNativeOwnedCommonRepository(
-	worktreesRoot, repo, remoteURL string,
+	worktreesRoot, repo, remoteURL string, index int,
 	envExecutable string,
 	envLocalGit func(...string) []string,
 	envRemoteGit func(...string) []string,
 	dryRun bool,
 ) (string, error) {
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo)
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo, index)
 	if err != nil {
 		return "", err
 	}
-	marker, err := nativeOwnedCommonRepositoryMarker(repo, remoteURL)
+	marker, err := nativeOwnedCommonRepositoryMarker(repo, remoteURL, index)
 	if err != nil {
 		return "", err
 	}
@@ -726,7 +821,7 @@ func ensureNativeOwnedCommonRepository(
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("package-owned common repository %s must be a real directory", commonDir)
 		}
-		if err := validateNativeOwnedCommonRepository(worktreesRoot, commonDir, repo, remoteURL, envExecutable, envLocalGit); err != nil {
+		if err := validateNativeOwnedCommonRepository(worktreesRoot, commonDir, repo, remoteURL, index, envExecutable, envLocalGit); err != nil {
 			return "", err
 		}
 		if err := runFetch(false, envExecutable, envRemoteGit("--git-dir", commonDir, "fetch", "--all", "--prune", "--progress")...); err != nil {
@@ -766,7 +861,7 @@ func ensureNativeOwnedCommonRepository(
 	if err := os.WriteFile(filepath.Join(staging, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
 		return "", fmt.Errorf("write package-owned common repository marker: %w", err)
 	}
-	if err := validateNativeOwnedCommonRepository(worktreesRoot, staging, repo, remoteURL, envExecutable, envLocalGit); err != nil {
+	if err := validateNativeOwnedCommonRepository(worktreesRoot, staging, repo, remoteURL, index, envExecutable, envLocalGit); err != nil {
 		return "", err
 	}
 	if err := os.Rename(staging, commonDir); err != nil {
@@ -776,11 +871,19 @@ func ensureNativeOwnedCommonRepository(
 	return commonDir, nil
 }
 
-func preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo string, first, last int) error {
+func preflightNativeOwnedWorktreeTargets(worktreesRoot, repo string, first, last int) error {
 	if first < 1 || last < first {
 		return fmt.Errorf("native worktree preflight range %d..%d is invalid", first, last)
 	}
 	for i := first; i <= last; i++ {
+		laneCommonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo, i)
+		if err != nil {
+			return err
+		}
+		legacyCommonDir, err := nativeLegacyOwnedCommonRepositoryPath(worktreesRoot, repo)
+		if err != nil {
+			return err
+		}
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i), repo)
 		info, err := os.Lstat(worktree)
 		if errors.Is(err, os.ErrNotExist) {
@@ -825,10 +928,22 @@ func preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo string, 
 		if err != nil {
 			return fmt.Errorf("resolve native worktree target gitdir %s: %w", gitFile, err)
 		}
-		ownedGitdirsRoot, err := filepath.Abs(filepath.Join(commonDir, "worktrees"))
+		actualCommonDir, err := nativeWorktreeCommonDirectory(worktree)
 		if err != nil {
-			return fmt.Errorf("resolve package-owned Git worktrees root %s: %w", commonDir, err)
+			return err
 		}
+		canonicalLaneCommon := canonicalOrClean(laneCommonDir)
+		canonicalLegacyCommon := canonicalOrClean(legacyCommonDir)
+		if actualCommonDir != canonicalLaneCommon && actualCommonDir != canonicalLegacyCommon {
+			return fmt.Errorf(
+				"native worktree target %s points to foreign common Git directory %s; expected lane-owned %s or legacy package-owned %s",
+				worktree,
+				actualCommonDir,
+				canonicalLaneCommon,
+				canonicalLegacyCommon,
+			)
+		}
+		ownedGitdirsRoot := filepath.Join(actualCommonDir, "worktrees")
 		if gitdir == ownedGitdirsRoot || !pathWithinRoot(ownedGitdirsRoot, gitdir) {
 			return fmt.Errorf("native worktree target %s points to foreign Git metadata %s outside %s", worktree, gitdir, ownedGitdirsRoot)
 		}
@@ -951,6 +1066,7 @@ type nativeResetCandidate struct {
 	boundary                  string
 	preserveRoot              bool
 	reuseRootWhenRenameDenied bool
+	requireRealDirectory      bool
 }
 
 // NativeResetPlan is an opaque, preflighted disposal plan. The paths are
@@ -964,8 +1080,6 @@ type NativeResetPlan struct {
 	quarantineName       string
 	recoverySources      map[string]string
 	quarantineBoundaries []string
-	selectedWorktree     string
-	metadataBoundary     string
 }
 
 var (
@@ -1044,6 +1158,15 @@ func validateNativeResetCandidate(candidate nativeResetCandidate, protectedRoots
 	if err := validateNativeResetPathComponents(candidate.path); err != nil {
 		return err
 	}
+	if candidate.requireRealDirectory {
+		info, err := os.Lstat(candidate.path)
+		if err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return fmt.Errorf("native reset target %s must remain a real directory", candidate.path)
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect native reset directory target %s: %w", candidate.path, err)
+		}
+	}
 	for _, protected := range protectedRoots {
 		protected = strings.TrimSpace(protected)
 		if protected == "" {
@@ -1119,6 +1242,110 @@ func appendNativeResetQuarantineResidue(
 	return candidates, nil
 }
 
+func nativeResetCanonicalTransactionQuarantineName(name, prefix string) bool {
+	if !strings.HasPrefix(name, prefix) || len(name) != len(prefix)+32 {
+		return false
+	}
+	for _, char := range name[len(prefix):] {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// appendNativeResetSelectedQuarantineResidue admits the durable transaction
+// identities produced by reserveNativeResetQuarantinePath. Every other entry
+// retains caller ownership outside the whole-reset candidate set.
+func appendNativeResetSelectedQuarantineResidue(
+	candidates []nativeResetCandidate,
+	boundaries []string,
+	quarantineName string,
+) ([]nativeResetCandidate, error) {
+	seenBoundaries := map[string]bool{}
+	for _, boundary := range boundaries {
+		boundary = filepath.Clean(strings.TrimSpace(boundary))
+		if boundary == "" || boundary == "." || seenBoundaries[boundary] {
+			continue
+		}
+		seenBoundaries[boundary] = true
+		if err := validateNativeResetPathComponents(boundary); err != nil {
+			return nil, fmt.Errorf("validate selected native reset quarantine boundary %s: %w", boundary, err)
+		}
+		entries, err := os.ReadDir(boundary)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("enumerate selected native reset quarantine residue under %s: %w", boundary, err)
+		}
+		for _, entry := range entries {
+			if !nativeResetCanonicalTransactionQuarantineName(entry.Name(), quarantineName) {
+				continue
+			}
+			path := filepath.Join(boundary, entry.Name())
+			info, err := os.Lstat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("inspect selected native reset quarantine residue %s: %w", path, err)
+			}
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				continue
+			}
+			candidates = append(candidates, nativeResetCandidate{
+				path:                 path,
+				boundary:             boundary,
+				requireRealDirectory: true,
+			})
+		}
+	}
+	return candidates, nil
+}
+
+func deduplicateNativeResetCandidateOverlaps(candidates []nativeResetCandidate) ([]nativeResetCandidate, error) {
+	result := make([]nativeResetCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidate.path = filepath.Clean(candidate.path)
+		candidate.boundary = filepath.Clean(candidate.boundary)
+		redundant := false
+		for index := 0; index < len(result); {
+			existing := result[index]
+			if candidate.path == existing.path {
+				if candidate.boundary != existing.boundary {
+					return nil, fmt.Errorf(
+						"native reset target %s has conflicting ownership boundaries %s and %s",
+						candidate.path,
+						existing.boundary,
+						candidate.boundary,
+					)
+				}
+				result[index].preserveRoot = existing.preserveRoot || candidate.preserveRoot
+				result[index].reuseRootWhenRenameDenied = existing.reuseRootWhenRenameDenied || candidate.reuseRootWhenRenameDenied
+				result[index].requireRealDirectory = existing.requireRealDirectory || candidate.requireRealDirectory
+				redundant = true
+				break
+			}
+			if pathWithinRoot(existing.path, candidate.path) {
+				// The already-declared ancestor owns this opaque descendant.
+				redundant = true
+				break
+			}
+			if pathWithinRoot(candidate.path, existing.path) {
+				// The newly-declared ancestor owns the existing opaque descendant.
+				result = append(result[:index], result[index+1:]...)
+				continue
+			}
+			index++
+		}
+		if !redundant {
+			result = append(result, candidate)
+		}
+	}
+	return result, nil
+}
+
 // PlanNativeReset validates the complete destructive boundary before any
 // broker, session, workspace, home, or bootstrap effect occurs. Existing
 // payload beneath an exact owned target is intentionally opaque: a foreign
@@ -1143,10 +1370,6 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve native reset state root %s: %w", opts.StateRoot, err)
 	}
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo)
-	if err != nil {
-		return nil, err
-	}
 	count := opts.Count
 	if count < 1 {
 		return nil, fmt.Errorf("native destructive reset count must be positive")
@@ -1158,8 +1381,14 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 		return nil, err
 	}
 
-	candidates := make([]nativeResetCandidate, 0, count*2+2)
+	candidates := make([]nativeResetCandidate, 0, count*3+2)
+	commonDirs := make([]string, 0, count+1)
 	for index := 1; index <= count; index++ {
+		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo, index)
+		if err != nil {
+			return nil, err
+		}
+		commonDirs = append(commonDirs, commonDir)
 		candidates = append(candidates,
 			nativeResetCandidate{
 				path:                      filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index)),
@@ -1171,10 +1400,25 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 				boundary:                  stateRoot,
 				reuseRootWhenRenameDenied: true,
 			},
+			nativeResetCandidate{path: commonDir, boundary: worktreeRoot},
 		)
+		selectedQuarantineName := fmt.Sprintf(".devkit-reset-%s-agent%d-", opts.Project, index)
+		candidates, err = appendNativeResetSelectedQuarantineResidue(
+			candidates,
+			[]string{stateRoot, filepath.Dir(commonDir)},
+			selectedQuarantineName,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
+	legacyCommonDir, err := nativeLegacyOwnedCommonRepositoryPath(worktreeRoot, repo)
+	if err != nil {
+		return nil, err
+	}
+	commonDirs = append(commonDirs, legacyCommonDir)
 	candidates = append(candidates,
-		nativeResetCandidate{path: commonDir, boundary: worktreeRoot},
+		nativeResetCandidate{path: legacyCommonDir, boundary: worktreeRoot},
 		nativeResetCandidate{
 			path:     runtimeagent.ManifestPath(stateRoot, opts.Project),
 			boundary: stateRoot,
@@ -1189,12 +1433,18 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	staging, err := filepath.Glob(filepath.Join(filepath.Dir(commonDir), "."+repo+".bootstrap-*"))
-	if err != nil {
-		return nil, fmt.Errorf("enumerate native reset bootstrap staging paths: %w", err)
+	for _, commonDir := range commonDirs {
+		staging, err := filepath.Glob(filepath.Join(filepath.Dir(commonDir), "."+repo+".bootstrap-*"))
+		if err != nil {
+			return nil, fmt.Errorf("enumerate native reset bootstrap staging paths: %w", err)
+		}
+		for _, path := range staging {
+			candidates = append(candidates, nativeResetCandidate{path: path, boundary: worktreeRoot})
+		}
 	}
-	for _, path := range staging {
-		candidates = append(candidates, nativeResetCandidate{path: path, boundary: worktreeRoot})
+	candidates, err = deduplicateNativeResetCandidateOverlaps(candidates)
+	if err != nil {
+		return nil, err
 	}
 
 	mountPoints, err := nativeResetMountPoints()
@@ -1215,54 +1465,10 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 	}, nil
 }
 
-func nativeSelectedWorktreeMetadata(commonDir, worktree, quarantinePrefix string) (string, error) {
-	metadataRoot := filepath.Join(commonDir, "worktrees")
-	entries, err := os.ReadDir(metadataRoot)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("enumerate package-owned worktree metadata %s: %w", metadataRoot, err)
-	}
-	expectedGitFile, err := filepath.Abs(filepath.Join(worktree, ".git"))
-	if err != nil {
-		return "", err
-	}
-	match := ""
-	for _, entry := range entries {
-		if quarantinePrefix != "" && strings.HasPrefix(entry.Name(), quarantinePrefix) {
-			continue
-		}
-		metadata := filepath.Join(metadataRoot, entry.Name())
-		info, err := os.Lstat(metadata)
-		if err != nil {
-			return "", fmt.Errorf("inspect package-owned worktree metadata %s: %w", metadata, err)
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("package-owned worktree metadata %s must be a real directory", metadata)
-		}
-		value, err := readPlainMetadataPath(filepath.Join(metadata, "gitdir"))
-		if err != nil {
-			return "", err
-		}
-		candidate := filepath.Clean(value)
-		if !filepath.IsAbs(candidate) {
-			candidate = filepath.Clean(filepath.Join(metadata, candidate))
-		}
-		if candidate != expectedGitFile {
-			continue
-		}
-		if match != "" {
-			return "", fmt.Errorf("selected native worktree %s has multiple package-owned metadata registrations", worktree)
-		}
-		match = metadata
-	}
-	return match, nil
-}
-
 // PlanNativeSlotReset validates the complete selected-slot destructive
-// boundary before any process, Git, home, or filesystem effect occurs. Shared
-// common-repository and manifest paths are deliberately excluded.
+// boundary before any process, Git, home, or filesystem effect occurs. The
+// selected lane's common repository is disposable with the slot; the legacy
+// shared common repository and shared manifest are deliberately excluded.
 func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) {
 	envExecutable, gitExecutable, err := nativeSourceExecutables(opts.RequirePackageSourceExecutables)
 	if err != nil {
@@ -1302,11 +1508,11 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 	agentRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", opts.Index))
 	worktree := filepath.Join(agentRoot, repo)
 	selectedState := filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, opts.Index))
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo)
+	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo, opts.Index)
 	if err != nil {
 		return nil, err
 	}
-	metadataBoundary := filepath.Join(commonDir, "worktrees")
+	commonBoundary := filepath.Dir(commonDir)
 	candidates := []nativeResetCandidate{
 		{path: worktree, boundary: agentRoot, reuseRootWhenRenameDenied: true},
 		{
@@ -1314,13 +1520,15 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			boundary:                  stateRoot,
 			reuseRootWhenRenameDenied: true,
 		},
+		{path: commonDir, boundary: commonBoundary},
 	}
 	recoverySources := map[string]string{
 		worktree:      agentRoot,
 		selectedState: stateRoot,
+		commonDir:     commonBoundary,
 	}
 	quarantineName := fmt.Sprintf(".devkit-reset-%s-agent%d-", opts.Project, opts.Index)
-	quarantineBoundaries := []string{agentRoot, stateRoot}
+	quarantineBoundaries := []string{agentRoot, stateRoot, commonBoundary}
 	// Agent 1's home is inside its worktree. Later slots keep the home beside
 	// the worktree, so select that exact directory without deleting the shared
 	// agent root or any other repository beneath it.
@@ -1345,22 +1553,19 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 		envLocalGit := func(args ...string) []string {
 			return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", gitExecutable}, args...)
 		}
-		if err := validateNativeOwnedCommonRepository(worktreeRoot, commonDir, repo, origin, envExecutable, envLocalGit); err != nil {
+		if err := validateNativeOwnedCommonRepository(worktreeRoot, commonDir, repo, origin, opts.Index, envExecutable, envLocalGit); err != nil {
 			return nil, err
-		}
-		quarantineBoundaries = append(quarantineBoundaries, metadataBoundary)
-		metadata, err := nativeSelectedWorktreeMetadata(commonDir, worktree, quarantineName)
-		if err != nil {
-			return nil, err
-		}
-		if metadata != "" {
-			candidates = append(candidates, nativeResetCandidate{
-				path: metadata, boundary: metadataBoundary,
-			})
-			recoverySources[metadata] = metadataBoundary
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect package-owned common repository %s: %w", commonDir, statErr)
+	}
+	staging, err := filepath.Glob(filepath.Join(commonBoundary, "."+repo+".bootstrap-*"))
+	if err != nil {
+		return nil, fmt.Errorf("enumerate selected native reset bootstrap staging paths: %w", err)
+	}
+	for _, path := range staging {
+		candidates = append(candidates, nativeResetCandidate{path: path, boundary: commonBoundary})
+		recoverySources[path] = commonBoundary
 	}
 	candidates, err = appendNativeResetQuarantineResidue(candidates, quarantineBoundaries, quarantineName)
 	if err != nil {
@@ -1393,8 +1598,6 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 		quarantineName:       quarantineName,
 		recoverySources:      recoverySources,
 		quarantineBoundaries: append([]string(nil), quarantineBoundaries...),
-		selectedWorktree:     worktree,
-		metadataBoundary:     metadataBoundary,
 	}, nil
 }
 
@@ -1508,6 +1711,24 @@ func reserveNativeResetQuarantinePath(
 		}
 	}
 	return "", fmt.Errorf("allocate unique native reset quarantine identity under %s", boundary)
+}
+
+func createNativeResetQuarantinePath(boundary, quarantineName string) (string, error) {
+	reserved := make(map[string]bool)
+	for attempt := 0; attempt < 32; attempt++ {
+		path, err := reserveNativeResetQuarantinePath(boundary, quarantineName, reserved)
+		if err != nil {
+			return "", err
+		}
+		if err := os.Mkdir(path, 0o700); err == nil {
+			return path, nil
+		} else if errors.Is(err, os.ErrExist) {
+			continue
+		} else {
+			return "", fmt.Errorf("create native reset quarantine %s: %w", path, err)
+		}
+	}
+	return "", fmt.Errorf("create unique native reset quarantine under %s", boundary)
 }
 
 // PrepareTransaction computes and validates the complete source-to-quarantine
@@ -1770,41 +1991,6 @@ func (transaction *NativeResetTransaction) Commit() error {
 	return result
 }
 
-func nativeResetMetadataSourceMatches(plan *NativeResetPlan, source, target string) bool {
-	if plan.metadataBoundary == "" || plan.selectedWorktree == "" ||
-		filepath.Dir(source) != plan.metadataBoundary || filepath.Base(source) == "." ||
-		strings.HasPrefix(filepath.Base(source), plan.quarantineName) ||
-		filepath.Dir(filepath.Dir(target)) != plan.metadataBoundary {
-		return false
-	}
-	inspect := source
-	if exists, err := nativeResetPathState(source); err != nil {
-		return false
-	} else if !exists {
-		if targetExists, targetErr := nativeResetPathState(target); targetErr != nil {
-			return false
-		} else if !targetExists {
-			// Post-CAS cleanup may already have removed the typed quarantine. With
-			// neither name present there is no remaining filesystem effect to
-			// authorize; the slot-level postcondition still decides completion.
-			return true
-		}
-		inspect = target
-	}
-	value, err := readPlainMetadataPath(filepath.Join(inspect, "gitdir"))
-	if err != nil {
-		return false
-	}
-	candidate := filepath.Clean(value)
-	if !filepath.IsAbs(candidate) {
-		// Git records this value relative to the metadata directory's active
-		// name. Quarantine relocation must not change its authority meaning.
-		candidate = filepath.Clean(filepath.Join(source, candidate))
-	}
-	expected := filepath.Join(filepath.Clean(plan.selectedWorktree), ".git")
-	return candidate == expected
-}
-
 func nativeResetPlanAllowsSource(plan *NativeResetPlan, source, target string) bool {
 	if plan == nil {
 		return false
@@ -1812,7 +1998,7 @@ func nativeResetPlanAllowsSource(plan *NativeResetPlan, source, target string) b
 	if boundary, ok := plan.recoverySources[source]; ok {
 		return filepath.Dir(filepath.Dir(target)) == boundary
 	}
-	return nativeResetMetadataSourceMatches(plan, source, target)
+	return false
 }
 
 func nativeResetPlanAllowsBoundary(plan *NativeResetPlan, boundary string) bool {
@@ -1825,8 +2011,8 @@ func nativeResetPlanAllowsBoundary(plan *NativeResetPlan, boundary string) bool 
 }
 
 func nativeResetPlanOwnsQuarantine(plan *NativeResetPlan, boundary, path string) bool {
-	if plan == nil || filepath.Dir(path) != boundary ||
-		!strings.HasPrefix(filepath.Base(path), plan.quarantineName) {
+	if plan == nil || plan.quarantineName == "" || filepath.Dir(path) != boundary ||
+		!nativeResetCanonicalTransactionQuarantineName(filepath.Base(path), plan.quarantineName) {
 		return false
 	}
 	for _, allowed := range plan.quarantineBoundaries {
@@ -1867,7 +2053,7 @@ func ResumeNativeResetTransaction(
 		}
 		if !nativeResetPlanAllowsBoundary(plan, boundary) ||
 			!nativeResetPlanOwnsQuarantine(plan, boundary, path) ||
-			!strings.HasPrefix(filepath.Base(path), quarantineName) {
+			!nativeResetCanonicalTransactionQuarantineName(filepath.Base(path), quarantineName) {
 			return nil, fmt.Errorf("native reset recovery quarantine is outside the reconstructed plan: %s", path)
 		}
 		if err := validateNativeResetCandidate(
@@ -2000,7 +2186,7 @@ func stageNativeResetDirectoryContents(
 	if quarantineName == "" {
 		quarantineName = ".devkit-reset-"
 	}
-	quarantine, err := os.MkdirTemp(candidate.path, quarantineName)
+	quarantine, err := createNativeResetQuarantinePath(candidate.path, quarantineName)
 	if err != nil {
 		return "", staged, fmt.Errorf("create native reset quarantine inside reusable root %s: %w", candidate.path, err)
 	}
@@ -2081,6 +2267,9 @@ func (plan *NativeResetPlan) Stage() (*NativeResetTransaction, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fail(fmt.Errorf("native reset target %s became a symlink or junction", candidate.path))
 		}
+		if candidate.requireRealDirectory && !info.IsDir() {
+			return fail(fmt.Errorf("native reset target %s ceased to be a real directory", candidate.path))
+		}
 		if candidate.preserveRoot {
 			quarantine, updated, stageErr := stageNativeResetDirectoryContents(plan, candidate, staged)
 			staged = updated
@@ -2098,7 +2287,7 @@ func (plan *NativeResetPlan) Stage() (*NativeResetTransaction, error) {
 			if quarantineName == "" {
 				quarantineName = ".devkit-reset-"
 			}
-			quarantine, err = os.MkdirTemp(candidate.boundary, quarantineName)
+			quarantine, err = createNativeResetQuarantinePath(candidate.boundary, quarantineName)
 			if err != nil {
 				return fail(fmt.Errorf("create native reset quarantine under %s: %w", candidate.boundary, err))
 			}
@@ -2160,10 +2349,6 @@ func PreflightNative(opts NativeOptions) error {
 	if worktreesRoot == "" {
 		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
 	}
-	commonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo)
-	if err != nil {
-		return err
-	}
 	first, last := 1, count
 	if opts.Index > 0 {
 		if opts.Index > count {
@@ -2171,7 +2356,7 @@ func PreflightNative(opts NativeOptions) error {
 		}
 		first, last = opts.Index, opts.Index
 	}
-	return preflightNativeOwnedWorktreeTargets(worktreesRoot, commonDir, repo, first, last)
+	return preflightNativeOwnedWorktreeTargets(worktreesRoot, repo, first, last)
 }
 
 // SetupNative creates dedicated worktrees for every native agent, including
@@ -2207,8 +2392,11 @@ func SetupNative(opts NativeOptions) error {
 	if worktreesRoot == "" {
 		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
 	}
-	repoCommonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo)
-	if err != nil {
+	validationIndex := 1
+	if opts.Index > 0 {
+		validationIndex = opts.Index
+	}
+	if _, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo, validationIndex); err != nil {
 		return err
 	}
 	repoPath := filepath.Join(devRoot, repo)
@@ -2265,21 +2453,6 @@ func SetupNative(opts NativeOptions) error {
 			return err
 		}
 	}
-	repoCommonDir, err = ensureNativeOwnedCommonRepository(
-		worktreesRoot,
-		repo,
-		remoteURL,
-		envExecutable,
-		envLocalGit,
-		envRemoteGit,
-		opts.DryRun,
-	)
-	if err != nil {
-		return err
-	}
-	if err := run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
-		return err
-	}
 	first, last := 1, count
 	if opts.Index > 0 {
 		if opts.Index > count {
@@ -2288,6 +2461,14 @@ func SetupNative(opts NativeOptions) error {
 		first, last = opts.Index, opts.Index
 	}
 	for i := first; i <= last; i++ {
+		repoCommonDir, err := nativeOwnedCommonRepositoryPath(worktreesRoot, repo, i)
+		if err != nil {
+			return err
+		}
+		legacyCommonDir, err := nativeLegacyOwnedCommonRepositoryPath(worktreesRoot, repo)
+		if err != nil {
+			return err
+		}
 		parent := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i))
 		if !opts.DryRun {
 			_ = os.MkdirAll(parent, 0o755)
@@ -2299,6 +2480,52 @@ func SetupNative(opts NativeOptions) error {
 			if ok, err := existingGitCheckout(wt, gitExecutable); err != nil {
 				return err
 			} else if ok {
+				actualCommonDir, err := nativeWorktreeCommonDirectory(wt)
+				if err != nil {
+					return err
+				}
+				if actualCommonDir == canonicalOrClean(legacyCommonDir) {
+					if err := validateNativeLegacyOwnedCommonRepository(
+						worktreesRoot,
+						legacyCommonDir,
+						repo,
+						remoteURL,
+						envExecutable,
+						envLocalGit,
+					); err != nil {
+						return err
+					}
+					if opts.ReconstructSelected {
+						return fmt.Errorf(
+							"selected native lane agent%d still uses the legacy shared common Git repository; run the selected-slot reset before reconstruction",
+							i,
+						)
+					}
+					// Migration is slot-scoped. An active legacy lane remains exactly
+					// where it is until its own selected-slot reset creates the v2
+					// lane repository; routine setup preserves shared refs and locks
+					// byte-for-byte under the legacy lane's custody.
+					continue
+				}
+				if actualCommonDir != canonicalOrClean(repoCommonDir) {
+					return fmt.Errorf("native worktree %s common Git directory %s does not match lane-owned %s", wt, actualCommonDir, repoCommonDir)
+				}
+				repoCommonDir, err = ensureNativeOwnedCommonRepository(
+					worktreesRoot,
+					repo,
+					remoteURL,
+					i,
+					envExecutable,
+					envLocalGit,
+					envRemoteGit,
+					false,
+				)
+				if err != nil {
+					return err
+				}
+				if err := run(false, envExecutable, envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
+					return err
+				}
 				if err := run(false, envExecutable, envLocalGit("-C", wt, "config", "worktree.useRelativePaths", "true")...); err != nil {
 					return err
 				}
@@ -2319,6 +2546,22 @@ func SetupNative(opts NativeOptions) error {
 				}
 				continue
 			}
+		}
+		repoCommonDir, err = ensureNativeOwnedCommonRepository(
+			worktreesRoot,
+			repo,
+			remoteURL,
+			i,
+			envExecutable,
+			envLocalGit,
+			envRemoteGit,
+			opts.DryRun,
+		)
+		if err != nil {
+			return err
+		}
+		if err := run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "config", "worktree.useRelativePaths", "true")...); err != nil {
+			return err
 		}
 		stagingDir := ""
 		if !opts.DryRun {
