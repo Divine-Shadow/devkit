@@ -1244,6 +1244,23 @@ func TestLifecycleReadinessErrorAllowsSkippedRepoChecks(t *testing.T) {
 	}
 }
 
+func TestLifecycleReadinessErrorIncludesFailedCheckDetails(t *testing.T) {
+	err := lifecycleReadinessError(capacity.Summary{
+		Total: 1,
+		Agents: []capacity.Agent{{
+			Index: 1,
+			FailedChecks: []readiness.Check{{
+				Phase:  readiness.PhaseRuntime,
+				Name:   "product-governance-envelope",
+				Detail: "broker socket is unavailable",
+			}},
+		}},
+	}, lifecycleArgs{})
+	if err == nil || err.Error() != "native capacity is not fully available: agent1 runtime/product-governance-envelope: broker socket is unavailable" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestRegisterTopLevelLifecycleAndNativeNamespace(t *testing.T) {
 	reg := cmdregistry.New()
 	Register(reg)

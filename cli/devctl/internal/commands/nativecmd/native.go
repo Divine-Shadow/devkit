@@ -842,12 +842,32 @@ func lifecycleBrokerConfigWithStatusSocket(brokerCfg runtimebroker.Config, statu
 
 func lifecycleReadinessError(summary capacity.Summary, parsed lifecycleArgs) error {
 	if summary.CapacityAvailable != summary.Total {
-		return fmt.Errorf("native capacity is not fully available")
+		return fmt.Errorf("native capacity is not fully available%s", lifecycleReadinessFailureSuffix(summary))
 	}
 	if !parsed.skipRepoChecks && summary.RepoReady != summary.Total {
-		return fmt.Errorf("native repo readiness is not fully available")
+		return fmt.Errorf("native repo readiness is not fully available%s", lifecycleReadinessFailureSuffix(summary))
 	}
 	return nil
+}
+
+func lifecycleReadinessFailureSuffix(summary capacity.Summary) string {
+	var failures []string
+	for _, agent := range summary.Agents {
+		for _, failed := range agent.FailedChecks {
+			detail := strings.TrimSpace(failed.Detail)
+			if detail == "" {
+				detail = strings.TrimSpace(failed.Action)
+			}
+			if detail == "" {
+				detail = "failed"
+			}
+			failures = append(failures, fmt.Sprintf("agent%d %s/%s: %s", agent.Index, failed.Phase, failed.Name, detail))
+		}
+	}
+	if len(failures) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(failures, "; ")
 }
 
 func handleTopExec(ctx *cmdregistry.Context) error {
