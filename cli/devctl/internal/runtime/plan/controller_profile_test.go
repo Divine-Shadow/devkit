@@ -24,6 +24,12 @@ func controllerProfileFileIdentity(t *testing.T, path, content string) Controlle
 	return ControllerProfileFileIdentity{Path: path, SHA256: hex.EncodeToString(digest[:])}
 }
 
+func TestManagementControllerProfileUsesSingleV8AuthorityPath(t *testing.T) {
+	if ManagementControllerProfileManifestPath != "/etc/fleet/controller-operation-authority.json" {
+		t.Fatalf("Management controller manifest path = %q", ManagementControllerProfileManifestPath)
+	}
+}
+
 func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot string) ManagementControllerProfile {
 	t.Helper()
 	writeExecutable := func(path string) string {

@@ -26,6 +26,9 @@ Option 3 preserves the compiled capability allowlist while allowing the authorit
   fixed-request Product station-reset capability. Devkit rejects missing,
   caller-selected, or mismatched socket, executable, operation, schema,
   service-user, ownership, and mode fields.
+- Devkit and Fleet load that contract from the single compiled authority path
+  `/etc/fleet/controller-operation-authority.json`; the former profile-path
+  alias is not retained.
 
 ## rollback_plan
 

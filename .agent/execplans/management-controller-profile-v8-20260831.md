@@ -24,6 +24,9 @@ tolerance is accepted.
 - The profile manifest and live identity advance together to v8. Maintaining a
   v7 compatibility projection would add a second contract and contradict the
   single-route convergence objective.
+- Devkit and Fleet consume the same v8 document at
+  `/etc/fleet/controller-operation-authority.json`; the retired profile-path
+  alias is removed rather than maintained.
 - Devkit validates only the declared fixed reset socket, immutable store
   executable, typed operation and schemas, service identity, and exact
   ownership/mode fields. It receives no new effect or caller-selected command

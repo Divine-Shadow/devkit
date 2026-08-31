@@ -52,7 +52,7 @@ const (
 )
 
 var (
-	ManagementControllerProfileManifestPath = "/etc/fleet/management-controller-convergence.json"
+	ManagementControllerProfileManifestPath = "/etc/fleet/controller-operation-authority.json"
 	WorkspaceControllerOperationSocket      = "/run/fleet-controller-operation/control.sock"
 	WorkspaceControllerOperationIdentity    = "/run/fleet-controller-operation/identity.json"
 	ControllerProfileStoreRoot              = "/nix/store"
