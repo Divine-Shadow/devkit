@@ -100,6 +100,14 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 			RequestSchema:      profile.ProductAgentLifecycle.RequestSchema,
 			EventSchema:        profile.ProductAgentLifecycle.EventSchema,
 		},
+		ProductStationReset: controllerOperationProductStationReset{
+			SocketPath:    profile.ProductStationReset.SocketPath,
+			Executable:    profile.ProductStationReset.Executable,
+			Operation:     profile.ProductStationReset.Operation,
+			RequestSchema: profile.ProductStationReset.RequestSchema,
+			EventSchema:   profile.ProductStationReset.EventSchema,
+			ServiceUser:   profile.ProductStationReset.ServiceUser,
+		},
 		NixOSDeployment: controllerOperationNixOSDeployment{
 			SocketPath:    profile.NixOSDeployment.SocketPath,
 			Operation:     profile.NixOSDeployment.Operation,
@@ -143,7 +151,7 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 	}
 }
 
-func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T) {
+func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T) {
 	withProductGovernanceEnvironmentFixture(t)
 	root, err := os.MkdirTemp("", "devkit-v4-")
 	if err != nil {
@@ -329,6 +337,18 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV6Profile(t *testing.T)
 		Owner:              "root",
 		Group:              "product-agent-operators",
 		NoFollow:           true,
+	}
+	profile.ProductStationReset = nativeplan.ControllerProfileProductStationReset{
+		SocketPath:    "/run/fleet-product-station-reset-effect/control.sock",
+		Executable:    writeExecutable(filepath.Join(operationStoreRoot, "devkit", "kit", "bin", "devctl")),
+		Operation:     "product.station-reset",
+		RequestSchema: "fleet-control/controller-local-product-station-reset-request/v1",
+		EventSchema:   "fleet-control/controller-local-product-station-reset-event/v1",
+		ServiceUser:   nativeplan.ManagementControllerIdentityExpectedOwner,
+		Mode:          "0660",
+		Owner:         "root",
+		Group:         "product-station-reset-operators",
+		NoFollow:      true,
 	}
 	profile.FleetRecovery = nativeplan.ControllerProfileFleetRecovery{
 		Controller:     nativeplan.ManagementControllerNode,

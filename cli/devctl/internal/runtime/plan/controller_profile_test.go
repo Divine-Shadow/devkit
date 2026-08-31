@@ -114,6 +114,18 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Group:              "product-agent-operators",
 			NoFollow:           true,
 		},
+		ProductStationReset: ControllerProfileProductStationReset{
+			SocketPath:    controllerProductStationResetSocket,
+			Executable:    writeExecutable(filepath.Join(ControllerProfileStoreRoot, "devkit", "kit", "bin", "devctl")),
+			Operation:     controllerProductStationResetOperation,
+			RequestSchema: controllerProductStationResetRequest,
+			EventSchema:   controllerProductStationResetEvent,
+			ServiceUser:   ManagementControllerIdentityExpectedOwner,
+			Mode:          "0660",
+			Owner:         "root",
+			Group:         "product-station-reset-operators",
+			NoFollow:      true,
+		},
 		FleetRecovery: ControllerProfileFleetRecovery{
 			Controller:     ManagementControllerNode,
 			Target:         "manifest-selected-station",
@@ -191,8 +203,11 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 	return profile
 }
 
-func TestManagementControllerProfileRecognizesV7CodexPermissionsAndRemoteGUI(t *testing.T) {
+func TestManagementControllerProfileRecognizesV8Capabilities(t *testing.T) {
 	profile := ManagementControllerProfile{
+		ProductStationReset: ControllerProfileProductStationReset{
+			Operation: controllerProductStationResetOperation,
+		},
 		RemoteProductGUI: ControllerProfileRemoteProductGUI{
 			SchemaVersion: controllerRemoteProductGUISchema,
 			Targets:       []ControllerProfileRemoteProductGUITarget{{ID: "station-1"}},
@@ -210,10 +225,12 @@ func TestManagementControllerProfileRecognizesV7CodexPermissionsAndRemoteGUI(t *
 	decoder.DisallowUnknownFields()
 	var decoded ManagementControllerProfile
 	if err := decoder.Decode(&decoded); err != nil {
-		t.Fatalf("v7 controller fields rejected: %v", err)
+		t.Fatalf("v8 controller fields rejected: %v", err)
 	}
-	if decoded.CodexPermissions.Mode != "custom" || decoded.RemoteProductGUI.SchemaVersion != controllerRemoteProductGUISchema {
-		t.Fatalf("v7 controller fields decoded incorrectly: %#v", decoded)
+	if decoded.CodexPermissions.Mode != "custom" ||
+		decoded.RemoteProductGUI.SchemaVersion != controllerRemoteProductGUISchema ||
+		decoded.ProductStationReset.Operation != controllerProductStationResetOperation {
+		t.Fatalf("v8 controller fields decoded incorrectly: %#v", decoded)
 	}
 }
 
@@ -577,6 +594,12 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	if err := validateManagementControllerProfile(withoutReconcile); err == nil ||
 		!strings.Contains(err.Error(), "Product-agent lifecycle") {
 		t.Fatalf("profile without Product-agent reconciliation operation was not rejected: %v", err)
+	}
+	withoutStationReset := profile
+	withoutStationReset.ProductStationReset.Operation = ""
+	if err := validateManagementControllerProfile(withoutStationReset); err == nil ||
+		!strings.Contains(err.Error(), "Product station reset") {
+		t.Fatalf("profile without typed Product station reset was not rejected: %v", err)
 	}
 	withoutControllerRead := profile
 	withoutControllerRead.Kinds = []string{

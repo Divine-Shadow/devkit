@@ -22,6 +22,10 @@ Option 3 preserves the compiled capability allowlist while allowing the authorit
 - The existing `shadow-throne-management-2` path remains accepted.
 - An undeclared Management-like identity is rejected with the existing fail-closed error.
 - Controller node, Product-agent host, inventory hashes, operation handle, mount policy, and permission contract validation are unchanged.
+- The v8 profile and live identity strictly include the manifest-selected,
+  fixed-request Product station-reset capability. Devkit rejects missing,
+  caller-selected, or mismatched socket, executable, operation, schema,
+  service-user, ownership, and mode fields.
 
 ## rollback_plan
 

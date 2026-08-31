@@ -71,6 +71,15 @@ type controllerOperationProductAgentLifecycle struct {
 	EventSchema        string `json:"eventSchema"`
 }
 
+type controllerOperationProductStationReset struct {
+	SocketPath    string `json:"socketPath"`
+	Executable    string `json:"executable"`
+	Operation     string `json:"operation"`
+	RequestSchema string `json:"requestSchema"`
+	EventSchema   string `json:"eventSchema"`
+	ServiceUser   string `json:"serviceUser"`
+}
+
 type controllerOperationNixOSDeployment struct {
 	SocketPath    string `json:"socketPath"`
 	Operation     string `json:"operation"`
@@ -86,6 +95,7 @@ type controllerOperationIdentity struct {
 	Package               controllerOperationPackageIdentity       `json:"package"`
 	Socket                controllerOperationSocketIdentity        `json:"socket"`
 	ProductAgentLifecycle controllerOperationProductAgentLifecycle `json:"productAgentLifecycle"`
+	ProductStationReset   controllerOperationProductStationReset   `json:"productStationReset"`
 	NixOSDeployment       controllerOperationNixOSDeployment       `json:"nixosDeployment"`
 	SourceInventories     controllerOperationInventories           `json:"sourceInventories"`
 	SourceRoots           controllerOperationSourceRoots           `json:"sourceRoots"`
@@ -297,6 +307,16 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 		EventSchema:        profile.ProductAgentLifecycle.EventSchema,
 	}) {
 		return fmt.Errorf("controller operation identity Product-agent lifecycle does not match the profile")
+	}
+	if identity.ProductStationReset != (controllerOperationProductStationReset{
+		SocketPath:    profile.ProductStationReset.SocketPath,
+		Executable:    profile.ProductStationReset.Executable,
+		Operation:     profile.ProductStationReset.Operation,
+		RequestSchema: profile.ProductStationReset.RequestSchema,
+		EventSchema:   profile.ProductStationReset.EventSchema,
+		ServiceUser:   profile.ProductStationReset.ServiceUser,
+	}) {
+		return fmt.Errorf("controller operation identity Product station reset effect does not match the profile")
 	}
 	if identity.NixOSDeployment != (controllerOperationNixOSDeployment{
 		SocketPath:    profile.NixOSDeployment.SocketPath,

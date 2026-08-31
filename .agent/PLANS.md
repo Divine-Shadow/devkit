@@ -57,6 +57,10 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [Management Controller Profile v8](execplans/management-controller-profile-v8-20260831.md):
+  consume the one strict v8 controller manifest and live identity, including
+  the isolated typed Product station-reset capability, without a compatibility
+  projection.
 - [GUI Target Configuration Projection](execplans/gui-target-config-projection-20260829.md):
   project one immutable inventory-selected Codex config during the exact GUI
   target launch and admit only a proven suffix-only stale slot-manifest shrink.

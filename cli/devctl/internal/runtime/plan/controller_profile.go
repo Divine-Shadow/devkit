@@ -16,8 +16,8 @@ import (
 const (
 	ManagementControllerProfileIdentity     = "management-controller-convergence/v1"
 	ManagementControllerMountPolicyIdentity = "devkit/workspace-egress/v4"
-	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v7"
-	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v7"
+	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v8"
+	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v8"
 	ControllerOperationRequestSchema        = "fleet-control/controller-operation-request/v1"
 	ControllerOperationAcceptedSchema       = "fleet-control/controller-operation-accepted/v1"
 	ControllerOperationEventSchema          = "fleet-control/controller-operation-event/v1"
@@ -39,6 +39,10 @@ const (
 	controllerProductAgentOperation         = "cycle-test"
 	controllerProductAgentRequestSchema     = "fleet-control/product-agent-local-request/v1"
 	controllerProductAgentEventSchema       = "fleet-control/product-agent-local-event/v1"
+	controllerProductStationResetSocket     = "/run/fleet-product-station-reset-effect/control.sock"
+	controllerProductStationResetOperation  = "product.station-reset"
+	controllerProductStationResetRequest    = "fleet-control/controller-local-product-station-reset-request/v1"
+	controllerProductStationResetEvent      = "fleet-control/controller-local-product-station-reset-event/v1"
 	controllerNixOSDeploymentSocket         = "/run/fleet-nixos-deploy-effect/control.sock"
 	controllerNixOSDeploymentOperation      = "nixos.deploy-closure"
 	controllerNixOSDeploymentRequestSchema  = "fleet-control/nixos-deploy-local-request/v1"
@@ -130,6 +134,19 @@ type ControllerProfileProductAgentLifecycle struct {
 	Owner              string `json:"owner"`
 	Group              string `json:"group"`
 	NoFollow           bool   `json:"noFollow"`
+}
+
+type ControllerProfileProductStationReset struct {
+	SocketPath    string `json:"socketPath"`
+	Executable    string `json:"executable"`
+	Operation     string `json:"operation"`
+	RequestSchema string `json:"requestSchema"`
+	EventSchema   string `json:"eventSchema"`
+	ServiceUser   string `json:"serviceUser"`
+	Mode          string `json:"mode"`
+	Owner         string `json:"owner"`
+	Group         string `json:"group"`
+	NoFollow      bool   `json:"noFollow"`
 }
 
 type ControllerProfileFleetRecovery struct {
@@ -303,6 +320,7 @@ type ManagementControllerProfile struct {
 	MountPolicyIdentity   string                                 `json:"mountPolicyIdentity"`
 	OperationHandle       ControllerProfileOperationHandle       `json:"operationHandle"`
 	ProductAgentLifecycle ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
+	ProductStationReset   ControllerProfileProductStationReset   `json:"productStationReset"`
 	FleetRecovery         ControllerProfileFleetRecovery         `json:"fleetRecovery"`
 	NixOSDeployment       ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
 	SourceRoots           ControllerProfileSourceRoots           `json:"sourceRoots"`
@@ -435,6 +453,21 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return fmt.Errorf("Management controller Product-agent lifecycle does not match the compiled fail-closed contract")
 	}
 	if err := validateControllerStoreExecutable("Product-agent lifecycle", productAgent.Executable); err != nil {
+		return err
+	}
+	stationReset := profile.ProductStationReset
+	if filepath.Clean(stationReset.SocketPath) != controllerProductStationResetSocket ||
+		stationReset.Operation != controllerProductStationResetOperation ||
+		stationReset.RequestSchema != controllerProductStationResetRequest ||
+		stationReset.EventSchema != controllerProductStationResetEvent ||
+		stationReset.ServiceUser != ManagementControllerIdentityExpectedOwner ||
+		stationReset.Mode != "0660" ||
+		stationReset.Owner != "root" ||
+		stationReset.Group != "product-station-reset-operators" ||
+		!stationReset.NoFollow {
+		return fmt.Errorf("Management controller Product station reset effect does not match the compiled fail-closed contract")
+	}
+	if err := validateControllerStoreExecutable("Product station reset", stationReset.Executable); err != nil {
 		return err
 	}
 	if err := validateControllerFleetRecovery(profile); err != nil {
