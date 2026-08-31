@@ -1393,12 +1393,16 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 			nativeResetCandidate{
 				path:                      filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index)),
 				boundary:                  worktreeRoot,
+				preserveRoot:              true,
 				reuseRootWhenRenameDenied: true,
+				requireRealDirectory:      true,
 			},
 			nativeResetCandidate{
 				path:                      filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, index)),
 				boundary:                  stateRoot,
+				preserveRoot:              true,
 				reuseRootWhenRenameDenied: true,
+				requireRealDirectory:      true,
 			},
 			nativeResetCandidate{path: commonDir, boundary: worktreeRoot},
 		)

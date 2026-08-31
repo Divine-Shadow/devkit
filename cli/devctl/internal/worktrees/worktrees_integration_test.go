@@ -1266,6 +1266,14 @@ func TestNativeResetDisposesOpaqueInPrefixPayloadWithoutForeignCustody(t *testin
 	if err := os.WriteFile(filepath.Join(stateRoot, "dev-all-agent1", "stale"), []byte("disposable\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	worktreeSlotBefore, err := os.Stat(filepath.Join(worktreeRoot, "agent1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateSlotBefore, err := os.Stat(filepath.Join(stateRoot, "dev-all-agent1"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	plan, err := PlanNativeReset(NativeResetOptions{
 		Project:      "dev-all",
@@ -1280,11 +1288,32 @@ func TestNativeResetDisposesOpaqueInPrefixPayloadWithoutForeignCustody(t *testin
 	if err := plan.Apply(); err != nil {
 		t.Fatalf("apply native reset: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(worktreeRoot, "agent1")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("owned stale worktree survived reset: %v", err)
+	worktreeSlotAfter, err := os.Stat(filepath.Join(worktreeRoot, "agent1"))
+	if err != nil || !os.SameFile(worktreeSlotBefore, worktreeSlotAfter) {
+		t.Fatalf("owned worktree slot root identity changed: before=%v after=%v error=%v", worktreeSlotBefore, worktreeSlotAfter, err)
 	}
-	if _, err := os.Lstat(filepath.Join(stateRoot, "dev-all-agent1")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("owned stale state survived reset: %v", err)
+	if _, err := os.Lstat(staleWorktree); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned stale worktree payload survived reset: %v", err)
+	}
+	stateSlotAfter, err := os.Stat(filepath.Join(stateRoot, "dev-all-agent1"))
+	if err != nil || !os.SameFile(stateSlotBefore, stateSlotAfter) {
+		t.Fatalf("owned state slot root identity changed: before=%v after=%v error=%v", stateSlotBefore, stateSlotAfter, err)
+	}
+	stateEntries, err := os.ReadDir(filepath.Join(stateRoot, "dev-all-agent1"))
+	if err != nil || len(stateEntries) != 0 {
+		t.Fatalf("owned stale state payload survived reset: entries=%v error=%v", stateEntries, err)
+	}
+	reconstructedHome := filepath.Join(worktreeRoot, "agent1", ".devhome-agent1")
+	if err := os.MkdirAll(reconstructedHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	temporary := filepath.Join(reconstructedHome, ".tmp-.zshrc-test")
+	final := filepath.Join(reconstructedHome, ".zshrc")
+	if err := os.WriteFile(temporary, []byte("managed\n"), 0o600); err != nil {
+		t.Fatalf("create atomic shell-hook staging file beneath retained slot root: %v", err)
+	}
+	if err := os.Rename(temporary, final); err != nil {
+		t.Fatalf("rename atomic shell-hook staging file beneath retained slot root: %v", err)
 	}
 	if got, err := os.ReadFile(foreignSentinel); err != nil || string(got) != "outside reset custody\n" {
 		t.Fatalf("foreign Git metadata acquired reset custody: data=%q error=%v", got, err)
@@ -2094,10 +2123,8 @@ func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *test
 		t.Fatalf("apply whole reset recovery: %v", err)
 	}
 	for _, path := range []string{
-		agentRoot,
 		selectedWorktree,
 		selectedHome,
-		selectedState,
 		commonDir,
 		manifestPath,
 		quarantineByBoundary[stateRoot],
@@ -2108,6 +2135,12 @@ func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *test
 	} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("whole reset residue survived %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{agentRoot, selectedState} {
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("whole reset structural root was not retained empty %s: entries=%v error=%v", path, entries, err)
 		}
 	}
 	for _, path := range lookalikeDirs {
