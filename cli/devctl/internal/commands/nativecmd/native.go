@@ -122,6 +122,7 @@ func managedAppServerServiceOwnedWithCgroup(service, invocationID, cgroup string
 type lifecycleArgs struct {
 	repo                    string
 	guiTargetID             string
+	requireGUIConfig        bool
 	flake                   string
 	count                   int
 	format                  string
@@ -1227,6 +1228,7 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		Project:               ctx.Project,
 		Repo:                  repo,
 		GUITargetID:           parsed.guiTargetID,
+		RequireGUIConfig:      parsed.requireGUIConfig,
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
 		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides),
 		BrokerBinary:          brokerCfg.Binary,
@@ -1482,6 +1484,10 @@ func ResetOwnedPrefix(ctx *cmdregistry.Context, stopSessions func()) (retErr err
 	if err != nil {
 		return err
 	}
+	// Whole-prefix reset reconstructs GUI-owned Product lanes. Require every
+	// fresh home to select its exact immutable Nix config by full declared
+	// geometry before the destructive boundary can run.
+	parsed.requireGUIConfig = true
 	cfg, repo, count, baseBranch, branchPrefix, err := lifecycleDefaults(ctx, parsed)
 	if err != nil {
 		return err

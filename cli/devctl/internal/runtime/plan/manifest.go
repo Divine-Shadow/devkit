@@ -18,6 +18,7 @@ func BuildManifest(opts BuildOptions, count int) (agent.Manifest, error) {
 		// The shared all-slot manifest records lifecycle geometry, so replaying
 		// one target's projection while enumerating sibling indexes is invalid.
 		next.GUITargetID = ""
+		next.RequireGUIConfig = false
 		p, err := BuildDevAll(next)
 		if err != nil {
 			return agent.Manifest{}, err

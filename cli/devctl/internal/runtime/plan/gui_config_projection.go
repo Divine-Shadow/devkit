@@ -91,6 +91,64 @@ func loadGUITargetConfigProjection(targetID string, geometry guiTargetGeometry) 
 	)
 }
 
+func loadUniqueGUITargetConfigProjectionForGeometry(geometry guiTargetGeometry) (GUITargetConfigProjection, error) {
+	return loadUniqueGUITargetConfigProjectionForGeometryFrom(
+		guiCodexConfigProjectionManifestPath,
+		guiCodexConfigProjectionStoreRoot,
+		geometry,
+	)
+}
+
+func loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, storeRoot string, geometry guiTargetGeometry) (GUITargetConfigProjection, error) {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return GUITargetConfigProjection{}, fmt.Errorf("read GUI Codex config projection manifest %s: %w", manifestPath, err)
+	}
+	var manifest guiCodexConfigProjectionManifest
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return GUITargetConfigProjection{}, fmt.Errorf("decode GUI Codex config projection manifest %s: %w", manifestPath, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = fmt.Errorf("unexpected trailing JSON value")
+		}
+		return GUITargetConfigProjection{}, fmt.Errorf("decode GUI Codex config projection manifest %s: %w", manifestPath, err)
+	}
+	if manifest.SchemaVersion != guiCodexConfigProjectionSchema {
+		return GUITargetConfigProjection{}, fmt.Errorf("GUI Codex config projection manifest %s schemaVersion = %q, want %q", manifestPath, manifest.SchemaVersion, guiCodexConfigProjectionSchema)
+	}
+	seen := make(map[string]struct{}, len(manifest.Projections))
+	matches := make([]guiCodexConfigProjectionRecord, 0, 1)
+	for i, record := range manifest.Projections {
+		if strings.TrimSpace(record.TargetID) == "" || record.TargetID != strings.TrimSpace(record.TargetID) {
+			return GUITargetConfigProjection{}, fmt.Errorf("GUI Codex config projection record %d has an empty or non-canonical targetId", i)
+		}
+		if _, ok := seen[record.TargetID]; ok {
+			return GUITargetConfigProjection{}, fmt.Errorf("GUI Codex config projection manifest has duplicate targetId %q", record.TargetID)
+		}
+		seen[record.TargetID] = struct{}{}
+		if record.Project == geometry.Project && record.Repo == geometry.Repo &&
+			record.AgentIndex == geometry.AgentIndex && record.WorkspaceRoot == geometry.WorkspaceRoot &&
+			record.HostWorktree == geometry.HostWorktree && record.HostHome == geometry.HostHome {
+			matches = append(matches, record)
+		}
+	}
+	if len(matches) != 1 {
+		return GUITargetConfigProjection{}, fmt.Errorf("GUI Codex config projection geometry matched %d targets, want exactly 1", len(matches))
+	}
+	selected := matches[0]
+	if err := validateGUITargetConfigProjectionRecord(selected, geometry, storeRoot); err != nil {
+		return GUITargetConfigProjection{}, err
+	}
+	return GUITargetConfigProjection{
+		TargetID: selected.TargetID, ConfigProfile: selected.ConfigProfile,
+		Source: selected.Source, SourceSHA256: selected.SourceSHA256,
+	}, nil
+}
+
 func loadGUITargetConfigProjectionFrom(manifestPath, storeRoot, targetID string, geometry guiTargetGeometry) (GUITargetConfigProjection, error) {
 	rawTargetID := targetID
 	targetID = strings.TrimSpace(rawTargetID)

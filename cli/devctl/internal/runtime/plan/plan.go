@@ -79,6 +79,7 @@ type BuildOptions struct {
 	Index                 int
 	Repo                  string
 	GUITargetID           string
+	RequireGUIConfig      bool
 	Flake                 string
 	FlakeInputOverrides   map[string]string
 	BrokerBinary          string
@@ -493,12 +494,22 @@ func Build(opts BuildOptions) (Plan, error) {
 		},
 		Notes: notes,
 	}
+	if opts.GUITargetID != "" && opts.RequireGUIConfig {
+		return Plan{}, fmt.Errorf("GUI target selection cannot combine an explicit target ID with required geometry selection")
+	}
 	if opts.GUITargetID != "" {
 		guiTargetID := strings.TrimSpace(opts.GUITargetID)
 		if guiTargetID == "" || guiTargetID != opts.GUITargetID {
 			return Plan{}, fmt.Errorf("GUI target ID must be non-empty and canonical")
 		}
 		projection, err := loadGUITargetConfigProjection(guiTargetID, guiTargetGeometryForPlan(p))
+		if err != nil {
+			return Plan{}, err
+		}
+		p.GUITargetConfig = &projection
+		p.Env[GUITargetIDEnvironment] = projection.TargetID
+	} else if opts.RequireGUIConfig {
+		projection, err := loadUniqueGUITargetConfigProjectionForGeometry(guiTargetGeometryForPlan(p))
 		if err != nil {
 			return Plan{}, err
 		}

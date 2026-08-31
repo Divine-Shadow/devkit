@@ -99,6 +99,55 @@ func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
 	}
 }
 
+func TestBuildRequiresUniqueGUITargetConfigProjectionByFullGeometry(t *testing.T) {
+	root := t.TempDir()
+	storeRoot := "/nix/store"
+	source := "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-gui-config.toml"
+	data := []byte("# source = nixos-wsl codex config\nmodel_provider = \"openai\"\n")
+	previousManifestPath := guiCodexConfigProjectionManifestPath
+	manifestPath := filepath.Join(root, "codex-config-projections.json")
+	guiCodexConfigProjectionManifestPath = manifestPath
+	t.Cleanup(func() {
+		guiCodexConfigProjectionManifestPath = previousManifestPath
+	})
+
+	opts := BuildOptions{
+		Paths:   devkitpaths.Paths{Root: filepath.Join(root, "devkit")},
+		Project: "dev-all",
+		Repo:    "ouroboros-ide",
+		Index:   3,
+	}
+	base, err := BuildDevAll(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	record := guiConfigRecordForPlan(base, "shadow-3", "product-governance", source, hex.EncodeToString(digest[:]))
+	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record})
+	projection, err := loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, storeRoot, guiTargetGeometryForPlan(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.TargetID != "shadow-3" {
+		t.Fatalf("geometry-selected GUI config = %#v", projection)
+	}
+	opts.RequireGUIConfig = true
+	p, err := BuildDevAll(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.GUITargetConfig == nil || p.GUITargetConfig.TargetID != "shadow-3" || p.Env[GUITargetIDEnvironment] != "shadow-3" {
+		t.Fatalf("geometry-selected GUI config = %#v env=%q", p.GUITargetConfig, p.Env[GUITargetIDEnvironment])
+	}
+
+	duplicate := record
+	duplicate.TargetID = "shadow-3-duplicate"
+	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record, duplicate})
+	if _, err := loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, storeRoot, guiTargetGeometryForPlan(base)); err == nil || !strings.Contains(err.Error(), "matched 2 targets, want exactly 1") {
+		t.Fatalf("duplicate geometry was not rejected: %v", err)
+	}
+}
+
 func TestGUITargetConfigProjectionRejectsMissingAndDuplicateTarget(t *testing.T) {
 	storeRoot := filepath.Join(t.TempDir(), "nix", "store")
 	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
