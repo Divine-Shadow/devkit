@@ -2353,6 +2353,7 @@ func isWorkspaceControllerCapabilityTarget(target string) bool {
 	if clean == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationIdentity) ||
+		clean == filepath.Clean(nativeplan.WorkspaceControllerWorkLedgerDirectory) ||
 		clean == filepath.Clean(nativeplan.ManagementControllerProfileManifestPath) {
 		return true
 	}
@@ -2430,6 +2431,23 @@ func isControllerSocketTarget(target string) bool {
 func validateWorkspaceControllerCapabilityBinding(source, target, mode string) error {
 	if filepath.Clean(source) != filepath.Clean(target) {
 		return fmt.Errorf("controller capability source override rejected for %s", target)
+	}
+	if filepath.Clean(target) == filepath.Clean(nativeplan.WorkspaceControllerWorkLedgerDirectory) {
+		if mode != "rw" {
+			return fmt.Errorf("controller work ledger directory must be projected read-write")
+		}
+		info, err := os.Lstat(source)
+		if err != nil {
+			return fmt.Errorf("inspect controller work ledger directory: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			return fmt.Errorf("controller work ledger capability must be a non-symlink mode 0700 directory: %s", source)
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || uint32(stat.Uid) != uint32(os.Getuid()) {
+			return fmt.Errorf("controller work ledger directory owner does not match launching user: %s", source)
+		}
+		return nil
 	}
 	if mode != "ro" {
 		return fmt.Errorf("controller capability %s must be projected read-only", target)

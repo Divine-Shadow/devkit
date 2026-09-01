@@ -28,6 +28,12 @@ func TestManagementControllerProfileUsesSingleV8AuthorityPath(t *testing.T) {
 	if ManagementControllerProfileManifestPath != "/etc/fleet/controller-operation-authority.json" {
 		t.Fatalf("Management controller manifest path = %q", ManagementControllerProfileManifestPath)
 	}
+	if WorkspaceControllerWorkLedgerDirectory != "/home/bayesartre/dev/.agent/fleet-work" {
+		t.Fatalf("Management controller work ledger directory = %q", WorkspaceControllerWorkLedgerDirectory)
+	}
+	if WorkspaceControllerWorkLedgerPath != "/home/bayesartre/dev/.agent/fleet-work/work.sqlite" {
+		t.Fatalf("Management controller work ledger path = %q", WorkspaceControllerWorkLedgerPath)
+	}
 }
 
 func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot string) ManagementControllerProfile {
@@ -576,7 +582,8 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	if p.ControllerProfile != ManagementControllerProfileIdentity ||
 		p.ControllerManifest != manifestPath ||
 		p.MountPolicyIdentity != ManagementControllerMountPolicyIdentity ||
-		p.Env[ControllerOperationHandleEnvironment] != ControllerOperationHandleRequiredValue {
+		p.Env[ControllerOperationHandleEnvironment] != ControllerOperationHandleRequiredValue ||
+		p.Env[WorkspaceControllerWorkLedgerEnvironment] != WorkspaceControllerWorkLedgerPath {
 		t.Fatalf("v4 readback mismatch: profile=%q manifest=%q policy=%q env=%#v", p.ControllerProfile, p.ControllerManifest, p.MountPolicyIdentity, p.Env)
 	}
 	if _, ok := p.Env["FLEET_EXEC_TRANSPORT_HANDLE"]; ok {
@@ -587,6 +594,7 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 		{Source: manifestPath, Target: manifestPath, Mode: "ro", Required: true},
 		{Source: operationSocket, Target: operationSocket, Mode: "ro", Required: true},
 		{Source: operationIdentity, Target: operationIdentity, Mode: "ro", Required: true},
+		{Source: WorkspaceControllerWorkLedgerDirectory, Target: WorkspaceControllerWorkLedgerDirectory, Mode: "rw", Required: true},
 	} {
 		if !hasBind(p.Binds, want.Source, want.Target) {
 			t.Fatalf("v4 bind absent: %+v from %#v", want, p.Binds)
@@ -632,6 +640,10 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	}
 	if product.ControllerProfile != "" || product.MountPolicyIdentity != "devkit/workspace-egress/v3" {
 		t.Fatalf("unrelated Product profile was promoted: %+v", product)
+	}
+	if _, ok := product.Env[WorkspaceControllerWorkLedgerEnvironment]; ok ||
+		hasBind(product.Binds, WorkspaceControllerWorkLedgerDirectory, WorkspaceControllerWorkLedgerDirectory) {
+		t.Fatalf("unrelated Product profile received controller work-ledger authority: env=%#v binds=%#v", product.Env, product.Binds)
 	}
 
 	mutableConfig := filepath.Join(root, "mutable-ssh-config")

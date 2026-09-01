@@ -51,10 +51,14 @@ const (
 	controllerCodexPermissionContract       = "wsl-nix/codex-granular-custom/v1"
 )
 
+const WorkspaceControllerWorkLedgerEnvironment = "FLEET_WORK_DB"
+
 var (
 	ManagementControllerProfileManifestPath = "/etc/fleet/controller-operation-authority.json"
 	WorkspaceControllerOperationSocket      = "/run/fleet-controller-operation/control.sock"
 	WorkspaceControllerOperationIdentity    = "/run/fleet-controller-operation/identity.json"
+	WorkspaceControllerWorkLedgerDirectory  = "/home/bayesartre/dev/.agent/fleet-work"
+	WorkspaceControllerWorkLedgerPath       = "/home/bayesartre/dev/.agent/fleet-work/work.sqlite"
 	ControllerProfileStoreRoot              = "/nix/store"
 	// These remain compiled defaults. They are variables only so hermetic
 	// cross-package tests can reproduce the same ownership validation under

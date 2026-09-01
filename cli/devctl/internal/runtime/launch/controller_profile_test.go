@@ -186,10 +186,13 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	manifestPath := filepath.Join(root, "management-controller-convergence.json")
 	operationSocket := filepath.Join(root, "run", "operation", "control.sock")
 	operationIdentity := filepath.Join(root, "run", "operation", "identity.json")
+	workLedgerDirectory := filepath.Join(root, "fleet-work")
 	execSocket := filepath.Join(root, "run", "exec", "control.sock")
 	previousManifest := nativeplan.ManagementControllerProfileManifestPath
 	previousOperationSocket := nativeplan.WorkspaceControllerOperationSocket
 	previousOperationIdentity := nativeplan.WorkspaceControllerOperationIdentity
+	previousWorkLedgerDirectory := nativeplan.WorkspaceControllerWorkLedgerDirectory
+	previousWorkLedgerPath := nativeplan.WorkspaceControllerWorkLedgerPath
 	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
 	previousFleetInventory := nativeplan.WorkspaceControllerSourceInventory
 	previousGUIInventory := nativeplan.WorkspaceControllerGUIInventory
@@ -214,6 +217,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	nativeplan.ManagementControllerProfileManifestPath = manifestPath
 	nativeplan.WorkspaceControllerOperationSocket = operationSocket
 	nativeplan.WorkspaceControllerOperationIdentity = operationIdentity
+	nativeplan.WorkspaceControllerWorkLedgerDirectory = workLedgerDirectory
+	nativeplan.WorkspaceControllerWorkLedgerPath = filepath.Join(workLedgerDirectory, "work.sqlite")
 	nativeplan.WorkspaceControllerExecSocket = execSocket
 	nativeplan.WorkspaceControllerSourceInventory = fleetInventory
 	nativeplan.WorkspaceControllerGUIInventory = guiInventory
@@ -226,6 +231,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		nativeplan.ManagementControllerProfileManifestPath = previousManifest
 		nativeplan.WorkspaceControllerOperationSocket = previousOperationSocket
 		nativeplan.WorkspaceControllerOperationIdentity = previousOperationIdentity
+		nativeplan.WorkspaceControllerWorkLedgerDirectory = previousWorkLedgerDirectory
+		nativeplan.WorkspaceControllerWorkLedgerPath = previousWorkLedgerPath
 		nativeplan.WorkspaceControllerExecSocket = previousExecSocket
 		nativeplan.WorkspaceControllerSourceInventory = previousFleetInventory
 		nativeplan.WorkspaceControllerGUIInventory = previousGUIInventory
@@ -242,6 +249,12 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	writeTestFile(t, fleetInventory, "fleet\n")
 	writeTestFile(t, guiInventory, "gui\n")
 	writeTestFile(t, resolvConf, "nameserver 127.0.0.1\n")
+	if err := os.MkdirAll(workLedgerDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(workLedgerDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(ti4Source, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -471,12 +484,14 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		"'--bind' '" + wslRoot + "' '/workspaces/dev/wsl-nix'",
 		"'--ro-bind' '" + operationSocket + "' '" + operationSocket + "'",
 		"'--ro-bind' '" + operationIdentity + "' '" + operationIdentity + "'",
+		"'--bind' '" + workLedgerDirectory + "' '" + workLedgerDirectory + "'",
 		"'--ro-bind' '" + fleetInventory + "' '" + fleetInventory + "'",
 		"'--ro-bind' '" + guiInventory + "' '" + guiInventory + "'",
 		"'--bind' '" + ti4Source + "' '/workspaces/dev/ti4-calculator'",
 		"'--setenv' 'DEVKIT_MANAGEMENT_CONTROLLER_PROFILE' 'management-controller-convergence/v1'",
 		"'--setenv' 'DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY' 'devkit/workspace-egress/v4'",
 		"'--setenv' 'FLEET_CONTROLLER_OPERATION_HANDLE' 'required'",
+		"'--setenv' 'FLEET_WORK_DB' '" + nativeplan.WorkspaceControllerWorkLedgerPath + "'",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("v4 command missing %q:\n%s", want, text)
@@ -492,6 +507,16 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("v4 command exposes forbidden host authority %q:\n%s", forbidden, text)
 		}
+	}
+	if err := os.Chmod(workLedgerDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil ||
+		!strings.Contains(err.Error(), "non-symlink mode 0700 directory") {
+		t.Fatalf("unprotected work ledger error = %v, want fail-closed capability rejection", err)
+	}
+	if err := os.Chmod(workLedgerDirectory, 0o700); err != nil {
+		t.Fatal(err)
 	}
 	dirtyPath := filepath.Join(wslRoot, "unexpected-untracked")
 	writeTestFile(t, dirtyPath, "dirty\n")

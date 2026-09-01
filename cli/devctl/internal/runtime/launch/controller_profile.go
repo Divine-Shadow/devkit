@@ -116,7 +116,8 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 		p.ControllerManifest != nativeplan.ManagementControllerProfileManifestPath ||
 		p.MountPolicyIdentity != nativeplan.ManagementControllerMountPolicyIdentity ||
 		p.Env[nativeplan.ManagementControllerProfileEnvironment] != nativeplan.ManagementControllerProfileIdentity ||
-		p.Env[nativeplan.ControllerOperationHandleEnvironment] != nativeplan.ControllerOperationHandleRequiredValue {
+		p.Env[nativeplan.ControllerOperationHandleEnvironment] != nativeplan.ControllerOperationHandleRequiredValue ||
+		p.Env[nativeplan.WorkspaceControllerWorkLedgerEnvironment] != nativeplan.WorkspaceControllerWorkLedgerPath {
 		return fmt.Errorf("Management controller plan does not match the named v1 capability profile")
 	}
 	profile, err := nativeplan.LoadManagementControllerProfile(p.ControllerManifest)
@@ -134,6 +135,7 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 		{Source: nativeplan.ManagementControllerProfileManifestPath, Target: nativeplan.ManagementControllerProfileManifestPath, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerOperationSocket, Target: nativeplan.WorkspaceControllerOperationSocket, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerOperationIdentity, Target: nativeplan.WorkspaceControllerOperationIdentity, Mode: "ro", Required: true},
+		{Source: nativeplan.WorkspaceControllerWorkLedgerDirectory, Target: nativeplan.WorkspaceControllerWorkLedgerDirectory, Mode: "rw", Required: true},
 	} {
 		if !planHasExactBind(p.Binds, expected) {
 			return fmt.Errorf("Management controller plan lacks exact required bind %+v", expected)

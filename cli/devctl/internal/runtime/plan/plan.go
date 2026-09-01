@@ -387,6 +387,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		if controllerProfile != nil {
 			env[ManagementControllerProfileEnvironment] = ManagementControllerProfileIdentity
 			env[ControllerOperationHandleEnvironment] = ControllerOperationHandleRequiredValue
+			env[WorkspaceControllerWorkLedgerEnvironment] = WorkspaceControllerWorkLedgerPath
 		}
 		notes = append(notes,
 			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
@@ -685,6 +686,10 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 			add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
 			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", true)
 			add(WorkspaceControllerOperationIdentity, WorkspaceControllerOperationIdentity, "ro", true)
+			// The existing fleet work commands and deployment campaign validator
+			// share this one canonical SQLite ledger. Bind its directory, rather
+			// than only work.sqlite, so SQLite can create its journal/WAL files.
+			add(WorkspaceControllerWorkLedgerDirectory, WorkspaceControllerWorkLedgerDirectory, "rw", true)
 		} else if _, err := os.Lstat(WorkspaceControllerExecSocket); err == nil {
 			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
 		}
