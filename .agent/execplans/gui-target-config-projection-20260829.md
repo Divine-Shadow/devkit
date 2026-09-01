@@ -9,7 +9,10 @@ Make Devkit the sole writer of a GUI member's `CODEX_HOME/config.toml` while
 keeping profile selection in the immutable WSL-Nix inventory projection. An
 exact `--gui-target-id` must select one manifest record, validate its lane
 geometry and immutable source, and atomically install the regular owner-matched
-`0600` file before the target command starts. Permit only a proven suffix-only
+`0600` file before the target command starts. A selected-slot reset whose
+controller route carries no target ID must select exactly one immutable record
+by the same full source-derived geometry and materialize it before readiness.
+Permit only a proven suffix-only
 shrink of a stale native slot manifest so a source-declared capacity reduction
 can reconstruct the selected slot without touching retained or active lanes.
 
@@ -20,6 +23,10 @@ can reconstruct the selected slot without touching retained or active lanes.
   `devkit/gui-codex-config-projections/v1`. Caller environment variables and
   mutable fallback files are not authority.
 - Ordinary non-GUI Devkit exec plans do not project a config.
+- Every destructive `dev-all` reconstruction plan projects one config before
+  readiness: exact-ID selection when supplied, otherwise unique full-geometry
+  selection. Missing or duplicate geometry fails before deletion; ambient
+  config remains non-authoritative.
 - Immutable source reads and mutable destination writes must be no-follow,
   owner-checked, same-handle/same-inode operations. A symlinked parent,
   noncanonical path, foreign owner, wrong hash, wrong geometry, or pathname
@@ -80,8 +87,18 @@ can reconstruct the selected slot without touching retained or active lanes.
   `14e83243e145d69e01269589cce5011f909b6ae4` to
   `8103bd8bb6bc4b60fb97e254997d7b06129471a0`, then fetch and prove the remote
   `master` ref equals the candidate.
-- [ ] Pin and deploy the published Devkit source through WSL-Nix, then prove a
-  real target's effective config origin and isolation.
+- [x] Diagnose controller-local Product reconstruction failure
+  `op-603b0b1f0ccfdd0cf7d07e680cacd428`: its selected reset omitted
+  `--gui-target-id`, built an ordinary plan, skipped config projection, and
+  failed `codex-provider-config` before readiness.
+- [x] Require targetless selected-slot reset to use the existing unique
+  full-geometry immutable projection while preserving exact-ID selection.
+- [x] Pass focused reset/geometry/materialization tests, full
+  `go test -p 2 ./... -count=1`, focused `go vet`, formatting/diff checks,
+  `nix flake check --no-build`, and the packaged Devctl/runtime Nix checks.
+- [ ] Publish by exact compare-and-swap, pin/deploy through WSL-Nix, and prove
+  a fresh local3 reconstruction reaches exact config/auth/native-governance
+  readiness.
 
 ## Implementation
 
@@ -146,6 +163,13 @@ profile bytes/hash/owner/mode, and no visibility or mutation of another lane.
   missing source under one validated boundary. Independent review caught both
   before publication; crash-before-first-effect, crash-after-first-rename,
   arbitrary-source, and cross-boundary recovery tests now cover them.
+- The controller-local and remote Fleet Product reconstruction routes had
+  different reset arguments: remote supplied the canonical GUI target ID,
+  while local supplied only exact lane geometry. Selected reset treated the
+  latter as an ordinary plan even though the destructive command exclusively
+  reconstructs a GUI Product lane. The immutable full-geometry selector
+  already used by whole-prefix reset was present; its selected-reset
+  composition flag was missing.
 
 ## Decision Log
 
@@ -164,6 +188,10 @@ profile bytes/hash/owner/mode, and no visibility or mutation of another lane.
 - 2026-08-29: Journal exact plan-derived mappings before the first destructive
   rename. A prepared transaction rolls back while the prior manifest remains;
   a committed/replacement-manifest transaction can only finish cleanup.
+- 2026-09-01: Preserve exact target-ID selection when present. When selected
+  reset has no ID, require exactly one projection by the same source-derived
+  project/repo/index/workspace/worktree/home geometry before any destructive
+  effect. Do not add an ambient path, config copy, or readiness bypass.
 
 ## Outcomes & Retrospective
 
@@ -176,6 +204,17 @@ upstream Product-lane projections. Post-rebase verification passed:
     TMPDIR=/tmp GOMAXPROCS=2 nice -n 19 ionice -c3 go vet ./internal/runtime/plan ./internal/runtime/launch ./internal/commands/nativecmd
     gofmt -l <all changed Go files>
     git diff --check origin/master..HEAD
+
+The 2026-09-01 selected-reset repair passed the focused causal chain and full
+repository/package gates from the dedicated clean source writer:
+
+    go test ./internal/commands/nativecmd -run 'Test(ParseNativeSlotResetArgsRequiresExactTypedLaneInterface|NativeSlotResetLifecycleAlwaysSelectsImmutableGUIConfig)$' -count=1
+    go test ./internal/runtime/plan -run TestBuildRequiresUniqueGUITargetConfigProjectionByFullGeometry -count=1
+    go test ./internal/runtime/launch -run 'TestSeedCodexConfig(DataAtomicallyMaterializesAndRefreshes0600Target|IgnoresHostileLegacyAmbientSourceForOrdinaryPlan)$' -count=1
+    go test -p 2 ./... -count=1
+    go vet ./internal/runtime/plan ./internal/runtime/launch ./internal/commands/nativecmd
+    nix --option max-jobs 2 --option cores 2 flake check --no-build
+    nix --option max-jobs 2 --option cores 2 build --no-link .#checks.x86_64-linux.devctl-go-tests .#checks.x86_64-linux.dev-all-runtime-bundle .#checks.x86_64-linux.dev-all-runtime-tools .#checks.x86_64-linux.dev-all-runtime-shell
 
 The original source publication boundary completed with expected remote ref
 `7fa979e9828a5286fd68e16a052143fcae35ab62`, candidate

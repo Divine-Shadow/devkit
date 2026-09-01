@@ -112,6 +112,16 @@ func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, er
 	return parsed, nil
 }
 
+func nativeSlotResetLifecycleArgs(parsed nativeSlotResetArgs, repo, baseBranch, branchPrefix string) lifecycleArgs {
+	return lifecycleArgs{
+		repo:             repo,
+		baseBranch:       baseBranch,
+		branchPrefix:     branchPrefix,
+		guiTargetID:      parsed.guiTargetID,
+		requireGUIConfig: parsed.guiTargetID == "",
+	}
+}
+
 func validateNativeSlotWorkspaceRoot(value string, selectedPlan nativeplan.Plan) (string, error) {
 	workspaceRoot := strings.TrimSpace(value)
 	if workspaceRoot == "" || !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
@@ -1603,12 +1613,12 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if branchPrefix == "" {
 		branchPrefix = "agent"
 	}
-	lifecycleParsed := lifecycleArgs{
-		repo:         declaredRepo,
-		baseBranch:   baseBranch,
-		branchPrefix: branchPrefix,
-		guiTargetID:  parsed.guiTargetID,
-	}
+	// Selected-slot reset always reconstructs one GUI-owned Product lane. An
+	// exact caller target ID selects its immutable projection directly. The
+	// controller-local route intentionally carries only source-derived lane
+	// geometry, so require that geometry to select exactly one projection
+	// before the destructive boundary. Neither path admits ambient config.
+	lifecycleParsed := nativeSlotResetLifecycleArgs(parsed, declaredRepo, baseBranch, branchPrefix)
 	if err := applyLifecycleReadinessMode(&lifecycleParsed, cfg); err != nil {
 		return err
 	}

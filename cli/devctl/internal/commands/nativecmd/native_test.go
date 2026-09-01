@@ -1338,6 +1338,31 @@ func TestParseNativeSlotResetArgsRequiresExactTypedLaneInterface(t *testing.T) {
 	}
 }
 
+func TestNativeSlotResetLifecycleAlwaysSelectsImmutableGUIConfig(t *testing.T) {
+	withoutTarget := nativeSlotResetLifecycleArgs(
+		nativeSlotResetArgs{},
+		"ouroboros-ide",
+		"main",
+		"agent",
+	)
+	if !withoutTarget.requireGUIConfig || withoutTarget.guiTargetID != "" {
+		t.Fatalf("targetless selected reset did not require geometry-selected config: %#v", withoutTarget)
+	}
+
+	withTarget := nativeSlotResetLifecycleArgs(
+		nativeSlotResetArgs{guiTargetID: "shadow-throne-local-3"},
+		"ouroboros-ide",
+		"main",
+		"agent",
+	)
+	if withTarget.requireGUIConfig || withTarget.guiTargetID != "shadow-throne-local-3" {
+		t.Fatalf("target-bound selected reset did not preserve exact-ID config selection: %#v", withTarget)
+	}
+	if withTarget.repo != "ouroboros-ide" || withTarget.baseBranch != "main" || withTarget.branchPrefix != "agent" {
+		t.Fatalf("selected reset lifecycle authority drifted: %#v", withTarget)
+	}
+}
+
 func TestNativeSlotWorkspaceRootConstrainsButDoesNotDeriveLifecycleGeometry(t *testing.T) {
 	root := t.TempDir()
 	worktreeRoot := filepath.Join(root, "agent-worktrees")
