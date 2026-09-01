@@ -1,6 +1,7 @@
 package worktrees
 
 import (
+	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/gitauthority"
 	"devkit/cli/devctl/internal/paths"
 	runtimeagent "devkit/cli/devctl/internal/runtime/agent"
@@ -9,8 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -2762,5 +2766,89 @@ func TestSetupNativeSelectedReconstructionRejectsStandaloneAgentCheckoutAsForeig
 	}
 	if got := readTrim(t, "git", "-C", standalone, "rev-parse", "--show-toplevel"); filepath.Clean(got) != standalone {
 		t.Fatalf("unexpected standalone toplevel: %s", got)
+	}
+}
+
+func TestNativeSourceGitInvocationUsesEmptySanitizedEnvironment(t *testing.T) {
+	wrapper := filepath.Join(t.TempDir(), "git-environment-probe")
+	source := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$HOME\" \"${TMPDIR-unset}\" \"${GIT_OBJECT_DIRECTORY-unset}\" \"${GIT_ALTERNATE_OBJECT_DIRECTORIES-unset}\" \"${GIT_CONFIG_COUNT-unset}\" \"$GIT_CONFIG_GLOBAL\" \"$GIT_CONFIG_NOSYSTEM\" \"$GIT_SSH_COMMAND\"\n"
+	if err := os.WriteFile(wrapper, []byte(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restoreGit := gitauthority.SetExecutableForTesting(wrapper)
+	defer restoreGit()
+	name, args, err := NativeSourceGitInvocation(false, "/package/ssh -F /source/config", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(name, args...)
+	command.Env = append(os.Environ(),
+		"TMPDIR=/protected/tmp",
+		"GIT_OBJECT_DIRECTORY=/protected/objects",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=/protected/alternates",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=core.excludesFile",
+		"GIT_CONFIG_VALUE_0=/protected/excludes",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run isolated Git environment probe: %v\n%s", err, output)
+	}
+	want := strings.Join([]string{
+		"/nonexistent",
+		"unset",
+		"unset",
+		"unset",
+		"unset",
+		"/dev/null",
+		"1",
+		"/package/ssh -F /source/config",
+		"",
+	}, "\n")
+	if string(output) != want {
+		t.Fatalf("isolated Git environment = %q, want %q", output, want)
+	}
+}
+
+func TestRunNativeSourceGitFetchUsesManagedIdleTimeoutAndKillsDescendants(t *testing.T) {
+	sleepExecutable, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Fatalf("managed fetch timeout fixture requires sleep: %v", err)
+	}
+	pidPath := filepath.Join(t.TempDir(), "child.pid")
+	wrapper := filepath.Join(t.TempDir(), "hanging-git")
+	source := "#!/bin/sh\n" +
+		"(trap '' TERM; while :; do " + sleepExecutable + " 30; done) &\n" +
+		"child=$!\n" +
+		"printf '%s\\n' \"$child\" > " + pidPath + "\n" +
+		"trap '' TERM\n" +
+		"wait \"$child\"\n"
+	if err := os.WriteFile(wrapper, []byte(source), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	restoreGit := gitauthority.SetExecutableForTesting(wrapper)
+	defer restoreGit()
+	previousIdleLimit := nativeFetchIdleLimit
+	nativeFetchIdleLimit = 75 * time.Millisecond
+	defer func() { nativeFetchIdleLimit = previousIdleLimit }()
+	started := time.Now()
+	err = RunNativeSourceGitFetch(false, "", "fetch")
+	if err == nil || !errors.Is(err, execx.ErrIdleTimeout) {
+		t.Fatalf("managed source fetch error = %v, want idle timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("managed source fetch exceeded bounded cleanup: %s", elapsed)
+	}
+	pidData, readErr := os.ReadFile(pidPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	if killErr := syscall.Kill(pid, 0); !errors.Is(killErr, syscall.ESRCH) {
+		t.Fatalf("managed source fetch descendant %d survived cleanup: %v", pid, killErr)
 	}
 }

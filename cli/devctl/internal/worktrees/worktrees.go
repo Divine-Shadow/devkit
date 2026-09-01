@@ -25,7 +25,6 @@ const (
 	// transfer duration. This permits a healthy full pack to outlive the short
 	// metadata-operation limit while failing closed when Git/OpenSSH and its
 	// package-owned ProxyCommand make no progress for a complete idle window.
-	nativeFetchIdleLimit   = 2 * time.Minute
 	nativeTerminationGrace = 2 * time.Second
 )
 
@@ -34,6 +33,7 @@ const (
 // requires the absolute package-owned values before effects.
 var (
 	packageEnvExecutable = "env"
+	nativeFetchIdleLimit = 2 * time.Minute
 )
 
 func nativeSourceExecutables(requirePackage bool) (string, string, error) {
@@ -52,6 +52,21 @@ func nativeSourceExecutables(requirePackage bool) (string, string, error) {
 			return "", "", err
 		}
 	}
+	if !requirePackage {
+		var err error
+		if !filepath.IsAbs(envExecutable) {
+			envExecutable, err = exec.LookPath(envExecutable)
+			if err != nil {
+				return "", "", fmt.Errorf("resolve native source env executable: %w", err)
+			}
+		}
+		if !filepath.IsAbs(gitExecutable) {
+			gitExecutable, err = exec.LookPath(gitExecutable)
+			if err != nil {
+				return "", "", fmt.Errorf("resolve native source Git executable: %w", err)
+			}
+		}
+	}
 	for name, executable := range map[string]string{"env": envExecutable, "Git": gitExecutable} {
 		if !filepath.IsAbs(executable) {
 			continue
@@ -65,6 +80,66 @@ func nativeSourceExecutables(requirePackage bool) (string, string, error) {
 		}
 	}
 	return envExecutable, gitExecutable, nil
+}
+
+// NativeSourceGitInvocation builds one package-derived Git command inside a
+// deliberately empty environment. The remaining variables are constants or
+// source-derived transport authority; ambient Git config, object redirection,
+// alternate object stores, prompts, and caller HOME/TMP settings cannot affect
+// the operation.
+func NativeSourceGitInvocation(
+	requirePackage bool,
+	gitSSHCommand string,
+	args ...string,
+) (string, []string, error) {
+	envExecutable, gitExecutable, err := nativeSourceExecutables(requirePackage)
+	if err != nil {
+		return "", nil, err
+	}
+	gitSSHCommand = strings.TrimSpace(gitSSHCommand)
+	if strings.ContainsAny(gitSSHCommand, "\r\n\x00") {
+		return "", nil, fmt.Errorf("native source Git SSH command contains control characters")
+	}
+	environment := []string{
+		"-i",
+		"HOME=/nonexistent",
+		"LANG=C",
+		"LC_ALL=C",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_OPTIONAL_LOCKS=0",
+	}
+	if gitSSHCommand != "" {
+		environment = append(environment, "GIT_SSH_COMMAND="+gitSSHCommand)
+	}
+	gitArgs := []string{
+		gitExecutable,
+		"-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false",
+		"-c", "core.excludesFile=/dev/null",
+		"-c", "gc.auto=0",
+		"-c", "maintenance.auto=false",
+		"-c", "fetch.writeCommitGraph=false",
+	}
+	gitArgs = append(gitArgs, args...)
+	return envExecutable, append(environment, gitArgs...), nil
+}
+
+// RunNativeSourceGitFetch executes a remote source proof through the same
+// bounded idle-timeout and process-group cleanup policy used by native source
+// acquisition. Callers must provide the package-owned SSH command whenever the
+// source-declared origin requires SSH.
+func RunNativeSourceGitFetch(
+	requirePackage bool,
+	gitSSHCommand string,
+	args ...string,
+) error {
+	name, invocationArgs, err := NativeSourceGitInvocation(requirePackage, gitSSHCommand, args...)
+	if err != nil {
+		return err
+	}
+	return runFetch(false, name, invocationArgs...)
 }
 
 func runWithPolicy(dry bool, fixedLimit, idleLimit time.Duration, name string, args ...string) error {
@@ -1057,6 +1132,8 @@ type NativeSlotResetOptions struct {
 	WorktreeRoot                    string
 	StateRoot                       string
 	ProtectedRoots                  []string
+	GeneratedSetupLayerFiles        []string
+	DisposableGeneratedResidueRoots []string
 	RequirePackageSourceExecutables bool
 	DryRun                          bool
 }

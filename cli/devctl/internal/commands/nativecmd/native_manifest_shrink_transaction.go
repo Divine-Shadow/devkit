@@ -204,6 +204,8 @@ func nativeManifestShrinkResetOptions(
 		WorktreeRoot:                    manifest.HostWorktreeRoot,
 		StateRoot:                       manifest.HostStateRoot,
 		ProtectedRoots:                  append([]string(nil), base.ProtectedRoots...),
+		GeneratedSetupLayerFiles:        append([]string(nil), base.GeneratedSetupLayerFiles...),
+		DisposableGeneratedResidueRoots: append([]string(nil), base.DisposableGeneratedResidueRoots...),
 		RequirePackageSourceExecutables: base.RequirePackageSourceExecutables,
 		DryRun:                          dryRun,
 	}
@@ -279,11 +281,12 @@ func mergeNativeManifestShrinkTransactionStates(
 	return merged
 }
 
-func requireNativeSlotManifestShrinkStagedWithPlanner(
+func requireNativeSlotManifestShrinkStagedWithPlannerAndCustody(
 	manifest nativeagent.Manifest,
 	spec nativeagent.Spec,
 	expectedOrigin string,
 	state wtx.NativeResetTransactionState,
+	policy nativeSlotManifestShrinkCustodyPolicy,
 	planner nativeSlotManifestShrinkProcessPlanner,
 ) error {
 	if planner == nil {
@@ -352,10 +355,27 @@ func requireNativeSlotManifestShrinkStagedWithPlanner(
 			return fmt.Errorf("surplus native slot %d has state lock residue at %s", spec.ID.Index, path)
 		}
 	}
-	if err := requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(manifest, spec, expectedOrigin, allowedQuarantines); err != nil {
+	if err := requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(manifest, spec, expectedOrigin, allowedQuarantines, policy); err != nil {
 		return err
 	}
 	return inspectProcesses()
+}
+
+func requireNativeSlotManifestShrinkStagedWithPlanner(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+	expectedOrigin string,
+	state wtx.NativeResetTransactionState,
+	planner nativeSlotManifestShrinkProcessPlanner,
+) error {
+	return requireNativeSlotManifestShrinkStagedWithPlannerAndCustody(
+		manifest,
+		spec,
+		expectedOrigin,
+		state,
+		nativeSlotManifestShrinkCustodyPolicy{},
+		planner,
+	)
 }
 
 func requireNativeSlotManifestShrinkStaged(
@@ -365,6 +385,40 @@ func requireNativeSlotManifestShrinkStaged(
 	state wtx.NativeResetTransactionState,
 ) error {
 	return requireNativeSlotManifestShrinkStagedWithPlanner(manifest, spec, expectedOrigin, state, planNativeSlotProcesses)
+}
+
+func requireNativeSlotManifestShrinkStagedWithGeneratedSetup(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+	expectedOrigin string,
+	state wtx.NativeResetTransactionState,
+	generatedSetupLayerFiles []string,
+) error {
+	return requireNativeSlotManifestShrinkStagedWithPlannerAndCustody(
+		manifest,
+		spec,
+		expectedOrigin,
+		state,
+		nativeSlotManifestShrinkCustodyPolicy{generatedSetupLayerFiles: generatedSetupLayerFiles},
+		planNativeSlotProcesses,
+	)
+}
+
+func requireNativeSlotManifestShrinkStagedWithCustody(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+	expectedOrigin string,
+	state wtx.NativeResetTransactionState,
+	policy nativeSlotManifestShrinkCustodyPolicy,
+) error {
+	return requireNativeSlotManifestShrinkStagedWithPlannerAndCustody(
+		manifest,
+		spec,
+		expectedOrigin,
+		state,
+		policy,
+		planNativeSlotProcesses,
+	)
 }
 
 func rollbackNativeManifestShrinkTransactions(transactions []*wtx.NativeResetTransaction) error {
@@ -443,6 +497,7 @@ func recoverNativeManifestShrinkTransaction(
 	buildOptions nativeplan.BuildOptions,
 	resetOptions wtx.NativeSlotResetOptions,
 	dryRun bool,
+	custodyPolicy nativeSlotManifestShrinkCustodyPolicy,
 ) (bool, error) {
 	transactionPath := nativeManifestShrinkTransactionPath(manifestPath)
 	exists, journal, err := readNativeManifestShrinkTransaction(transactionPath)
@@ -478,7 +533,7 @@ func recoverNativeManifestShrinkTransaction(
 			return false, fmt.Errorf("resume post-CAS surplus native slot cleanup; typed recovery retained at %s: %w", transactionPath, err)
 		}
 		for _, spec := range surplus {
-			if err := requireNativeSlotManifestShrinkStaged(journal.Prior, spec, resetOptions.Origin, wtx.NativeResetTransactionState{}); err != nil {
+			if err := requireNativeSlotManifestShrinkStagedWithCustody(journal.Prior, spec, resetOptions.Origin, wtx.NativeResetTransactionState{}, custodyPolicy); err != nil {
 				return false, fmt.Errorf("verify recovered surplus native slot %d absence: %w", spec.ID.Index, err)
 			}
 		}

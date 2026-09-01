@@ -232,6 +232,20 @@ native:
   state_root: /home/bayesartre/dev/.devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
+  # Native setup projects this tracked repository policy file. Historical
+  # disposable slots may differ only at this exact tracked path.
+  generated_setup_layer_files:
+    - .codex/config.toml
+    - scripts/devops/governance-control-plane
+    - scripts/devops/governance-mcp-stdio-forward
+  # Only Git-ignored residue beneath these exact source-declared roots is
+  # disposable during historical-slot retirement. Ambient/global/info ignore
+  # rules cannot expand this custody boundary.
+  disposable_generated_residue_roots:
+    - .bsp
+    - logs
+    - project/target
+    - target
   required_isolation_profile: workspace-egress
   isolation_profiles:
     workspace-egress:

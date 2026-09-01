@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -84,6 +85,10 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 		"  state_root: ../.devkit/native-agents\n" +
 		"  worktree_container_root: /worktrees\n" +
 		"  state_container_root: /agent-state\n" +
+		"  generated_setup_layer_files:\n" +
+		"    - .codex/config.toml\n" +
+		"  disposable_generated_residue_roots:\n" +
+		"    - target\n" +
 		"  required_isolation_profile: workspace-egress\n" +
 		"  isolation_profiles:\n" +
 		"    workspace-egress:\n" +
@@ -124,6 +129,12 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	if cfg.Native.WorktreeContainerRoot != "/worktrees" || cfg.Native.StateContainerRoot != "/agent-state" {
 		t.Fatalf("native container roots = %#v", cfg.Native)
 	}
+	if !reflect.DeepEqual(cfg.Native.GeneratedSetupLayerFiles, []string{".codex/config.toml"}) {
+		t.Fatalf("native generated setup layer files = %#v", cfg.Native.GeneratedSetupLayerFiles)
+	}
+	if !reflect.DeepEqual(cfg.Native.DisposableGeneratedResidueRoots, []string{"target"}) {
+		t.Fatalf("native disposable generated residue roots = %#v", cfg.Native.DisposableGeneratedResidueRoots)
+	}
 	if cfg.Native.RequiredIsolationProfile != "workspace-egress" {
 		t.Fatalf("required isolation profile = %q", cfg.Native.RequiredIsolationProfile)
 	}
@@ -136,6 +147,30 @@ func TestReadAllParsesBrokerAndReadiness(t *testing.T) {
 	}
 	if cfg.Runtime.Flake != "./overlays/dev-all#default" {
 		t.Fatalf("runtime flake = %q", cfg.Runtime.Flake)
+	}
+}
+
+func TestDevAllDeclaresOnlyExactGeneratedSetupLayerFiles(t *testing.T) {
+	overlayRoot := filepath.Join("..", "..", "..", "..", "overlays")
+	cfg, _, err := ReadAll([]string{overlayRoot}, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		".codex/config.toml",
+		"scripts/devops/governance-control-plane",
+		"scripts/devops/governance-mcp-stdio-forward",
+	}
+	if !reflect.DeepEqual(cfg.Native.GeneratedSetupLayerFiles, want) {
+		t.Fatalf("dev-all generated setup layer files = %#v, want %#v", cfg.Native.GeneratedSetupLayerFiles, want)
+	}
+	wantResidueRoots := []string{".bsp", "logs", "project/target", "target"}
+	if !reflect.DeepEqual(cfg.Native.DisposableGeneratedResidueRoots, wantResidueRoots) {
+		t.Fatalf(
+			"dev-all disposable generated residue roots = %#v, want %#v",
+			cfg.Native.DisposableGeneratedResidueRoots,
+			wantResidueRoots,
+		)
 	}
 }
 

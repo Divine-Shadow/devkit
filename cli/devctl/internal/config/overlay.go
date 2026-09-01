@@ -104,9 +104,18 @@ type Native struct {
 	// AgentStatePrefix lets a source-owned profile retain an established Codex
 	// home/state identity while using a distinct project/profile name. It must
 	// be a single path component and is never accepted from lifecycle CLI args.
-	AgentStatePrefix         string                      `yaml:"agent_state_prefix"`
-	RequiredIsolationProfile string                      `yaml:"required_isolation_profile"`
-	IsolationProfiles        map[string]IsolationProfile `yaml:"isolation_profiles"`
+	AgentStatePrefix string `yaml:"agent_state_prefix"`
+	// GeneratedSetupLayerFiles is the exact repo-relative allowlist of tracked
+	// setup-layer files whose source-owned projection may differ in an otherwise
+	// disposable historical worktree. It never admits untracked files.
+	GeneratedSetupLayerFiles []string `yaml:"generated_setup_layer_files"`
+	// DisposableGeneratedResidueRoots is the exact repo-relative allowlist of
+	// generated directory roots which may contain Git-ignored disposable
+	// residue in a historical leased worktree. Ignore provenance alone is not
+	// authority: ignored paths outside these source-declared roots are refused.
+	DisposableGeneratedResidueRoots []string                    `yaml:"disposable_generated_residue_roots"`
+	RequiredIsolationProfile        string                      `yaml:"required_isolation_profile"`
+	IsolationProfiles               map[string]IsolationProfile `yaml:"isolation_profiles"`
 }
 
 type IsolationProfile struct {

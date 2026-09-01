@@ -103,6 +103,37 @@ repository—including the retired lane's stale registration/ref and every
 retained sibling's metadata and lock domain—remains untouched until all legacy
 lanes have migrated or a proven-idle whole-prefix reset owns it.
 
+The still-older historical layout may register a surplus linked worktree under
+the ordinary source checkout at `<host-root>/<repo>/.git/worktrees/<entry>`.
+Manifest shrink accepts that layout only when the common path is derived
+exactly from the manifest's worktree root and repository, all paths and
+forward/reverse links are canonical, the source origin and `agentN` branch are
+exact, and the branch commit is contained in a fresh current remote base. The
+protected source checkout's potentially stale `refs/remotes/origin/<base>` is
+not ancestry or setup-tree authority for this historical layout. One
+operation-bound proof fetches the base once for the full surplus suffix and
+uses that exact fetched commit for both checks through package-owned Git/SSH
+configuration and the managed egress proxy. The fetch is idle-bounded with
+process-group cleanup and stores only missing remote objects in source-derived
+disjoint scratch; a proof-local alternate reads the historical objects.
+Ambient Git config, object redirection, HOME, and TMP settings are removed, and
+the source checkout's objects, refs, indexes, metadata, and content remain
+read-only.
+
+Historical-root shrink refuses any Git lock, non-ignored untracked file,
+gitlink/submodule, unexpected tracked difference, non-stage-zero entry,
+assume-unchanged/skip-worktree bit, or sparse checkout. `dev-all` declares only
+three generated setup-layer tracked exceptions: `.codex/config.toml`,
+`scripts/devops/governance-control-plane`, and
+`scripts/devops/governance-mcp-stdio-forward`. Separately, only ignored residue
+below the real directory roots `.bsp`, `logs`, `project/target`, and `target`
+may leave with the staged worktree. Global config and `.git/info/exclude` do not
+authorize any other ignored path. These declarations are exact paths, not
+globs or operator overrides. Retirement still stages only the surplus
+worktree, home, and state through the durable shrink journal. The historical
+metadata and branch ref remain byte-identical until a later proven-idle
+whole-prefix reset.
+
 ## Down
 
 Stop broker state for the overlay and clean lifecycle metadata:
