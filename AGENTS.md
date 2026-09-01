@@ -9,6 +9,12 @@ Principles
   the source-derived cold history snapshot before deleting a Codex home. Never
   add a bypass, manual SQLite copy, automatic restore/import, or retention
   pruning to the reset path.
+- A referenced malformed GUI rollout may cross a reset boundary only through
+  the source-derived raw cold-quarantine class: retain its exact bytes and
+  digest, prove a matching session identity, bind the durable objective to its
+  captured SQLite row and digest, and mark it ineligible for resume. Missing or
+  conflicting identity, objective custody, or SQLite integrity still fails
+  closed; never sanitize, truncate, skip, or repair the source rollout in place.
 - Native `dev-all` Git custody is lane-local. Fresh and reconstructed lanes use
   `.devkit/git/agentN/<repo>.git`; selected-slot reset and bootstrap own exactly
   that lane's common repository. An active sibling retains byte-for-byte

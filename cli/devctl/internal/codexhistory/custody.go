@@ -23,7 +23,7 @@ import (
 	"devkit/cli/devctl/internal/sqliteauthority"
 )
 
-const SnapshotSchema = "devkit/codex-gui-history-snapshot/v1"
+const SnapshotSchema = "devkit/codex-gui-history-snapshot/v2"
 
 var sqliteFamilyPattern = regexp.MustCompile(`^(state|goals)_[0-9]+\.sqlite(?:-(?:wal|shm))?$`)
 
@@ -47,13 +47,14 @@ type SnapshotOptions struct {
 }
 
 type Result struct {
-	Status       string
-	GenerationID string
-	ManifestPath string
-	FileCount    int
-	TotalBytes   int64
-	GUIRollouts  int
-	BundleSHA256 string
+	Status                 string
+	GenerationID           string
+	ManifestPath           string
+	FileCount              int
+	TotalBytes             int64
+	GUIRollouts            int
+	QuarantinedGUIRollouts int
+	BundleSHA256           string
 }
 
 type manifestFile struct {
@@ -63,19 +64,43 @@ type manifestFile struct {
 }
 
 type snapshotManifest struct {
-	SchemaVersion     string         `json:"schema_version"`
-	Status            string         `json:"status"`
-	Project           string         `json:"project"`
-	ResetKind         string         `json:"reset_kind"`
-	AgentIndex        int            `json:"agent_index"`
-	CreatedAt         string         `json:"created_at"`
-	SourceHostHome    string         `json:"source_host_home"`
-	SourceSandboxHome string         `json:"source_sandbox_home"`
-	FileCount         int            `json:"file_count"`
-	TotalBytes        int64          `json:"total_bytes"`
-	GUIRolloutCount   int            `json:"gui_rollout_count"`
-	BundleSHA256      string         `json:"bundle_sha256"`
-	Files             []manifestFile `json:"files"`
+	SchemaVersion              string                  `json:"schema_version"`
+	Status                     string                  `json:"status"`
+	Project                    string                  `json:"project"`
+	ResetKind                  string                  `json:"reset_kind"`
+	AgentIndex                 int                     `json:"agent_index"`
+	CreatedAt                  string                  `json:"created_at"`
+	SourceHostHome             string                  `json:"source_host_home"`
+	SourceSandboxHome          string                  `json:"source_sandbox_home"`
+	FileCount                  int                     `json:"file_count"`
+	TotalBytes                 int64                   `json:"total_bytes"`
+	GUIRolloutCount            int                     `json:"gui_rollout_count"`
+	QuarantinedGUIRolloutCount int                     `json:"quarantined_gui_rollout_count"`
+	QuarantinedGUIRollouts     []quarantinedGUIRollout `json:"quarantined_gui_rollouts,omitempty"`
+	BundleSHA256               string                  `json:"bundle_sha256"`
+	Files                      []manifestFile          `json:"files"`
+}
+
+type objectiveCustody struct {
+	SourceDatabase string `json:"source_database"`
+	SourceTable    string `json:"source_table"`
+	SourceColumn   string `json:"source_column"`
+	ThreadID       string `json:"thread_id"`
+	Bytes          int    `json:"bytes"`
+	SHA256         string `json:"sha256"`
+}
+
+type quarantinedGUIRollout struct {
+	CustodyClass       string           `json:"custody_class"`
+	ThreadID           string           `json:"thread_id"`
+	RolloutPath        string           `json:"rollout_path"`
+	Bytes              int64            `json:"bytes"`
+	SHA256             string           `json:"sha256"`
+	ResumeEligible     bool             `json:"resume_eligible"`
+	ValidationCode     string           `json:"validation_code"`
+	FirstInvalidLine   int              `json:"first_invalid_line"`
+	InvalidRecordCount int              `json:"invalid_record_count"`
+	ObjectiveCustody   objectiveCustody `json:"objective_custody"`
 }
 
 type sourceFile struct {
@@ -90,6 +115,17 @@ type sourceFile struct {
 type sqliteRollout struct {
 	ThreadID    string `json:"thread_id"`
 	RolloutPath string `json:"rollout_path"`
+}
+
+type sqliteObjective struct {
+	ThreadID string `json:"thread_id"`
+	Title    string `json:"title"`
+}
+
+type guiRolloutValidation struct {
+	ValidationCode     string
+	FirstInvalidLine   int
+	InvalidRecordCount int
 }
 
 var availableSpaceCheck = requireAvailableSpace
@@ -229,26 +265,37 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		return result, err
 	}
 
-	guiRollouts, err := validateSQLiteAndRollouts(sqliteExecutable, payloadRoot, fileSet, options)
+	guiRollouts, quarantinedGUIRollouts, err := validateSQLiteAndRollouts(sqliteExecutable, payloadRoot, fileSet, options)
 	if err != nil {
 		return result, err
 	}
 	sort.Slice(manifestFiles, func(i, j int) bool { return manifestFiles[i].Path < manifestFiles[j].Path })
+	sort.Slice(quarantinedGUIRollouts, func(i, j int) bool {
+		if quarantinedGUIRollouts[i].ObjectiveCustody.SourceDatabase != quarantinedGUIRollouts[j].ObjectiveCustody.SourceDatabase {
+			return quarantinedGUIRollouts[i].ObjectiveCustody.SourceDatabase < quarantinedGUIRollouts[j].ObjectiveCustody.SourceDatabase
+		}
+		if quarantinedGUIRollouts[i].ThreadID != quarantinedGUIRollouts[j].ThreadID {
+			return quarantinedGUIRollouts[i].ThreadID < quarantinedGUIRollouts[j].ThreadID
+		}
+		return quarantinedGUIRollouts[i].RolloutPath < quarantinedGUIRollouts[j].RolloutPath
+	})
 	bundleHash := aggregateHash(manifestFiles)
 	manifest := snapshotManifest{
-		SchemaVersion:     SnapshotSchema,
-		Status:            "complete",
-		Project:           options.Project,
-		ResetKind:         options.ResetKind,
-		AgentIndex:        options.AgentIndex,
-		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
-		SourceHostHome:    hostHome,
-		SourceSandboxHome: filepath.Clean(options.SandboxHome),
-		FileCount:         len(manifestFiles),
-		TotalBytes:        totalBytes,
-		GUIRolloutCount:   guiRollouts,
-		BundleSHA256:      bundleHash,
-		Files:             manifestFiles,
+		SchemaVersion:              SnapshotSchema,
+		Status:                     "complete",
+		Project:                    options.Project,
+		ResetKind:                  options.ResetKind,
+		AgentIndex:                 options.AgentIndex,
+		CreatedAt:                  time.Now().UTC().Format(time.RFC3339Nano),
+		SourceHostHome:             hostHome,
+		SourceSandboxHome:          filepath.Clean(options.SandboxHome),
+		FileCount:                  len(manifestFiles),
+		TotalBytes:                 totalBytes,
+		GUIRolloutCount:            guiRollouts,
+		QuarantinedGUIRolloutCount: len(quarantinedGUIRollouts),
+		QuarantinedGUIRollouts:     quarantinedGUIRollouts,
+		BundleSHA256:               bundleHash,
+		Files:                      manifestFiles,
 	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -282,13 +329,14 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		status = "empty"
 	}
 	return Result{
-		Status:       status,
-		GenerationID: generationID,
-		ManifestPath: filepath.Join(finalRoot, "manifest.json"),
-		FileCount:    len(manifestFiles),
-		TotalBytes:   totalBytes,
-		GUIRollouts:  guiRollouts,
-		BundleSHA256: bundleHash,
+		Status:                 status,
+		GenerationID:           generationID,
+		ManifestPath:           filepath.Join(finalRoot, "manifest.json"),
+		FileCount:              len(manifestFiles),
+		TotalBytes:             totalBytes,
+		GUIRollouts:            guiRollouts,
+		QuarantinedGUIRollouts: len(quarantinedGUIRollouts),
+		BundleSHA256:           bundleHash,
 	}, nil
 }
 
@@ -514,10 +562,14 @@ func verifySourceSetStable(codexRoot string, before []sourceFile, beforeDirector
 	return nil
 }
 
-func validateSQLiteAndRollouts(sqliteExecutable, payloadRoot string, files map[string]manifestFile, options SnapshotOptions) (int, error) {
+func validateSQLiteAndRollouts(
+	sqliteExecutable, payloadRoot string,
+	files map[string]manifestFile,
+	options SnapshotOptions,
+) (int, []quarantinedGUIRollout, error) {
 	validationRoot := filepath.Join(filepath.Dir(payloadRoot), ".sqlite-validation")
 	if err := os.Mkdir(validationRoot, 0o700); err != nil {
-		return 0, fmt.Errorf("create private SQLite validation directory: %w", err)
+		return 0, nil, fmt.Errorf("create private SQLite validation directory: %w", err)
 	}
 	removeValidation := func() error {
 		if err := os.RemoveAll(validationRoot); err != nil {
@@ -538,10 +590,10 @@ func validateSQLiteAndRollouts(sqliteExecutable, payloadRoot string, files map[s
 		sourcePath := filepath.Join(payloadRoot, filepath.FromSlash(rel))
 		source, err := inspectSourceFile(sourcePath, rel)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		if _, err := copyStableFile(source, filepath.Join(validationRoot, filepath.Base(rel))); err != nil {
-			return 0, fmt.Errorf("copy private SQLite validation file %s: %w", rel, err)
+			return 0, nil, fmt.Errorf("copy private SQLite validation file %s: %w", rel, err)
 		}
 	}
 	var stateDatabases []string
@@ -551,36 +603,74 @@ func validateSQLiteAndRollouts(sqliteExecutable, payloadRoot string, files map[s
 		}
 		if (strings.HasPrefix(rel, "state_") || strings.HasPrefix(rel, "goals_")) && strings.HasSuffix(rel, ".sqlite") {
 			if err := sqliteQuickCheck(sqliteExecutable, filepath.Join(validationRoot, filepath.Base(rel))); err != nil {
-				return 0, fmt.Errorf("validate captured SQLite database %s: %w", rel, err)
+				return 0, nil, fmt.Errorf("validate captured SQLite database %s: %w", rel, err)
 			}
 		}
 	}
 	sort.Strings(stateDatabases)
 	guiRollouts := 0
+	var quarantinedGUIRollouts []quarantinedGUIRollout
 	for _, rel := range stateDatabases {
-		rollouts, err := sqliteGUIRollouts(sqliteExecutable, filepath.Join(validationRoot, filepath.Base(rel)))
+		database := filepath.Join(validationRoot, filepath.Base(rel))
+		rollouts, err := sqliteGUIRollouts(sqliteExecutable, database)
 		if err != nil {
-			return 0, fmt.Errorf("enumerate GUI rollout references from %s: %w", rel, err)
+			return 0, nil, fmt.Errorf("enumerate GUI rollout references from %s: %w", rel, err)
 		}
+		var objectives map[string]string
 		for _, rollout := range rollouts {
 			historyRel, err := rolloutRelativePath(rollout.RolloutPath, options)
 			if err != nil {
-				return 0, err
+				return 0, nil, err
 			}
-			if _, ok := files[historyRel]; !ok {
-				return 0, fmt.Errorf("GUI rollout reference is missing from resumable history: %s", rollout.RolloutPath)
+			fileRecord, ok := files[historyRel]
+			if !ok {
+				return 0, nil, fmt.Errorf("GUI rollout reference is missing from resumable history: %s", rollout.RolloutPath)
 			}
-			if err := validateGUIRolloutJSONL(payloadRoot, historyRel, rollout.ThreadID); err != nil {
-				return 0, err
+			validation, err := validateGUIRolloutJSONL(payloadRoot, historyRel, rollout.ThreadID)
+			if err != nil {
+				return 0, nil, err
+			}
+			if validation.InvalidRecordCount > 0 {
+				if objectives == nil {
+					objectives, err = sqliteGUIObjectives(sqliteExecutable, database)
+					if err != nil {
+						return 0, nil, fmt.Errorf("enumerate GUI objective custody from %s: %w", rel, err)
+					}
+				}
+				objective, ok := objectives[rollout.ThreadID]
+				if !ok || strings.TrimSpace(objective) == "" {
+					return 0, nil, fmt.Errorf("malformed GUI rollout has no durable objective custody in %s for thread %s", rel, rollout.ThreadID)
+				}
+				objectiveHash := sha256.Sum256([]byte(objective))
+				quarantinedGUIRollouts = append(quarantinedGUIRollouts, quarantinedGUIRollout{
+					CustodyClass:       "raw-cold-quarantine",
+					ThreadID:           rollout.ThreadID,
+					RolloutPath:        historyRel,
+					Bytes:              fileRecord.Bytes,
+					SHA256:             fileRecord.SHA256,
+					ResumeEligible:     false,
+					ValidationCode:     validation.ValidationCode,
+					FirstInvalidLine:   validation.FirstInvalidLine,
+					InvalidRecordCount: validation.InvalidRecordCount,
+					ObjectiveCustody: objectiveCustody{
+						SourceDatabase: rel,
+						SourceTable:    "threads",
+						SourceColumn:   "title",
+						ThreadID:       rollout.ThreadID,
+						Bytes:          len([]byte(objective)),
+						SHA256:         hex.EncodeToString(objectiveHash[:]),
+					},
+				})
+				continue
 			}
 			guiRollouts++
 		}
 	}
 	if err := removeValidation(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	validationCleaned = true
-	return guiRollouts, nil
+	return guiRollouts, quarantinedGUIRollouts, nil
 }
 
 func captureRequiredBytes(files []sourceFile) (int64, error) {
@@ -643,17 +733,17 @@ func sqliteQuickCheck(executable, database string) error {
 	return nil
 }
 
-func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) error {
+func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) (guiRolloutValidation, error) {
 	parts := strings.Split(rel, "/")
 	if len(parts) < 2 || (parts[0] != "sessions" && parts[0] != "archived_sessions" && parts[0] != "rollouts") || filepath.Ext(rel) != ".jsonl" {
-		return fmt.Errorf("GUI rollout reference is not a resumable JSONL history file: %s", rel)
+		return guiRolloutValidation{}, fmt.Errorf("GUI rollout reference is not a resumable JSONL history file: %s", rel)
 	}
 	if strings.TrimSpace(threadID) == "" {
-		return fmt.Errorf("GUI rollout reference has an empty thread identity: %s", rel)
+		return guiRolloutValidation{}, fmt.Errorf("GUI rollout reference has an empty thread identity: %s", rel)
 	}
 	file, err := os.Open(filepath.Join(payloadRoot, filepath.FromSlash(rel)))
 	if err != nil {
-		return fmt.Errorf("open captured GUI rollout %s: %w", rel, err)
+		return guiRolloutValidation{}, fmt.Errorf("open captured GUI rollout %s: %w", rel, err)
 	}
 	defer file.Close()
 
@@ -664,43 +754,49 @@ func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) error {
 		} `json:"payload"`
 	}
 	reader := bufio.NewReader(file)
-	records := 0
 	lineNumber := 0
 	matchingSessionMeta := false
+	validation := guiRolloutValidation{}
+	recordInvalid := func(code string) {
+		if validation.InvalidRecordCount == 0 {
+			validation.ValidationCode = code
+			validation.FirstInvalidLine = lineNumber
+		}
+		validation.InvalidRecordCount++
+	}
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			lineNumber++
 			trimmed := bytes.TrimSpace(line)
 			if len(trimmed) == 0 {
-				return fmt.Errorf("captured GUI rollout contains an empty JSONL record at %s:%d", rel, lineNumber)
-			}
-			var envelope rolloutEnvelope
-			if err := json.Unmarshal(trimmed, &envelope); err != nil {
-				return fmt.Errorf("captured GUI rollout contains invalid JSON at %s:%d: %w", rel, lineNumber, err)
-			}
-			records++
-			if envelope.Type == "session_meta" {
-				if envelope.Payload.ID != threadID {
-					return fmt.Errorf("captured GUI rollout session identity mismatch at %s:%d", rel, lineNumber)
+				recordInvalid("empty-json-record")
+			} else {
+				var envelope rolloutEnvelope
+				if err := json.Unmarshal(trimmed, &envelope); err != nil {
+					recordInvalid("invalid-json-record")
+				} else if envelope.Type == "session_meta" {
+					if envelope.Payload.ID != threadID {
+						return guiRolloutValidation{}, fmt.Errorf("captured GUI rollout session identity mismatch at %s:%d", rel, lineNumber)
+					}
+					matchingSessionMeta = true
 				}
-				matchingSessionMeta = true
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("read captured GUI rollout %s: %w", rel, readErr)
+			return guiRolloutValidation{}, fmt.Errorf("read captured GUI rollout %s: %w", rel, readErr)
 		}
 	}
-	if records == 0 {
-		return fmt.Errorf("captured GUI rollout is empty: %s", rel)
+	if lineNumber == 0 {
+		return guiRolloutValidation{}, fmt.Errorf("captured GUI rollout is empty: %s", rel)
 	}
 	if !matchingSessionMeta {
-		return fmt.Errorf("captured GUI rollout has no matching session_meta identity: %s", rel)
+		return guiRolloutValidation{}, fmt.Errorf("captured GUI rollout has no matching session_meta identity: %s", rel)
 	}
-	return nil
+	return validation, nil
 }
 
 func sqliteGUIRollouts(executable, database string) ([]sqliteRollout, error) {
@@ -720,6 +816,32 @@ func sqliteGUIRollouts(executable, database string) ([]sqliteRollout, error) {
 		return nil, fmt.Errorf("decode sqlite3 GUI rollout query: %w", err)
 	}
 	return rollouts, nil
+}
+
+func sqliteGUIObjectives(executable, database string) (map[string]string, error) {
+	query := "PRAGMA query_only=ON; SELECT id AS thread_id, title FROM threads WHERE source = 'vscode' ORDER BY id;"
+	command := exec.Command(executable, "-readonly", "-batch", "-json", database, query)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("sqlite3 GUI objective query failed: %w: %s", err, boundedText(stderr.String()))
+	}
+	if strings.TrimSpace(string(output)) == "" {
+		return map[string]string{}, nil
+	}
+	var objectives []sqliteObjective
+	if err := json.Unmarshal(output, &objectives); err != nil {
+		return nil, fmt.Errorf("decode sqlite3 GUI objective query: %w", err)
+	}
+	byThread := make(map[string]string, len(objectives))
+	for _, objective := range objectives {
+		if _, duplicate := byThread[objective.ThreadID]; duplicate {
+			return nil, fmt.Errorf("SQLite GUI objective query returned duplicate thread identity %s", objective.ThreadID)
+		}
+		byThread[objective.ThreadID] = objective.Title
+	}
+	return byThread, nil
 }
 
 func rolloutRelativePath(raw string, options SnapshotOptions) (string, error) {

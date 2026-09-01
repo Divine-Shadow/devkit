@@ -2,6 +2,8 @@ package codexhistory
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,8 @@ type captureFixture struct {
 	codexRoot string
 	sqlite    string
 }
+
+const testGUIObjective = "preserve this exact GUI objective"
 
 func newCaptureFixture(t *testing.T) captureFixture {
 	t.Helper()
@@ -90,8 +94,8 @@ func createStateDatabase(t *testing.T, fixture captureFixture, rollout string) s
 	t.Helper()
 	database := filepath.Join(fixture.codexRoot, "state_5.sqlite")
 	runSQLite(t, fixture.sqlite, database, fmt.Sprintf(
-		"CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, source TEXT NOT NULL); INSERT INTO threads VALUES ('gui-thread', %s, 'vscode'); INSERT INTO threads VALUES ('cli-thread', '/discarded/cli.jsonl', 'cli');",
-		sqlQuote(rollout),
+		"CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL); INSERT INTO threads VALUES ('gui-thread', %s, 'vscode', %s); INSERT INTO threads VALUES ('cli-thread', '/discarded/cli.jsonl', 'cli', 'CLI thread');",
+		sqlQuote(rollout), sqlQuote(testGUIObjective),
 	))
 	return database
 }
@@ -218,7 +222,7 @@ func TestCaptureStoresOnlyValidatedResumableGUIHistory(t *testing.T) {
 	if got := aggregateHash(manifest.Files); got != manifest.BundleSHA256 || got != result.BundleSHA256 {
 		t.Fatalf("bundle hash = %s manifest=%s result=%s", got, manifest.BundleSHA256, result.BundleSHA256)
 	}
-	if data, err := os.ReadFile(result.ManifestPath); err != nil || bytes.Contains(data, []byte("durable goal")) || bytes.Contains(data, []byte("excluded-secret")) {
+	if data, err := os.ReadFile(result.ManifestPath); err != nil || bytes.Contains(data, []byte("durable goal")) || bytes.Contains(data, []byte(testGUIObjective)) || bytes.Contains(data, []byte("excluded-secret")) {
 		t.Fatalf("manifest leaked content or was unreadable: %v", err)
 	}
 	if info, err := os.Stat(result.ManifestPath); err != nil || info.Mode().Perm() != 0o600 {
@@ -298,10 +302,10 @@ func TestCaptureRefusesNonResumableGUIRolloutPayload(t *testing.T) {
 		want     string
 	}{
 		{name: "empty", rel: "sessions/empty.jsonl", contents: "", want: "rollout is empty"},
-		{name: "truncated-json", rel: "sessions/truncated.jsonl", contents: "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n{", want: "invalid JSON"},
 		{name: "wrong-history-type", rel: "shell_snapshots/shell.sh", contents: "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n", want: "not a resumable JSONL history file"},
 		{name: "wrong-thread", rel: "sessions/wrong-thread.jsonl", contents: "{\"type\":\"session_meta\",\"payload\":{\"id\":\"other-thread\"}}\n", want: "session identity mismatch"},
 		{name: "missing-session-meta", rel: "rollouts/no-meta.jsonl", contents: "{\"type\":\"event\",\"payload\":{}}\n", want: "no matching session_meta identity"},
+		{name: "malformed-without-session-meta", rel: "archived_sessions/malformed-no-meta.jsonl", contents: "{\x00\n", want: "no matching session_meta identity"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -325,6 +329,120 @@ func TestCaptureRefusesNonResumableGUIRolloutPayload(t *testing.T) {
 				t.Fatalf("invalid rollout left generation residue: %v", entries)
 			}
 		})
+	}
+}
+
+func TestCaptureColdQuarantinesMalformedGUIRolloutWithObjectiveCustody(t *testing.T) {
+	tests := []struct {
+		name        string
+		rel         string
+		invalidLine int
+		totalLines  int
+	}{
+		{name: "active-session", rel: "sessions/2026/07/12/rollout-corrupt.jsonl", invalidLine: 1692, totalLines: 1765},
+		{name: "archived-session", rel: "archived_sessions/rollout-corrupt.jsonl", invalidLine: 3960, totalLines: 3960},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newCaptureFixture(t)
+			rollout := filepath.ToSlash(filepath.Join(fixture.options.SandboxHome, ".codex", filepath.FromSlash(test.rel)))
+			createStateDatabase(t, fixture, rollout)
+			raw := []byte(
+				"{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n" +
+					strings.Repeat("{\"type\":\"event\",\"payload\":{}}\n", test.invalidLine-2) +
+					"{\"type\":\"event\",\"payload\":{}}\x00\n" +
+					strings.Repeat("{\"type\":\"event\",\"payload\":{}}\n", test.totalLines-test.invalidLine),
+			)
+			writeTestFile(t, filepath.Join(fixture.codexRoot, filepath.FromSlash(test.rel)), string(raw))
+
+			result, err := Capture(fixture.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != "captured" || result.GUIRollouts != 0 || result.QuarantinedGUIRollouts != 1 {
+				t.Fatalf("quarantine result = %+v", result)
+			}
+			manifest := readManifest(t, result.ManifestPath)
+			if manifest.SchemaVersion != SnapshotSchema || manifest.Status != "complete" || manifest.GUIRolloutCount != 0 || manifest.QuarantinedGUIRolloutCount != 1 || len(manifest.QuarantinedGUIRollouts) != 1 {
+				t.Fatalf("quarantine manifest identity = %+v", manifest)
+			}
+			quarantine := manifest.QuarantinedGUIRollouts[0]
+			if quarantine.CustodyClass != "raw-cold-quarantine" ||
+				quarantine.ThreadID != "gui-thread" ||
+				quarantine.RolloutPath != test.rel ||
+				quarantine.ResumeEligible ||
+				quarantine.ValidationCode != "invalid-json-record" ||
+				quarantine.FirstInvalidLine != test.invalidLine ||
+				quarantine.InvalidRecordCount != 1 {
+				t.Fatalf("quarantine classification = %+v", quarantine)
+			}
+			payloadPath := filepath.Join(filepath.Dir(result.ManifestPath), "payload", filepath.FromSlash(test.rel))
+			capturedRaw, err := os.ReadFile(payloadPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(capturedRaw, raw) {
+				t.Fatalf("quarantined rollout was not byte exact: got %q, want %q", capturedRaw, raw)
+			}
+			rolloutHash, err := hashFile(payloadPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if quarantine.Bytes != int64(len(raw)) || quarantine.SHA256 != rolloutHash {
+				t.Fatalf("quarantined rollout integrity = %+v, hash %s", quarantine, rolloutHash)
+			}
+			objectiveHash := sha256.Sum256([]byte(testGUIObjective))
+			objective := quarantine.ObjectiveCustody
+			if objective.SourceDatabase != "state_5.sqlite" ||
+				objective.SourceTable != "threads" ||
+				objective.SourceColumn != "title" ||
+				objective.ThreadID != "gui-thread" ||
+				objective.Bytes != len([]byte(testGUIObjective)) ||
+				objective.SHA256 != hex.EncodeToString(objectiveHash[:]) {
+				t.Fatalf("objective custody = %+v", objective)
+			}
+			capturedDatabase := filepath.Join(filepath.Dir(result.ManifestPath), "payload", objective.SourceDatabase)
+			command := exec.Command(fixture.sqlite, "-readonly", "-batch", "-noheader", capturedDatabase, "SELECT title FROM threads WHERE id = 'gui-thread';")
+			capturedObjective, err := command.Output()
+			if err != nil {
+				t.Fatalf("read captured objective custody: %v", err)
+			}
+			if strings.TrimSuffix(string(capturedObjective), "\n") != testGUIObjective {
+				t.Fatalf("captured objective custody changed: %q", capturedObjective)
+			}
+			manifestData, err := os.ReadFile(result.ManifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(manifestData, []byte(testGUIObjective)) {
+				t.Fatal("quarantine manifest leaked objective content instead of binding its SQLite custody")
+			}
+		})
+	}
+}
+
+func TestCaptureColdQuarantineRequiresDurableObjectiveCustody(t *testing.T) {
+	fixture := newCaptureFixture(t)
+	rel := "sessions/corrupt.jsonl"
+	rollout := filepath.ToSlash(filepath.Join(fixture.options.SandboxHome, ".codex", filepath.FromSlash(rel)))
+	database := createStateDatabase(t, fixture, rollout)
+	runSQLite(t, fixture.sqlite, database, "UPDATE threads SET title = '' WHERE id = 'gui-thread';")
+	writeTestFile(t, filepath.Join(fixture.codexRoot, filepath.FromSlash(rel)), "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n{\x00\n")
+
+	_, err := Capture(fixture.options)
+	if err == nil || !strings.Contains(err.Error(), "has no durable objective custody") {
+		t.Fatalf("missing objective custody error = %v", err)
+	}
+	custodyRoot, rootErr := WorkspaceCustodyRoot(fixture.options.WorkspaceRoot, fixture.options.Project)
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(custodyRoot, "agent1"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("objective-less quarantine left generation residue: %v", entries)
 	}
 }
 

@@ -37,7 +37,7 @@ func captureNativeSlotHistory(
 	}
 	fmt.Fprintf(
 		os.Stderr,
-		"codex_gui_history_custody schema=%s agent=%d status=%s generation=%s files=%d bytes=%d gui_rollouts=%d bundle_sha256=%s manifest=%s\n",
+		"codex_gui_history_custody schema=%s agent=%d status=%s generation=%s files=%d bytes=%d gui_rollouts=%d quarantined_gui_rollouts=%d bundle_sha256=%s manifest=%s\n",
 		codexhistory.SnapshotSchema,
 		identity.index,
 		result.Status,
@@ -45,6 +45,7 @@ func captureNativeSlotHistory(
 		result.FileCount,
 		result.TotalBytes,
 		result.GUIRollouts,
+		result.QuarantinedGUIRollouts,
 		result.BundleSHA256,
 		result.ManifestPath,
 	)
