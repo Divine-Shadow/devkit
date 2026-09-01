@@ -96,8 +96,12 @@ can reconstruct the selected slot without touching retained or active lanes.
 - [x] Pass focused reset/geometry/materialization tests, full
   `go test -p 2 ./... -count=1`, focused `go vet`, formatting/diff checks,
   `nix flake check --no-build`, and the packaged Devctl/runtime Nix checks.
-- [ ] Publish by exact compare-and-swap, pin/deploy through WSL-Nix, and prove
-  a fresh local3 reconstruction reaches exact config/auth/native-governance
+- [x] Publish the repair by exact compare-and-swap from
+  `9a4de0458c93db33d1c939dc41f5ab65546ba1db` to
+  `166b217583dbc7ff025c609409feb8aad81b78eb`, then fetch and prove remote
+  `master` equals the candidate.
+- [ ] Pin/deploy the published Devkit revision through WSL-Nix and prove a
+  fresh local3 reconstruction reaches exact config/auth/native-governance
   readiness.
 
 ## Implementation
@@ -215,6 +219,12 @@ repository/package gates from the dedicated clean source writer:
     go vet ./internal/runtime/plan ./internal/runtime/launch ./internal/commands/nativecmd
     nix --option max-jobs 2 --option cores 2 flake check --no-build
     nix --option max-jobs 2 --option cores 2 build --no-link .#checks.x86_64-linux.devctl-go-tests .#checks.x86_64-linux.dev-all-runtime-bundle .#checks.x86_64-linux.dev-all-runtime-tools .#checks.x86_64-linux.dev-all-runtime-shell
+
+The implementation was published by exact compare-and-swap from remote
+`master` `9a4de0458c93db33d1c939dc41f5ab65546ba1db` to candidate
+`166b217583dbc7ff025c609409feb8aad81b78eb`; the immediate fetch/readback
+matched the candidate exactly. WSL-Nix input advancement and centralized
+deployment remain outside this Devkit writer lease.
 
 The original source publication boundary completed with expected remote ref
 `7fa979e9828a5286fd68e16a052143fcae35ab62`, candidate
