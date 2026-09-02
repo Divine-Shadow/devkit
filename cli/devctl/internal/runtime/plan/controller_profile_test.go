@@ -609,6 +609,13 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 		!strings.Contains(err.Error(), "Product-agent lifecycle") {
 		t.Fatalf("profile without Product-agent reconciliation operation was not rejected: %v", err)
 	}
+	legacyLifecycleSchema := profile
+	legacyLifecycleSchema.ProductAgentLifecycle.RequestSchema = "fleet-control/product-agent-local-request/v1"
+	legacyLifecycleSchema.ProductAgentLifecycle.EventSchema = "fleet-control/product-agent-local-event/v1"
+	if err := validateManagementControllerProfile(legacyLifecycleSchema); err == nil ||
+		!strings.Contains(err.Error(), "Product-agent lifecycle") {
+		t.Fatalf("profile with legacy Product-agent lifecycle schemas was not rejected: %v", err)
+	}
 	withoutStationReset := profile
 	withoutStationReset.ProductStationReset.Operation = ""
 	if err := validateManagementControllerProfile(withoutStationReset); err == nil ||
