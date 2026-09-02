@@ -9,7 +9,7 @@ defaults:
   require_warm: false
 runtime:
   flake: ./overlays/dev-workspace#default
-  codex_version: 0.144.0
+  codex_version: 0.152.1
   core_check: git diff --check
   notes: Native runtime for a Codex agent entered at the dev workspace root.
 native:
