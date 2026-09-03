@@ -7,6 +7,11 @@ This ExecPlan is a living document maintained according to `.agent/PLANS.md`.
 Permit the existing native manifest-shrink transaction to recognize an exact
 historical-root linked worktree whose Git link files were written from the
 source-derived sandbox namespace instead of the corresponding host namespace.
+Also recognize the one source-derived legacy Product identity that live rollout
+exposed: the same GitHub repository expressed by the old SCP origin instead of
+the declared port-443 SSH origin, and the exact old `codex/agentN/main` branch
+instead of `agentN`. Admit the newly observed nested SBT target only through an
+exact source declaration.
 The operator-visible outcome is that an idle, clean, current-remote-contained
 surplus lane can be retired without manual station repair, while arbitrary
 aliases and every existing custody failure continue to refuse before mutation.
@@ -55,13 +60,37 @@ aliases and every existing custody failure continue to refuse before mutation.
   legitimately contains more than the arbitrary limit of 32 entries.
 - [x] (2026-09-03) Replaced the shared-directory scan with target-shaped
   selection: the bounded exact forward link for a present worktree, or at most
-  three exact branch-domain probes for an absent worktree. Added more-than-32,
+  three exact common-domain probes for an absent worktree. Added more-than-32,
   unrelated-symlink, empty-lane-common, equal/divergent-branch, and detached
   lane-registration regressions.
 - [x] (2026-09-03) Completed independent static review and focused verification;
   both approved the target-shaped correction without another rebuild.
-- [ ] (2026-09-03) Publish the correction, repin/deploy through the central Nix
-  lane, and run one bounded Meowlnir lane-2 canary.
+- [x] (2026-09-03) Published the target-shaped correction as Devkit
+  `8832cd957729ae402364246a377d23623e1bc007`, repinned it in WSL commit
+  `0691a3239108a02227c7e401c33d0365c68a6ea8`, deployed the controller and
+  Meowlnir closures centrally, and ran exactly one lane-2 canary. The former
+  32-registration failure disappeared; reconstruction then refused the old SCP
+  source origin against the declared port-443 SSH spelling before lane setup.
+- [x] (2026-09-03) Audited the exact surplus agent3 state read-only. The
+  remaining sequential false negatives are the source-origin spelling, the
+  exact historical `codex/agent3/main` ref, and ignored
+  `project/project/target`; process, socket, topology, index, dirt, lock, and
+  current-remote/ahead predicates otherwise pass.
+- [x] (2026-09-03) Added strict known-migration origin parsing, the one derived
+  historical branch ref, its lock and fresh-remote checks, the fifth declared
+  residue root, and one combined Meowlnir-shaped acceptance regression plus
+  hostile near-miss refusals.
+- [x] (2026-09-03) Hardened managed command I/O after review found that an
+  escaped session could retain inherited pipes after its leader exited. Pipe
+  draining and wait cleanup are now grace-bounded and cleanup failures cannot
+  be mistaken for Git's ordinary predicate exits.
+- [x] (2026-09-03) Completed two adversarial reviews and cached owning-package,
+  race, vet, formatting, and diff gates. Review-found absent-ref lock,
+  unselected-ref custody, unbounded marker, and process-group proof gaps now
+  have focused regressions; final review approved the corrected source.
+- [ ] (2026-09-03) Publish the comprehensive correction, repin/deploy once
+  through the central Nix lane, and run one final bounded Meowlnir lane-2
+  canary.
 
 ## Context
 
@@ -79,11 +108,12 @@ each agent's `HostWorktree`/`SandboxWorktree`; no ambient symlink or caller path
 is authority. Sandbox paths are bwrap mount targets and need not exist while
 the host-side shrink classifier runs.
 
-The existing historical-root retirement remains responsible for exact origin,
-branch, fresh current-remote containment, dirt and index custody, transaction
-locks, process absence, cold-history capture, durable staging, manifest CAS,
+The existing historical-root retirement remains responsible for exact source
+identity, branch, fresh current-remote containment, dirt and index custody,
+transaction locks, process absence, cold-history capture, durable staging,
+manifest CAS,
 rollback, and crash recovery. This change touches only recognition and
-validation of equivalent path spelling before those checks.
+validation of the exact declared migration identities before those checks.
 
 ## Invariants
 
@@ -116,10 +146,32 @@ validation of equivalent path spelling before those checks.
   filter refuses before status. Common `info/exclude`, the copied
   `config.worktree`, sparse config checks, and index flags retain or validate
   the semantics used by custody.
+- Origin equality remains byte-exact outside `dev-all`/`ouroboros-ide`. Inside
+  that one migration domain, only strict lowercase GitHub SSH spellings for the
+  same two-component owner/repository identity are equivalent: SCP
+  `git@github.com:owner/repo.git`, standard SSH on the default port, or
+  `ssh://git@ssh.github.com:443/owner/repo.git`. Raw bounded
+  `remote.origin.url` values are read with `--no-includes`; rewrites, multiple
+  values, malformed URLs, wrong hosts/users/ports, escapes, and extra path
+  components refuse.
+- The canonical branch remains exact `refs/heads/agentN`. Only historical-root
+  custody for this same migration domain may additionally select the fully
+  derived `refs/heads/codex/agentN/main`. A present worktree's bounded `HEAD`
+  chooses one of those exact refs, but every other existing allowed ref remains
+  custody and must pass the same fresh-remote proof. An absent worktree probes
+  both historical spellings, proves every discovered commit against the same fresh remote, and
+  prefers the canonical ref if both survive. Both exact lock paths are checked;
+  near-miss `codex/agentN/*` refs remain outside authority.
+- Ignored generated residue may leave only beneath the five exact overlay
+  declarations `.bsp`, `logs`, `project/project/target`, `project/target`, and
+  `target`. This does not broaden ambient ignore rules or accept a parent glob.
 - The shared historical registration directory is never enumerated. Selected
   pointer/config/index inputs have separate byte limits, selected metadata
   enumeration is capped, Git stdout is capped, and fixed command deadlines
-  kill the complete process group. Lock inspection names only exact active
+  kill and prove disappearance of the complete original process group. Owned
+  pipe drains are grace-bounded, and any escaped descriptor holder or cleanup
+  failure is typed as infrastructure failure rather than a Git predicate exit.
+  Lock inspection names only exact active
   common, selected metadata, and branch transaction surfaces; it never walks
   the object store.
 - Any active branch domain not contained in the same fresh current remote, or
@@ -141,9 +193,11 @@ validation of equivalent path spelling before those checks.
 - 2026-09-03: Compare exact manifest-derived lexical counterparts instead of
   canonicalizing arbitrary aliases. Canonicalization could accidentally admit
   a foreign symlink that happens to reach protected Git state.
-- 2026-09-03: Limit the compatibility spelling to historical-root
-  registrations; lane-local and transitional legacy registrations keep their
-  existing contracts.
+- 2026-09-03: Limit path compatibility to historical-root registrations.
+  Lane-local and transitional legacy paths keep their existing contracts; the
+  later strict source-identity exception also applies to the exact v1 legacy
+  ownership marker because that marker was written before the port-443 overlay
+  origin became authoritative.
 - 2026-09-03: Do not require the consumer namespace to exist on the host.
   Normalize only an operation-owned scratch metadata view for Git custody
   commands; never rewrite or ask Git to follow the protected consumer-valued
@@ -171,6 +225,20 @@ validation of equivalent path spelling before those checks.
   lane/legacy registration remains active custody because it claims the
   selected physical worktree; the lane common is additionally a reset
   candidate, so disagreement with branch selection fails closed.
+- 2026-09-03: Treat the SCP and port-443 SSH URLs as one repository only after
+  strict parsing and only for the exact Product migration domain. Reading raw
+  config with includes disabled prevents `url.*.insteadOf` from manufacturing
+  equivalence. Keep new v2 lane creation/reuse byte-exact; the exception is
+  read-only retirement compatibility for historical-root and exact v1 marker
+  custody.
+- 2026-09-03: Accept only the old `codex/agentN/main` branch whose complete
+  spelling is derived from the manifest's exact project/repo/prefix/base tuple.
+  General Codex prefixes, arbitrary branch aliases, and normalization are not
+  retirement authority.
+- 2026-09-03: Classify inability to reap managed command state or drain owned
+  pipes as infrastructure failure even when a leader supplies an ordinary exit
+  code. This preserves fail-closed Git predicate handling without allowing an
+  escaped descriptor holder to hang fleet convergence indefinitely.
 
 ## Verification
 
@@ -246,6 +314,44 @@ Focused correction results so far:
     git diff --check
     # no output
 
+Comprehensive post-canary correction checks currently passed:
+
+    go test ./internal/commands/nativecmd -run '^TestNativeSlotManifestShrinkHistoricalRoot(GitHubOriginIdentity|ConsumerAlias|RejectsNearMissCodexBranchAlias|AbsentWorktreeStillUsesBranchCustody)$|^TestNativeSlotManifestShrinkLegacy' -count=1
+    ok devkit/cli/devctl/internal/commands/nativecmd 2.760s
+
+    go test ./internal/commands/nativecmd -run '^(TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRefusesHostileGeometry|TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRecheckUsesFreshMetadata)$' -count=1
+    ok devkit/cli/devctl/internal/commands/nativecmd 2.560s
+
+    go test ./internal/config -run '^TestDevAllDeclaresOnlyExactGeneratedSetupLayerFiles$' -count=1
+    ok devkit/cli/devctl/internal/config 0.002s
+
+    go test ./internal/execx -count=1
+    ok devkit/cli/devctl/internal/execx 2.617s
+
+    go test ./internal/execx -run '^(TestRunManagedEscapedPipeHolderDoesNotHang|TestRunManagedNonzeroLeaderWithEscapedPipeHolderIsCleanupFailure|TestCaptureManagedEscapedPipeHolderDoesNotHang|TestCaptureManagedNonzeroLeaderWithEscapedPipeHolderIsCleanupFailure|TestManagedResultPreservesJoinedExitAndCleanupClassification|TestManagedWaitFailuresAreClassifiedAsCleanup)$' -count=20
+    ok devkit/cli/devctl/internal/execx 11.772s
+
+    go test -race ./internal/execx -count=1
+    ok devkit/cli/devctl/internal/execx 3.654s
+
+Final cached owning-package gates after adversarial fixes:
+
+    go test ./internal/commands/nativecmd ./internal/config ./internal/worktrees -count=1
+    ok devkit/cli/devctl/internal/commands/nativecmd 19.126s
+    ok devkit/cli/devctl/internal/config 0.018s
+    ok devkit/cli/devctl/internal/worktrees 6.752s
+
+    go test ./internal/execx -count=1
+    ok devkit/cli/devctl/internal/execx 2.783s
+
+    go test -race ./internal/execx -count=1
+    ok devkit/cli/devctl/internal/execx 3.764s
+
+    go vet ./internal/commands/nativecmd ./internal/config ./internal/worktrees ./internal/execx
+    # no output
+
+Independent final review approved the source with no remaining blocker.
+
 ## Surprises & Discoveries
 
 - `plan.Build` first projects a host worktree beneath `HostRoot` into the fixed
@@ -261,11 +367,23 @@ Focused correction results so far:
   Git validated the consumer-valued reverse `gitdir`. A minimal metadata view
   in the existing owned proof scratch is therefore required for truly
   host-only custody reads.
+- The first centrally deployed target-shaped canary proved the registration cap
+  was gone and exposed the next exact historical difference rather than failing
+  setup: source metadata still records
+  `git@github.com:Divine-Shadow/ouroboros-ide.git`, while the overlay now declares
+  `ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git`. The same
+  read-only audit then found `refs/heads/codex/agent3/main` at zero commits ahead
+  of current local main and the nested SBT target as the only later residue
+  miss.
+- `os/exec` can finish waiting for a leader while a child that called `setsid`
+  retains stdout/stderr descriptors. A bare pipe-copy wait therefore made a
+  bounded Git operation unbounded. Owning and forcibly closing the read ends
+  after the declared grace converts that state into a typed cleanup failure.
 
 ## Outcomes & Retrospective
 
-- Historical-root shrink now recognizes only the two exact path spellings
-  derivable from the canonical manifest. The complete success fixture keeps
+- Historical-root shrink now recognizes only the two exact path spellings and
+  narrowly derived source/branch identities described above. The complete success fixture keeps
   the consumer namespace absent, retires only surplus worktree/home/state,
   observes full proof-scratch cleanup, and finds the protected source root
   byte-identical afterward.
@@ -280,14 +398,16 @@ Focused correction results so far:
   supported. Pointers are capped at 4 KiB, config at 1 MiB, copied index files
   at 64 MiB, selected metadata entries at 16, and Git stdout at 4 MiB. The
   historical registration directory is not enumerated; absent-worktree
-  selection probes only the three exact source-derived common repositories.
+  selection probes only the three exact source-derived common repositories and
+  at most four exact branch refs.
   Extra companions, non-empty worktree-specific refs,
   repo-local includes/effectful filters, and unknown top-level state refuse.
 - Residual risk is limited to an otherwise safe historical worktree using one
   of those deliberately unsupported Git metadata forms; it will fail closed
-  and require a separately reviewed extension. Live rollout behavior remains
-  unverified because deployment and station mutation were explicitly out of
-  scope. The two custody passes and exact Git lock checks reduce the race but do
+  and require a separately reviewed extension. Earlier staged corrections were
+  deployed and each canary advanced to the next exact predicate; this final
+  comprehensive candidate still awaits its one bounded rollout canary. The two
+  custody passes and exact Git lock checks reduce the race but do
   not create a filesystem-wide read transaction: even a cooperative Git writer
   can acquire, rename, and release its config lock entirely between observations
   and replace common config before status. Removing that final config TOCTOU
@@ -295,6 +415,7 @@ Focused correction results so far:
   execution sandbox, beyond this bounded alias repair. Managed capture cleans
   and proves disappearance of same-process-group descendants on normal leader
   exit, deadline/cancellation, idle expiry, or stdout overflow; a deliberately
-  self-daemonizing child that escapes that group remains outside the guarantee,
-  which is acceptable here only because the executables are package-owned
-  Git/env/SSH.
+  self-daemonizing child that escapes that group cannot hang the caller:
+  retained pipes are force-closed after grace and reported as cleanup failure.
+  Killing an arbitrary escaped session remains outside the guarantee, which is
+  acceptable here only because the executables are package-owned Git/env/SSH.

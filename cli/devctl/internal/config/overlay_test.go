@@ -164,7 +164,7 @@ func TestDevAllDeclaresOnlyExactGeneratedSetupLayerFiles(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Native.GeneratedSetupLayerFiles, want) {
 		t.Fatalf("dev-all generated setup layer files = %#v, want %#v", cfg.Native.GeneratedSetupLayerFiles, want)
 	}
-	wantResidueRoots := []string{".bsp", "logs", "project/target", "target"}
+	wantResidueRoots := []string{".bsp", "logs", "project/project/target", "project/target", "target"}
 	if !reflect.DeepEqual(cfg.Native.DisposableGeneratedResidueRoots, wantResidueRoots) {
 		t.Fatalf(
 			"dev-all disposable generated residue roots = %#v, want %#v",

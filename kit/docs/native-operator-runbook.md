@@ -96,8 +96,8 @@ transaction retire the old suffix before running another setup or selected-slot
 reset. The shrink transaction deliberately validates indices against the prior
 installed manifest, so it can still retire legacy `agentN` after the new source
 count makes `N` out of range for an ordinary selected reset. For a legacy
-surplus it requires the exact v1 ownership marker, origin, forward `.git` link,
-reverse worktree registration, branch, and clean/no-ahead custody. It then
+surplus it requires the exact v1 ownership marker and source identity, forward
+`.git` link, reverse worktree registration, branch, and clean/no-ahead custody. It then
 removes only that surplus worktree, home, and state. The shared legacy common
 repository—including the retired lane's stale registration/ref and every
 retained sibling's metadata and lock domain—remains untouched until all legacy
@@ -107,13 +107,21 @@ The still-older historical layout may register a surplus linked worktree under
 the ordinary source checkout at `<host-root>/<repo>/.git/worktrees/<entry>`.
 Manifest shrink accepts that layout only when the common path is derived
 exactly from the manifest's worktree root and repository, all paths and
-forward/reverse links are canonical, the source origin and `agentN` branch are
-exact, and the branch commit is contained in a fresh current remote base. The
+forward/reverse links are canonical, the source and branch identities are
+exact, and the branch commit is contained in a fresh current remote base.
+Origin comparison is byte-exact except for the one historical
+`dev-all`/`ouroboros-ide` migration: strict raw GitHub SSH forms may identify
+the same owner/repository across the old SCP and declared port-443 spellings.
+Likewise, only that historical domain may use the fully derived
+`codex/agentN/main` ref instead of canonical `agentN`. Every existing allowed
+ref is current-remote-contained even when it is not the branch selected by the
+present worktree. The
 present worktree's bounded, exact `.git` pointer is the sole selector for its
 active historical registration; unrelated and stale entries in the shared
 registration directory are not enumerated or treated as lane custody. When the
-worktree is already absent, the exact `agentN` branch is resolved across the
-lane, legacy, and historical common repositories instead. When more than one
+worktree is already absent, exact `agentN` and the one historical branch
+spelling are resolved across the lane, legacy, and historical common
+repositories instead. When more than one
 branch domain survives, every discovered commit must be independently contained
 in the same freshly fetched current base; equal or divergent contained copies
 are safe migration residue, and the preserved historical domain is preferred
@@ -141,7 +149,8 @@ assume-unchanged/skip-worktree bit, or sparse checkout. `dev-all` declares only
 three generated setup-layer tracked exceptions: `.codex/config.toml`,
 `scripts/devops/governance-control-plane`, and
 `scripts/devops/governance-mcp-stdio-forward`. Separately, only ignored residue
-below the real directory roots `.bsp`, `logs`, `project/target`, and `target`
+below the real directory roots `.bsp`, `logs`, `project/project/target`,
+`project/target`, and `target`
 may leave with the staged worktree. Global config and `.git/info/exclude` do not
 authorize any other ignored path. These declarations are exact paths, not
 globs or operator overrides. Retirement still stages only the surplus

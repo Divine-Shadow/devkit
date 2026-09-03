@@ -33,15 +33,17 @@ later proven-idle whole-prefix reset rather than broadening this transaction.
 
 The only tolerated tracked differences are three exact setup-layer paths
 declared by the `dev-all` source overlay. Ignored-path provenance is not custody
-authority: only ignored residue beneath the four separately declared directory
-roots `.bsp`, `logs`, `project/target`, and `target` may leave with the leased
+authority: only ignored residue beneath the five separately declared directory
+roots `.bsp`, `logs`, `project/project/target`, `project/target`, and `target`
+may leave with the leased
 slot. Every other ignored path, every non-ignored untracked path, and every
 submodule, unexpected tracked, non-stage-zero, assume-unchanged, skip-worktree,
 sparse, unsafe selected registration, symlinked, wrong-origin,
 wrong-branch, ahead, or competing active custody domain fails closed. When the
 worktree is already absent, stale historical reverse-registration metadata is
 protected but inert because this transaction never stages or removes it; any
-surviving exact `agentN` branch remains active custody and is still checked.
+surviving exact canonical or permitted historical migration branch remains
+active custody and is still checked.
 
 ## safety_checks
 
@@ -49,7 +51,12 @@ surviving exact `agentN` branch remains active custody and is still checked.
   `filepath.Dir(manifest.host_worktree_root)/manifest.repo/.git`.
 - Require canonical real host root/worktree/selected-metadata paths, exact
   forward/reverse registration and `commondir`, one active custody domain, a
-  non-bare root, and exact declared origin. A pointer may use only its exact
+  non-bare root, and exact source identity. Origin equality remains byte-exact
+  except for the known `dev-all`/`ouroboros-ide` migration, where a strict raw
+  GitHub SSH parser may equate only the same owner/repository expressed as SCP,
+  default-port SSH, or `ssh.github.com:443`; config is read with includes
+  disabled so URL rewrites cannot confer authority. A pointer may use only its
+  exact
   manifest-derived sandbox counterpart: the consumer worktree must preserve
   the host `agentN/<repo>` suffix, the consumer common must be derived from the
   declared sandbox worktree root, and forward metadata must preserve the exact
@@ -63,20 +70,28 @@ surviving exact `agentN` branch remains active custody and is still checked.
 - For a present worktree, use its bounded exact `.git` pointer as the sole
   active-registration selector and inspect only that selected metadata. Do not
   enumerate unrelated entries in the shared historical registration
-  directory. For an absent worktree, resolve the exact `agentN` branch across
-  the three manifest-derived lane, legacy, and historical common repositories;
+  directory. Prove both the selected branch and every other existing exact
+  migration branch against the same fresh remote. For an absent worktree,
+  resolve exact `agentN` plus the one fully
+  derived historical `codex/agentN/main` spelling across the three
+  manifest-derived lane, legacy, and historical common repositories;
   when more than one branch domain survives, require every discovered commit to
   be independently contained in one freshly fetched current base and refuse
   disagreement with any known lane/legacy registration. Equal or divergent
   contained branch copies are migration residue; prefer the historical domain
-  when present, then the non-disposable legacy domain. A sole historical branch
+  when present, then the non-disposable legacy domain, and prefer canonical
+  `agentN` if both historical spellings survive. Every discovered ref is
+  checked against the same fresh remote and both exact ref lock paths are
+  inspected. A sole historical branch
   receives the same current-remote proof; sole lane/legacy domains retain their
   existing local-base check. A
   detached or wrong-branch stale historical registration is
   inert but byte-preserved with its objects because no shared-root path is a
   transaction candidate.
-- Require exact `agentN` and containment in a freshly fetched current remote
-  base. For historical-root only, that fetched commit is the sole ancestry and
+- Require exact `agentN`, or only the fully derived historical
+  `codex/agentN/main` alias in the known migration domain, and containment in a
+  freshly fetched current remote base. For historical-root only, that fetched
+  commit is the sole ancestry and
   setup-tree authority; never consult or advance the protected checkout's
   potentially stale `refs/remotes/origin/<base>`. Lane and legacy layouts keep
   their existing local remote-tracking check. One operation-bound proof uses
@@ -97,8 +112,11 @@ surviving exact `agentN` branch remains active custody and is still checked.
 - Avoid historical registration-directory enumeration entirely. Cap the
   selected per-worktree metadata enumeration, pointer, config, and index reads,
   plus every captured Git stdout stream. Absent-worktree domain selection uses
-  at most three exact `show-ref --verify --quiet` calls. Fixed Git deadlines and
-  output overflow terminate the complete process group. Inspect only exact
+  at most four exact `show-ref --verify --quiet` calls across three common
+  repositories. Fixed Git deadlines and output overflow terminate the complete
+  process group. Managed I/O drain and wait cleanup are grace-bounded; an
+  escaped inherited descriptor becomes a typed infrastructure failure rather
+  than a hang or an ordinary Git predicate exit. Inspect only exact
   active common, selected metadata, and branch lock surfaces; never recursively
   walk the shared object store.
 - Before status, parse bounded common and worktree config without following
@@ -109,7 +127,7 @@ surviving exact `agentN` branch remains active custody and is still checked.
 - Reject all Git locks, non-ignored untracked files, gitlinks/submodules, and
   tracked dirt outside the exact source declaration. Prove a stage-zero index
   with no assume-unchanged, skip-worktree, sparse-checkout, or unmerged state
-  under sanitized config. Permit ignored generated residue only below the four
+  under sanitized config. Permit ignored generated residue only below the five
   exact source-declared real directory roots; ambient global/info ignore rules
   cannot broaden that set.
 - Preserve all-suffix preflight, cold-history capture-before-stage, recheck,
@@ -130,8 +148,9 @@ stale historical registration/ref remains for a later whole-prefix reset.
 This decision covers only native manifest shrink of exact obsolete linked
 worktrees registered beneath the source root checkout, including exact
 bijective host/sandbox spellings already declared by the manifest; the three
-source-owned setup-layer files; four disposable generated-residue directory
-roots; operation-bound remote-containment proof; transaction recovery tests;
+source-owned setup-layer files; five disposable generated-residue directory
+roots; strict known-migration origin and branch identities; operation-bound
+remote-containment proof; transaction recovery tests;
 and operator documentation. It does not authorize live deployment,
 station-local repair, general root-common or alias acceptance, Product source
 changes, manual Git cleanup, or whole-prefix reset.
@@ -151,3 +170,29 @@ mutates shared-root metadata or refs. Known lane/legacy reverse registrations
 remain authoritative because they claim the selected physical worktree; the
 lane common is additionally a reset candidate. Disagreement with branch-domain
 selection refuses before mutation.
+
+## amendment_2026_09_03_live_identity
+
+The next centrally deployed canary passed target selection and exposed three
+later, deterministic historical facts: the v1/root config uses the old exact
+SCP GitHub origin while current source declares the port-443 SSH endpoint; the
+surplus branch is exactly `codex/agent3/main`; and SBT left ignored output under
+`project/project/target`. A read-only audit proved the remaining process,
+socket, topology, index, dirt, lock, and no-ahead predicates. The correction is
+therefore limited to a strict same-repository GitHub SSH identity parser used
+only by historical/v1 shrink validation, one branch alias derived completely
+from the exact Product manifest tuple, and one additional exact residue root.
+It does not change v2 lane origin creation/reuse, normalize arbitrary URLs, or
+accept arbitrary Codex refs. Both allowed exact refs are protected even when
+one is not selected by a present worktree or neither ref currently exists:
+every existing commit is fresh-remote-contained and both lock paths must be
+absent.
+
+Independent review also found that a command leader can exit after a child
+escapes the process group with `setsid` while retaining inherited output pipes.
+Managed execution now owns those pipes, bounds drain and wait cleanup by the
+declared grace, and exposes cleanup failure as a typed error that shrink cannot
+mistake for a meaningful Git exit. Every normal, cancellation, deadline, idle,
+and overflow path also terminates and proves disappearance of the original
+process group before returning. This is a convergence-safety correction, not
+additional deletion authority.

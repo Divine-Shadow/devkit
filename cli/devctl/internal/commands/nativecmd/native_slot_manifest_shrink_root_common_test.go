@@ -1,6 +1,7 @@
 package nativecmd
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/gitauthority"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
@@ -25,6 +27,7 @@ var historicalRootCommonGeneratedSetupLayerFiles = []string{
 var historicalRootCommonDisposableGeneratedResidueRoots = []string{
 	".bsp",
 	"logs",
+	"project/project/target",
 	"project/target",
 	"target",
 }
@@ -102,7 +105,7 @@ func prepareHistoricalRootCommonNativeSlotManifestShrinkGit(
 	}
 	for path, content := range map[string]string{
 		"tracked.txt":        "base\n",
-		".gitignore":         "/.bsp/\n/logs/\n/project/target/\n/target/\n",
+		".gitignore":         "/.bsp/\n/logs/\n/project/project/target/\n/project/target/\n/target/\n",
 		".codex/config.toml": "# source setup layer\n",
 		"scripts/devops/governance-control-plane":     "#!/bin/sh\n# source setup layer\n",
 		"scripts/devops/governance-mcp-stdio-forward": "#!/bin/sh\n# source setup layer\n",
@@ -259,10 +262,121 @@ func materializeHistoricalRootCommonUnrelatedRegistrationNoise(t *testing.T, roo
 	}
 }
 
+func historicalRootCommonFakeSSHCommand(t *testing.T, origin string) string {
+	t.Helper()
+	uploadPack, err := exec.LookPath("git-upload-pack")
+	if err != nil {
+		t.Skip("git-upload-pack is supplied by the Nix test closure")
+	}
+	command := filepath.Join(t.TempDir(), "fake-ssh")
+	content := fmt.Sprintf("#!/bin/sh\nfor arg in \"$@\"; do\n  [ \"$arg\" = -G ] && exit 0\ndone\nexec %q %q\n", uploadPack, origin)
+	if err := os.WriteFile(command, []byte(content), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return command
+}
+
+func rewriteHistoricalRootCommonBranchToCodexAlias(
+	t *testing.T,
+	git string,
+	rootCommon string,
+	metadata string,
+	spec nativeagent.Spec,
+) string {
+	t.Helper()
+	if metadata == "" {
+		metadataOutput, err := exec.Command(git, "-C", spec.HostWorktree, "rev-parse", "--absolute-git-dir").CombinedOutput()
+		if err != nil {
+			t.Fatalf("resolve historical metadata before branch alias rewrite: %v\n%s", err, metadataOutput)
+		}
+		metadata = filepath.Clean(strings.TrimSpace(string(metadataOutput)))
+	}
+	declaredRef := fmt.Sprintf("refs/heads/agent%d", spec.ID.Index)
+	aliasRef := fmt.Sprintf("refs/heads/codex/agent%d/main", spec.ID.Index)
+	runNativeSlotManifestShrinkGit(t, git, "--git-dir", rootCommon, "update-ref", aliasRef, declaredRef)
+	runNativeSlotManifestShrinkGit(t, git, "--git-dir", rootCommon, "update-ref", "-d", declaredRef)
+	if err := os.WriteFile(filepath.Join(metadata, "HEAD"), []byte("ref: "+aliasRef+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return aliasRef
+}
+
+func TestNativeSlotManifestShrinkHistoricalRootGitHubOriginIdentity(t *testing.T) {
+	manifest := nativeagent.Manifest{Project: "dev-all", Repo: "ouroboros-ide"}
+	canonical := "ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git"
+	for _, test := range []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{name: "exact", left: canonical, right: canonical, want: true},
+		{name: "scp", left: "git@github.com:Divine-Shadow/ouroboros-ide.git", right: canonical, want: true},
+		{name: "github-uri", left: "ssh://git@github.com/Divine-Shadow/ouroboros-ide.git", right: canonical, want: true},
+		{name: "github-port-22", left: "ssh://git@github.com:22/Divine-Shadow/ouroboros-ide.git", right: canonical, want: true},
+		{name: "wrong-owner", left: "git@github.com:Other/ouroboros-ide.git", right: canonical},
+		{name: "wrong-repository", left: "git@github.com:Divine-Shadow/ouroboros.git", right: canonical},
+		{name: "wrong-user", left: "ssh://root@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "wrong-port", left: "ssh://git@ssh.github.com:22/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "empty-port", left: "ssh://git@github.com:/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "github-port-443", left: "ssh://git@github.com:443/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "ssh-host-without-port", left: "ssh://git@ssh.github.com/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "scp-ssh-host", left: "git@ssh.github.com:Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "https", left: "https://github.com/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "uppercase-scheme", left: "SSH://git@github.com/Divine-Shadow/ouroboros-ide.git", right: canonical},
+		{name: "missing-git-suffix", left: "git@github.com:Divine-Shadow/ouroboros-ide", right: canonical},
+		{name: "extra-component", left: "git@github.com:Divine-Shadow/team/ouroboros-ide.git", right: canonical},
+		{name: "query", left: "ssh://git@github.com/Divine-Shadow/ouroboros-ide.git?x=1", right: canonical},
+		{name: "fragment", left: "ssh://git@github.com/Divine-Shadow/ouroboros-ide.git#x", right: canonical},
+		{name: "percent-encoding", left: "ssh://git@github.com/Divine-Shadow/ouroboros%2dide.git", right: canonical},
+		{name: "case-drift", left: "git@github.com:divine-shadow/ouroboros-ide.git", right: canonical},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nativeSlotManifestShrinkOriginsEquivalent(manifest, test.left, test.right); got != test.want {
+				t.Fatalf("origin identity (%q, %q) = %t, want %t", test.left, test.right, got, test.want)
+			}
+		})
+	}
+	other := manifest
+	other.Project = "other"
+	if nativeSlotManifestShrinkOriginsEquivalent(other, "git@github.com:Divine-Shadow/ouroboros-ide.git", canonical) {
+		t.Fatal("origin alias escaped the exact historical dev-all Product migration domain")
+	}
+}
+
+func TestNativeSlotManifestShrinkManagedCaptureRejectsCleanupAsGitPredicate(t *testing.T) {
+	exitErr := exec.Command("sh", "-c", "exit 1").Run()
+	if _, ok := exitErr.(*exec.ExitError); !ok {
+		t.Fatalf("fixture did not return a direct ExitError: %T %v", exitErr, exitErr)
+	}
+	if err := nativeSlotManifestShrinkManagedCaptureError(execx.Result{Code: 1, Err: exitErr}); err != nil {
+		t.Fatalf("ordinary Git predicate exit rejected: %v", err)
+	}
+	cleanupErr := errors.Join(exitErr, execx.ErrManagedCleanup)
+	if err := nativeSlotManifestShrinkManagedCaptureError(execx.Result{Code: 1, Err: cleanupErr}); err == nil || !execx.IsManagedCleanupError(err) {
+		t.Fatalf("managed cleanup failure was accepted as Git predicate: %v", err)
+	}
+	genericErr := errors.New("fixture executor failure")
+	if err := nativeSlotManifestShrinkManagedCaptureError(execx.Result{Code: 1, Err: genericErr}); !errors.Is(err, genericErr) {
+		t.Fatalf("generic executor failure was accepted as Git predicate: %v", err)
+	}
+}
+
 func TestNativeSlotManifestShrinkHistoricalRootConsumerAlias(t *testing.T) {
 	fixture, rootCommon, metadata, consumerRoot := prepareHistoricalRootCommonNativeSlotConsumerAlias(t)
 	surplus := fixture.actual.Agents[2]
 	materializeHistoricalRootCommonUnrelatedRegistrationNoise(t, rootCommon)
+	branchRef := rewriteHistoricalRootCommonBranchToCodexAlias(t, gitauthority.Executable(), rootCommon, metadata, surplus)
+	declaredOrigin := "ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git"
+	actualOrigin := "git@github.com:Divine-Shadow/ouroboros-ide.git"
+	runNativeSlotManifestShrinkGit(t, gitauthority.Executable(), "--git-dir", rootCommon, "remote", "set-url", "origin", actualOrigin)
+	nestedResidue := filepath.Join(surplus.HostWorktree, "project", "project", "target", "cache.bin")
+	if err := os.MkdirAll(filepath.Dir(nestedResidue), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nestedResidue, []byte("disposable nested SBT cache\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	wantConsumerCommon := filepath.Join(consumerRoot, fixture.actual.Repo, ".git")
 	wantConsumerMetadata := filepath.Join(wantConsumerCommon, "worktrees", filepath.Base(metadata))
@@ -278,15 +392,25 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAlias(t *testing.T) {
 	}
 	rootCheckout := filepath.Dir(rootCommon)
 	rootBefore := snapshotHistoricalRootCommonTree(t, rootCheckout)
+	options := historicalRootCommonResetOptions(fixture)
+	options.Origin = declaredOrigin
 
 	if _, err := reconcileNativeSlotManifestShrink(
 		fixture.path,
 		fixture.expected,
 		fixture.opts,
-		historicalRootCommonResetOptions(fixture),
+		options,
 		false,
+		nativeSlotManifestShrinkRemoteProofConfig{
+			ScratchParent:  filepath.Dir(options.StateRoot),
+			ProtectedRoots: append([]string(nil), options.ProtectedRoots...),
+			GitSSHCommand:  historicalRootCommonFakeSSHCommand(t, fixture.origin),
+		},
 	); err != nil {
 		t.Fatalf("retire exact historical consumer-alias surplus: %v", err)
+	}
+	if branchRef != "refs/heads/codex/agent3/main" {
+		t.Fatalf("historical branch alias = %q", branchRef)
 	}
 	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 		t.Fatal("historical consumer-alias retirement did not install expected manifest")
@@ -314,6 +438,123 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAlias(t *testing.T) {
 	}
 }
 
+func TestNativeSlotManifestShrinkHistoricalRootRejectsNearMissCodexBranchAlias(t *testing.T) {
+	fixture := newNativeSlotManifestShrinkFixture(t, 3, 2)
+	git, rootCommon := prepareHistoricalRootCommonNativeSlotManifestShrinkGit(t, &fixture)
+	surplus := fixture.actual.Agents[2]
+	materializeNativeSlotDisposableState(t, surplus)
+	runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "branch", "-m", "codex/agent3/not-main")
+	rootBefore := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon))
+	captureCalls := 0
+	previousCapture := captureNativeManifestShrinkSlotHistory
+	captureNativeManifestShrinkSlotHistory = func(string, string, nativeSlotProcessIdentity, string, string, bool) error {
+		captureCalls++
+		return nil
+	}
+	t.Cleanup(func() { captureNativeManifestShrinkSlotHistory = previousCapture })
+
+	_, err := reconcileNativeSlotManifestShrink(
+		fixture.path,
+		fixture.expected,
+		fixture.opts,
+		historicalRootCommonResetOptions(fixture),
+		false,
+	)
+	if err == nil || !strings.Contains(err.Error(), "outside its exact declared and migration branch identities") {
+		t.Fatalf("near-miss historical branch rejection = %v", err)
+	}
+	if captureCalls != 0 {
+		t.Fatalf("near-miss historical branch reached history capture %d time(s)", captureCalls)
+	}
+	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
+		t.Fatal("near-miss historical branch rejection changed manifest")
+	}
+	if _, err := os.Lstat(surplus.HostWorktree); err != nil {
+		t.Fatalf("near-miss historical branch rejection changed worktree: %v", err)
+	}
+	if got := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon)); !reflect.DeepEqual(got, rootBefore) {
+		t.Fatal("near-miss historical branch rejection changed shared root Git state")
+	}
+}
+
+func TestNativeSlotManifestShrinkHistoricalRootPresentWorktreeProvesEveryMigrationBranch(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		selectedAlias bool
+	}{
+		{name: "selected-canonical-alias-ahead"},
+		{name: "selected-alias-canonical-ahead", selectedAlias: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newNativeSlotManifestShrinkFixture(t, 3, 2)
+			git, rootCommon := prepareHistoricalRootCommonNativeSlotManifestShrinkGit(t, &fixture)
+			surplus := fixture.actual.Agents[2]
+			materializeNativeSlotDisposableState(t, surplus)
+			runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "config", "user.email", "present-branch-test@example.invalid")
+			runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "config", "user.name", "present-branch-test")
+			if err := os.WriteFile(filepath.Join(surplus.HostWorktree, "tracked.txt"), []byte("ahead\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "add", "tracked.txt")
+			runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "commit", "-m", "ahead migration branch")
+			readOID := func(revision string) string {
+				command := exec.Command(git, "-C", surplus.HostWorktree, "rev-parse", revision)
+				command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+				output, err := command.CombinedOutput()
+				if err != nil {
+					t.Fatalf("resolve %s: %v\n%s", revision, err, output)
+				}
+				return strings.TrimSpace(string(output))
+			}
+			aheadOID := readOID("HEAD")
+			baseOID := readOID("HEAD^")
+			runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "reset", "--hard", baseOID)
+
+			declaredRef := "refs/heads/agent" + fmt.Sprint(surplus.ID.Index)
+			aliasRef := "refs/heads/codex/agent" + fmt.Sprint(surplus.ID.Index) + "/main"
+			aheadRef := aliasRef
+			if test.selectedAlias {
+				rewriteHistoricalRootCommonBranchToCodexAlias(t, git, rootCommon, "", surplus)
+				aheadRef = declaredRef
+			}
+			runNativeSlotManifestShrinkGit(t, git, "--git-dir", rootCommon, "update-ref", aheadRef, aheadOID)
+			rootBefore := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon))
+			captureCalls := 0
+			previousCapture := captureNativeManifestShrinkSlotHistory
+			captureNativeManifestShrinkSlotHistory = func(string, string, nativeSlotProcessIdentity, string, string, bool) error {
+				captureCalls++
+				return nil
+			}
+			t.Cleanup(func() { captureNativeManifestShrinkSlotHistory = previousCapture })
+
+			_, err := reconcileNativeSlotManifestShrink(
+				fixture.path,
+				fixture.expected,
+				fixture.opts,
+				historicalRootCommonResetOptions(fixture),
+				false,
+			)
+			if err == nil || !strings.Contains(err.Error(), aheadRef) || !strings.Contains(err.Error(), "not contained") {
+				t.Fatalf("unselected migration branch custody rejection = %v, want ahead ref %s", err, aheadRef)
+			}
+			if captureCalls != 0 {
+				t.Fatalf("unselected migration branch reached history capture %d time(s)", captureCalls)
+			}
+			if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
+				t.Fatal("unselected migration branch rejection changed manifest")
+			}
+			if got := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon)); !reflect.DeepEqual(got, rootBefore) {
+				t.Fatal("unselected migration branch rejection changed shared root Git state")
+			}
+			for _, candidate := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+				if _, statErr := os.Lstat(candidate); statErr != nil {
+					t.Fatalf("unselected migration branch rejection changed %s: %v", candidate, statErr)
+				}
+			}
+		})
+	}
+}
+
 func TestNativeSlotManifestShrinkHistoricalRootAbsentWorktreeStillUsesBranchCustody(t *testing.T) {
 	for _, test := range []struct {
 		name             string
@@ -323,9 +564,12 @@ func TestNativeSlotManifestShrinkHistoricalRootAbsentWorktreeStillUsesBranchCust
 		copyBaseToLane   bool
 		detachedLane     bool
 		advanceRemote    bool
+		branchAlias      bool
 		want             string
 	}{
 		{name: "contained"},
+		{name: "contained-historical-branch-alias", branchAlias: true},
+		{name: "ahead-historical-branch-alias", makeAhead: true, branchAlias: true, want: "not contained in current refs/heads/main"},
 		{name: "ahead-with-empty-lane-common", makeAhead: true, makeLane: true, want: "not contained in current refs/heads/main"},
 		{name: "equal-branch-migration-residue", makeLane: true, copyBranchToLane: true},
 		{name: "contained-divergent-branch-domains", makeLane: true, copyBaseToLane: true, advanceRemote: true},
@@ -401,6 +645,9 @@ func TestNativeSlotManifestShrinkHistoricalRootAbsentWorktreeStillUsesBranchCust
 					runNativeSlotManifestShrinkGit(t, git, "--git-dir", laneCommon, "worktree", "add", "--detach", surplus.HostWorktree, "FETCH_HEAD")
 				}
 			}
+			if test.branchAlias {
+				rewriteHistoricalRootCommonBranchToCodexAlias(t, git, rootCommon, "", surplus)
+			}
 			if err := os.RemoveAll(surplus.HostWorktree); err != nil {
 				t.Fatal(err)
 			}
@@ -446,6 +693,61 @@ func TestNativeSlotManifestShrinkHistoricalRootAbsentWorktreeStillUsesBranchCust
 				}
 			}
 		})
+	}
+}
+
+func TestNativeSlotManifestShrinkHistoricalRootAbsentWithoutBranchRejectsAliasLock(t *testing.T) {
+	fixture := newNativeSlotManifestShrinkFixture(t, 3, 2)
+	git, rootCommon := prepareHistoricalRootCommonNativeSlotManifestShrinkGit(t, &fixture)
+	surplus := fixture.actual.Agents[2]
+	materializeNativeSlotDisposableState(t, surplus)
+	if err := os.RemoveAll(surplus.HostWorktree); err != nil {
+		t.Fatal(err)
+	}
+	declaredBranch := "refs/heads/" + fixture.actual.BranchPrefix + fmt.Sprint(surplus.ID.Index)
+	runNativeSlotManifestShrinkGit(t, git, "--git-dir", rootCommon, "update-ref", "-d", declaredBranch)
+	aliasLock := filepath.Join(
+		rootCommon,
+		filepath.FromSlash("refs/heads/codex/agent"+fmt.Sprint(surplus.ID.Index)+"/main.lock"),
+	)
+	if err := os.MkdirAll(filepath.Dir(aliasLock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(aliasLock, []byte("in-flight\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rootBefore := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon))
+	captureCalls := 0
+	previousCapture := captureNativeManifestShrinkSlotHistory
+	captureNativeManifestShrinkSlotHistory = func(string, string, nativeSlotProcessIdentity, string, string, bool) error {
+		captureCalls++
+		return nil
+	}
+	t.Cleanup(func() { captureNativeManifestShrinkSlotHistory = previousCapture })
+
+	_, err := reconcileNativeSlotManifestShrink(
+		fixture.path,
+		fixture.expected,
+		fixture.opts,
+		historicalRootCommonResetOptions(fixture),
+		false,
+	)
+	if err == nil || !strings.Contains(err.Error(), aliasLock) {
+		t.Fatalf("absent historical alias lock rejection = %v, want exact lock %s", err, aliasLock)
+	}
+	if captureCalls != 0 {
+		t.Fatalf("absent historical alias lock reached history capture %d time(s)", captureCalls)
+	}
+	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
+		t.Fatal("absent historical alias lock rejection changed manifest")
+	}
+	if got := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon)); !reflect.DeepEqual(got, rootBefore) {
+		t.Fatal("absent historical alias lock rejection changed shared root Git state")
+	}
+	for _, candidate := range []string{surplus.HostHome, surplus.StateRoot} {
+		if _, statErr := os.Lstat(candidate); statErr != nil {
+			t.Fatalf("absent historical alias lock rejection changed %s: %v", candidate, statErr)
+		}
 	}
 }
 
@@ -653,7 +955,7 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRefusesHostileGeomet
 		},
 		{
 			name: "non-regular-head",
-			want: "metadata entry must be a regular non-symlink file",
+			want: "historical HEAD must be a regular non-symlink file",
 			mutate: func(t *testing.T, _ nativeSlotManifestShrinkFixture, _ string, metadata string, _ string) {
 				head := filepath.Join(metadata, "HEAD")
 				if err := os.Remove(head); err != nil {
@@ -719,7 +1021,7 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRecheckUsesFreshMeta
 	}{
 		{
 			name: "head-changes-during-history",
-			want: "must be checked out on exact branch refs/heads/agent3",
+			want: "outside its exact declared and migration branch identities",
 			mutate: func(t *testing.T, _ string, metadata string) {
 				if err := os.WriteFile(filepath.Join(metadata, "HEAD"), []byte("ref: refs/heads/agent2\n"), 0o600); err != nil {
 					t.Fatal(err)

@@ -21,9 +21,12 @@ type Result struct {
 }
 
 var (
-	ErrIdleTimeout                        = errors.New("command made no observable progress before its idle deadline")
-	ErrOutputLimit                        = errors.New("command stdout exceeded its capture limit")
-	errManagedCaptureProcessGroupSurvived = errors.New("managed capture process group survived forced termination")
+	ErrIdleTimeout = errors.New("command made no observable progress before its idle deadline")
+	ErrOutputLimit = errors.New("command stdout exceeded its capture limit")
+	// ErrManagedCleanup marks failures to reap a managed command or prove that
+	// its process group and I/O-copy goroutines have terminated.
+	ErrManagedCleanup              = errors.New("managed command cleanup failed")
+	errManagedProcessGroupSurvived = errors.New("managed process group survived forced termination")
 )
 
 type ManagedPolicy struct {
@@ -39,6 +42,13 @@ type activityWriter struct {
 	activity chan<- struct{}
 }
 
+type managedCommandIO struct {
+	readers []*os.File
+	done    chan struct{}
+	mu      sync.Mutex
+	err     error
+}
+
 type boundedCaptureWriter struct {
 	mu       sync.Mutex
 	buffer   bytes.Buffer
@@ -46,6 +56,16 @@ type boundedCaptureWriter struct {
 	overflow bool
 	activity chan<- struct{}
 	exceeded chan<- struct{}
+}
+
+func joinManagedErrors(left, right error) error {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	return errors.Join(left, right)
 }
 
 func (w *boundedCaptureWriter) Write(payload []byte) (int, error) {
@@ -94,6 +114,98 @@ func (w activityWriter) Write(payload []byte) (int, error) {
 	return written, err
 }
 
+func startManagedCommand(cmd *exec.Cmd, stdout, stderr io.Writer) (*managedCommandIO, error) {
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("create managed command stdout pipe: %w", err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		return nil, fmt.Errorf("create managed command stderr pipe: %w", err)
+	}
+	closePipes := func() {
+		_ = stdoutReader.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrReader.Close()
+		_ = stderrWriter.Close()
+	}
+
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
+	if err := cmd.Start(); err != nil {
+		closePipes()
+		return nil, err
+	}
+	// The child owns duplicated write descriptors after Start. Closing the
+	// parent's copies lets EOF prove that every inheriting descendant closed
+	// its corresponding descriptor.
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+
+	managedIO := &managedCommandIO{
+		readers: []*os.File{stdoutReader, stderrReader},
+		done:    make(chan struct{}),
+	}
+	var copies sync.WaitGroup
+	copies.Add(2)
+	copyOutput := func(label string, destination io.Writer, source *os.File) {
+		defer copies.Done()
+		defer source.Close()
+		if _, err := io.Copy(destination, source); err != nil {
+			managedIO.mu.Lock()
+			managedIO.err = errors.Join(managedIO.err, fmt.Errorf("copy managed command %s: %w", label, err))
+			managedIO.mu.Unlock()
+		}
+	}
+	go copyOutput("stdout", stdout, stdoutReader)
+	go copyOutput("stderr", stderr, stderrReader)
+	go func() {
+		copies.Wait()
+		close(managedIO.done)
+	}()
+	return managedIO, nil
+}
+
+func (managedIO *managedCommandIO) finish(grace time.Duration) error {
+	if grace <= 0 {
+		grace = 2 * time.Second
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-managedIO.done:
+		return managedIO.copyError()
+	case <-timer.C:
+	}
+
+	for _, reader := range managedIO.readers {
+		_ = reader.Close()
+	}
+	cleanupErr := fmt.Errorf("%w: command I/O remained open after process exit for %s", ErrManagedCleanup, grace)
+	cleanupTimer := time.NewTimer(grace)
+	defer cleanupTimer.Stop()
+	select {
+	case <-managedIO.done:
+		return errors.Join(cleanupErr, managedIO.copyError())
+	case <-cleanupTimer.C:
+		return errors.Join(
+			cleanupErr,
+			fmt.Errorf("%w: command I/O copy workers did not stop within %s", ErrManagedCleanup, grace),
+		)
+	}
+}
+
+func (managedIO *managedCommandIO) copyError() error {
+	managedIO.mu.Lock()
+	defer managedIO.mu.Unlock()
+	if managedIO.err == nil {
+		return nil
+	}
+	return errors.Join(ErrManagedCleanup, managedIO.err)
+}
+
 // RunManaged runs a command in its own process group. Cancellation and idle
 // expiry terminate the complete descendant group, wait for it to unwind, and
 // then force-kill any orphan that outlives the declared grace period.
@@ -115,16 +227,30 @@ func RunManaged(ctx context.Context, policy ManagedPolicy, name string, args ...
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = activityWriter{writer: os.Stdout, activity: activity}
-	cmd.Stderr = activityWriter{writer: os.Stderr, activity: activity}
-	if err := cmd.Start(); err != nil {
+	// Descendants can escape the managed process group with setsid while still
+	// holding I/O descriptors. Bound any os/exec wait work in addition to the
+	// explicitly owned pipe drains below.
+	cmd.WaitDelay = grace
+	managedIO, err := startManagedCommand(
+		cmd,
+		activityWriter{writer: os.Stdout, activity: activity},
+		activityWriter{writer: os.Stderr, activity: activity},
+	)
+	if err != nil {
 		return Result{Code: 1, Err: err}
 	}
 
 	wait := make(chan error, 1)
 	go func() {
-		wait <- cmd.Wait()
+		wait <- classifyManagedWaitError(cmd.Wait())
 	}()
+	finish := func(waitErr, cause error) Result {
+		return managedResult(joinManagedErrors(waitErr, managedIO.finish(grace)), cause)
+	}
+	finishAfterWait := func(waitErr, cause error) Result {
+		waitErr = terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, waitErr, true)
+		return finish(waitErr, cause)
+	}
 
 	var idleTimer *time.Timer
 	var idle <-chan time.Time
@@ -149,25 +275,25 @@ func RunManaged(ctx context.Context, policy ManagedPolicy, name string, args ...
 	for {
 		select {
 		case err := <-wait:
-			return managedResult(err, nil)
+			return finishAfterWait(err, nil)
 		case <-activity:
 			resetIdle()
 		case <-ctx.Done():
 			select {
 			case err := <-wait:
-				return managedResult(err, nil)
+				return finishAfterWait(err, nil)
 			default:
 			}
-			err := terminateManagedProcessGroup(cmd.Process.Pid, grace, wait)
-			return managedResult(err, ctx.Err())
+			err := terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, nil, false)
+			return finish(err, ctx.Err())
 		case <-idle:
 			select {
 			case err := <-wait:
-				return managedResult(err, nil)
+				return finishAfterWait(err, nil)
 			default:
 			}
-			err := terminateManagedProcessGroup(cmd.Process.Pid, grace, wait)
-			return managedResult(err, ErrIdleTimeout)
+			err := terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, nil, false)
+			return finish(err, ErrIdleTimeout)
 		}
 	}
 }
@@ -208,15 +334,19 @@ func CaptureManaged(
 	}
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = stdout
-	cmd.Stderr = activityWriter{writer: io.Discard, activity: activity}
-	if err := cmd.Start(); err != nil {
+	cmd.WaitDelay = grace
+	managedIO, err := startManagedCommand(
+		cmd,
+		stdout,
+		activityWriter{writer: io.Discard, activity: activity},
+	)
+	if err != nil {
 		return "", Result{Code: 1, Err: err}
 	}
 
 	wait := make(chan error, 1)
 	go func() {
-		wait <- cmd.Wait()
+		wait <- classifyManagedWaitError(cmd.Wait())
 	}()
 
 	var idleTimer *time.Timer
@@ -239,6 +369,7 @@ func CaptureManaged(
 		idleTimer.Reset(policy.IdleTimeout)
 	}
 	finish := func(waitErr error, cause error) (string, Result) {
+		waitErr = joinManagedErrors(waitErr, managedIO.finish(grace))
 		output, overflow := stdout.snapshot()
 		return output, managedCaptureResult(waitErr, cause, overflow)
 	}
@@ -246,24 +377,24 @@ func CaptureManaged(
 	for {
 		select {
 		case err := <-wait:
-			err = terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, err, true)
+			err = terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, err, true)
 			return finish(err, nil)
 		case <-activity:
 			resetIdle()
 		case <-exceeded:
-			err := terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, nil, false)
+			err := terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, nil, false)
 			return finish(err, ErrOutputLimit)
 		case <-ctx.Done():
-			err := terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, nil, false)
+			err := terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, nil, false)
 			return finish(err, ctx.Err())
 		case <-idle:
-			err := terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, nil, false)
+			err := terminateManagedProcessGroupAfterLeader(cmd.Process.Pid, grace, wait, nil, false)
 			return finish(err, ErrIdleTimeout)
 		}
 	}
 }
 
-func terminateManagedCaptureProcessGroup(
+func terminateManagedProcessGroupAfterLeader(
 	pgid int,
 	grace time.Duration,
 	wait <-chan error,
@@ -275,13 +406,17 @@ func terminateManagedCaptureProcessGroup(
 	}
 	if !managedProcessGroupExists(pgid) {
 		if !waited {
-			waitErr = <-wait
+			waitErr = waitForManagedCommand(wait, grace)
 		}
 		return waitErr
 	}
 	termErr := syscall.Kill(-pgid, syscall.SIGTERM)
 	if termErr != nil && !errors.Is(termErr, syscall.ESRCH) {
-		return errors.Join(waitErr, fmt.Errorf("terminate managed capture process group %d: %w", pgid, termErr))
+		return errors.Join(
+			waitErr,
+			ErrManagedCleanup,
+			fmt.Errorf("terminate managed process group %d: %w", pgid, termErr),
+		)
 	}
 
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -304,7 +439,11 @@ func terminateManagedCaptureProcessGroup(
 
 force:
 	if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
-		return errors.Join(waitErr, fmt.Errorf("kill managed capture process group %d: %w", pgid, killErr))
+		return errors.Join(
+			waitErr,
+			ErrManagedCleanup,
+			fmt.Errorf("kill managed process group %d: %w", pgid, killErr),
+		)
 	}
 	proofGrace := grace
 	if proofGrace < time.Second {
@@ -324,13 +463,14 @@ force:
 		case <-proofTimer.C:
 			if !managedProcessGroupExists(pgid) {
 				if !waited {
-					waitErr = <-wait
+					waitErr = waitForManagedCommand(wait, grace)
 				}
 				return waitErr
 			}
 			return errors.Join(
 				waitErr,
-				fmt.Errorf("%w: %d", errManagedCaptureProcessGroupSurvived, pgid),
+				ErrManagedCleanup,
+				fmt.Errorf("%w: %d", errManagedProcessGroupSurvived, pgid),
 			)
 		}
 	}
@@ -355,56 +495,48 @@ func managedResult(waitErr, cause error) Result {
 			code = 130
 		}
 		if waitErr != nil {
-			return Result{Code: code, Err: fmt.Errorf("%w (process wait: %v)", cause, waitErr)}
+			return Result{Code: code, Err: errors.Join(cause, fmt.Errorf("process wait: %w", waitErr))}
 		}
 		return Result{Code: code, Err: cause}
 	}
 	if waitErr == nil {
 		return Result{}
 	}
-	if exitErr, ok := waitErr.(*exec.ExitError); ok {
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
 		return Result{Code: exitErr.ExitCode(), Err: waitErr}
 	}
 	return Result{Code: 1, Err: waitErr}
 }
 
-func terminateManagedProcessGroup(pgid int, grace time.Duration, wait <-chan error) error {
-	termErr := syscall.Kill(-pgid, syscall.SIGTERM)
-	if termErr != nil && !errors.Is(termErr, syscall.ESRCH) {
-		_ = syscall.Kill(pgid, syscall.SIGTERM)
+func classifyManagedWaitError(err error) error {
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		return err
 	}
-
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	var (
-		waitErr error
-		waited  bool
+	return errors.Join(
+		ErrManagedCleanup,
+		fmt.Errorf("managed command I/O pipes remained open after process exit: %w", err),
 	)
-	recordWait := func(err error) {
-		waitErr = err
-		waited = true
+}
+
+func waitForManagedCommand(wait <-chan error, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
 	}
-	for {
-		select {
-		case err := <-wait:
-			recordWait(err)
-			if !managedProcessGroupExists(pgid) {
-				return waitErr
-			}
-		case <-ticker.C:
-			if waited && !managedProcessGroupExists(pgid) {
-				return waitErr
-			}
-		case <-timer.C:
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			if !waited {
-				recordWait(<-wait)
-			}
-			return waitErr
-		}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-wait:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("%w: command wait exceeded %s", ErrManagedCleanup, timeout)
 	}
+}
+
+// IsManagedCleanupError reports whether err includes a managed process
+// lifecycle infrastructure or cleanup failure.
+func IsManagedCleanupError(err error) bool {
+	return errors.Is(err, ErrManagedCleanup)
 }
 
 func managedProcessGroupExists(pgid int) bool {

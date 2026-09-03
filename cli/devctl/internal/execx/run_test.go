@@ -3,7 +3,9 @@ package execx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,7 +41,7 @@ wait
 		t.Fatalf("idle managed command = %#v, want idle timeout code 124", result)
 	}
 	descendantPID := readManagedTestPID(t, pidFile)
-	assertManagedTestProcessGone(t, descendantPID)
+	assertManagedTestProcessGoneAtReturn(t, descendantPID)
 }
 
 func TestRunManagedContextDeadlineTerminatesDescendantGroup(t *testing.T) {
@@ -60,7 +62,7 @@ wait
 		t.Fatalf("deadline managed command = %#v, want deadline code 124", result)
 	}
 	descendantPID := readManagedTestPID(t, pidFile)
-	assertManagedTestProcessGone(t, descendantPID)
+	assertManagedTestProcessGoneAtReturn(t, descendantPID)
 }
 
 func TestRunManagedPreservesCommandExitClassification(t *testing.T) {
@@ -74,6 +76,91 @@ func TestRunManagedPreservesCommandExitClassification(t *testing.T) {
 	}
 	if errors.Is(result.Err, ErrIdleTimeout) || errors.Is(result.Err, context.DeadlineExceeded) {
 		t.Fatalf("ordinary exit was misclassified as lifecycle timeout: %v", result.Err)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(result.Err, &exitErr) || IsManagedCleanupError(result.Err) {
+		t.Fatalf("ordinary exit classification = %v, want only *exec.ExitError", result.Err)
+	}
+}
+
+func TestRunManagedLeaderExitCleansRedirectedDescendantBeforeReturn(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	script := `
+sh -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' descendant "$1" >/dev/null 2>&1 &
+while [ ! -s "$1" ]; do :; done
+exit 0
+`
+	result := RunManaged(
+		context.Background(),
+		ManagedPolicy{TerminationGrace: 100 * time.Millisecond},
+		"sh", "-c", script, "parent", pidFile,
+	)
+	if result.Code != 0 || result.Err != nil {
+		t.Fatalf("normal leader exit = %#v, want success after descendant cleanup", result)
+	}
+	assertManagedTestProcessGoneAtReturn(t, readManagedTestPID(t, pidFile))
+}
+
+func TestRunManagedEscapedPipeHolderDoesNotHang(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "escaped.pid")
+	script := `
+setsid sh -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' escaped "$1" &
+while [ ! -s "$1" ]; do :; done
+exit 0
+`
+	completed := make(chan Result, 1)
+	go func() {
+		completed <- RunManaged(
+			context.Background(),
+			ManagedPolicy{TerminationGrace: 100 * time.Millisecond},
+			"sh", "-c", script, "parent", pidFile,
+		)
+	}()
+
+	escapedPID := waitManagedTestPID(t, pidFile)
+	registerEscapedManagedTestCleanup(t, escapedPID)
+	watchdog := time.NewTimer(2 * time.Second)
+	defer watchdog.Stop()
+	select {
+	case result := <-completed:
+		if result.Code != 1 || !IsManagedCleanupError(result.Err) {
+			t.Fatalf("escaped pipe-holder result = %#v, want managed cleanup failure", result)
+		}
+	case <-watchdog.C:
+		t.Fatal("RunManaged hung on an escaped setsid child holding its copy pipes")
+	}
+}
+
+func TestRunManagedNonzeroLeaderWithEscapedPipeHolderIsCleanupFailure(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "escaped.pid")
+	script := `
+setsid sh -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' escaped "$1" &
+while [ ! -s "$1" ]; do :; done
+exit 23
+`
+	completed := make(chan Result, 1)
+	go func() {
+		completed <- RunManaged(
+			context.Background(),
+			ManagedPolicy{TerminationGrace: 100 * time.Millisecond},
+			"sh", "-c", script, "parent", pidFile,
+		)
+	}()
+
+	escapedPID := waitManagedTestPID(t, pidFile)
+	registerEscapedManagedTestCleanup(t, escapedPID)
+	watchdog := time.NewTimer(2 * time.Second)
+	defer watchdog.Stop()
+	select {
+	case result := <-completed:
+		var exitErr *exec.ExitError
+		_, directExitError := result.Err.(*exec.ExitError)
+		if result.Code != 23 || !IsManagedCleanupError(result.Err) ||
+			!errors.As(result.Err, &exitErr) || directExitError {
+			t.Fatalf("nonzero escaped pipe-holder result = %#v, want joined exit 23 and cleanup failure", result)
+		}
+	case <-watchdog.C:
+		t.Fatal("RunManaged hung after a nonzero leader left an escaped setsid pipe holder")
 	}
 }
 
@@ -117,6 +204,93 @@ exit 0
 		t.Fatalf("normal leader exit capture = output %q result %#v, want success", output, result)
 	}
 	assertManagedTestProcessGoneAtReturn(t, readManagedTestPID(t, pidFile))
+}
+
+func TestCaptureManagedEscapedPipeHolderDoesNotHang(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "escaped.pid")
+	script := `
+setsid sh -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' escaped "$1" &
+while [ ! -s "$1" ]; do :; done
+printf captured
+exit 0
+`
+	type captureResult struct {
+		output string
+		result Result
+	}
+	completed := make(chan captureResult, 1)
+	go func() {
+		output, result := CaptureManaged(
+			context.Background(),
+			ManagedPolicy{TerminationGrace: 100 * time.Millisecond},
+			1024,
+			"sh", "-c", script, "parent", pidFile,
+		)
+		completed <- captureResult{output: output, result: result}
+	}()
+
+	escapedPID := waitManagedTestPID(t, pidFile)
+	registerEscapedManagedTestCleanup(t, escapedPID)
+	watchdog := time.NewTimer(2 * time.Second)
+	defer watchdog.Stop()
+	select {
+	case captured := <-completed:
+		if captured.output != "captured" || captured.result.Code != 1 ||
+			!IsManagedCleanupError(captured.result.Err) {
+			t.Fatalf(
+				"escaped pipe-holder capture = output %q result %#v, want managed cleanup failure",
+				captured.output,
+				captured.result,
+			)
+		}
+	case <-watchdog.C:
+		t.Fatal("CaptureManaged hung on an escaped setsid child holding its copy pipes")
+	}
+}
+
+func TestCaptureManagedNonzeroLeaderWithEscapedPipeHolderIsCleanupFailure(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "escaped.pid")
+	script := `
+setsid sh -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' escaped "$1" &
+while [ ! -s "$1" ]; do :; done
+printf captured
+exit 23
+`
+	type captureResult struct {
+		output string
+		result Result
+	}
+	completed := make(chan captureResult, 1)
+	go func() {
+		output, result := CaptureManaged(
+			context.Background(),
+			ManagedPolicy{TerminationGrace: 100 * time.Millisecond},
+			1024,
+			"sh", "-c", script, "parent", pidFile,
+		)
+		completed <- captureResult{output: output, result: result}
+	}()
+
+	escapedPID := waitManagedTestPID(t, pidFile)
+	registerEscapedManagedTestCleanup(t, escapedPID)
+	watchdog := time.NewTimer(2 * time.Second)
+	defer watchdog.Stop()
+	select {
+	case captured := <-completed:
+		var exitErr *exec.ExitError
+		_, directExitError := captured.result.Err.(*exec.ExitError)
+		if captured.output != "captured" || captured.result.Code != 23 ||
+			!IsManagedCleanupError(captured.result.Err) ||
+			!errors.As(captured.result.Err, &exitErr) || directExitError {
+			t.Fatalf(
+				"nonzero escaped pipe-holder capture = output %q result %#v, want joined exit 23 and cleanup failure",
+				captured.output,
+				captured.result,
+			)
+		}
+	case <-watchdog.C:
+		t.Fatal("CaptureManaged hung after a nonzero leader left an escaped setsid pipe holder")
+	}
 }
 
 func TestCaptureManagedOverflowAndLeaderExitCleanDescendantBeforeReturn(t *testing.T) {
@@ -335,6 +509,42 @@ func TestManagedCaptureResultPreservesSelectedLifecycleCause(t *testing.T) {
 	}
 }
 
+func TestManagedResultPreservesJoinedExitAndCleanupClassification(t *testing.T) {
+	exitErr := exec.Command("sh", "-c", "exit 23").Run()
+	var typedExitErr *exec.ExitError
+	if !errors.As(exitErr, &typedExitErr) {
+		t.Fatalf("fixture error = %T %v, want *exec.ExitError", exitErr, exitErr)
+	}
+	waitErr := errors.Join(exitErr, fmt.Errorf("%w: fixture cleanup failure", ErrManagedCleanup))
+
+	result := managedResult(waitErr, nil)
+	if result.Code != 23 || !errors.As(result.Err, &typedExitErr) || !IsManagedCleanupError(result.Err) {
+		t.Fatalf("joined exit/cleanup result = %#v, want exit 23 with both classifications", result)
+	}
+
+	result = managedResult(waitErr, ErrIdleTimeout)
+	if result.Code != 124 || !errors.Is(result.Err, ErrIdleTimeout) ||
+		!errors.As(result.Err, &typedExitErr) || !IsManagedCleanupError(result.Err) {
+		t.Fatalf("joined lifecycle result = %#v, want idle, exit, and cleanup classifications", result)
+	}
+}
+
+func TestManagedWaitFailuresAreClassifiedAsCleanup(t *testing.T) {
+	waitDelayErr := classifyManagedWaitError(exec.ErrWaitDelay)
+	if !IsManagedCleanupError(waitDelayErr) || !errors.Is(waitDelayErr, exec.ErrWaitDelay) {
+		t.Fatalf("WaitDelay classification = %v, want managed cleanup retaining exec.ErrWaitDelay", waitDelayErr)
+	}
+	if IsManagedCleanupError(classifyManagedWaitError(errors.New("ordinary wait failure"))) {
+		t.Fatal("ordinary wait failure was misclassified as managed cleanup")
+	}
+
+	neverCompletes := make(chan error)
+	err := waitForManagedCommand(neverCompletes, 20*time.Millisecond)
+	if !IsManagedCleanupError(err) {
+		t.Fatalf("bounded wait failure = %v, want managed cleanup classification", err)
+	}
+}
+
 func readManagedTestPID(t *testing.T, path string) int {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -390,4 +600,18 @@ func assertManagedTestProcessGoneAtReturn(t *testing.T, pid int) {
 	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("managed descendant %d remained at function return: %v", pid, err)
 	}
+}
+
+func registerEscapedManagedTestCleanup(t *testing.T, pgid int) {
+	t.Helper()
+	if pgid <= 1 {
+		t.Fatalf("unsafe escaped process group id %d", pgid)
+	}
+	t.Cleanup(func() {
+		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("kill escaped process group %d: %v", pgid, err)
+			return
+		}
+		assertManagedTestProcessGone(t, pgid)
+	})
 }

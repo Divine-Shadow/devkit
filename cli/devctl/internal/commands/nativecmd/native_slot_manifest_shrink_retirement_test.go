@@ -205,6 +205,17 @@ func TestNativeSlotManifestShrinkRetiresCleanRealGitSuffixAtomically(t *testing.
 func TestNativeSlotManifestShrinkRetiresLegacySurplusWithoutTouchingRetainedCustody(t *testing.T) {
 	fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
 	git, legacyCommonDir := prepareLegacyNativeSlotManifestShrinkGit(t, &fixture)
+	actualOrigin := "git@github.com:Divine-Shadow/ouroboros-ide.git"
+	declaredOrigin := "ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git"
+	runNativeSlotManifestShrinkGit(t, git, "--git-dir", legacyCommonDir, "remote", "set-url", "origin", actualOrigin)
+	marker := fmt.Sprintf(
+		"schema=devkit/native-owned-common-repository/v1\nrepository=%s\norigin=%s\n",
+		fixture.actual.Repo,
+		actualOrigin,
+	)
+	if err := os.WriteFile(filepath.Join(legacyCommonDir, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	surplus := fixture.actual.Agents[3]
 	materializeNativeSlotDisposableState(t, surplus)
 
@@ -262,11 +273,13 @@ func TestNativeSlotManifestShrinkRetiresLegacySurplusWithoutTouchingRetainedCust
 		t.Fatal(err)
 	}
 
+	options := nativeSlotManifestShrinkResetOptions(fixture)
+	options.Origin = declaredOrigin
 	if _, err := reconcileNativeSlotManifestShrink(
 		fixture.path,
 		fixture.expected,
 		fixture.opts,
-		nativeSlotManifestShrinkResetOptions(fixture),
+		options,
 		false,
 	); err != nil {
 		t.Fatalf("retire exact legacy surplus: %v", err)
@@ -323,6 +336,39 @@ func TestNativeSlotManifestShrinkRejectsLegacyLookalikeBeforeMutation(t *testing
 	for _, path := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
 		if _, err := os.Lstat(path); err != nil {
 			t.Fatalf("legacy lookalike rejection changed %s: %v", path, err)
+		}
+	}
+}
+
+func TestNativeSlotManifestShrinkRejectsOversizeLegacyMarkerBeforeMutation(t *testing.T) {
+	fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
+	_, legacyCommonDir := prepareLegacyNativeSlotManifestShrinkGit(t, &fixture)
+	surplus := fixture.actual.Agents[3]
+	materializeNativeSlotDisposableState(t, surplus)
+	markerPath := filepath.Join(legacyCommonDir, "devkit-owned-common")
+	if err := os.WriteFile(
+		markerPath,
+		[]byte(strings.Repeat("x", nativeSlotManifestShrinkPointerFileLimit+1)),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reconcileNativeSlotManifestShrink(
+		fixture.path,
+		fixture.expected,
+		fixture.opts,
+		nativeSlotManifestShrinkResetOptions(fixture),
+		false,
+	); err == nil || !strings.Contains(err.Error(), "exceeds the bounded metadata-view file limit") {
+		t.Fatalf("oversize legacy marker rejection = %v", err)
+	}
+	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
+		t.Fatal("oversize legacy marker rejection changed manifest")
+	}
+	for _, path := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot, markerPath} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("oversize legacy marker rejection changed %s: %v", path, err)
 		}
 	}
 }

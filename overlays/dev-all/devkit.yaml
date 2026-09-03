@@ -244,6 +244,7 @@ native:
   disposable_generated_residue_roots:
     - .bsp
     - logs
+    - project/project/target
     - project/target
     - target
   required_isolation_profile: workspace-egress

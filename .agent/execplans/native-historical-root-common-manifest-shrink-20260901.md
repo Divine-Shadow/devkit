@@ -20,7 +20,7 @@ Git repository.
 - [x] (2026-09-01) Added exact historical-root classification, source origin
   and branch checks, fresh current-remote containment, strict index
   custody checks, the three-file setup-layer declaration, and the separate
-  four-directory disposable generated-residue declaration.
+  five-directory disposable generated-residue declaration.
 - [x] (2026-09-01) Replaced per-check ambient fetches with one operation-bound,
   package-transport proof using managed egress, sanitized Git environment,
   bounded descendant cleanup, disjoint source-derived scratch, and a read-only
@@ -58,8 +58,11 @@ transaction with “neither exact lane nor legacy registration.”
   are real canonical non-symlink directories. The `.git`, reverse `gitdir`, and
   `commondir` links must select one exact registration, with no competing lane
   or legacy registration.
-- The root repository is non-bare and has the exact source-declared origin.
-  The surplus worktree is on exact `agentN`; its commit is contained in the
+- The root repository is non-bare and has the exact source-declared identity.
+  The later live-migration amendment admits only strict same-repository GitHub
+  SSH SCP/default/port-443 spellings for historical/v1 custody. The surplus
+  worktree is on exact `agentN`, or the fully derived historical
+  `codex/agentN/main`; its commit is contained in the
   freshly fetched current remote base. The protected checkout's potentially
   stale `refs/remotes/origin/<base>` is not ancestry or setup-tree authority
   for historical-root retirement. Lane and legacy layouts retain their local
@@ -83,7 +86,8 @@ transaction with “neither exact lane nor legacy registration.”
   stage-zero non-gitlink entries with no assume-unchanged, skip-worktree,
   sparse-checkout, or unmerged state. Ignored residue may leave only beneath
   the separately declared real directory roots `.bsp`, `logs`,
-  `project/target`, and `target`; ambient global/info ignore rules do not confer
+  `project/project/target`, `project/target`, and `target`; ambient global/info
+  ignore rules do not confer
   custody authority or permit any arbitrary-path deletion.
 - All suffix slots preflight before history capture or quarantine. Cold Codex
   history is captured before filesystem staging, then all custody is rechecked.
@@ -116,7 +120,7 @@ transaction with “neither exact lane nor legacy registration.”
   custody would contradict the disposable execution contract. Treating every
   `!!` entry as disposable would instead let `.git/info/exclude`, a global
   excludes file, or other ambient policy hide arbitrary custody. The final
-  classifier therefore permits ignored residue only beneath those four exact
+  classifier therefore permits ignored residue only beneath those five exact
   declared real directories and refuses every other ignored or untracked path.
 - An isolated repository is not isolated if ambient `TMPDIR`,
   `GIT_OBJECT_DIRECTORY`, alternate-object variables, or Git config can redirect
@@ -134,7 +138,7 @@ transaction with “neither exact lane nor legacy registration.”
 - 2026-09-01: Permit tracked dirt only through exact source config, never a
   directory, glob, status heuristic, or operator override.
 - 2026-09-01: Reject ambient ignore provenance as disposal authority. Add a
-  separate exact source declaration for the four known generated directory
+  separate exact source declaration for the known generated directory
   roots and reject all other `!!` entries.
 - 2026-09-01: Bind current-remote proof to the full shrink operation. Reuse the
   existing package-owned SSH and managed fetch helpers, fetch only once, and

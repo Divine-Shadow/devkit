@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -899,6 +901,7 @@ type nativeSlotManifestShrinkCommon struct {
 	matchingMetadata         string
 	matchingConsumerMetadata string
 	consumerGitFile          string
+	branchRef                string
 }
 
 type nativeSlotManifestShrinkPathPair struct {
@@ -914,6 +917,141 @@ const (
 	nativeSlotManifestShrinkMetadataViewCompanionLimit = 1
 	nativeSlotManifestShrinkGitOutputLimit             = 4 << 20
 )
+
+type nativeSlotManifestShrinkGitHubSSHIdentity struct {
+	owner      string
+	repository string
+}
+
+func nativeSlotManifestShrinkGitHubSSHSegment(value string, owner bool) bool {
+	if value == "" || len(value) > 255 || value == "." || value == ".." {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' ||
+			character == '-' || (!owner && (character == '_' || character == '.')) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func parseNativeSlotManifestShrinkGitHubSSHIdentity(raw string) (nativeSlotManifestShrinkGitHubSSHIdentity, bool) {
+	if raw == "" || len(raw) > nativeSlotManifestShrinkPointerFileLimit || strings.TrimSpace(raw) != raw ||
+		strings.ContainsAny(raw, "\\\r\n\x00%?#") {
+		return nativeSlotManifestShrinkGitHubSSHIdentity{}, false
+	}
+	repositoryPath := ""
+	const scpPrefix = "git@github.com:"
+	if strings.HasPrefix(raw, scpPrefix) {
+		repositoryPath = strings.TrimPrefix(raw, scpPrefix)
+	} else {
+		if !strings.HasPrefix(raw, "ssh://") {
+			return nativeSlotManifestShrinkGitHubSSHIdentity{}, false
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme != "ssh" || parsed.Opaque != "" || parsed.User == nil ||
+			parsed.User.Username() != "git" || parsed.User.String() != "git" || parsed.RawPath != "" ||
+			parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery ||
+			!strings.HasPrefix(parsed.Path, "/") {
+			return nativeSlotManifestShrinkGitHubSSHIdentity{}, false
+		}
+		if parsed.Host != "github.com" && parsed.Host != "github.com:22" &&
+			parsed.Host != "ssh.github.com:443" {
+			return nativeSlotManifestShrinkGitHubSSHIdentity{}, false
+		}
+		repositoryPath = strings.TrimPrefix(parsed.Path, "/")
+	}
+	parts := strings.Split(repositoryPath, "/")
+	if len(parts) != 2 || !strings.HasSuffix(parts[1], ".git") {
+		return nativeSlotManifestShrinkGitHubSSHIdentity{}, false
+	}
+	repository := strings.TrimSuffix(parts[1], ".git")
+	if !nativeSlotManifestShrinkGitHubSSHSegment(parts[0], true) ||
+		!nativeSlotManifestShrinkGitHubSSHSegment(repository, false) {
+		return nativeSlotManifestShrinkGitHubSSHIdentity{}, false
+	}
+	return nativeSlotManifestShrinkGitHubSSHIdentity{
+		owner:      parts[0],
+		repository: repository,
+	}, true
+}
+
+func nativeSlotManifestShrinkOriginsEquivalent(
+	manifest nativeagent.Manifest,
+	left string,
+	right string,
+) bool {
+	if left == right {
+		return true
+	}
+	// This is a read-only migration allowance for the one known historical
+	// Product topology and its v1 transitional common repository. It does not
+	// normalize origins for v2 lane repositories or choose the URL used by the
+	// fresh remote proof.
+	if manifest.Project != "dev-all" || manifest.Repo != "ouroboros-ide" {
+		return false
+	}
+	leftIdentity, leftOK := parseNativeSlotManifestShrinkGitHubSSHIdentity(left)
+	rightIdentity, rightOK := parseNativeSlotManifestShrinkGitHubSSHIdentity(right)
+	return leftOK && rightOK && leftIdentity == rightIdentity && leftIdentity.repository == manifest.Repo
+}
+
+func nativeSlotManifestShrinkDeclaredBranchRef(manifest nativeagent.Manifest, spec nativeagent.Spec) string {
+	return "refs/heads/" + strings.TrimSpace(manifest.BranchPrefix) + strconv.Itoa(spec.ID.Index)
+}
+
+func nativeSlotManifestShrinkHistoricalBranchRefs(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+) []string {
+	declared := nativeSlotManifestShrinkDeclaredBranchRef(manifest, spec)
+	refs := []string{declared}
+	// Before Devkit owned branch naming, Codex Desktop created these Product
+	// lanes as codex/agentN/main. Admit only that one fully derived historical
+	// spelling for the exact known migration domain.
+	if manifest.Project == "dev-all" && manifest.Repo == "ouroboros-ide" &&
+		manifest.BranchPrefix == "agent" && manifest.BaseBranch == "main" && spec.ID.Index > 0 {
+		refs = append(refs, "refs/heads/codex/agent"+strconv.Itoa(spec.ID.Index)+"/main")
+	}
+	return refs
+}
+
+func nativeSlotManifestShrinkHistoricalMetadataBranchRef(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+	metadata string,
+) (string, error) {
+	data, err := readNativeSlotManifestShrinkRegularFile(
+		fmt.Sprintf("surplus native slot %d historical HEAD", spec.ID.Index),
+		filepath.Join(metadata, "HEAD"),
+		nativeSlotManifestShrinkPointerFileLimit,
+	)
+	if err != nil {
+		return "", err
+	}
+	line, err := parseNativeSlotManifestShrinkPointerLine(
+		fmt.Sprintf("surplus native slot %d historical HEAD", spec.ID.Index),
+		data,
+	)
+	if err != nil || !strings.HasPrefix(line, "ref: ") {
+		return "", fmt.Errorf("surplus native slot %d historical HEAD is detached or unsafe", spec.ID.Index)
+	}
+	branchRef := strings.TrimPrefix(line, "ref: ")
+	for _, allowed := range nativeSlotManifestShrinkHistoricalBranchRefs(manifest, spec) {
+		if branchRef == allowed {
+			return branchRef, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"surplus native slot %d historical HEAD %s is outside its exact declared and migration branch identities",
+		spec.ID.Index,
+		branchRef,
+	)
+}
 
 func (pair nativeSlotManifestShrinkPathPair) matchesRaw(candidate, relativeBase string) bool {
 	// Consumer spellings are bwrap targets and may not exist host-side. Absolute
@@ -1260,6 +1398,12 @@ func nativeSlotManifestShrinkCommonBranchOID(
 	branchRef string,
 	operation *nativeSlotManifestShrinkRemoteProofOperation,
 ) (string, error) {
+	branchLock := filepath.Join(commonDir, filepath.FromSlash(branchRef)+".lock")
+	if _, err := os.Lstat(branchLock); err == nil {
+		return "", fmt.Errorf("exact native slot branch domain %s has Git transaction lock residue %s", branchRef, branchLock)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect exact native slot branch domain lock %s: %w", branchLock, err)
+	}
 	capture := func(args ...string) (string, execx.Result, error) {
 		if operation != nil {
 			return operation.capture(args...)
@@ -1294,6 +1438,31 @@ func nativeSlotManifestShrinkCommonBranchOID(
 	}
 }
 
+func nativeSlotManifestShrinkSingleConfigValue(label string, output string) (string, error) {
+	values := strings.Split(output, "\x00")
+	if len(values) != 2 || values[0] == "" || values[1] != "" ||
+		strings.ContainsAny(values[0], "\r\n\x00") {
+		return "", fmt.Errorf("%s must contain exactly one safe value", label)
+	}
+	return values[0], nil
+}
+
+func nativeSlotManifestShrinkLegacyMarkerMatches(
+	manifest nativeagent.Manifest,
+	marker []byte,
+	origin string,
+) bool {
+	lines := strings.Split(string(marker), "\n")
+	if len(lines) != 4 || lines[3] != "" ||
+		lines[0] != "schema=devkit/native-owned-common-repository/v1" ||
+		lines[1] != "repository="+strings.TrimSpace(manifest.Repo) ||
+		!strings.HasPrefix(lines[2], "origin=") {
+		return false
+	}
+	markerOrigin := strings.TrimPrefix(lines[2], "origin=")
+	return nativeSlotManifestShrinkOriginsEquivalent(manifest, markerOrigin, origin)
+}
+
 func validateNativeSlotManifestShrinkLegacyCommon(
 	manifest nativeagent.Manifest,
 	commonDir string,
@@ -1317,23 +1486,15 @@ func validateNativeSlotManifestShrinkLegacyCommon(
 		return fmt.Errorf("legacy surplus native slot common Git repository escapes its exact package-owned path: %s", commonDir)
 	}
 	markerPath := filepath.Join(commonDir, "devkit-owned-common")
-	markerInfo, err := os.Lstat(markerPath)
-	if err != nil {
-		return fmt.Errorf("inspect legacy package-owned common repository marker %s: %w", markerPath, err)
-	}
-	if !markerInfo.Mode().IsRegular() || markerInfo.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("legacy package-owned common repository marker must be a regular non-symlink file: %s", markerPath)
-	}
-	marker, err := os.ReadFile(markerPath)
-	if err != nil {
-		return fmt.Errorf("read legacy package-owned common repository marker %s: %w", markerPath, err)
-	}
-	expectedMarker := fmt.Sprintf(
-		"schema=devkit/native-owned-common-repository/v1\nrepository=%s\norigin=%s\n",
-		strings.TrimSpace(manifest.Repo),
-		origin,
+	marker, err := readNativeSlotManifestShrinkRegularFile(
+		"legacy package-owned common repository marker",
+		markerPath,
+		nativeSlotManifestShrinkPointerFileLimit,
 	)
-	if string(marker) != expectedMarker {
+	if err != nil {
+		return err
+	}
+	if !nativeSlotManifestShrinkLegacyMarkerMatches(manifest, marker, origin) {
 		return fmt.Errorf("legacy package-owned common repository %s identity does not match repository %s and its declared origin", commonDir, manifest.Repo)
 	}
 	git := gitauthority.Executable()
@@ -1341,12 +1502,31 @@ func validateNativeSlotManifestShrinkLegacyCommon(
 	if result.Code != 0 || strings.TrimSpace(bare) != "true" {
 		return fmt.Errorf("legacy package-owned common repository %s is not a bare Git repository", commonDir)
 	}
-	actualOrigin, result := execx.Capture(context.Background(), git, "--git-dir", commonDir, "remote", "get-url", "origin")
+	configPath := filepath.Join(commonDir, "config")
+	if _, err := readNativeSlotManifestShrinkRegularFile(
+		"legacy package-owned common repository Git config",
+		configPath,
+		nativeSlotManifestShrinkConfigFileLimit,
+	); err != nil {
+		return err
+	}
+	actualOrigins, result := execx.Capture(
+		context.Background(),
+		git,
+		"config", "--file", configPath, "--no-includes", "--null", "--get-all", "remote.origin.url",
+	)
 	if result.Code != 0 {
 		return fmt.Errorf("read legacy package-owned common repository origin %s: git exit %d", commonDir, result.Code)
 	}
-	if strings.TrimSpace(actualOrigin) != origin {
-		return fmt.Errorf("legacy package-owned common repository %s origin %q does not match declared origin %q", commonDir, strings.TrimSpace(actualOrigin), origin)
+	actualOrigin, err := nativeSlotManifestShrinkSingleConfigValue(
+		"legacy package-owned common repository origin",
+		actualOrigins,
+	)
+	if err != nil {
+		return fmt.Errorf("read legacy package-owned common repository origin %s: %w", commonDir, err)
+	}
+	if !nativeSlotManifestShrinkOriginsEquivalent(manifest, actualOrigin, origin) {
+		return fmt.Errorf("legacy package-owned common repository %s origin %q does not match declared origin %q", commonDir, actualOrigin, origin)
 	}
 	return nil
 }
@@ -1391,15 +1571,32 @@ func validateNativeSlotManifestShrinkHistoricalRootCommon(
 	if captureErr != nil || result.Code != 0 || strings.TrimSpace(bare) != "false" {
 		return fmt.Errorf("historical source root common Git repository %s must be the non-bare root checkout repository", commonDir)
 	}
-	actualOrigin, result, captureErr := operation.capture("--git-dir", commonDir, "remote", "get-url", "origin")
+	configPath := filepath.Join(commonDir, "config")
+	if _, err := readNativeSlotManifestShrinkRegularFile(
+		"historical source root common Git config",
+		configPath,
+		nativeSlotManifestShrinkConfigFileLimit,
+	); err != nil {
+		return err
+	}
+	actualOrigins, result, captureErr := operation.capture(
+		"config", "--file", configPath, "--no-includes", "--null", "--get-all", "remote.origin.url",
+	)
 	if captureErr != nil || result.Code != 0 {
 		return fmt.Errorf("read historical source root common Git origin %s: git exit %d", commonDir, result.Code)
 	}
-	if strings.TrimSpace(actualOrigin) != origin {
+	actualOrigin, err := nativeSlotManifestShrinkSingleConfigValue(
+		"historical source root common Git origin",
+		actualOrigins,
+	)
+	if err != nil {
+		return fmt.Errorf("read historical source root common Git origin %s: %w", commonDir, err)
+	}
+	if !nativeSlotManifestShrinkOriginsEquivalent(manifest, actualOrigin, origin) {
 		return fmt.Errorf(
 			"historical source root common Git repository %s origin %q does not match declared origin %q",
 			commonDir,
-			strings.TrimSpace(actualOrigin),
+			actualOrigin,
 			origin,
 		)
 	}
@@ -1483,12 +1680,13 @@ func resolveNativeSlotManifestShrinkCommon(
 		}
 	}
 	if !worktreeExists {
-		branchRef := "refs/heads/" + strings.TrimSpace(manifest.BranchPrefix) + strconv.Itoa(spec.ID.Index)
+		branchRef := nativeSlotManifestShrinkDeclaredBranchRef(manifest, spec)
 		if laneMetadata != "" {
 			return nativeSlotManifestShrinkCommon{
 				kind:             nativeSlotManifestShrinkCommonLane,
 				path:             laneCommonDir,
 				matchingMetadata: laneMetadata,
+				branchRef:        branchRef,
 			}, nil
 		}
 		if laneExists {
@@ -1514,36 +1712,50 @@ func resolveNativeSlotManifestShrinkCommon(
 			}
 		}
 		type branchDomain struct {
-			kind     nativeSlotManifestShrinkCommonKind
-			path     string
-			metadata string
-			oid      string
+			kind      nativeSlotManifestShrinkCommonKind
+			path      string
+			metadata  string
+			branchRef string
+			oid       string
 		}
 		var domains []branchDomain
 		for _, candidate := range []struct {
-			kind     nativeSlotManifestShrinkCommonKind
-			path     string
-			metadata string
-			exists   bool
+			kind       nativeSlotManifestShrinkCommonKind
+			path       string
+			metadata   string
+			exists     bool
+			branchRefs []string
 		}{
-			{kind: nativeSlotManifestShrinkCommonLane, path: laneCommonDir, metadata: laneMetadata, exists: laneExists},
-			{kind: nativeSlotManifestShrinkCommonLegacy, path: legacyCommonDir, metadata: legacyMetadata, exists: legacyExists},
-			{kind: nativeSlotManifestShrinkCommonHistoricalRoot, path: historicalRootCommonDir, exists: historicalRootExists},
+			{
+				kind: nativeSlotManifestShrinkCommonLane, path: laneCommonDir,
+				metadata: laneMetadata, exists: laneExists, branchRefs: []string{branchRef},
+			},
+			{
+				kind: nativeSlotManifestShrinkCommonLegacy, path: legacyCommonDir,
+				metadata: legacyMetadata, exists: legacyExists, branchRefs: []string{branchRef},
+			},
+			{
+				kind: nativeSlotManifestShrinkCommonHistoricalRoot, path: historicalRootCommonDir,
+				exists: historicalRootExists, branchRefs: nativeSlotManifestShrinkHistoricalBranchRefs(manifest, spec),
+			},
 		} {
 			if !candidate.exists {
 				continue
 			}
-			oid, branchErr := nativeSlotManifestShrinkCommonBranchOID(candidate.path, branchRef, operation)
-			if branchErr != nil {
-				return nativeSlotManifestShrinkCommon{}, branchErr
-			}
-			if oid != "" {
-				domains = append(domains, branchDomain{
-					kind:     candidate.kind,
-					path:     candidate.path,
-					metadata: candidate.metadata,
-					oid:      oid,
-				})
+			for _, candidateBranchRef := range candidate.branchRefs {
+				oid, branchErr := nativeSlotManifestShrinkCommonBranchOID(candidate.path, candidateBranchRef, operation)
+				if branchErr != nil {
+					return nativeSlotManifestShrinkCommon{}, branchErr
+				}
+				if oid != "" {
+					domains = append(domains, branchDomain{
+						kind:      candidate.kind,
+						path:      candidate.path,
+						metadata:  candidate.metadata,
+						branchRef: candidateBranchRef,
+						oid:       oid,
+					})
+				}
 			}
 		}
 		if len(domains) > 0 {
@@ -1555,7 +1767,7 @@ func resolveNativeSlotManifestShrinkCommon(
 			}
 			preferred := domains[0]
 			for _, domain := range domains[1:] {
-				if domain.kind == nativeSlotManifestShrinkCommonHistoricalRoot ||
+				if (domain.kind == nativeSlotManifestShrinkCommonHistoricalRoot && preferred.kind != nativeSlotManifestShrinkCommonHistoricalRoot) ||
 					(domain.kind == nativeSlotManifestShrinkCommonLegacy && preferred.kind == nativeSlotManifestShrinkCommonLane) {
 					preferred = domain
 				}
@@ -1583,8 +1795,9 @@ func resolveNativeSlotManifestShrinkCommon(
 					)
 					if captureErr != nil || result.Code != 0 {
 						return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
-							"surplus native slot %d branch %s from %s is not contained in current %s at %s",
+							"surplus native slot %d branch %s (%s) from %s is not contained in current %s at %s",
 							spec.ID.Index,
+							domain.branchRef,
 							domain.oid,
 							domain.path,
 							proof.remoteRef,
@@ -1597,8 +1810,8 @@ func resolveNativeSlotManifestShrinkCommon(
 		}
 		var metadataDomains []branchDomain
 		for _, candidate := range []branchDomain{
-			{kind: nativeSlotManifestShrinkCommonLane, path: laneCommonDir, metadata: laneMetadata},
-			{kind: nativeSlotManifestShrinkCommonLegacy, path: legacyCommonDir, metadata: legacyMetadata},
+			{kind: nativeSlotManifestShrinkCommonLane, path: laneCommonDir, metadata: laneMetadata, branchRef: branchRef},
+			{kind: nativeSlotManifestShrinkCommonLegacy, path: legacyCommonDir, metadata: legacyMetadata, branchRef: branchRef},
 		} {
 			if candidate.metadata != "" {
 				metadataDomains = append(metadataDomains, candidate)
@@ -1623,6 +1836,7 @@ func resolveNativeSlotManifestShrinkCommon(
 					kind:             domain.kind,
 					path:             domain.path,
 					matchingMetadata: domain.metadata,
+					branchRef:        domain.branchRef,
 				}, nil
 			case nativeSlotManifestShrinkCommonLegacy:
 				if err := validateNativeSlotManifestShrinkLegacyCommon(manifest, domain.path, expectedOrigin); err != nil {
@@ -1632,6 +1846,7 @@ func resolveNativeSlotManifestShrinkCommon(
 					kind:             domain.kind,
 					path:             domain.path,
 					matchingMetadata: domain.metadata,
+					branchRef:        domain.branchRef,
 				}, nil
 			case nativeSlotManifestShrinkCommonHistoricalRoot:
 				if err := validateNativeSlotManifestShrinkHistoricalRootCommon(manifest, domain.path, expectedOrigin, operation); err != nil {
@@ -1641,6 +1856,7 @@ func resolveNativeSlotManifestShrinkCommon(
 					kind:         domain.kind,
 					path:         domain.path,
 					consumerPath: historicalRootConsumerCommonDir,
+					branchRef:    domain.branchRef,
 				}, nil
 			}
 		}
@@ -1662,6 +1878,7 @@ func resolveNativeSlotManifestShrinkCommon(
 			kind:             nativeSlotManifestShrinkCommonLane,
 			path:             laneCommonDir,
 			matchingMetadata: laneMetadata,
+			branchRef:        nativeSlotManifestShrinkDeclaredBranchRef(manifest, spec),
 		}, nil
 	}
 	if legacyMetadata != "" {
@@ -1672,6 +1889,7 @@ func resolveNativeSlotManifestShrinkCommon(
 			kind:             nativeSlotManifestShrinkCommonLegacy,
 			path:             legacyCommonDir,
 			matchingMetadata: legacyMetadata,
+			branchRef:        nativeSlotManifestShrinkDeclaredBranchRef(manifest, spec),
 		}, nil
 	}
 	if historicalRootMetadata != "" {
@@ -1691,6 +1909,14 @@ func resolveNativeSlotManifestShrinkCommon(
 		if err := validateNativeSlotManifestShrinkHistoricalRootCommon(manifest, historicalRootCommonDir, expectedOrigin, operation); err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
+		branchRef, err := nativeSlotManifestShrinkHistoricalMetadataBranchRef(
+			manifest,
+			spec,
+			historicalRootMetadata,
+		)
+		if err != nil {
+			return nativeSlotManifestShrinkCommon{}, err
+		}
 		return nativeSlotManifestShrinkCommon{
 			kind:                     nativeSlotManifestShrinkCommonHistoricalRoot,
 			path:                     historicalRootCommonDir,
@@ -1698,6 +1924,7 @@ func resolveNativeSlotManifestShrinkCommon(
 			matchingMetadata:         historicalRootMetadata,
 			matchingConsumerMetadata: metadata.consumer,
 			consumerGitFile:          historicalGitFile.consumer,
+			branchRef:                branchRef,
 		}, nil
 	}
 	if worktreeExists {
@@ -2032,12 +2259,29 @@ func (operation *nativeSlotManifestShrinkRemoteProofOperation) capture(args ...s
 		name,
 		invocationArgs...,
 	)
-	if errors.Is(result.Err, execx.ErrOutputLimit) ||
-		errors.Is(result.Err, context.DeadlineExceeded) ||
-		errors.Is(result.Err, context.Canceled) {
-		return output, result, result.Err
+	if captureErr := nativeSlotManifestShrinkManagedCaptureError(result); captureErr != nil {
+		return output, result, captureErr
 	}
 	return output, result, nil
+}
+
+func nativeSlotManifestShrinkManagedCaptureError(result execx.Result) error {
+	if result.Err == nil {
+		return nil
+	}
+	if errors.Is(result.Err, execx.ErrOutputLimit) ||
+		errors.Is(result.Err, context.DeadlineExceeded) ||
+		errors.Is(result.Err, context.Canceled) ||
+		execx.IsManagedCleanupError(result.Err) {
+		return result.Err
+	}
+	// A direct ExitError is the command's ordinary predicate result. Any
+	// wrapper or other error is executor/infrastructure failure and must not be
+	// mistaken for Git's meaningful exit 1 (for example, an unset config key).
+	if _, ok := result.Err.(*exec.ExitError); !ok {
+		return result.Err
+	}
+	return nil
 }
 
 func nativeSlotManifestShrinkSharedIndexName(name string) bool {
@@ -2221,10 +2465,8 @@ func (operation *nativeSlotManifestShrinkRemoteProofOperation) captureHistorical
 		name,
 		invocationArgs...,
 	)
-	if errors.Is(result.Err, execx.ErrOutputLimit) ||
-		errors.Is(result.Err, context.DeadlineExceeded) ||
-		errors.Is(result.Err, context.Canceled) {
-		return output, result, result.Err
+	if captureErr := nativeSlotManifestShrinkManagedCaptureError(result); captureErr != nil {
+		return output, result, captureErr
 	}
 	return output, result, nil
 }
@@ -2687,13 +2929,21 @@ func requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(
 		}
 	}
 
-	branch := strings.TrimSpace(manifest.BranchPrefix) + strconv.Itoa(spec.ID.Index)
-	branchRef := "refs/heads/" + branch
-	branchLock := filepath.Join(commonDir, filepath.FromSlash(branchRef)+".lock")
-	if _, err := os.Lstat(branchLock); err == nil {
-		return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, branchLock)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("inspect surplus native slot Git transaction lock %s: %w", branchLock, err)
+	branchRef := common.branchRef
+	if branchRef == "" {
+		return fmt.Errorf("surplus native slot %d has no exact selected branch identity", spec.ID.Index)
+	}
+	branchLockRefs := []string{branchRef}
+	if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
+		branchLockRefs = nativeSlotManifestShrinkHistoricalBranchRefs(manifest, spec)
+	}
+	for _, lockedBranchRef := range branchLockRefs {
+		branchLock := filepath.Join(commonDir, filepath.FromSlash(lockedBranchRef)+".lock")
+		if _, err := os.Lstat(branchLock); err == nil {
+			return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, branchLock)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect surplus native slot Git transaction lock %s: %w", branchLock, err)
+		}
 	}
 
 	git := gitauthority.Executable()
@@ -2739,6 +2989,41 @@ func requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(
 		)
 		if err != nil {
 			return err
+		}
+		for _, otherBranchRef := range nativeSlotManifestShrinkHistoricalBranchRefs(manifest, spec) {
+			if otherBranchRef == branchRef {
+				continue
+			}
+			_, otherShowRef, otherShowRefErr := captureGit(
+				"--git-dir", commonDir,
+				"show-ref", "--verify", "--quiet", otherBranchRef,
+			)
+			if otherShowRefErr != nil {
+				return fmt.Errorf("inspect surplus native slot %d branch %s: %w", spec.ID.Index, otherBranchRef, otherShowRefErr)
+			}
+			switch otherShowRef.Code {
+			case 1:
+				continue
+			case 0:
+				if _, err := requireNativeSlotManifestShrinkCurrentRemoteContainment(
+					manifest,
+					spec,
+					commonDir,
+					otherBranchRef,
+					baseBranch,
+					expectedOrigin,
+					policy.remoteProof,
+				); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf(
+					"inspect surplus native slot %d branch %s: git exit %d",
+					spec.ID.Index,
+					otherBranchRef,
+					otherShowRef.Code,
+				)
+			}
 		}
 	} else {
 		ahead, result, captureErr := captureGit(
