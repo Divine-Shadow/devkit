@@ -3,14 +3,17 @@ package nativecmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"devkit/cli/devctl/internal/codexhistory"
 	"devkit/cli/devctl/internal/devkitpaths"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/sqliteauthority"
 	wtx "devkit/cli/devctl/internal/worktrees"
 )
 
@@ -87,6 +90,81 @@ func TestSourceDerivedNativeSlotProcessIdentitiesIncludeEveryDeclaredSlot(t *tes
 		if !strings.Contains(identity.hostWorktree, fmt.Sprintf("agent%d", want)) {
 			t.Fatalf("identity %d host worktree = %q", want, identity.hostWorktree)
 		}
+	}
+}
+
+func TestCaptureNativeWholeHistoryAcceptsGUIWorkspaceProjection(t *testing.T) {
+	sqlite, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 is supplied by the Nix test closure")
+	}
+	restoreSQLite := sqliteauthority.SetExecutableForTesting(sqlite)
+	t.Cleanup(restoreSQLite)
+
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "agent-worktrees", "agent2")
+	hostWorktree := filepath.Join(workspaceRoot, "ouroboros-ide")
+	hostHome := filepath.Join(workspaceRoot, ".devhome-agent2")
+	hostCodex := filepath.Join(hostHome, ".codex")
+	rolloutRel := filepath.Join("archived_sessions", "rollout-gui-thread.jsonl")
+	if err := os.MkdirAll(hostWorktree, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(hostCodex, "archived_sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(hostCodex, rolloutRel),
+		[]byte("{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(hostCodex, "state_5.sqlite")
+	projectedRollout := filepath.ToSlash(filepath.Join("/workspaces/dev/.devhome-agent2/.codex", rolloutRel))
+	statement := fmt.Sprintf(
+		"CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL); INSERT INTO threads VALUES ('gui-thread', '%s', 'vscode', 'preserve projected GUI thread');",
+		projectedRollout,
+	)
+	if output, err := exec.Command(sqlite, "-batch", database, statement).CombinedOutput(); err != nil {
+		t.Fatalf("create GUI history fixture database: %v: %s", err, output)
+	}
+	stateRoot := filepath.Join(root, ".devkit", "native-agents")
+	if err := os.MkdirAll(filepath.Dir(stateRoot), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity := nativeSlotProcessIdentity{
+		index:           2,
+		hostWorktree:    hostWorktree,
+		sandboxWorktree: "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide",
+		hostHome:        hostHome,
+		sandboxHome:     "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2",
+		stateRoot:       filepath.Join(stateRoot, "dev-all-agent2"),
+		sandboxState:    "/agent-state/dev-all-agent2",
+	}
+	if err := captureNativeWholeHistory("dev-all", []nativeSlotProcessIdentity{identity}, stateRoot, false); err != nil {
+		t.Fatal(err)
+	}
+	custodyRoot, err := codexhistory.CustodyRoot(stateRoot, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	generations, err := os.ReadDir(filepath.Join(custodyRoot, "agent2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generations) != 1 {
+		t.Fatalf("global custody generations = %d, want 1", len(generations))
+	}
+	if _, err := os.Stat(filepath.Join(custodyRoot, "agent2", generations[0].Name(), "manifest.json")); err != nil {
+		t.Fatalf("global custody manifest: %v", err)
+	}
+	workspaceCustodyRoot, err := codexhistory.WorkspaceCustodyRoot(workspaceRoot, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(workspaceCustodyRoot); !os.IsNotExist(err) {
+		t.Fatalf("whole reset relocated custody into reset-owned workspace: %v", err)
 	}
 }
 

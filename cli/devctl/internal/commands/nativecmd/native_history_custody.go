@@ -3,6 +3,7 @@ package nativecmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"devkit/cli/devctl/internal/codexhistory"
 )
@@ -22,15 +23,16 @@ func captureNativeSlotHistory(
 	dryRun bool,
 ) error {
 	result, err := codexhistory.Capture(codexhistory.SnapshotOptions{
-		Project:       project,
-		ResetKind:     resetKind,
-		AgentIndex:    identity.index,
-		HostWorktree:  identity.hostWorktree,
-		HostHome:      identity.hostHome,
-		SandboxHome:   identity.sandboxHome,
-		StateRoot:     stateRoot,
-		WorkspaceRoot: workspaceRoot,
-		DryRun:        dryRun,
+		Project:                 project,
+		ResetKind:               resetKind,
+		AgentIndex:              identity.index,
+		HostWorktree:            identity.hostWorktree,
+		HostHome:                identity.hostHome,
+		SandboxHome:             identity.sandboxHome,
+		StateRoot:               stateRoot,
+		WorkspaceRoot:           workspaceRoot,
+		WorkspaceProjectionRoot: filepath.Dir(filepath.Clean(identity.hostWorktree)),
+		DryRun:                  dryRun,
 	})
 	if err != nil {
 		return err

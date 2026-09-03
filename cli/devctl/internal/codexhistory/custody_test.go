@@ -268,8 +268,71 @@ func TestCaptureRejectsHostHomeOutsideWorkspaceProjection(t *testing.T) {
 	fixture := newCaptureFixture(t)
 	fixture.options.HostHome = filepath.Join(filepath.Dir(fixture.options.WorkspaceRoot), "foreign-home")
 	_, err := Capture(fixture.options)
-	if err == nil || !strings.Contains(err.Error(), "host home must be contained by the selected workspace root") {
+	if err == nil || !strings.Contains(err.Error(), "host home must be contained by the projection workspace root") {
 		t.Fatalf("outside host home error = %v", err)
+	}
+}
+
+func TestValidateOptionsSeparatesWholeResetCustodyFromProjectionGeometry(t *testing.T) {
+	fixture := newCaptureFixture(t)
+	options := fixture.options
+	options.ResetKind = "whole-prefix-reset"
+	options.WorkspaceProjectionRoot = options.WorkspaceRoot
+	options.WorkspaceRoot = ""
+	if err := validateOptions(options); err != nil {
+		t.Fatalf("valid whole-reset projection geometry: %v", err)
+	}
+	manifestShrink := options
+	manifestShrink.ResetKind = "manifest-shrink-retirement"
+	if err := validateOptions(manifestShrink); err != nil {
+		t.Fatalf("valid manifest-shrink projection geometry: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		custodyRoot    string
+		projectionRoot string
+		want           string
+	}{
+		{
+			name:        "whole reset cannot select lane-local custody",
+			custodyRoot: fixture.options.WorkspaceRoot,
+			want:        "must remain in the global state-root boundary",
+		},
+		{
+			name:           "projection must own worktree parent",
+			projectionRoot: filepath.Dir(fixture.options.WorkspaceRoot),
+			want:           "projection workspace root must own the selected worktree parent",
+		},
+		{
+			name:           "projection must be canonical",
+			projectionRoot: fixture.options.WorkspaceRoot + string(filepath.Separator) + ".",
+			want:           "projection workspace root must be absolute and canonical",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := options
+			candidate.WorkspaceRoot = test.custodyRoot
+			if test.projectionRoot != "" {
+				candidate.WorkspaceProjectionRoot = test.projectionRoot
+			}
+			err := validateOptions(candidate)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+	manifestShrink.WorkspaceRoot = fixture.options.WorkspaceRoot
+	if err := validateOptions(manifestShrink); err == nil || !strings.Contains(err.Error(), "must remain in the global state-root boundary") {
+		t.Fatalf("manifest-shrink custody error = %v", err)
+	}
+
+	selectedWithoutCustody := fixture.options
+	selectedWithoutCustody.WorkspaceProjectionRoot = selectedWithoutCustody.WorkspaceRoot
+	selectedWithoutCustody.WorkspaceRoot = ""
+	if err := validateOptions(selectedWithoutCustody); err == nil || !strings.Contains(err.Error(), "requires a workspace root") {
+		t.Fatalf("selected-slot custody error = %v", err)
 	}
 }
 
@@ -657,6 +720,6 @@ func TestWorkspaceCustodyRootIsLaneLocalAndOutsideResetOwnedPaths(t *testing.T) 
 		t.Fatal(err)
 	}
 	if want := filepath.Join(root, ".devkit", "codex-gui-history", "dev-all"); legacy != want {
-		t.Fatalf("legacy whole-reset custody root = %s, want %s", legacy, want)
+		t.Fatalf("whole-reset custody root = %s, want %s", legacy, want)
 	}
 }

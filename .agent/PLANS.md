@@ -57,6 +57,9 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [Whole-reset GUI History Projection Repair](execplans/whole-reset-gui-history-projection-20260903.md):
+  preserve GUI-projected rollout references during whole-prefix reset without
+  moving custody into the reset-owned lane.
 - [Management Controller Profile v8](execplans/management-controller-profile-v8-20260831.md):
   consume the one strict v8 controller manifest and live identity, including
   the isolated typed Product station-reset capability, without a compatibility

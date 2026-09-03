@@ -35,15 +35,19 @@ var historyDirectories = map[string]struct{}{
 }
 
 type SnapshotOptions struct {
-	Project       string
-	ResetKind     string
-	AgentIndex    int
-	HostWorktree  string
-	HostHome      string
-	SandboxHome   string
-	StateRoot     string
+	Project      string
+	ResetKind    string
+	AgentIndex   int
+	HostWorktree string
+	HostHome     string
+	SandboxHome  string
+	StateRoot    string
+	// WorkspaceRoot opts selected-slot capture into lane-local custody.
 	WorkspaceRoot string
-	DryRun        bool
+	// WorkspaceProjectionRoot validates GUI rollout paths projected through
+	// /workspaces/dev without changing where the snapshot is stored.
+	WorkspaceProjectionRoot string
+	DryRun                  bool
 }
 
 type Result struct {
@@ -360,12 +364,31 @@ func validateOptions(options SnapshotOptions) error {
 			return fmt.Errorf("Codex GUI history custody %s must be absolute", name)
 		}
 	}
-	if workspaceRoot := strings.TrimSpace(options.WorkspaceRoot); workspaceRoot != "" {
+	workspaceRoot := strings.TrimSpace(options.WorkspaceRoot)
+	switch options.ResetKind {
+	case "selected-slot-reset":
+		if workspaceRoot == "" {
+			return fmt.Errorf("selected-slot Codex GUI history custody requires a workspace root")
+		}
+	case "whole-prefix-reset", "manifest-shrink-retirement":
+		if workspaceRoot != "" {
+			return fmt.Errorf("%s Codex GUI history custody must remain in the global state-root boundary", options.ResetKind)
+		}
+	}
+	if workspaceRoot != "" {
 		if !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
 			return fmt.Errorf("Codex GUI history custody workspace root must be absolute and canonical")
 		}
 		if filepath.Dir(filepath.Clean(options.HostWorktree)) != workspaceRoot {
 			return fmt.Errorf("Codex GUI history custody workspace root must own the selected worktree parent")
+		}
+	}
+	if projectionRoot := workspaceProjectionRoot(options); projectionRoot != "" {
+		if !filepath.IsAbs(projectionRoot) || filepath.Clean(projectionRoot) != projectionRoot {
+			return fmt.Errorf("Codex GUI history projection workspace root must be absolute and canonical")
+		}
+		if filepath.Dir(filepath.Clean(options.HostWorktree)) != projectionRoot {
+			return fmt.Errorf("Codex GUI history projection workspace root must own the selected worktree parent")
 		}
 		if _, err := workspaceProjectedCodexRoot(options); err != nil {
 			return err
@@ -871,9 +894,12 @@ func rolloutRelativePath(raw string, options SnapshotOptions) (string, error) {
 }
 
 func workspaceProjectedCodexRoot(options SnapshotOptions) (string, error) {
-	workspaceRoot := filepath.Clean(strings.TrimSpace(options.WorkspaceRoot))
-	if workspaceRoot == "." {
+	workspaceRoot := strings.TrimSpace(workspaceProjectionRoot(options))
+	if workspaceRoot == "" {
 		return "", nil
+	}
+	if !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
+		return "", fmt.Errorf("Codex GUI history projection workspace root must be absolute and canonical")
 	}
 	hostHome := filepath.Clean(strings.TrimSpace(options.HostHome))
 	relativeHome, err := filepath.Rel(workspaceRoot, hostHome)
@@ -881,9 +907,16 @@ func workspaceProjectedCodexRoot(options SnapshotOptions) (string, error) {
 		relativeHome == "." ||
 		relativeHome == ".." ||
 		strings.HasPrefix(relativeHome, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("Codex GUI history custody host home must be contained by the selected workspace root")
+		return "", fmt.Errorf("Codex GUI history host home must be contained by the projection workspace root")
 	}
 	return filepath.Join("/workspaces/dev", relativeHome, ".codex"), nil
+}
+
+func workspaceProjectionRoot(options SnapshotOptions) string {
+	if root := strings.TrimSpace(options.WorkspaceProjectionRoot); root != "" {
+		return root
+	}
+	return strings.TrimSpace(options.WorkspaceRoot)
 }
 
 func ensurePrivateDirectory(path string) error {
