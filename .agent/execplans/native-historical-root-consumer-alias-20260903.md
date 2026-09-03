@@ -47,15 +47,31 @@ aliases and every existing custody failure continue to refuse before mutation.
   normal wait, overflow, explicit cancellation, and idle expiry, with the
   leader exiting during cleanup and immediate post-return PID checks.
 - [x] (2026-09-03) Ran final focused cached Go tests, formatting inspection, and
-  `git diff --check`; record results below. No commit, publication, deployment,
-  or station mutation is authorized.
+  `git diff --check`; record results below. At that review checkpoint, no
+  publication or deployment had yet occurred.
+- [x] (2026-09-03) Published the reviewed alias repair, repinned and centrally
+  deployed it, then observed the first live Meowlnir reconstruction canary fail
+  before lane mutation because the shared historical registration directory
+  legitimately contains more than the arbitrary limit of 32 entries.
+- [x] (2026-09-03) Replaced the shared-directory scan with target-shaped
+  selection: the bounded exact forward link for a present worktree, or at most
+  three exact branch-domain probes for an absent worktree. Added more-than-32,
+  unrelated-symlink, empty-lane-common, equal/divergent-branch, and detached
+  lane-registration regressions.
+- [x] (2026-09-03) Completed independent static review and focused verification;
+  both approved the target-shaped correction without another rebuild.
+- [ ] (2026-09-03) Publish the correction, repin/deploy through the central Nix
+  lane, and run one bounded Meowlnir lane-2 canary.
 
 ## Context
 
 `cli/devctl/internal/commands/nativecmd/native_slot_reset.go` derives three
-possible common repositories, scans each `worktrees/*/gitdir` for the exact
-surplus registration, then validates the worktree's forward `.git` link and
-the metadata `commondir`. Historical source-created worktrees can contain
+possible common repositories. Lane-local and transitional legacy repositories
+retain their small, owned reverse-registration scans. Historical-root custody
+now selects a present worktree through its own exact bounded `.git` pointer,
+then validates the selected reverse link and metadata `commondir`; an absent
+worktree is classified by its exact branch across those three common domains.
+Historical source-created worktrees can contain
 absolute consumer paths such as `/workspaces/dev/...` even when the same
 manifest declares `/home/bayesartre/dev/...` as the host geometry. The two
 namespaces are already paired by `HostWorktreeRoot`/`SandboxWorktreeRoot` and
@@ -100,14 +116,20 @@ validation of equivalent path spelling before those checks.
   filter refuses before status. Common `info/exclude`, the copied
   `config.worktree`, sparse config checks, and index flags retain or validate
   the semantics used by custody.
-- Historical metadata enumeration is capped, pointer/config/index inputs have
-  separate byte limits, Git stdout is capped, and fixed command deadlines kill
-  the complete process group. Lock inspection names only exact common,
-  metadata, and branch transaction surfaces; it never walks the object store.
-- Multiple registrations, wrong lanes, foreign common repositories, malformed
-  pointers, symlinks, non-regular nodes, locks, dirty/ahead/wrong-branch state,
-  and failed current-remote proof continue to refuse before history capture or
-  durable mutation.
+- The shared historical registration directory is never enumerated. Selected
+  pointer/config/index inputs have separate byte limits, selected metadata
+  enumeration is capped, Git stdout is capped, and fixed command deadlines
+  kill the complete process group. Lock inspection names only exact active
+  common, selected metadata, and branch transaction surfaces; it never walks
+  the object store.
+- Any active branch domain not contained in the same fresh current remote, or
+  disagreement with known lane/legacy registration metadata, wrong lanes,
+  foreign common repositories,
+  malformed selected pointers, selected symlinks/non-regular nodes/locks,
+  dirty/ahead/wrong-branch present worktrees, and failed current-remote proof
+  refuse before history capture or durable mutation. An absent stale historical
+  reverse registration—including detached HEAD or metadata locks—is inert but
+  remains byte-preserved because no root-common path is staged or removed.
 - Historical common metadata and refs remain byte-identical; only the existing
   typed transaction may retire the surplus worktree, home, and state.
 
@@ -135,6 +157,20 @@ validation of equivalent path spelling before those checks.
   pointer text, unbounded scans/output, and config-dependent status execution.
   Treat all four as blocking and retain the correction regressions in the
   owning packages.
+- 2026-09-03: The live fleet disproved 32 registrations as a valid bound: the
+  analogous controller root has 48 legitimate entries. Do not raise the cap.
+  Treat the present forward link as the sole active historical-registration
+  selector; for an absent worktree, protect surviving exact branches across all
+  three source-derived common domains. When multiple domains survive, every
+  discovered commit must be independently contained in one fresh current base;
+  equal or divergent contained branch copies are migration residue and select
+  the preserved historical domain when present. A sole historical branch keeps
+  the same proof; sole lane/legacy domains keep their existing local-base
+  check. Unselected/stale historical metadata is
+  protected but inert because this transaction never mutates it. A known
+  lane/legacy registration remains active custody because it claims the
+  selected physical worktree; the lane common is additionally a reset
+  candidate, so disagreement with branch selection fails closed.
 
 ## Verification
 
@@ -161,6 +197,24 @@ changed-file hygiene:
     git diff --check
 
 Focused correction results so far:
+
+    go test ./internal/commands/nativecmd -run 'TestNativeSlotManifestShrink(HistoricalRoot|TransitionRejects)' -count=1
+    ok devkit/cli/devctl/internal/commands/nativecmd 11.956s
+
+    go test ./internal/commands/nativecmd -count=1
+    ok devkit/cli/devctl/internal/commands/nativecmd 16.630s
+
+    go test ./internal/worktrees -count=1
+    ok devkit/cli/devctl/internal/worktrees 6.529s
+
+    go test ./internal/commands/nativecmd -run 'TestNativeSlotManifestShrinkHistoricalRootAbsentWorktreeStillUsesBranchCustody' -count=1
+    ok devkit/cli/devctl/internal/commands/nativecmd 1.585s
+
+    git diff --check
+    # no output
+
+    gofmt -d cli/devctl/internal/commands/nativecmd/native_slot_manifest_shrink_root_common_test.go cli/devctl/internal/commands/nativecmd/native_slot_reset.go
+    # no output
 
     go test ./internal/commands/nativecmd -run '^TestNativeSlotManifestShrinkHistoricalRootConsumerAlias' -count=1
     ok devkit/cli/devctl/internal/commands/nativecmd 3.748s
@@ -224,8 +278,10 @@ Focused correction results so far:
   regular `ORIG_HEAD` and `config.worktree`; real `logs`; and empty real `refs`
   directory trees. One regular exact `sharedindex.<40-or-64-lowercase-hex>` is
   supported. Pointers are capped at 4 KiB, config at 1 MiB, copied index files
-  at 64 MiB, metadata entries at 16, historical registrations at 32, and Git
-  stdout at 4 MiB. Extra companions, non-empty worktree-specific refs,
+  at 64 MiB, selected metadata entries at 16, and Git stdout at 4 MiB. The
+  historical registration directory is not enumerated; absent-worktree
+  selection probes only the three exact source-derived common repositories.
+  Extra companions, non-empty worktree-specific refs,
   repo-local includes/effectful filters, and unknown top-level state refuse.
 - Residual risk is limited to an otherwise safe historical worktree using one
   of those deliberately unsupported Git metadata forms; it will fail closed

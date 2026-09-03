@@ -907,13 +907,12 @@ type nativeSlotManifestShrinkPathPair struct {
 }
 
 const (
-	nativeSlotManifestShrinkPointerFileLimit            = 4 << 10
-	nativeSlotManifestShrinkConfigFileLimit             = 1 << 20
-	nativeSlotManifestShrinkMetadataViewIndexFileLimit  = 64 << 20
-	nativeSlotManifestShrinkMetadataViewEntryLimit      = 16
-	nativeSlotManifestShrinkMetadataViewCompanionLimit  = 1
-	nativeSlotManifestShrinkHistoricalRegistrationLimit = 32
-	nativeSlotManifestShrinkGitOutputLimit              = 4 << 20
+	nativeSlotManifestShrinkPointerFileLimit           = 4 << 10
+	nativeSlotManifestShrinkConfigFileLimit            = 1 << 20
+	nativeSlotManifestShrinkMetadataViewIndexFileLimit = 64 << 20
+	nativeSlotManifestShrinkMetadataViewEntryLimit     = 16
+	nativeSlotManifestShrinkMetadataViewCompanionLimit = 1
+	nativeSlotManifestShrinkGitOutputLimit             = 4 << 20
 )
 
 func (pair nativeSlotManifestShrinkPathPair) matchesRaw(candidate, relativeBase string) bool {
@@ -1153,7 +1152,6 @@ func nativeSlotManifestShrinkMatchingMetadata(
 	commonDir string,
 	allowedQuarantines map[string]bool,
 	gitFile nativeSlotManifestShrinkPathPair,
-	entryLimit int,
 ) (string, error) {
 	expectedGitFile := filepath.Join(filepath.Clean(spec.HostWorktree), ".git")
 	if gitFile.host == "" {
@@ -1163,19 +1161,7 @@ func nativeSlotManifestShrinkMatchingMetadata(
 		return "", fmt.Errorf("surplus native slot %d host Git link identity is inconsistent", spec.ID.Index)
 	}
 	metadataRoot := filepath.Join(commonDir, "worktrees")
-	var entries []os.DirEntry
-	var err error
-	if entryLimit > 0 {
-		entries, err = readNativeSlotManifestShrinkDirectoryEntries(
-			"historical-root worktree registration directory",
-			metadataRoot,
-			entryLimit,
-		)
-	} else {
-		// Lane and legacy classification retain their existing behavior. Only the
-		// newly admitted historical-root topology receives the bounded scan.
-		entries, err = os.ReadDir(metadataRoot)
-	}
+	entries, err := os.ReadDir(metadataRoot)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("enumerate surplus native slot Git metadata %s: %w", metadataRoot, err)
 	}
@@ -1218,6 +1204,94 @@ func nativeSlotManifestShrinkMatchingMetadata(
 		}
 	}
 	return matchingMetadata, nil
+}
+
+func nativeSlotManifestShrinkHistoricalMetadataFromWorktree(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+	common nativeSlotManifestShrinkPathPair,
+	gitFile nativeSlotManifestShrinkPathPair,
+) (string, error) {
+	data, err := readNativeSlotManifestShrinkRegularFile(
+		fmt.Sprintf("surplus native slot %d Git link", spec.ID.Index),
+		gitFile.host,
+		nativeSlotManifestShrinkPointerFileLimit,
+	)
+	if err != nil {
+		return "", fmt.Errorf("read surplus native slot %d Git link %s: %w", spec.ID.Index, gitFile.host, err)
+	}
+	line, err := parseNativeSlotManifestShrinkPointerLine(
+		fmt.Sprintf("surplus native slot %d Git link", spec.ID.Index),
+		data,
+	)
+	if err != nil || !strings.HasPrefix(line, "gitdir: ") {
+		return "", fmt.Errorf("surplus native slot %d Git link has an unsafe target", spec.ID.Index)
+	}
+	selectedMetadata := strings.TrimPrefix(line, "gitdir: ")
+	metadataName := filepath.Base(selectedMetadata)
+	if metadataName == "" || metadataName == "." || metadataName == ".." {
+		return "", fmt.Errorf("surplus native slot %d Git link has an unsafe target", spec.ID.Index)
+	}
+	if strings.HasPrefix(metadataName, fmt.Sprintf(".devkit-reset-%s-agent%d-", manifest.Project, spec.ID.Index)) {
+		return "", fmt.Errorf("surplus native slot %d has Git transaction quarantine residue selected by its Git link", spec.ID.Index)
+	}
+	metadata, err := nativeSlotManifestShrinkHistoricalMetadataPair(
+		common,
+		filepath.Join(common.host, "worktrees", metadataName),
+	)
+	if err != nil {
+		return "", err
+	}
+	if !metadata.matchesRaw(selectedMetadata, filepath.Dir(gitFile.host)) {
+		return "", fmt.Errorf("surplus native slot %d Git link does not select its exact registered metadata", spec.ID.Index)
+	}
+	metadataInfo, err := os.Lstat(metadata.host)
+	if err != nil {
+		return "", fmt.Errorf("surplus native slot %d Git link does not select its exact registered metadata: %w", spec.ID.Index, err)
+	}
+	if !metadataInfo.IsDir() || metadataInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("historical surplus native slot registered Git metadata must be a real directory: %s", metadata.host)
+	}
+	return metadata.host, nil
+}
+
+func nativeSlotManifestShrinkCommonBranchOID(
+	commonDir string,
+	branchRef string,
+	operation *nativeSlotManifestShrinkRemoteProofOperation,
+) (string, error) {
+	capture := func(args ...string) (string, execx.Result, error) {
+		if operation != nil {
+			return operation.capture(args...)
+		}
+		output, result := execx.Capture(context.Background(), gitauthority.Executable(), args...)
+		return output, result, nil
+	}
+	_, result, captureErr := capture("--git-dir", commonDir, "show-ref", "--verify", "--quiet", branchRef)
+	if captureErr != nil {
+		return "", fmt.Errorf("inspect exact native slot branch domain %s in %s: %w", branchRef, commonDir, captureErr)
+	}
+	switch result.Code {
+	case 0:
+		output, resolveResult, resolveErr := capture("--git-dir", commonDir, "rev-parse", "--verify", branchRef+"^{commit}")
+		if resolveErr != nil || resolveResult.Code != 0 {
+			return "", fmt.Errorf("resolve exact native slot branch domain %s in %s", branchRef, commonDir)
+		}
+		oid, parseErr := parseNativeSlotManifestShrinkPointerLine("native slot branch object ID", []byte(output))
+		if parseErr != nil || (len(oid) != 40 && len(oid) != 64) {
+			return "", fmt.Errorf("exact native slot branch domain %s in %s returned an invalid object ID", branchRef, commonDir)
+		}
+		for _, character := range oid {
+			if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+				return "", fmt.Errorf("exact native slot branch domain %s in %s returned an invalid object ID", branchRef, commonDir)
+			}
+		}
+		return oid, nil
+	case 1:
+		return "", nil
+	default:
+		return "", fmt.Errorf("inspect exact native slot branch domain %s in %s: git exit %d", branchRef, commonDir, result.Code)
+	}
 }
 
 func validateNativeSlotManifestShrinkLegacyCommon(
@@ -1369,14 +1443,14 @@ func resolveNativeSlotManifestShrinkCommon(
 		host: filepath.Join(filepath.Clean(spec.HostWorktree), ".git"),
 	}
 	if laneExists {
-		laneMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, laneCommonDir, allowedQuarantines, hostGitFile, 0)
+		laneMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, laneCommonDir, allowedQuarantines, hostGitFile)
 		if err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
 	}
 	legacyMetadata := ""
 	if legacyExists {
-		legacyMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, legacyCommonDir, allowedQuarantines, hostGitFile, 0)
+		legacyMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, legacyCommonDir, allowedQuarantines, hostGitFile)
 		if err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
@@ -1393,16 +1467,182 @@ func resolveNativeSlotManifestShrinkCommon(
 		if err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
-		historicalRootMetadata, err = nativeSlotManifestShrinkMatchingMetadata(
-			manifest,
-			spec,
-			historicalRootCommonDir,
-			allowedQuarantines,
-			historicalGitFile,
-			nativeSlotManifestShrinkHistoricalRegistrationLimit,
-		)
-		if err != nil {
-			return nativeSlotManifestShrinkCommon{}, err
+		if worktreeExists && laneMetadata == "" && legacyMetadata == "" {
+			historicalRootMetadata, err = nativeSlotManifestShrinkHistoricalMetadataFromWorktree(
+				manifest,
+				spec,
+				nativeSlotManifestShrinkPathPair{
+					host:     historicalRootCommonDir,
+					consumer: historicalRootConsumerCommonDir,
+				},
+				historicalGitFile,
+			)
+			if err != nil {
+				return nativeSlotManifestShrinkCommon{}, err
+			}
+		}
+	}
+	if !worktreeExists {
+		branchRef := "refs/heads/" + strings.TrimSpace(manifest.BranchPrefix) + strconv.Itoa(spec.ID.Index)
+		if laneMetadata != "" {
+			return nativeSlotManifestShrinkCommon{
+				kind:             nativeSlotManifestShrinkCommonLane,
+				path:             laneCommonDir,
+				matchingMetadata: laneMetadata,
+			}, nil
+		}
+		if laneExists {
+			for _, lockPath := range []string{
+				filepath.Join(laneCommonDir, "index.lock"),
+				filepath.Join(laneCommonDir, "packed-refs.lock"),
+				filepath.Join(laneCommonDir, "shallow.lock"),
+				filepath.Join(laneCommonDir, filepath.FromSlash(branchRef)+".lock"),
+			} {
+				if _, lockErr := os.Lstat(lockPath); lockErr == nil {
+					return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+						"surplus native slot %d has Git transaction lock residue %s",
+						spec.ID.Index,
+						lockPath,
+					)
+				} else if !errors.Is(lockErr, os.ErrNotExist) {
+					return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+						"inspect surplus native slot Git transaction lock %s: %w",
+						lockPath,
+						lockErr,
+					)
+				}
+			}
+		}
+		type branchDomain struct {
+			kind     nativeSlotManifestShrinkCommonKind
+			path     string
+			metadata string
+			oid      string
+		}
+		var domains []branchDomain
+		for _, candidate := range []struct {
+			kind     nativeSlotManifestShrinkCommonKind
+			path     string
+			metadata string
+			exists   bool
+		}{
+			{kind: nativeSlotManifestShrinkCommonLane, path: laneCommonDir, metadata: laneMetadata, exists: laneExists},
+			{kind: nativeSlotManifestShrinkCommonLegacy, path: legacyCommonDir, metadata: legacyMetadata, exists: legacyExists},
+			{kind: nativeSlotManifestShrinkCommonHistoricalRoot, path: historicalRootCommonDir, exists: historicalRootExists},
+		} {
+			if !candidate.exists {
+				continue
+			}
+			oid, branchErr := nativeSlotManifestShrinkCommonBranchOID(candidate.path, branchRef, operation)
+			if branchErr != nil {
+				return nativeSlotManifestShrinkCommon{}, branchErr
+			}
+			if oid != "" {
+				domains = append(domains, branchDomain{
+					kind:     candidate.kind,
+					path:     candidate.path,
+					metadata: candidate.metadata,
+					oid:      oid,
+				})
+			}
+		}
+		if len(domains) > 0 {
+			if operation == nil && len(domains) > 1 {
+				return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+					"surplus native slot %d competing branch-domain resolution requires one operation-bound current-remote proof",
+					spec.ID.Index,
+				)
+			}
+			preferred := domains[0]
+			for _, domain := range domains[1:] {
+				if domain.kind == nativeSlotManifestShrinkCommonHistoricalRoot ||
+					(domain.kind == nativeSlotManifestShrinkCommonLegacy && preferred.kind == nativeSlotManifestShrinkCommonLane) {
+					preferred = domain
+				}
+			}
+			if operation != nil && len(domains) > 1 {
+				baseBranch := strings.TrimSpace(manifest.BaseBranch)
+				if baseBranch == "" {
+					return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+						"surplus native slot %d cannot prove branch domains without a source-derived base branch",
+						spec.ID.Index,
+					)
+				}
+				proof, proofErr := operation.ensureRemoteProof(manifest, preferred.path, baseBranch, expectedOrigin)
+				if proofErr != nil {
+					return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+						"prepare current-remote proof for surplus native slot %d branch domains: %w",
+						spec.ID.Index,
+						proofErr,
+					)
+				}
+				for _, domain := range domains {
+					_, result, captureErr := operation.capture(
+						"--git-dir", proof.proofDir,
+						"merge-base", "--is-ancestor", domain.oid, proof.remoteOID,
+					)
+					if captureErr != nil || result.Code != 0 {
+						return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+							"surplus native slot %d branch %s from %s is not contained in current %s at %s",
+							spec.ID.Index,
+							domain.oid,
+							domain.path,
+							proof.remoteRef,
+							proof.remoteOID,
+						)
+					}
+				}
+			}
+			domains = []branchDomain{preferred}
+		}
+		var metadataDomains []branchDomain
+		for _, candidate := range []branchDomain{
+			{kind: nativeSlotManifestShrinkCommonLane, path: laneCommonDir, metadata: laneMetadata},
+			{kind: nativeSlotManifestShrinkCommonLegacy, path: legacyCommonDir, metadata: legacyMetadata},
+		} {
+			if candidate.metadata != "" {
+				metadataDomains = append(metadataDomains, candidate)
+			}
+		}
+		if len(metadataDomains) > 1 ||
+			(len(metadataDomains) == 1 && len(domains) == 1 && metadataDomains[0].kind != domains[0].kind) {
+			return nativeSlotManifestShrinkCommon{}, fmt.Errorf(
+				"surplus native slot %d has competing registration and branch common Git repositories",
+				spec.ID.Index,
+			)
+		}
+		selectedDomains := domains
+		if len(selectedDomains) == 0 {
+			selectedDomains = metadataDomains
+		}
+		if len(selectedDomains) == 1 {
+			domain := selectedDomains[0]
+			switch domain.kind {
+			case nativeSlotManifestShrinkCommonLane:
+				return nativeSlotManifestShrinkCommon{
+					kind:             domain.kind,
+					path:             domain.path,
+					matchingMetadata: domain.metadata,
+				}, nil
+			case nativeSlotManifestShrinkCommonLegacy:
+				if err := validateNativeSlotManifestShrinkLegacyCommon(manifest, domain.path, expectedOrigin); err != nil {
+					return nativeSlotManifestShrinkCommon{}, err
+				}
+				return nativeSlotManifestShrinkCommon{
+					kind:             domain.kind,
+					path:             domain.path,
+					matchingMetadata: domain.metadata,
+				}, nil
+			case nativeSlotManifestShrinkCommonHistoricalRoot:
+				if err := validateNativeSlotManifestShrinkHistoricalRootCommon(manifest, domain.path, expectedOrigin, operation); err != nil {
+					return nativeSlotManifestShrinkCommon{}, err
+				}
+				return nativeSlotManifestShrinkCommon{
+					kind:         domain.kind,
+					path:         domain.path,
+					consumerPath: historicalRootConsumerCommonDir,
+				}, nil
+			}
 		}
 	}
 	registrations := 0
@@ -1435,15 +1675,18 @@ func resolveNativeSlotManifestShrinkCommon(
 		}, nil
 	}
 	if historicalRootMetadata != "" {
-		metadata, err := nativeSlotManifestShrinkHistoricalMetadataPair(
-			nativeSlotManifestShrinkPathPair{
-				host:     historicalRootCommonDir,
-				consumer: historicalRootConsumerCommonDir,
-			},
-			historicalRootMetadata,
-		)
-		if err != nil {
-			return nativeSlotManifestShrinkCommon{}, err
+		metadata := nativeSlotManifestShrinkPathPair{}
+		if historicalRootMetadata != "" {
+			metadata, err = nativeSlotManifestShrinkHistoricalMetadataPair(
+				nativeSlotManifestShrinkPathPair{
+					host:     historicalRootCommonDir,
+					consumer: historicalRootConsumerCommonDir,
+				},
+				historicalRootMetadata,
+			)
+			if err != nil {
+				return nativeSlotManifestShrinkCommon{}, err
+			}
 		}
 		if err := validateNativeSlotManifestShrinkHistoricalRootCommon(manifest, historicalRootCommonDir, expectedOrigin, operation); err != nil {
 			return nativeSlotManifestShrinkCommon{}, err

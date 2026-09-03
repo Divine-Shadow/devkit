@@ -233,9 +233,36 @@ func prepareHistoricalRootCommonNativeSlotConsumerAlias(
 	return fixture, rootCommon, metadata, consumerRoot
 }
 
+func materializeHistoricalRootCommonUnrelatedRegistrationNoise(t *testing.T, rootCommon string) {
+	t.Helper()
+	metadataRoot := filepath.Join(rootCommon, "worktrees")
+	unrelatedRoot := t.TempDir()
+	for index := 0; index < 64; index++ {
+		unrelated := filepath.Join(metadataRoot, fmt.Sprintf("unrelated-%02d", index))
+		if err := os.Mkdir(unrelated, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(unrelated, "gitdir"),
+			[]byte(filepath.Join(unrelatedRoot, fmt.Sprintf("worktree-%02d", index), ".git")+"\n"),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unrelatedTarget := filepath.Join(unrelatedRoot, "symlink-target")
+	if err := os.Mkdir(unrelatedTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(unrelatedTarget, filepath.Join(metadataRoot, "unrelated-symlink")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNativeSlotManifestShrinkHistoricalRootConsumerAlias(t *testing.T) {
 	fixture, rootCommon, metadata, consumerRoot := prepareHistoricalRootCommonNativeSlotConsumerAlias(t)
 	surplus := fixture.actual.Agents[2]
+	materializeHistoricalRootCommonUnrelatedRegistrationNoise(t, rootCommon)
 
 	wantConsumerCommon := filepath.Join(consumerRoot, fixture.actual.Repo, ".git")
 	wantConsumerMetadata := filepath.Join(wantConsumerCommon, "worktrees", filepath.Base(metadata))
@@ -284,6 +311,141 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAlias(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), ".devkit-native-shrink-proof-") {
 			t.Fatalf("historical consumer-alias retirement left proof scratch %s", filepath.Join(scratchParent, entry.Name()))
 		}
+	}
+}
+
+func TestNativeSlotManifestShrinkHistoricalRootAbsentWorktreeStillUsesBranchCustody(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		makeAhead        bool
+		makeLane         bool
+		copyBranchToLane bool
+		copyBaseToLane   bool
+		detachedLane     bool
+		advanceRemote    bool
+		want             string
+	}{
+		{name: "contained"},
+		{name: "ahead-with-empty-lane-common", makeAhead: true, makeLane: true, want: "not contained in current refs/heads/main"},
+		{name: "equal-branch-migration-residue", makeLane: true, copyBranchToLane: true},
+		{name: "contained-divergent-branch-domains", makeLane: true, copyBaseToLane: true, advanceRemote: true},
+		{name: "ahead-divergent-branch-domain", makeAhead: true, makeLane: true, copyBaseToLane: true, want: "is not contained in current refs/heads/main"},
+		{name: "detached-lane-registration", makeLane: true, detachedLane: true, want: "registered Git worktree metadata without its worktree"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newNativeSlotManifestShrinkFixture(t, 3, 2)
+			git, rootCommon := prepareHistoricalRootCommonNativeSlotManifestShrinkGit(t, &fixture)
+			surplus := fixture.actual.Agents[2]
+			laneCommon := ""
+			materializeNativeSlotDisposableState(t, surplus)
+			if test.makeAhead {
+				runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "config", "user.email", "absent-worktree-test@example.invalid")
+				runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "config", "user.name", "absent-worktree-test")
+				if err := os.WriteFile(filepath.Join(surplus.HostWorktree, "tracked.txt"), []byte("ahead\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "add", "tracked.txt")
+				runNativeSlotManifestShrinkGit(t, git, "-C", surplus.HostWorktree, "commit", "-m", "ahead")
+			}
+			if test.advanceRemote {
+				publisher := filepath.Join(t.TempDir(), "publisher")
+				runNativeSlotManifestShrinkGit(t, git, "clone", fixture.origin, publisher)
+				runNativeSlotManifestShrinkGit(t, git, "-C", publisher, "config", "user.email", "absent-worktree-test@example.invalid")
+				runNativeSlotManifestShrinkGit(t, git, "-C", publisher, "config", "user.name", "absent-worktree-test")
+				if err := os.WriteFile(filepath.Join(publisher, "remote-only.txt"), []byte("remote\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runNativeSlotManifestShrinkGit(t, git, "-C", publisher, "add", "remote-only.txt")
+				runNativeSlotManifestShrinkGit(t, git, "-C", publisher, "commit", "-m", "remote advance")
+				runNativeSlotManifestShrinkGit(t, git, "-C", publisher, "push", "origin", fixture.actual.BaseBranch)
+			}
+			if test.makeLane {
+				var err error
+				laneCommon, err = nativeSlotManifestShrinkCommonDir(fixture.actual, surplus)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(laneCommon), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				runNativeSlotManifestShrinkGit(t, git, "init", "--bare", laneCommon)
+				runNativeSlotManifestShrinkGit(t, git, "--git-dir", laneCommon, "remote", "add", "origin", fixture.origin)
+				marker := fmt.Sprintf(
+					"schema=devkit/native-owned-common-repository/v2\nrepository=%s\norigin=%s\nlane=agent%d\n",
+					fixture.actual.Repo,
+					fixture.origin,
+					surplus.ID.Index,
+				)
+				if err := os.WriteFile(filepath.Join(laneCommon, "devkit-owned-common"), []byte(marker), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runNativeSlotManifestShrinkGit(t, git, "--git-dir", laneCommon, "fetch", "origin", fixture.actual.BaseBranch)
+				if test.copyBranchToLane {
+					branchRef := "refs/heads/" + fixture.actual.BranchPrefix + fmt.Sprint(surplus.ID.Index)
+					command := exec.Command(git, "--git-dir", rootCommon, "rev-parse", branchRef)
+					command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+					oid, err := command.CombinedOutput()
+					if err != nil {
+						t.Fatalf("read historical branch for competing-domain fixture: %v\n%s", err, oid)
+					}
+					runNativeSlotManifestShrinkGit(t, git, "--git-dir", laneCommon, "update-ref", branchRef, strings.TrimSpace(string(oid)))
+				}
+				if test.copyBaseToLane {
+					branchRef := "refs/heads/" + fixture.actual.BranchPrefix + fmt.Sprint(surplus.ID.Index)
+					runNativeSlotManifestShrinkGit(t, git, "--git-dir", laneCommon, "update-ref", branchRef, "FETCH_HEAD")
+				}
+				if test.detachedLane {
+					if err := os.RemoveAll(surplus.HostWorktree); err != nil {
+						t.Fatal(err)
+					}
+					runNativeSlotManifestShrinkGit(t, git, "--git-dir", laneCommon, "worktree", "add", "--detach", surplus.HostWorktree, "FETCH_HEAD")
+				}
+			}
+			if err := os.RemoveAll(surplus.HostWorktree); err != nil {
+				t.Fatal(err)
+			}
+			materializeHistoricalRootCommonUnrelatedRegistrationNoise(t, rootCommon)
+			rootBefore := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon))
+			var laneBefore map[string]historicalRootCommonSnapshotEntry
+			if test.want != "" && laneCommon != "" {
+				laneBefore = snapshotHistoricalRootCommonTree(t, laneCommon)
+			}
+
+			_, err := reconcileNativeSlotManifestShrink(
+				fixture.path,
+				fixture.expected,
+				fixture.opts,
+				historicalRootCommonResetOptions(fixture),
+				false,
+			)
+			if test.want != "" {
+				if err == nil || !strings.Contains(err.Error(), test.want) {
+					t.Fatalf("absent worktree rejection = %v, want %q", err, test.want)
+				}
+				if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.actual) {
+					t.Fatal("absent ahead-worktree refusal changed manifest")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("retire absent historical worktree: %v", err)
+				}
+				if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
+					t.Fatal("absent historical worktree retirement did not install expected manifest")
+				}
+			}
+			if got := snapshotHistoricalRootCommonTree(t, filepath.Dir(rootCommon)); !reflect.DeepEqual(got, rootBefore) {
+				t.Fatal("absent historical worktree retirement changed shared root Git state")
+			}
+			if laneBefore != nil {
+				if got := snapshotHistoricalRootCommonTree(t, laneCommon); !reflect.DeepEqual(got, laneBefore) {
+					t.Fatal("absent historical worktree refusal changed lane common Git state")
+				}
+			} else if laneCommon != "" {
+				if _, err := os.Lstat(laneCommon); !os.IsNotExist(err) {
+					t.Fatalf("successful absent historical retirement retained disposable lane common %s: %v", laneCommon, err)
+				}
+			}
+		})
 	}
 }
 
@@ -341,7 +503,7 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRefusesHostileGeomet
 		},
 		{
 			name: "reverse-alias-dotdot",
-			want: "without its package-owned common Git repository",
+			want: "reverse Git link does not select its exact worktree",
 			mutate: func(t *testing.T, fixture nativeSlotManifestShrinkFixture, _ string, metadata string, _ string) {
 				sandboxWorktree := fixture.actual.Agents[2].SandboxWorktree
 				hostile := sandboxWorktree + "/../" + filepath.Base(sandboxWorktree) + "/.git"
@@ -352,7 +514,7 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRefusesHostileGeomet
 		},
 		{
 			name: "reverse-mismatch",
-			want: "without its package-owned common Git repository",
+			want: "reverse Git link does not select its exact worktree",
 			mutate: func(t *testing.T, fixture nativeSlotManifestShrinkFixture, _ string, metadata string, _ string) {
 				wrongConsumerRoot := filepath.Join(t.TempDir(), "wrong-consumer", "dev")
 				wrongGitFile := filepath.Join(
@@ -373,18 +535,6 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAliasRefusesHostileGeomet
 			mutate: func(t *testing.T, _ nativeSlotManifestShrinkFixture, _ string, metadata string, _ string) {
 				if err := os.Truncate(filepath.Join(metadata, "gitdir"), nativeSlotManifestShrinkPointerFileLimit+1); err != nil {
 					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "registration-directory-over-limit",
-			want: "exceeds the bounded entry limit",
-			mutate: func(t *testing.T, _ nativeSlotManifestShrinkFixture, rootCommon string, _ string, _ string) {
-				metadataRoot := filepath.Join(rootCommon, "worktrees")
-				for index := 0; index < nativeSlotManifestShrinkHistoricalRegistrationLimit; index++ {
-					if err := os.Mkdir(filepath.Join(metadataRoot, fmt.Sprintf("overflow-%02d", index)), 0o700); err != nil {
-						t.Fatal(err)
-					}
 				}
 			},
 		},

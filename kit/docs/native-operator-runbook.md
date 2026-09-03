@@ -109,7 +109,22 @@ Manifest shrink accepts that layout only when the common path is derived
 exactly from the manifest's worktree root and repository, all paths and
 forward/reverse links are canonical, the source origin and `agentN` branch are
 exact, and the branch commit is contained in a fresh current remote base. The
-protected source checkout's potentially stale `refs/remotes/origin/<base>` is
+present worktree's bounded, exact `.git` pointer is the sole selector for its
+active historical registration; unrelated and stale entries in the shared
+registration directory are not enumerated or treated as lane custody. When the
+worktree is already absent, the exact `agentN` branch is resolved across the
+lane, legacy, and historical common repositories instead. When more than one
+branch domain survives, every discovered commit must be independently contained
+in the same freshly fetched current base; equal or divergent contained copies
+are safe migration residue, and the preserved historical domain is preferred
+when present. A sole historical domain receives that same current-remote proof,
+while sole lane/legacy domains retain their existing local-base check. A stale
+historical registration and its metadata locks are
+then protected but inert: this transaction neither reads through nor mutates
+that metadata, and it still protects any surviving branch through the same
+current-remote containment proof.
+
+The protected source checkout's potentially stale `refs/remotes/origin/<base>` is
 not ancestry or setup-tree authority for this historical layout. One
 operation-bound proof fetches the base once for the full surplus suffix and
 uses that exact fetched commit for both checks through package-owned Git/SSH

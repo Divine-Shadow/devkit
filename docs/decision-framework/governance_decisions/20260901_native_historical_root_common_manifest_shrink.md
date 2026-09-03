@@ -37,15 +37,18 @@ authority: only ignored residue beneath the four separately declared directory
 roots `.bsp`, `logs`, `project/target`, and `target` may leave with the leased
 slot. Every other ignored path, every non-ignored untracked path, and every
 submodule, unexpected tracked, non-stage-zero, assume-unchanged, skip-worktree,
-sparse, duplicate, unsafe, symlinked, wrong-origin, wrong-branch, ahead, or
-competing-registration state fails closed.
+sparse, unsafe selected registration, symlinked, wrong-origin,
+wrong-branch, ahead, or competing active custody domain fails closed. When the
+worktree is already absent, stale historical reverse-registration metadata is
+protected but inert because this transaction never stages or removes it; any
+surviving exact `agentN` branch remains active custody and is still checked.
 
 ## safety_checks
 
 - Derive `<host-root>/<repo>/.git` only as
   `filepath.Dir(manifest.host_worktree_root)/manifest.repo/.git`.
-- Require canonical real host root/worktree/metadata paths, exact
-  forward/reverse registration and `commondir`, one registration domain, a
+- Require canonical real host root/worktree/selected-metadata paths, exact
+  forward/reverse registration and `commondir`, one active custody domain, a
   non-bare root, and exact declared origin. A pointer may use only its exact
   manifest-derived sandbox counterpart: the consumer worktree must preserve
   the host `agentN/<repo>` suffix, the consumer common must be derived from the
@@ -57,6 +60,21 @@ competing-registration state fails closed.
   when it exactly equals the derived `filepath.Rel` spelling. Arbitrary aliases
   remain outside authority, and all protected reads and mutations use canonical
   real host paths.
+- For a present worktree, use its bounded exact `.git` pointer as the sole
+  active-registration selector and inspect only that selected metadata. Do not
+  enumerate unrelated entries in the shared historical registration
+  directory. For an absent worktree, resolve the exact `agentN` branch across
+  the three manifest-derived lane, legacy, and historical common repositories;
+  when more than one branch domain survives, require every discovered commit to
+  be independently contained in one freshly fetched current base and refuse
+  disagreement with any known lane/legacy registration. Equal or divergent
+  contained branch copies are migration residue; prefer the historical domain
+  when present, then the non-disposable legacy domain. A sole historical branch
+  receives the same current-remote proof; sole lane/legacy domains retain their
+  existing local-base check. A
+  detached or wrong-branch stale historical registration is
+  inert but byte-preserved with its objects because no shared-root path is a
+  transaction candidate.
 - Require exact `agentN` and containment in a freshly fetched current remote
   base. For historical-root only, that fetched commit is the sole ancestry and
   setup-tree authority; never consult or advance the protected checkout's
@@ -76,11 +94,13 @@ competing-registration state fails closed.
   non-empty worktree-specific refs, symlink/non-regular required files, and
   every other unsupported metadata shape rather than copying an unbounded
   metadata tree.
-- Cap historical registration and per-worktree metadata enumeration, pointer,
-  config, and index reads, plus every captured Git stdout stream. Fixed Git
-  deadlines and output overflow terminate the complete process group. Inspect
-  only exact common, metadata, and branch lock surfaces; never recursively walk
-  the shared object store.
+- Avoid historical registration-directory enumeration entirely. Cap the
+  selected per-worktree metadata enumeration, pointer, config, and index reads,
+  plus every captured Git stdout stream. Absent-worktree domain selection uses
+  at most three exact `show-ref --verify --quiet` calls. Fixed Git deadlines and
+  output overflow terminate the complete process group. Inspect only exact
+  active common, selected metadata, and branch lock surfaces; never recursively
+  walk the shared object store.
 - Before status, parse bounded common and worktree config without following
   includes and refuse any repo-local `include`/`includeIf` or clean/process
   filter. Preserve common `info/exclude` through the validated commondir, copy
@@ -99,8 +119,9 @@ competing-registration state fails closed.
 ## rollback_plan
 
 Revert the source commit before deployment. The implementation performs no
-automatic migration until a shrink encounters one exact historical
-registration, and the transaction never changes the shared root checkout.
+automatic migration until a shrink encounters an exact historical worktree or
+surviving exact historical branch, and the transaction never changes the
+shared root checkout.
 Already retired worktree/home/state remain intentionally disposable; their
 stale historical registration/ref remains for a later whole-prefix reset.
 
@@ -114,3 +135,19 @@ roots; operation-bound remote-containment proof; transaction recovery tests;
 and operator documentation. It does not authorize live deployment,
 station-local repair, general root-common or alias acceptance, Product source
 changes, manual Git cleanup, or whole-prefix reset.
+
+## amendment_2026_09_03
+
+A live source-derived reconstruction found 48 legitimate historical
+registrations in one shared root, exceeding the implementation's arbitrary
+limit of 32. Raising that count would only defer the same failure and keep
+unrelated shared state in a lane-local custody decision. The implementation now
+uses target-shaped selection: the present worktree's exact forward link, or a
+bounded three-common exact-branch resolution when the worktree is absent.
+Unselected and stale historical metadata, including its lock or detached-HEAD
+state, remains protected for later whole-prefix custody but cannot authorize or
+block deletion of a different physical lane because manifest shrink never
+mutates shared-root metadata or refs. Known lane/legacy reverse registrations
+remain authoritative because they claim the selected physical worktree; the
+lane common is additionally a reset candidate. Disagreement with branch-domain
+selection refuses before mutation.
