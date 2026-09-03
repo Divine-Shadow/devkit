@@ -57,6 +57,10 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [Historical-root Consumer Alias Manifest Shrink](execplans/native-historical-root-consumer-alias-20260903.md):
+  admit only the exact manifest-derived sandbox spelling of an otherwise exact
+  historical-root linked-worktree registration while preserving every custody
+  refusal and the read-only shared-root boundary.
 - [Whole-reset GUI History Projection Repair](execplans/whole-reset-gui-history-projection-20260903.md):
   preserve GUI-projected rollout references during whole-prefix reset without
   moving custody into the reset-owned lane.

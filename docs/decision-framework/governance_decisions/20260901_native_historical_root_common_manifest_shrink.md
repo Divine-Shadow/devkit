@@ -44,9 +44,19 @@ competing-registration state fails closed.
 
 - Derive `<host-root>/<repo>/.git` only as
   `filepath.Dir(manifest.host_worktree_root)/manifest.repo/.git`.
-- Require canonical real root/worktree/metadata paths, exact forward/reverse
-  registration and `commondir`, one registration domain, a non-bare root, and
-  exact declared origin.
+- Require canonical real host root/worktree/metadata paths, exact
+  forward/reverse registration and `commondir`, one registration domain, a
+  non-bare root, and exact declared origin. A pointer may use only its exact
+  manifest-derived sandbox counterpart: the consumer worktree must preserve
+  the host `agentN/<repo>` suffix, the consumer common must be derived from the
+  declared sandbox worktree root, and forward metadata must preserve the exact
+  `worktrees/<entry>` suffix. This is a lexical bijection; the bwrap-only
+  consumer namespace need not exist in the host shrink process. Absolute
+  pointer text is compared byte-for-byte without trimming or cleaning (apart
+  from one conventional final LF), and a relative host pointer is valid only
+  when it exactly equals the derived `filepath.Rel` spelling. Arbitrary aliases
+  remain outside authority, and all protected reads and mutations use canonical
+  real host paths.
 - Require exact `agentN` and containment in a freshly fetched current remote
   base. For historical-root only, that fetched commit is the sole ancestry and
   setup-tree authority; never consult or advance the protected checkout's
@@ -57,7 +67,25 @@ competing-registration state fails closed.
   and a proof-local alternates file that reads the historical object store. It
   fetches the base once for the complete suffix and never writes the shared
   root. Its source-derived scratch boundary must be canonical and disjoint from
-  every protected/shared root.
+  every protected/shared root. Host-side Git custody commands use a second
+  fresh minimal view for each custody pass inside that same owned scratch:
+  bounded copies of `HEAD`, `index`, optional `config.worktree`, and at most one
+  exact SHA-1/SHA-256-named split-index companion, with only scratch `commondir`
+  and `gitdir` rewritten to host spellings. The protected metadata is never
+  changed. The compatibility set rejects extra split-index companions,
+  non-empty worktree-specific refs, symlink/non-regular required files, and
+  every other unsupported metadata shape rather than copying an unbounded
+  metadata tree.
+- Cap historical registration and per-worktree metadata enumeration, pointer,
+  config, and index reads, plus every captured Git stdout stream. Fixed Git
+  deadlines and output overflow terminate the complete process group. Inspect
+  only exact common, metadata, and branch lock surfaces; never recursively walk
+  the shared object store.
+- Before status, parse bounded common and worktree config without following
+  includes and refuse any repo-local `include`/`includeIf` or clean/process
+  filter. Preserve common `info/exclude` through the validated commondir, copy
+  `config.worktree`, and separately refuse sparse config or index flags so the
+  scratch view cannot silently weaken custody semantics or execute a filter.
 - Reject all Git locks, non-ignored untracked files, gitlinks/submodules, and
   tracked dirt outside the exact source declaration. Prove a stage-zero index
   with no assume-unchanged, skip-worktree, sparse-checkout, or unmerged state
@@ -79,9 +107,10 @@ stale historical registration/ref remains for a later whole-prefix reset.
 ## decision_scope
 
 This decision covers only native manifest shrink of exact obsolete linked
-worktrees registered beneath the source root checkout, the three source-owned
-setup-layer files, four disposable generated-residue directory roots,
-operation-bound remote-containment proof, transaction recovery tests, and
-operator documentation. It does not authorize live deployment, station-local
-repair, general root-common acceptance, Product source changes, manual Git
-cleanup, or whole-prefix reset.
+worktrees registered beneath the source root checkout, including exact
+bijective host/sandbox spellings already declared by the manifest; the three
+source-owned setup-layer files; four disposable generated-residue directory
+roots; operation-bound remote-containment proof; transaction recovery tests;
+and operator documentation. It does not authorize live deployment,
+station-local repair, general root-common or alias acceptance, Product source
+changes, manual Git cleanup, or whole-prefix reset.

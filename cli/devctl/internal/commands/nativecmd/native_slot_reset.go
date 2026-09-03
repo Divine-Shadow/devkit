@@ -893,9 +893,178 @@ const (
 )
 
 type nativeSlotManifestShrinkCommon struct {
-	kind             nativeSlotManifestShrinkCommonKind
-	path             string
-	matchingMetadata string
+	kind                     nativeSlotManifestShrinkCommonKind
+	path                     string
+	consumerPath             string
+	matchingMetadata         string
+	matchingConsumerMetadata string
+	consumerGitFile          string
+}
+
+type nativeSlotManifestShrinkPathPair struct {
+	host     string
+	consumer string
+}
+
+const (
+	nativeSlotManifestShrinkPointerFileLimit            = 4 << 10
+	nativeSlotManifestShrinkConfigFileLimit             = 1 << 20
+	nativeSlotManifestShrinkMetadataViewIndexFileLimit  = 64 << 20
+	nativeSlotManifestShrinkMetadataViewEntryLimit      = 16
+	nativeSlotManifestShrinkMetadataViewCompanionLimit  = 1
+	nativeSlotManifestShrinkHistoricalRegistrationLimit = 32
+	nativeSlotManifestShrinkGitOutputLimit              = 4 << 20
+)
+
+func (pair nativeSlotManifestShrinkPathPair) matchesRaw(candidate, relativeBase string) bool {
+	// Consumer spellings are bwrap targets and may not exist host-side. Absolute
+	// pointers therefore match only the exact manifest-derived byte spelling.
+	// A relative pointer remains valid only when it is exactly Git's canonical
+	// relative spelling for the host path; do not Clean caller-controlled text.
+	if filepath.IsAbs(candidate) {
+		return candidate == pair.host || (pair.consumer != "" && candidate == pair.consumer)
+	}
+	relativeHost, err := filepath.Rel(relativeBase, pair.host)
+	return err == nil && candidate == relativeHost
+}
+
+func parseNativeSlotManifestShrinkPointerLine(label string, data []byte) (string, error) {
+	if len(data) != 0 && data[len(data)-1] == '\n' {
+		data = data[:len(data)-1]
+	}
+	value := string(data)
+	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("%s must contain one exact path line", label)
+	}
+	return value, nil
+}
+
+func readNativeSlotManifestShrinkRegularFile(label string, path string, limit int64) ([]byte, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("%s has an invalid read limit", label)
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("%s must be a regular non-symlink file: %s", label, path)
+		}
+		return nil, fmt.Errorf("read %s %s: %w", label, path, err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("read %s %s: invalid file descriptor", label, path)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s %s: %w", label, path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must be a regular non-symlink file: %s", label, path)
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("%s exceeds the bounded metadata-view file limit: %s", label, path)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s %s: %w", label, path, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds the bounded metadata-view file limit while reading: %s", label, path)
+	}
+	if int64(len(data)) != info.Size() {
+		return nil, fmt.Errorf("%s changed while reading: %s", label, path)
+	}
+	return data, nil
+}
+
+func readNativeSlotManifestShrinkDirectoryEntries(label, directory string, maxEntries int) ([]os.DirEntry, error) {
+	if maxEntries < 0 {
+		return nil, fmt.Errorf("%s has an invalid entry limit", label)
+	}
+	fd, err := syscall.Open(directory, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("%s must be a real non-symlink directory: %s", label, directory)
+		}
+		return nil, fmt.Errorf("open %s %s: %w", label, directory, err)
+	}
+	directoryHandle := os.NewFile(uintptr(fd), directory)
+	if directoryHandle == nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("open %s %s: invalid file descriptor", label, directory)
+	}
+	defer directoryHandle.Close()
+	entries, readErr := directoryHandle.ReadDir(maxEntries + 1)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return nil, fmt.Errorf("enumerate %s %s: %w", label, directory, readErr)
+	}
+	if len(entries) > maxEntries {
+		return nil, fmt.Errorf("%s exceeds the bounded entry limit %d: %s", label, maxEntries, directory)
+	}
+	return entries, nil
+}
+
+func nativeSlotManifestShrinkHistoricalConsumerCommonDir(manifest nativeagent.Manifest) (string, error) {
+	repo := strings.TrimSpace(manifest.Repo)
+	if repo == "" || repo == "." || filepath.IsAbs(repo) || filepath.Clean(repo) != repo || filepath.Base(repo) != repo {
+		return "", fmt.Errorf("surplus native slot repository identity is unsafe: %q", manifest.Repo)
+	}
+	root := strings.TrimSpace(manifest.SandboxWorktreeRoot)
+	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return "", fmt.Errorf("surplus native slot sandbox worktree root must be absolute and canonical")
+	}
+	return filepath.Join(filepath.Dir(root), repo, ".git"), nil
+}
+
+func nativeSlotManifestShrinkHistoricalGitFilePair(
+	manifest nativeagent.Manifest,
+	spec nativeagent.Spec,
+) (nativeSlotManifestShrinkPathPair, error) {
+	hostRoot := strings.TrimSpace(manifest.HostWorktreeRoot)
+	consumerRoot := strings.TrimSpace(manifest.SandboxWorktreeRoot)
+	hostWorktree := strings.TrimSpace(spec.HostWorktree)
+	consumerWorktree := strings.TrimSpace(spec.SandboxWorktree)
+	for label, candidate := range map[string]string{
+		"host worktree root":     hostRoot,
+		"consumer worktree root": consumerRoot,
+		"host worktree":          hostWorktree,
+		"consumer worktree":      consumerWorktree,
+	} {
+		if candidate == "" || !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate {
+			return nativeSlotManifestShrinkPathPair{}, fmt.Errorf("surplus native slot %s must be absolute and canonical", label)
+		}
+	}
+	relativeWorktree, err := filepath.Rel(hostRoot, hostWorktree)
+	if err != nil || relativeWorktree == "." || relativeWorktree == ".." || filepath.IsAbs(relativeWorktree) ||
+		strings.HasPrefix(relativeWorktree, ".."+string(filepath.Separator)) {
+		return nativeSlotManifestShrinkPathPair{}, fmt.Errorf("surplus native slot host worktree is outside its declared root")
+	}
+	expectedRelative := filepath.Join(fmt.Sprintf("agent%d", spec.ID.Index), strings.TrimSpace(manifest.Repo))
+	if relativeWorktree != expectedRelative || consumerWorktree != filepath.Join(consumerRoot, relativeWorktree) {
+		return nativeSlotManifestShrinkPathPair{}, fmt.Errorf("surplus native slot host and consumer worktrees are not an exact manifest-derived pair")
+	}
+	return nativeSlotManifestShrinkPathPair{
+		host:     filepath.Join(hostWorktree, ".git"),
+		consumer: filepath.Join(consumerWorktree, ".git"),
+	}, nil
+}
+
+func nativeSlotManifestShrinkHistoricalMetadataPair(
+	common nativeSlotManifestShrinkPathPair,
+	metadata string,
+) (nativeSlotManifestShrinkPathPair, error) {
+	relativeMetadata, err := filepath.Rel(common.host, metadata)
+	if err != nil || relativeMetadata == "." || relativeMetadata == ".." || filepath.IsAbs(relativeMetadata) ||
+		strings.HasPrefix(relativeMetadata, ".."+string(filepath.Separator)) ||
+		filepath.Dir(relativeMetadata) != "worktrees" {
+		return nativeSlotManifestShrinkPathPair{}, fmt.Errorf("historical surplus native slot metadata is outside its exact common repository")
+	}
+	return nativeSlotManifestShrinkPathPair{
+		host:     metadata,
+		consumer: filepath.Join(common.consumer, relativeMetadata),
+	}, nil
 }
 
 func nativeSlotManifestShrinkCommonDir(manifest nativeagent.Manifest, spec nativeagent.Spec) (string, error) {
@@ -983,10 +1152,30 @@ func nativeSlotManifestShrinkMatchingMetadata(
 	spec nativeagent.Spec,
 	commonDir string,
 	allowedQuarantines map[string]bool,
+	gitFile nativeSlotManifestShrinkPathPair,
+	entryLimit int,
 ) (string, error) {
 	expectedGitFile := filepath.Join(filepath.Clean(spec.HostWorktree), ".git")
+	if gitFile.host == "" {
+		gitFile.host = expectedGitFile
+	}
+	if gitFile.host != expectedGitFile {
+		return "", fmt.Errorf("surplus native slot %d host Git link identity is inconsistent", spec.ID.Index)
+	}
 	metadataRoot := filepath.Join(commonDir, "worktrees")
-	entries, err := os.ReadDir(metadataRoot)
+	var entries []os.DirEntry
+	var err error
+	if entryLimit > 0 {
+		entries, err = readNativeSlotManifestShrinkDirectoryEntries(
+			"historical-root worktree registration directory",
+			metadataRoot,
+			entryLimit,
+		)
+	} else {
+		// Lane and legacy classification retain their existing behavior. Only the
+		// newly admitted historical-root topology receives the bounded scan.
+		entries, err = os.ReadDir(metadataRoot)
+	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("enumerate surplus native slot Git metadata %s: %w", metadataRoot, err)
 	}
@@ -1006,15 +1195,22 @@ func nativeSlotManifestShrinkMatchingMetadata(
 		if !metadataInfo.IsDir() || metadataInfo.Mode()&os.ModeSymlink != 0 {
 			return "", fmt.Errorf("surplus native slot Git metadata must be a real directory: %s", metadata)
 		}
-		gitdirData, readErr := os.ReadFile(filepath.Join(metadata, "gitdir"))
+		gitdirData, readErr := readNativeSlotManifestShrinkRegularFile(
+			fmt.Sprintf("surplus native slot %d reverse Git link", spec.ID.Index),
+			filepath.Join(metadata, "gitdir"),
+			nativeSlotManifestShrinkPointerFileLimit,
+		)
 		if readErr != nil {
 			return "", fmt.Errorf("read surplus native slot Git metadata %s: %w", metadata, readErr)
 		}
-		candidate := filepath.Clean(strings.TrimSpace(string(gitdirData)))
-		if !filepath.IsAbs(candidate) {
-			candidate = filepath.Clean(filepath.Join(metadata, candidate))
+		candidate, parseErr := parseNativeSlotManifestShrinkPointerLine(
+			fmt.Sprintf("surplus native slot %d reverse Git link", spec.ID.Index),
+			gitdirData,
+		)
+		if parseErr != nil {
+			return "", parseErr
 		}
-		if candidate == expectedGitFile {
+		if gitFile.matchesRaw(candidate, metadata) {
 			if matchingMetadata != "" {
 				return "", fmt.Errorf("surplus native slot %d has multiple registered Git worktree metadata entries", spec.ID.Index)
 			}
@@ -1169,22 +1365,42 @@ func resolveNativeSlotManifestShrinkCommon(
 		return nativeSlotManifestShrinkCommon{}, err
 	}
 	laneMetadata := ""
+	hostGitFile := nativeSlotManifestShrinkPathPair{
+		host: filepath.Join(filepath.Clean(spec.HostWorktree), ".git"),
+	}
 	if laneExists {
-		laneMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, laneCommonDir, allowedQuarantines)
+		laneMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, laneCommonDir, allowedQuarantines, hostGitFile, 0)
 		if err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
 	}
 	legacyMetadata := ""
 	if legacyExists {
-		legacyMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, legacyCommonDir, allowedQuarantines)
+		legacyMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, legacyCommonDir, allowedQuarantines, hostGitFile, 0)
 		if err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
 	}
 	historicalRootMetadata := ""
+	historicalRootConsumerCommonDir := ""
+	historicalGitFile := hostGitFile
 	if historicalRootExists {
-		historicalRootMetadata, err = nativeSlotManifestShrinkMatchingMetadata(manifest, spec, historicalRootCommonDir, allowedQuarantines)
+		historicalRootConsumerCommonDir, err = nativeSlotManifestShrinkHistoricalConsumerCommonDir(manifest)
+		if err != nil {
+			return nativeSlotManifestShrinkCommon{}, err
+		}
+		historicalGitFile, err = nativeSlotManifestShrinkHistoricalGitFilePair(manifest, spec)
+		if err != nil {
+			return nativeSlotManifestShrinkCommon{}, err
+		}
+		historicalRootMetadata, err = nativeSlotManifestShrinkMatchingMetadata(
+			manifest,
+			spec,
+			historicalRootCommonDir,
+			allowedQuarantines,
+			historicalGitFile,
+			nativeSlotManifestShrinkHistoricalRegistrationLimit,
+		)
 		if err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
@@ -1219,13 +1435,26 @@ func resolveNativeSlotManifestShrinkCommon(
 		}, nil
 	}
 	if historicalRootMetadata != "" {
+		metadata, err := nativeSlotManifestShrinkHistoricalMetadataPair(
+			nativeSlotManifestShrinkPathPair{
+				host:     historicalRootCommonDir,
+				consumer: historicalRootConsumerCommonDir,
+			},
+			historicalRootMetadata,
+		)
+		if err != nil {
+			return nativeSlotManifestShrinkCommon{}, err
+		}
 		if err := validateNativeSlotManifestShrinkHistoricalRootCommon(manifest, historicalRootCommonDir, expectedOrigin, operation); err != nil {
 			return nativeSlotManifestShrinkCommon{}, err
 		}
 		return nativeSlotManifestShrinkCommon{
-			kind:             nativeSlotManifestShrinkCommonHistoricalRoot,
-			path:             historicalRootCommonDir,
-			matchingMetadata: historicalRootMetadata,
+			kind:                     nativeSlotManifestShrinkCommonHistoricalRoot,
+			path:                     historicalRootCommonDir,
+			consumerPath:             historicalRootConsumerCommonDir,
+			matchingMetadata:         historicalRootMetadata,
+			matchingConsumerMetadata: metadata.consumer,
+			consumerGitFile:          historicalGitFile.consumer,
 		}, nil
 	}
 	if worktreeExists {
@@ -1242,34 +1471,71 @@ func validateNativeSlotManifestShrinkWorktreeLink(
 	common nativeSlotManifestShrinkCommon,
 ) error {
 	gitFile := filepath.Join(filepath.Clean(spec.HostWorktree), ".git")
-	data, err := os.ReadFile(gitFile)
+	data, err := readNativeSlotManifestShrinkRegularFile(
+		fmt.Sprintf("surplus native slot %d Git link", spec.ID.Index),
+		gitFile,
+		nativeSlotManifestShrinkPointerFileLimit,
+	)
 	if err != nil {
 		return fmt.Errorf("read surplus native slot %d Git link %s: %w", spec.ID.Index, gitFile, err)
 	}
-	line := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(line, "gitdir: ") || strings.ContainsAny(line, "\r\n\x00") {
+	line, err := parseNativeSlotManifestShrinkPointerLine(
+		fmt.Sprintf("surplus native slot %d Git link", spec.ID.Index),
+		data,
+	)
+	if err != nil || !strings.HasPrefix(line, "gitdir: ") {
 		return fmt.Errorf("surplus native slot %d Git link has an unsafe target", spec.ID.Index)
 	}
-	metadata := filepath.Clean(strings.TrimSpace(strings.TrimPrefix(line, "gitdir: ")))
-	if !filepath.IsAbs(metadata) {
-		metadata = filepath.Clean(filepath.Join(filepath.Dir(gitFile), metadata))
+	selectedMetadata := strings.TrimPrefix(line, "gitdir: ")
+	metadata := nativeSlotManifestShrinkPathPair{
+		host:     common.matchingMetadata,
+		consumer: common.matchingConsumerMetadata,
 	}
-	if metadata != common.matchingMetadata {
+	if !metadata.matchesRaw(selectedMetadata, filepath.Dir(gitFile)) {
 		return fmt.Errorf("surplus native slot %d Git link does not select its exact registered metadata", spec.ID.Index)
 	}
-	commondirData, err := os.ReadFile(filepath.Join(metadata, "commondir"))
+	reverseData, err := readNativeSlotManifestShrinkRegularFile(
+		fmt.Sprintf("surplus native slot %d reverse Git link", spec.ID.Index),
+		filepath.Join(metadata.host, "gitdir"),
+		nativeSlotManifestShrinkPointerFileLimit,
+	)
+	if err != nil {
+		return fmt.Errorf("read surplus native slot %d reverse Git link: %w", spec.ID.Index, err)
+	}
+	reverseValue, err := parseNativeSlotManifestShrinkPointerLine(
+		fmt.Sprintf("surplus native slot %d reverse Git link", spec.ID.Index),
+		reverseData,
+	)
+	if err != nil {
+		return fmt.Errorf("surplus native slot %d reverse Git link is unsafe", spec.ID.Index)
+	}
+	worktreeGitFile := nativeSlotManifestShrinkPathPair{
+		host:     gitFile,
+		consumer: common.consumerGitFile,
+	}
+	if !worktreeGitFile.matchesRaw(reverseValue, metadata.host) {
+		return fmt.Errorf("surplus native slot %d reverse Git link does not select its exact worktree", spec.ID.Index)
+	}
+	commondirData, err := readNativeSlotManifestShrinkRegularFile(
+		fmt.Sprintf("surplus native slot %d commondir", spec.ID.Index),
+		filepath.Join(metadata.host, "commondir"),
+		nativeSlotManifestShrinkPointerFileLimit,
+	)
 	if err != nil {
 		return fmt.Errorf("read surplus native slot %d commondir: %w", spec.ID.Index, err)
 	}
-	commondirValue := strings.TrimSpace(string(commondirData))
-	if commondirValue == "" || strings.ContainsAny(commondirValue, "\r\n\x00") {
+	commondirValue, err := parseNativeSlotManifestShrinkPointerLine(
+		fmt.Sprintf("surplus native slot %d commondir", spec.ID.Index),
+		commondirData,
+	)
+	if err != nil {
 		return fmt.Errorf("surplus native slot %d commondir is unsafe", spec.ID.Index)
 	}
-	resolvedCommon := filepath.Clean(commondirValue)
-	if !filepath.IsAbs(resolvedCommon) {
-		resolvedCommon = filepath.Clean(filepath.Join(metadata, resolvedCommon))
+	commonPath := nativeSlotManifestShrinkPathPair{
+		host:     common.path,
+		consumer: common.consumerPath,
 	}
-	if resolvedCommon != common.path {
+	if !commonPath.matchesRaw(commondirValue, metadata.host) {
 		return fmt.Errorf("surplus native slot %d commondir does not select its exact package-owned common Git repository", spec.ID.Index)
 	}
 	return nil
@@ -1354,6 +1620,12 @@ type nativeSlotManifestShrinkRemoteProofOperation struct {
 	transportCleanup func() error
 	transportStarted bool
 	proofs           map[string]nativeSlotManifestShrinkRemoteProof
+	nextWorktreeView int
+}
+
+type nativeSlotManifestShrinkHistoricalWorktreeView struct {
+	gitDir   string
+	worktree string
 }
 
 func newNativeSlotManifestShrinkRemoteProofOperation(
@@ -1363,7 +1635,9 @@ func newNativeSlotManifestShrinkRemoteProofOperation(
 		return nil, fmt.Errorf("native manifest shrink accepts exactly one remote-proof configuration")
 	}
 	if len(configs) == 0 {
-		return &nativeSlotManifestShrinkRemoteProofOperation{proofs: map[string]nativeSlotManifestShrinkRemoteProof{}}, nil
+		return &nativeSlotManifestShrinkRemoteProofOperation{
+			proofs: map[string]nativeSlotManifestShrinkRemoteProof{},
+		}, nil
 	}
 	config := configs[0]
 	config.ProtectedRoots = append([]string(nil), config.ProtectedRoots...)
@@ -1508,7 +1782,207 @@ func (operation *nativeSlotManifestShrinkRemoteProofOperation) capture(args ...s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	output, result := execx.Capture(ctx, name, invocationArgs...)
+	output, result := execx.CaptureManaged(
+		ctx,
+		execx.ManagedPolicy{TerminationGrace: 250 * time.Millisecond},
+		nativeSlotManifestShrinkGitOutputLimit,
+		name,
+		invocationArgs...,
+	)
+	if errors.Is(result.Err, execx.ErrOutputLimit) ||
+		errors.Is(result.Err, context.DeadlineExceeded) ||
+		errors.Is(result.Err, context.Canceled) {
+		return output, result, result.Err
+	}
+	return output, result, nil
+}
+
+func nativeSlotManifestShrinkSharedIndexName(name string) bool {
+	const prefix = "sharedindex."
+	digest := strings.TrimPrefix(name, prefix)
+	if digest == name || (len(digest) != 40 && len(digest) != 64) {
+		return false
+	}
+	for _, character := range digest {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func (operation *nativeSlotManifestShrinkRemoteProofOperation) newHistoricalWorktreeView(
+	commonDir string,
+	metadataDir string,
+	worktree string,
+) (nativeSlotManifestShrinkHistoricalWorktreeView, error) {
+	// Git validates the consumer-valued reverse gitdir even when GIT_COMMON_DIR
+	// and --work-tree point at the host. Build one fresh, bounded metadata view
+	// per custody pass so Git reads that pass's HEAD/index/config while only the
+	// two pointers are normalized inside operation-owned scratch.
+	if operation.scratchDir == "" || operation.scratchInfo == nil {
+		return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree custody requires the owned operation scratch")
+	}
+	currentScratch, err := os.Lstat(operation.scratchDir)
+	if err != nil || !currentScratch.IsDir() || currentScratch.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(operation.scratchInfo, currentScratch) {
+		return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree custody scratch identity changed at %s", operation.scratchDir)
+	}
+	entries, err := readNativeSlotManifestShrinkDirectoryEntries(
+		"historical-root worktree metadata view source",
+		metadataDir,
+		nativeSlotManifestShrinkMetadataViewEntryLimit,
+	)
+	if err != nil {
+		return nativeSlotManifestShrinkHistoricalWorktreeView{}, err
+	}
+	present := map[string]bool{}
+	var indexCompanions []string
+	for _, entry := range entries {
+		name := entry.Name()
+		candidate := filepath.Join(metadataDir, name)
+		info, statErr := os.Lstat(candidate)
+		if statErr != nil {
+			return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("inspect historical-root worktree metadata entry %s: %w", candidate, statErr)
+		}
+		switch {
+		case name == "HEAD" || name == "index" || name == "commondir" || name == "gitdir" || name == "config.worktree":
+			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata entry must be a regular non-symlink file: %s", candidate)
+			}
+			present[name] = true
+		case name == "ORIG_HEAD":
+			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata entry must be a regular non-symlink file: %s", candidate)
+			}
+		case name == "logs":
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata logs must be a real directory: %s", candidate)
+			}
+		case name == "refs":
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata refs must be a real directory: %s", candidate)
+			}
+			if _, refsErr := readNativeSlotManifestShrinkDirectoryEntries(
+				"historical-root worktree-specific refs",
+				candidate,
+				0,
+			); refsErr != nil {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, refsErr
+			}
+		case nativeSlotManifestShrinkSharedIndexName(name):
+			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root shared index must be a regular non-symlink file: %s", candidate)
+			}
+			indexCompanions = append(indexCompanions, name)
+			if len(indexCompanions) > nativeSlotManifestShrinkMetadataViewCompanionLimit {
+				return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata has more than one supported split-index companion")
+			}
+		default:
+			return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata has unsupported custody state: %s", candidate)
+		}
+	}
+	for _, required := range []string{"HEAD", "index", "commondir", "gitdir"} {
+		if !present[required] {
+			return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("historical-root worktree metadata is missing required %s", required)
+		}
+	}
+
+	operation.nextWorktreeView++
+	viewDir := filepath.Join(operation.scratchDir, fmt.Sprintf("worktree-%d.git", operation.nextWorktreeView))
+	if err := os.Mkdir(viewDir, 0o700); err != nil {
+		return nativeSlotManifestShrinkHistoricalWorktreeView{}, fmt.Errorf("create historical-root worktree metadata view %s: %w", viewDir, err)
+	}
+	writeViewFile := func(name string, data []byte) error {
+		viewPath := filepath.Join(viewDir, name)
+		file, openErr := os.OpenFile(viewPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if openErr != nil {
+			return fmt.Errorf("create historical-root worktree metadata view file %s: %w", viewPath, openErr)
+		}
+		if _, writeErr := file.Write(data); writeErr != nil {
+			_ = file.Close()
+			return fmt.Errorf("write historical-root worktree metadata view file %s: %w", viewPath, writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return fmt.Errorf("close historical-root worktree metadata view file %s: %w", viewPath, closeErr)
+		}
+		return nil
+	}
+	copyFiles := append([]string{"HEAD", "index"}, indexCompanions...)
+	if present["config.worktree"] {
+		copyFiles = append(copyFiles, "config.worktree")
+	}
+	for _, name := range copyFiles {
+		limit := int64(nativeSlotManifestShrinkMetadataViewIndexFileLimit)
+		if name == "HEAD" {
+			limit = nativeSlotManifestShrinkPointerFileLimit
+		} else if name == "config.worktree" {
+			limit = nativeSlotManifestShrinkConfigFileLimit
+		}
+		data, readErr := readNativeSlotManifestShrinkRegularFile(
+			"historical-root worktree metadata "+name,
+			filepath.Join(metadataDir, name),
+			limit,
+		)
+		if readErr != nil {
+			return nativeSlotManifestShrinkHistoricalWorktreeView{}, readErr
+		}
+		if err := writeViewFile(name, data); err != nil {
+			return nativeSlotManifestShrinkHistoricalWorktreeView{}, err
+		}
+	}
+	if err := writeViewFile("commondir", []byte(commonDir+"\n")); err != nil {
+		return nativeSlotManifestShrinkHistoricalWorktreeView{}, err
+	}
+	if err := writeViewFile("gitdir", []byte(filepath.Join(worktree, ".git")+"\n")); err != nil {
+		return nativeSlotManifestShrinkHistoricalWorktreeView{}, err
+	}
+	return nativeSlotManifestShrinkHistoricalWorktreeView{gitDir: viewDir, worktree: worktree}, nil
+}
+
+func (operation *nativeSlotManifestShrinkRemoteProofOperation) captureHistoricalWorktree(
+	view nativeSlotManifestShrinkHistoricalWorktreeView,
+	args ...string,
+) (string, execx.Result, error) {
+	for label, candidate := range map[string]string{
+		"Git metadata view": view.gitDir,
+		"worktree":          view.worktree,
+	} {
+		if candidate == "" || !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate {
+			return "", execx.Result{Code: 1}, fmt.Errorf("historical-root %s must be absolute and canonical: %s", label, candidate)
+		}
+	}
+	if operation.scratchDir == "" || !pathWithin(view.gitDir, operation.scratchDir) {
+		return "", execx.Result{Code: 1}, fmt.Errorf("historical-root Git metadata view is outside the owned operation scratch")
+	}
+	gitArgs := []string{
+		"--no-optional-locks",
+		"--git-dir", view.gitDir,
+		"--work-tree", view.worktree,
+	}
+	gitArgs = append(gitArgs, args...)
+	name, invocationArgs, err := wtx.NativeSourceGitInvocation(
+		operation.config.RequirePackageSourceExecutables,
+		operation.config.GitSSHCommand,
+		gitArgs...,
+	)
+	if err != nil {
+		return "", execx.Result{Code: 1, Err: err}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, result := execx.CaptureManaged(
+		ctx,
+		execx.ManagedPolicy{TerminationGrace: 250 * time.Millisecond},
+		nativeSlotManifestShrinkGitOutputLimit,
+		name,
+		invocationArgs...,
+	)
+	if errors.Is(result.Err, execx.ErrOutputLimit) ||
+		errors.Is(result.Err, context.DeadlineExceeded) ||
+		errors.Is(result.Err, context.Canceled) {
+		return output, result, result.Err
+	}
 	return output, result, nil
 }
 
@@ -1653,6 +2127,7 @@ func requireNativeSlotManifestShrinkCurrentRemoteContainment(
 
 func requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 	spec nativeagent.Spec,
+	view nativeSlotManifestShrinkHistoricalWorktreeView,
 	proof nativeSlotManifestShrinkRemoteProof,
 	generatedSetupLayerFiles []string,
 	disposableGeneratedResidueRoots []string,
@@ -1670,8 +2145,8 @@ func requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 		return fmt.Errorf("historical-root retirement requires one operation-bound current-remote proof")
 	}
 	worktree := filepath.Clean(spec.HostWorktree)
-	index, result, captureErr := operation.capture(
-		"--no-optional-locks", "-C", worktree,
+	index, result, captureErr := operation.captureHistoricalWorktree(
+		view,
 		"ls-files", "--stage", "-z",
 	)
 	if captureErr != nil || result.Code != 0 {
@@ -1696,8 +2171,8 @@ func requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 			return fmt.Errorf("surplus native slot %d has submodule custody", spec.ID.Index)
 		}
 	}
-	flags, result, captureErr := operation.capture(
-		"--no-optional-locks", "-C", worktree,
+	flags, result, captureErr := operation.captureHistoricalWorktree(
+		view,
 		"ls-files", "-v", "-z",
 	)
 	if captureErr != nil || result.Code != 0 {
@@ -1712,8 +2187,8 @@ func requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 		}
 	}
 	for _, key := range []string{"core.sparseCheckout", "core.sparseCheckoutCone"} {
-		configured, configResult, configErr := operation.capture(
-			"--no-optional-locks", "-C", worktree,
+		configured, configResult, configErr := operation.captureHistoricalWorktree(
+			view,
 			"config", "--bool", "--get", key,
 		)
 		if configErr != nil || (configResult.Code != 0 && configResult.Code != 1) {
@@ -1723,8 +2198,8 @@ func requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 			return fmt.Errorf("surplus native slot %d has sparse-checkout enabled by %s", spec.ID.Index, key)
 		}
 	}
-	status, result, captureErr := operation.capture(
-		"--no-optional-locks", "-C", worktree,
+	status, result, captureErr := operation.captureHistoricalWorktree(
+		view,
 		"status", "--porcelain=v1", "-z", "--no-renames",
 		"--untracked-files=all", "--ignored=matching", "--ignore-submodules=none",
 	)
@@ -1809,16 +2284,66 @@ func requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 	return nil
 }
 
-func requireNativeSlotManifestShrinkHistoricalRootUnlocked(spec nativeagent.Spec, commonDir string) error {
-	return filepath.WalkDir(commonDir, func(candidate string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("inspect historical root Git transaction paths for surplus native slot %d: %w", spec.ID.Index, walkErr)
+func requireNativeSlotManifestShrinkHistoricalConfigSafe(
+	spec nativeagent.Spec,
+	commonDir string,
+	metadataDir string,
+	operation *nativeSlotManifestShrinkRemoteProofOperation,
+) error {
+	if operation == nil {
+		return fmt.Errorf("historical-root retirement requires one operation-bound current-remote proof")
+	}
+	configs := []struct {
+		path     string
+		optional bool
+	}{
+		{path: filepath.Join(commonDir, "config")},
+		{path: filepath.Join(metadataDir, "config.worktree"), optional: true},
+	}
+	for _, config := range configs {
+		if config.optional {
+			if _, err := os.Lstat(config.path); errors.Is(err, os.ErrNotExist) {
+				continue
+			} else if err != nil {
+				return fmt.Errorf("inspect historical-root worktree config %s: %w", config.path, err)
+			}
 		}
-		if strings.HasSuffix(entry.Name(), ".lock") {
-			return fmt.Errorf("surplus native slot %d has shared historical-root Git transaction lock residue %s", spec.ID.Index, candidate)
+		if _, err := readNativeSlotManifestShrinkRegularFile(
+			"historical-root Git config",
+			config.path,
+			nativeSlotManifestShrinkConfigFileLimit,
+		); err != nil {
+			return err
 		}
-		return nil
-	})
+		keys, result, captureErr := operation.capture(
+			"config", "--file", config.path, "--no-includes", "--null", "--name-only", "--list",
+		)
+		if captureErr != nil || result.Code != 0 {
+			return fmt.Errorf("inspect historical-root Git config names for surplus native slot %d: git exit %d", spec.ID.Index, result.Code)
+		}
+		for _, key := range strings.Split(keys, "\x00") {
+			key = strings.ToLower(key)
+			if key == "" {
+				continue
+			}
+			if strings.HasPrefix(key, "include.") || strings.HasPrefix(key, "includeif.") {
+				return fmt.Errorf(
+					"surplus native slot %d historical-root Git config has unsupported include semantics at %s",
+					spec.ID.Index,
+					key,
+				)
+			}
+			if strings.HasPrefix(key, "filter.") &&
+				(strings.HasSuffix(key, ".clean") || strings.HasSuffix(key, ".process")) {
+				return fmt.Errorf(
+					"surplus native slot %d historical-root Git config has executable clean/process filter custody at %s",
+					spec.ID.Index,
+					key,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 type nativeSlotManifestShrinkCustodyPolicy struct {
@@ -1869,16 +2394,21 @@ func requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(
 				return err
 			}
 		}
-		if err := requireNativeSlotManifestShrinkHistoricalRootUnlocked(spec, commonDir); err != nil {
-			return err
-		}
 	}
 
-	for _, lockPath := range []string{
+	lockPaths := []string{
 		filepath.Join(commonDir, "index.lock"),
 		filepath.Join(commonDir, "packed-refs.lock"),
 		filepath.Join(commonDir, "shallow.lock"),
-	} {
+	}
+	if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
+		lockPaths = append(
+			lockPaths,
+			filepath.Join(commonDir, "config.lock"),
+			filepath.Join(commonDir, "HEAD.lock"),
+		)
+	}
+	for _, lockPath := range lockPaths {
 		if _, err := os.Lstat(lockPath); err == nil {
 			return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, lockPath)
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -1895,11 +2425,22 @@ func requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(
 		return fmt.Errorf("surplus native slot %d has registered Git worktree metadata without its worktree: %s", spec.ID.Index, matchingMetadata)
 	}
 	if matchingMetadata != "" {
-		metadataLock := filepath.Join(matchingMetadata, "index.lock")
-		if _, err := os.Lstat(metadataLock); err == nil {
-			return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, metadataLock)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect surplus native slot Git transaction lock %s: %w", metadataLock, err)
+		metadataLocks := []string{filepath.Join(matchingMetadata, "index.lock")}
+		if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
+			metadataLocks = append(
+				metadataLocks,
+				filepath.Join(matchingMetadata, "HEAD.lock"),
+				filepath.Join(matchingMetadata, "commondir.lock"),
+				filepath.Join(matchingMetadata, "gitdir.lock"),
+				filepath.Join(matchingMetadata, "locked"),
+			)
+		}
+		for _, metadataLock := range metadataLocks {
+			if _, err := os.Lstat(metadataLock); err == nil {
+				return fmt.Errorf("surplus native slot %d has Git transaction lock residue %s", spec.ID.Index, metadataLock)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect surplus native slot Git transaction lock %s: %w", metadataLock, err)
+			}
 		}
 	}
 
@@ -1990,17 +2531,51 @@ func requireNativeSlotManifestShrinkGitQuiescentWithQuarantines(
 		if err := validateNativeSlotManifestShrinkWorktreeLink(spec, common); err != nil {
 			return err
 		}
-		head, headResult, headErr := captureGit("-C", worktree, "symbolic-ref", "--quiet", "HEAD")
+		if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
+			if err := requireNativeSlotManifestShrinkHistoricalConfigSafe(
+				spec,
+				commonDir,
+				matchingMetadata,
+				policy.remoteProof,
+			); err != nil {
+				return err
+			}
+		}
+		var historicalView nativeSlotManifestShrinkHistoricalWorktreeView
+		if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
+			historicalView, err = policy.remoteProof.newHistoricalWorktreeView(
+				commonDir,
+				matchingMetadata,
+				worktree,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		var head string
+		var headResult execx.Result
+		var headErr error
+		if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
+			head, headResult, headErr = policy.remoteProof.captureHistoricalWorktree(
+				historicalView,
+				"symbolic-ref", "--quiet", "HEAD",
+			)
+		} else {
+			head, headResult, headErr = captureGit("-C", worktree, "symbolic-ref", "--quiet", "HEAD")
+		}
 		if headErr != nil || headResult.Code != 0 || strings.TrimSpace(head) != branchRef {
 			return fmt.Errorf(
-				"surplus native slot %d must be checked out on exact branch %s",
+				"surplus native slot %d must be checked out on exact branch %s (git exit %d: %v)",
 				spec.ID.Index,
 				branchRef,
+				headResult.Code,
+				headResult.Err,
 			)
 		}
 		if common.kind == nativeSlotManifestShrinkCommonHistoricalRoot {
 			if err := requireNativeSlotManifestShrinkHistoricalWorktreeCustody(
 				spec,
+				historicalView,
 				historicalProof,
 				policy.generatedSetupLayerFiles,
 				policy.disposableGeneratedResidueRoots,

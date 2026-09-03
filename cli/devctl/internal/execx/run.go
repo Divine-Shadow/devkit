@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -19,7 +20,11 @@ type Result struct {
 	Err  error
 }
 
-var ErrIdleTimeout = errors.New("command made no observable progress before its idle deadline")
+var (
+	ErrIdleTimeout                        = errors.New("command made no observable progress before its idle deadline")
+	ErrOutputLimit                        = errors.New("command stdout exceeded its capture limit")
+	errManagedCaptureProcessGroupSurvived = errors.New("managed capture process group survived forced termination")
+)
 
 type ManagedPolicy struct {
 	// IdleTimeout bounds a command only while it produces no stdout or stderr.
@@ -32,6 +37,50 @@ type ManagedPolicy struct {
 type activityWriter struct {
 	writer   io.Writer
 	activity chan<- struct{}
+}
+
+type boundedCaptureWriter struct {
+	mu       sync.Mutex
+	buffer   bytes.Buffer
+	limit    int
+	overflow bool
+	activity chan<- struct{}
+	exceeded chan<- struct{}
+}
+
+func (w *boundedCaptureWriter) Write(payload []byte) (int, error) {
+	written := len(payload)
+	w.mu.Lock()
+	remaining := w.limit - w.buffer.Len()
+	if remaining > len(payload) {
+		remaining = len(payload)
+	}
+	if remaining > 0 {
+		_, _ = w.buffer.Write(payload[:remaining])
+	}
+	if remaining < len(payload) && !w.overflow {
+		w.overflow = true
+		select {
+		case w.exceeded <- struct{}{}:
+		default:
+		}
+	}
+	w.mu.Unlock()
+	if written > 0 {
+		select {
+		case w.activity <- struct{}{}:
+		default:
+		}
+	}
+	// Pretend the entire write was consumed so the process stays observable
+	// until the managed loop terminates its complete process group.
+	return written, nil
+}
+
+func (w *boundedCaptureWriter) snapshot() (string, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String(), w.overflow
 }
 
 func (w activityWriter) Write(payload []byte) (int, error) {
@@ -121,6 +170,180 @@ func RunManaged(ctx context.Context, policy ManagedPolicy, name string, args ...
 			return managedResult(err, ErrIdleTimeout)
 		}
 	}
+}
+
+// CaptureManaged captures a bounded amount of stdout while retaining
+// RunManaged's process-group cancellation and idle-timeout guarantees. Output
+// beyond maxOutputBytes terminates the complete descendant group and reports
+// ErrOutputLimit; stderr is observed for liveness but is not retained.
+func CaptureManaged(
+	ctx context.Context,
+	policy ManagedPolicy,
+	maxOutputBytes int,
+	name string,
+	args ...string,
+) (string, Result) {
+	if maxOutputBytes < 1 {
+		return "", Result{Code: 1, Err: fmt.Errorf("capture output limit must be positive")}
+	}
+	if os.Getenv("DEVKIT_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(append([]string{name}, args...), " "))
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	grace := policy.TerminationGrace
+	if grace <= 0 {
+		grace = 2 * time.Second
+	}
+
+	activity := make(chan struct{}, 1)
+	exceeded := make(chan struct{}, 1)
+	stdout := &boundedCaptureWriter{
+		limit:    maxOutputBytes,
+		activity: activity,
+		exceeded: exceeded,
+	}
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = stdout
+	cmd.Stderr = activityWriter{writer: io.Discard, activity: activity}
+	if err := cmd.Start(); err != nil {
+		return "", Result{Code: 1, Err: err}
+	}
+
+	wait := make(chan error, 1)
+	go func() {
+		wait <- cmd.Wait()
+	}()
+
+	var idleTimer *time.Timer
+	var idle <-chan time.Time
+	if policy.IdleTimeout > 0 {
+		idleTimer = time.NewTimer(policy.IdleTimeout)
+		idle = idleTimer.C
+		defer idleTimer.Stop()
+	}
+	resetIdle := func() {
+		if idleTimer == nil {
+			return
+		}
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(policy.IdleTimeout)
+	}
+	finish := func(waitErr error, cause error) (string, Result) {
+		output, overflow := stdout.snapshot()
+		return output, managedCaptureResult(waitErr, cause, overflow)
+	}
+
+	for {
+		select {
+		case err := <-wait:
+			err = terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, err, true)
+			return finish(err, nil)
+		case <-activity:
+			resetIdle()
+		case <-exceeded:
+			err := terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, nil, false)
+			return finish(err, ErrOutputLimit)
+		case <-ctx.Done():
+			err := terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, nil, false)
+			return finish(err, ctx.Err())
+		case <-idle:
+			err := terminateManagedCaptureProcessGroup(cmd.Process.Pid, grace, wait, nil, false)
+			return finish(err, ErrIdleTimeout)
+		}
+	}
+}
+
+func terminateManagedCaptureProcessGroup(
+	pgid int,
+	grace time.Duration,
+	wait <-chan error,
+	waitErr error,
+	waited bool,
+) error {
+	if grace <= 0 {
+		grace = 2 * time.Second
+	}
+	if !managedProcessGroupExists(pgid) {
+		if !waited {
+			waitErr = <-wait
+		}
+		return waitErr
+	}
+	termErr := syscall.Kill(-pgid, syscall.SIGTERM)
+	if termErr != nil && !errors.Is(termErr, syscall.ESRCH) {
+		return errors.Join(waitErr, fmt.Errorf("terminate managed capture process group %d: %w", pgid, termErr))
+	}
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	termTimer := time.NewTimer(grace)
+	defer termTimer.Stop()
+	for {
+		if waited && !managedProcessGroupExists(pgid) {
+			return waitErr
+		}
+		select {
+		case err := <-wait:
+			waitErr = err
+			waited = true
+		case <-ticker.C:
+		case <-termTimer.C:
+			goto force
+		}
+	}
+
+force:
+	if killErr := syscall.Kill(-pgid, syscall.SIGKILL); killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+		return errors.Join(waitErr, fmt.Errorf("kill managed capture process group %d: %w", pgid, killErr))
+	}
+	proofGrace := grace
+	if proofGrace < time.Second {
+		proofGrace = time.Second
+	}
+	proofTimer := time.NewTimer(proofGrace)
+	defer proofTimer.Stop()
+	for {
+		if waited && !managedProcessGroupExists(pgid) {
+			return waitErr
+		}
+		select {
+		case err := <-wait:
+			waitErr = err
+			waited = true
+		case <-ticker.C:
+		case <-proofTimer.C:
+			if !managedProcessGroupExists(pgid) {
+				if !waited {
+					waitErr = <-wait
+				}
+				return waitErr
+			}
+			return errors.Join(
+				waitErr,
+				fmt.Errorf("%w: %d", errManagedCaptureProcessGroupSurvived, pgid),
+			)
+		}
+	}
+}
+
+func managedCaptureResult(waitErr, selectedCause error, overflow bool) Result {
+	// Once the managed loop selects a lifecycle cause, later observation of an
+	// output overflow must not relabel that deadline, cancellation, or idle
+	// expiry. A normal process completion still reports a recorded overflow.
+	if selectedCause == nil && overflow {
+		selectedCause = ErrOutputLimit
+	}
+	return managedResult(waitErr, selectedCause)
 }
 
 func managedResult(waitErr, cause error) Result {
