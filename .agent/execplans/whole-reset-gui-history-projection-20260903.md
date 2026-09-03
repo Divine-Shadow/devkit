@@ -23,7 +23,10 @@ Decision record:
   `codexhistory`/`nativecmd` tests.
 - [x] Passed the complete Devkit gate and independent review; the packaged
   sqlite-equipped test executed the new regression.
-- [ ] Publish by compare-and-swap and prove the remote ref equals the commit.
+- [x] Published the tested repair commit
+  `27b0bc51d0ec2f6b54e58d4b7f8088d864a7b93a` by compare-and-swap from
+  `7590178e8a1e5167d1a408f5ababb2f06752cc93`; the advertised remote `master`
+  read back as the exact candidate.
 - [ ] Hand the immutable revision to WSL-Nix for central deployment and one
   fresh Derpinator canary.
 
@@ -81,4 +84,7 @@ after that bounded correction, `devctl-go-tests` and all three runtime package
 checks exited zero with two jobs and two cores. Independent review found no
 blocking code issue after the fix.
 
-Publication and deployed Derpinator canary evidence remain pending.
+The tested repair was published at
+`27b0bc51d0ec2f6b54e58d4b7f8088d864a7b93a`, and `git ls-remote` proved
+`refs/heads/master` advertised that exact commit. WSL-Nix pinning, centralized
+deployment, and deployed Derpinator canary evidence remain pending.
