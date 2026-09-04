@@ -251,6 +251,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		javaOptions = append(javaOptions, javaProxyOptions(proxyURL)...)
 	}
 	var controllerProfile *ManagementControllerProfile
+	var emdrOwnerPreparation *EMDROwnerPreparationCapability
 	if isolationProfile == IsolationProfileWorkspaceEgress &&
 		project == "dev-workspace" && repo == "shadow-throne-management" {
 		requestedProfile := strings.TrimSpace(os.Getenv(ManagementControllerProfileEnvironment))
@@ -263,6 +264,11 @@ func Build(opts BuildOptions) (Plan, error) {
 				return Plan{}, err
 			}
 			controllerProfile = &loaded
+			ownerCapability, err := LoadEMDROwnerPreparationCapability(EMDROwnerPreparationManifestPath)
+			if err != nil {
+				return Plan{}, err
+			}
+			emdrOwnerPreparation = &ownerCapability
 		}
 	}
 	javaToolOptions := strings.Join(javaOptions, " ")
@@ -365,6 +371,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			broker,
 			resolvConf,
 			controllerProfile,
+			emdrOwnerPreparation,
 		)
 		if err != nil {
 			return Plan{}, err
@@ -388,6 +395,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			env[ManagementControllerProfileEnvironment] = ManagementControllerProfileIdentity
 			env[ControllerOperationHandleEnvironment] = ControllerOperationHandleRequiredValue
 			env[WorkspaceControllerWorkLedgerEnvironment] = WorkspaceControllerWorkLedgerPath
+			env[EMDROwnerPreparationHandleEnvironment] = EMDROwnerPreparationHandleRequired
 		}
 		notes = append(notes,
 			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
@@ -558,7 +566,7 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
+func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile, emdrOwnerPreparation *EMDROwnerPreparationCapability) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -678,6 +686,9 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 			add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
 		}
 		if controllerProfile != nil {
+			if emdrOwnerPreparation == nil {
+				return nil, fmt.Errorf("Management controller profile lacks the required EMDR owner preparation capability")
+			}
 			activeWSLNixRoot := controllerProfile.SourceRoots.WSLNix
 			if workspaceRoot != "" {
 				activeWSLNixRoot.BackingPath = filepath.Join(workspaceRoot, "wsl-nix")
@@ -686,6 +697,9 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 			add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
 			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", true)
 			add(WorkspaceControllerOperationIdentity, WorkspaceControllerOperationIdentity, "ro", true)
+			add(EMDROwnerPreparationManifestPath, EMDROwnerPreparationManifestPath, "ro", true)
+			add(emdrOwnerPreparation.SocketPath, EMDROwnerPreparationSocketPath, "ro", true)
+			add(emdrOwnerPreparation.IdentityPath, EMDROwnerPreparationIdentityPath, "ro", true)
 			// The existing fleet work commands and deployment campaign validator
 			// share this one canonical SQLite ledger. Bind its directory, rather
 			// than only work.sqlite, so SQLite can create its journal/WAL files.

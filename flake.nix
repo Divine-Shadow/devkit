@@ -123,6 +123,7 @@
             pkgs.git
             pkgs.openssh
             pkgs.sqlite
+            pkgs.util-linux
           ];
           doCheck = true;
           checkPhase = ''

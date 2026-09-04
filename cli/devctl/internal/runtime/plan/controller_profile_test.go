@@ -215,6 +215,112 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 	return profile
 }
 
+func writeEMDROwnerPreparationCapability(t *testing.T, path string) EMDROwnerPreparationCapability {
+	t.Helper()
+	writeExecutable := func(path string) string {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	capability := EMDROwnerPreparationCapability{
+		SchemaVersion:    EMDROwnerPreparationManifestSchema,
+		ProfileIdentity:  EMDROwnerPreparationProfileIdentity,
+		Environment:      EMDROwnerPreparationHandleEnvironment,
+		RequiredValue:    EMDROwnerPreparationHandleRequired,
+		SocketPath:       EMDROwnerPreparationSocketPath,
+		IdentityPath:     EMDROwnerPreparationIdentityPath,
+		IdentitySchema:   EMDROwnerPreparationIdentitySchema,
+		SocketMode:       EMDROwnerPreparationExpectedSocketMode,
+		IdentityMode:     EMDROwnerPreparationExpectedIDMode,
+		Owner:            EMDROwnerPreparationExpectedOwner,
+		Group:            EMDROwnerPreparationExpectedGroup,
+		NoFollow:         true,
+		ClientExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "emdr-owner-preparation", "bin", "emdr-owner-preparation")),
+		ServerExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "emdr-owner-preparation", "libexec", "emdr-owner-preparation-handler")),
+		RequestSchema:    EMDROwnerPreparationRequestSchema,
+		AcceptedSchema:   EMDROwnerPreparationAcceptedSchema,
+		ReceiptSchema:    EMDROwnerPreparationReceiptSchema,
+		Operations:       []string{"sources", "jobs", "status", "job-create"},
+	}
+	data, err := json.MarshalIndent(capability, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return capability
+}
+
+func TestEMDROwnerPreparationCapabilityFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	previousManifest := EMDROwnerPreparationManifestPath
+	previousSocket := EMDROwnerPreparationSocketPath
+	previousIdentity := EMDROwnerPreparationIdentityPath
+	previousStoreRoot := ControllerProfileStoreRoot
+	EMDROwnerPreparationManifestPath = filepath.Join(root, "capability.json")
+	EMDROwnerPreparationSocketPath = filepath.Join(root, "run", "control.sock")
+	EMDROwnerPreparationIdentityPath = filepath.Join(root, "run", "identity.json")
+	ControllerProfileStoreRoot = filepath.Join(root, "nix", "store")
+	t.Cleanup(func() {
+		EMDROwnerPreparationManifestPath = previousManifest
+		EMDROwnerPreparationSocketPath = previousSocket
+		EMDROwnerPreparationIdentityPath = previousIdentity
+		ControllerProfileStoreRoot = previousStoreRoot
+	})
+	capability := writeEMDROwnerPreparationCapability(t, EMDROwnerPreparationManifestPath)
+	if _, err := LoadEMDROwnerPreparationCapability(EMDROwnerPreparationManifestPath); err != nil {
+		t.Fatalf("valid owner preparation capability was rejected: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*EMDROwnerPreparationCapability)
+	}{
+		{
+			name: "promotion authority",
+			mutate: func(candidate *EMDROwnerPreparationCapability) {
+				candidate.Operations = append(candidate.Operations, "promote")
+			},
+		},
+		{
+			name: "caller-selected socket",
+			mutate: func(candidate *EMDROwnerPreparationCapability) {
+				candidate.SocketPath = filepath.Join(root, "other.sock")
+			},
+		},
+		{
+			name: "mutable executable",
+			mutate: func(candidate *EMDROwnerPreparationCapability) {
+				candidate.ClientExecutable = filepath.Join(root, "client")
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := capability
+			candidate.Operations = append([]string(nil), capability.Operations...)
+			testCase.mutate(&candidate)
+			data, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(EMDROwnerPreparationManifestPath, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadEMDROwnerPreparationCapability(EMDROwnerPreparationManifestPath); err == nil {
+				t.Fatal("unsafe owner preparation capability passed")
+			}
+		})
+	}
+}
+
 func TestManagementControllerProfileRecognizesV8Capabilities(t *testing.T) {
 	profile := ManagementControllerProfile{
 		ProductStationReset: ControllerProfileProductStationReset{
@@ -416,10 +522,16 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	manifestPath := filepath.Join(root, "management-controller-convergence.json")
 	operationSocket := filepath.Join(root, "run", "operation", "control.sock")
 	operationIdentity := filepath.Join(root, "run", "operation", "identity.json")
+	ownerManifest := filepath.Join(root, "emdr-owner-preparation-capability.json")
+	ownerSocket := filepath.Join(root, "run", "emdr-owner-preparation", "control.sock")
+	ownerIdentity := filepath.Join(root, "run", "emdr-owner-preparation", "identity.json")
 	execSocket := filepath.Join(root, "run", "exec", "control.sock")
 	previousManifest := ManagementControllerProfileManifestPath
 	previousOperationSocket := WorkspaceControllerOperationSocket
 	previousOperationIdentity := WorkspaceControllerOperationIdentity
+	previousOwnerManifest := EMDROwnerPreparationManifestPath
+	previousOwnerSocket := EMDROwnerPreparationSocketPath
+	previousOwnerIdentity := EMDROwnerPreparationIdentityPath
 	previousExecSocket := WorkspaceControllerExecSocket
 	previousFleetInventory := WorkspaceControllerSourceInventory
 	previousGUIInventory := WorkspaceControllerGUIInventory
@@ -427,6 +539,9 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	ManagementControllerProfileManifestPath = manifestPath
 	WorkspaceControllerOperationSocket = operationSocket
 	WorkspaceControllerOperationIdentity = operationIdentity
+	EMDROwnerPreparationManifestPath = ownerManifest
+	EMDROwnerPreparationSocketPath = ownerSocket
+	EMDROwnerPreparationIdentityPath = ownerIdentity
 	WorkspaceControllerExecSocket = execSocket
 	WorkspaceControllerSourceInventory = filepath.Join(root, "fleet-inventory.json")
 	WorkspaceControllerGUIInventory = filepath.Join(root, "gui-inventory.json")
@@ -435,12 +550,16 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 		ManagementControllerProfileManifestPath = previousManifest
 		WorkspaceControllerOperationSocket = previousOperationSocket
 		WorkspaceControllerOperationIdentity = previousOperationIdentity
+		EMDROwnerPreparationManifestPath = previousOwnerManifest
+		EMDROwnerPreparationSocketPath = previousOwnerSocket
+		EMDROwnerPreparationIdentityPath = previousOwnerIdentity
 		WorkspaceControllerExecSocket = previousExecSocket
 		WorkspaceControllerSourceInventory = previousFleetInventory
 		WorkspaceControllerGUIInventory = previousGUIInventory
 		ControllerProfileStoreRoot = previousStoreRoot
 	})
 	profile := writeControllerProfileManifest(t, manifestPath, base.Agent.HostWorktree, filepath.Join(root, "wsl-nix-lease"))
+	ownerCapability := writeEMDROwnerPreparationCapability(t, ownerManifest)
 	t.Setenv(ManagementControllerProfileEnvironment, ManagementControllerProfileIdentity)
 	profile.Targets.ControllerGUI = ManagementControllerPrimaryGUI
 	if err := validateManagementControllerProfile(profile); err != nil {
@@ -594,11 +713,20 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 		{Source: manifestPath, Target: manifestPath, Mode: "ro", Required: true},
 		{Source: operationSocket, Target: operationSocket, Mode: "ro", Required: true},
 		{Source: operationIdentity, Target: operationIdentity, Mode: "ro", Required: true},
+		{Source: ownerManifest, Target: ownerManifest, Mode: "ro", Required: true},
+		{Source: ownerSocket, Target: ownerSocket, Mode: "ro", Required: true},
+		{Source: ownerIdentity, Target: ownerIdentity, Mode: "ro", Required: true},
 		{Source: WorkspaceControllerWorkLedgerDirectory, Target: WorkspaceControllerWorkLedgerDirectory, Mode: "rw", Required: true},
 	} {
 		if !hasBind(p.Binds, want.Source, want.Target) {
 			t.Fatalf("v4 bind absent: %+v from %#v", want, p.Binds)
 		}
+	}
+	if p.Env[EMDROwnerPreparationHandleEnvironment] != EMDROwnerPreparationHandleRequired {
+		t.Fatalf("v4 plan lacks EMDR owner preparation environment: %#v", p.Env)
+	}
+	if ownerCapability.SocketPath != ownerSocket || ownerCapability.IdentityPath != ownerIdentity {
+		t.Fatalf("EMDR owner preparation fixture paths changed: %#v", ownerCapability)
 	}
 	if hasBind(p.Binds, execSocket, execSocket) {
 		t.Fatalf("v4 must not project the legacy direct exec socket: %#v", p.Binds)

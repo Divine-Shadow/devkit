@@ -151,6 +151,48 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 	}
 }
 
+func writeEMDROwnerPreparationIdentityFixture(
+	t *testing.T,
+	capability nativeplan.EMDROwnerPreparationCapability,
+) {
+	t.Helper()
+	socketInfo, err := os.Lstat(nativeplan.EMDROwnerPreparationSocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketStat := socketInfo.Sys().(*syscall.Stat_t)
+	identity := emdrOwnerPreparationIdentity{
+		SchemaVersion:   capability.IdentitySchema,
+		State:           "ready",
+		ProfileIdentity: capability.ProfileIdentity,
+		Manifest: controllerOperationFileIdentity{
+			Path:   nativeplan.EMDROwnerPreparationManifestPath,
+			SHA256: hashControllerTestFile(t, nativeplan.EMDROwnerPreparationManifestPath),
+		},
+		Socket: emdrOwnerPreparationSocketIdentity{
+			Path:   nativeplan.EMDROwnerPreparationSocketPath,
+			Device: uint64(socketStat.Dev),
+			Inode:  socketStat.Ino,
+			UID:    uint32(socketStat.Uid),
+			GID:    uint32(socketStat.Gid),
+			Mode:   uint32(socketInfo.Mode().Perm()),
+		},
+		ClientExecutable: capability.ClientExecutable,
+		ServerExecutable: capability.ServerExecutable,
+		Operations:       append([]string(nil), capability.Operations...),
+		ServerPID:        os.Getpid(),
+		StartedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.MarshalIndent(identity, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, nativeplan.EMDROwnerPreparationIdentityPath, string(data)+"\n")
+	if err := os.Chmod(nativeplan.EMDROwnerPreparationIdentityPath, 0o400); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T) {
 	withProductGovernanceEnvironmentFixture(t)
 	root, err := os.MkdirTemp("", "devkit-v4-")
@@ -186,11 +228,17 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	manifestPath := filepath.Join(root, "management-controller-convergence.json")
 	operationSocket := filepath.Join(root, "run", "operation", "control.sock")
 	operationIdentity := filepath.Join(root, "run", "operation", "identity.json")
+	ownerManifest := filepath.Join(root, "emdr-owner-preparation-capability.json")
+	ownerSocket := filepath.Join(root, "run", "emdr-owner-preparation", "control.sock")
+	ownerIdentity := filepath.Join(root, "run", "emdr-owner-preparation", "identity.json")
 	workLedgerDirectory := filepath.Join(root, "fleet-work")
 	execSocket := filepath.Join(root, "run", "exec", "control.sock")
 	previousManifest := nativeplan.ManagementControllerProfileManifestPath
 	previousOperationSocket := nativeplan.WorkspaceControllerOperationSocket
 	previousOperationIdentity := nativeplan.WorkspaceControllerOperationIdentity
+	previousOwnerManifest := nativeplan.EMDROwnerPreparationManifestPath
+	previousOwnerSocket := nativeplan.EMDROwnerPreparationSocketPath
+	previousOwnerIdentity := nativeplan.EMDROwnerPreparationIdentityPath
 	previousWorkLedgerDirectory := nativeplan.WorkspaceControllerWorkLedgerDirectory
 	previousWorkLedgerPath := nativeplan.WorkspaceControllerWorkLedgerPath
 	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
@@ -201,6 +249,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	previousIdentityMode := nativeplan.ManagementControllerIdentityExpectedMode
 	previousIdentityOwner := nativeplan.ManagementControllerIdentityExpectedOwner
 	previousIdentityGroup := nativeplan.ManagementControllerIdentityExpectedGroup
+	previousOwnerPreparationOwner := nativeplan.EMDROwnerPreparationExpectedOwner
+	previousOwnerPreparationGroup := nativeplan.EMDROwnerPreparationExpectedGroup
 	fleetInventory := filepath.Join(root, "fleet-inventory.json")
 	guiInventory := filepath.Join(root, "fleet-codex-gui-inventory.json")
 	ti4Source := filepath.Join(root, "ti4-calculator")
@@ -217,6 +267,9 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	nativeplan.ManagementControllerProfileManifestPath = manifestPath
 	nativeplan.WorkspaceControllerOperationSocket = operationSocket
 	nativeplan.WorkspaceControllerOperationIdentity = operationIdentity
+	nativeplan.EMDROwnerPreparationManifestPath = ownerManifest
+	nativeplan.EMDROwnerPreparationSocketPath = ownerSocket
+	nativeplan.EMDROwnerPreparationIdentityPath = ownerIdentity
 	nativeplan.WorkspaceControllerWorkLedgerDirectory = workLedgerDirectory
 	nativeplan.WorkspaceControllerWorkLedgerPath = filepath.Join(workLedgerDirectory, "work.sqlite")
 	nativeplan.WorkspaceControllerExecSocket = execSocket
@@ -227,10 +280,15 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	nativeplan.ManagementControllerIdentityExpectedMode = "0400"
 	nativeplan.ManagementControllerIdentityExpectedOwner = currentUser.Username
 	nativeplan.ManagementControllerIdentityExpectedGroup = currentGroup.Name
+	nativeplan.EMDROwnerPreparationExpectedOwner = currentUser.Username
+	nativeplan.EMDROwnerPreparationExpectedGroup = currentGroup.Name
 	t.Cleanup(func() {
 		nativeplan.ManagementControllerProfileManifestPath = previousManifest
 		nativeplan.WorkspaceControllerOperationSocket = previousOperationSocket
 		nativeplan.WorkspaceControllerOperationIdentity = previousOperationIdentity
+		nativeplan.EMDROwnerPreparationManifestPath = previousOwnerManifest
+		nativeplan.EMDROwnerPreparationSocketPath = previousOwnerSocket
+		nativeplan.EMDROwnerPreparationIdentityPath = previousOwnerIdentity
 		nativeplan.WorkspaceControllerWorkLedgerDirectory = previousWorkLedgerDirectory
 		nativeplan.WorkspaceControllerWorkLedgerPath = previousWorkLedgerPath
 		nativeplan.WorkspaceControllerExecSocket = previousExecSocket
@@ -241,6 +299,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		nativeplan.ManagementControllerIdentityExpectedMode = previousIdentityMode
 		nativeplan.ManagementControllerIdentityExpectedOwner = previousIdentityOwner
 		nativeplan.ManagementControllerIdentityExpectedGroup = previousIdentityGroup
+		nativeplan.EMDROwnerPreparationExpectedOwner = previousOwnerPreparationOwner
+		nativeplan.EMDROwnerPreparationExpectedGroup = previousOwnerPreparationGroup
 	})
 	operationListener := listenControllerTestSocket(t, operationSocket)
 	_ = operationListener
@@ -327,6 +387,33 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		}
 		return path
 	}
+	ownerCapability := nativeplan.EMDROwnerPreparationCapability{
+		SchemaVersion:    nativeplan.EMDROwnerPreparationManifestSchema,
+		ProfileIdentity:  nativeplan.EMDROwnerPreparationProfileIdentity,
+		Environment:      nativeplan.EMDROwnerPreparationHandleEnvironment,
+		RequiredValue:    nativeplan.EMDROwnerPreparationHandleRequired,
+		SocketPath:       ownerSocket,
+		IdentityPath:     ownerIdentity,
+		IdentitySchema:   nativeplan.EMDROwnerPreparationIdentitySchema,
+		SocketMode:       nativeplan.EMDROwnerPreparationExpectedSocketMode,
+		IdentityMode:     nativeplan.EMDROwnerPreparationExpectedIDMode,
+		Owner:            nativeplan.EMDROwnerPreparationExpectedOwner,
+		Group:            nativeplan.EMDROwnerPreparationExpectedGroup,
+		NoFollow:         true,
+		ClientExecutable: writeExecutable(filepath.Join(operationStoreRoot, "emdr-owner-preparation", "bin", "emdr-owner-preparation")),
+		ServerExecutable: writeExecutable(filepath.Join(operationStoreRoot, "emdr-owner-preparation", "libexec", "emdr-owner-preparation-handler")),
+		RequestSchema:    nativeplan.EMDROwnerPreparationRequestSchema,
+		AcceptedSchema:   nativeplan.EMDROwnerPreparationAcceptedSchema,
+		ReceiptSchema:    nativeplan.EMDROwnerPreparationReceiptSchema,
+		Operations:       []string{"sources", "jobs", "status", "job-create"},
+	}
+	ownerManifestBytes, err := json.MarshalIndent(ownerCapability, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, ownerManifest, string(ownerManifestBytes)+"\n")
+	listenControllerTestSocket(t, ownerSocket)
+	writeEMDROwnerPreparationIdentityFixture(t, ownerCapability)
 	profile.Broker = nativeplan.ControllerProfileBroker{
 		Executable:     writeExecutable(filepath.Join(operationStoreRoot, "fleet-control", "bin", "fleet-control")),
 		SourceRevision: strings.Repeat("c", 40),
@@ -484,6 +571,9 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		"'--bind' '" + wslRoot + "' '/workspaces/dev/wsl-nix'",
 		"'--ro-bind' '" + operationSocket + "' '" + operationSocket + "'",
 		"'--ro-bind' '" + operationIdentity + "' '" + operationIdentity + "'",
+		"'--ro-bind' '" + ownerManifest + "' '" + ownerManifest + "'",
+		"'--ro-bind' '" + ownerSocket + "' '" + ownerSocket + "'",
+		"'--ro-bind' '" + ownerIdentity + "' '" + ownerIdentity + "'",
 		"'--bind' '" + workLedgerDirectory + "' '" + workLedgerDirectory + "'",
 		"'--ro-bind' '" + fleetInventory + "' '" + fleetInventory + "'",
 		"'--ro-bind' '" + guiInventory + "' '" + guiInventory + "'",
@@ -491,6 +581,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		"'--setenv' 'DEVKIT_MANAGEMENT_CONTROLLER_PROFILE' 'management-controller-convergence/v1'",
 		"'--setenv' 'DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY' 'devkit/workspace-egress/v4'",
 		"'--setenv' 'FLEET_CONTROLLER_OPERATION_HANDLE' 'required'",
+		"'--setenv' 'EMDR_OWNER_PREPARATION_HANDLE' 'required'",
 		"'--setenv' 'FLEET_WORK_DB' '" + nativeplan.WorkspaceControllerWorkLedgerPath + "'",
 	} {
 		if !strings.Contains(text, want) {

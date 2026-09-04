@@ -57,6 +57,9 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [EMDR Owner Preparation Controller Envelope](execplans/emdr-owner-preparation-envelope-20260904.md):
+  compose a preparation-only WSL owner socket into the isolated Management
+  controller without widening its lifecycle broker or exposing contents.
 - [Historical-root Consumer Alias Manifest Shrink](execplans/native-historical-root-consumer-alias-20260903.md):
   admit only the exact manifest-derived sandbox spelling of an otherwise exact
   historical-root linked-worktree registration while preserving every custody

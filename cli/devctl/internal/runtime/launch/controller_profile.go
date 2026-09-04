@@ -124,6 +124,13 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 	if err != nil {
 		return err
 	}
+	ownerPreparation, err := nativeplan.LoadEMDROwnerPreparationCapability(nativeplan.EMDROwnerPreparationManifestPath)
+	if err != nil {
+		return err
+	}
+	if p.Env[nativeplan.EMDROwnerPreparationHandleEnvironment] != nativeplan.EMDROwnerPreparationHandleRequired {
+		return fmt.Errorf("Management controller plan lacks the required EMDR owner preparation handle")
+	}
 	activeManagementRoot := profile.SourceRoots.Management
 	activeManagementRoot.BackingPath = p.Agent.HostWorktree
 	activeWSLNixRoot := profile.SourceRoots.WSLNix
@@ -135,6 +142,9 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 		{Source: nativeplan.ManagementControllerProfileManifestPath, Target: nativeplan.ManagementControllerProfileManifestPath, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerOperationSocket, Target: nativeplan.WorkspaceControllerOperationSocket, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerOperationIdentity, Target: nativeplan.WorkspaceControllerOperationIdentity, Mode: "ro", Required: true},
+		{Source: nativeplan.EMDROwnerPreparationManifestPath, Target: nativeplan.EMDROwnerPreparationManifestPath, Mode: "ro", Required: true},
+		{Source: ownerPreparation.SocketPath, Target: nativeplan.EMDROwnerPreparationSocketPath, Mode: "ro", Required: true},
+		{Source: ownerPreparation.IdentityPath, Target: nativeplan.EMDROwnerPreparationIdentityPath, Mode: "ro", Required: true},
 		{Source: nativeplan.WorkspaceControllerWorkLedgerDirectory, Target: nativeplan.WorkspaceControllerWorkLedgerDirectory, Mode: "rw", Required: true},
 	} {
 		if !planHasExactBind(p.Binds, expected) {
@@ -147,7 +157,10 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 	if err := validateControllerSourceWorktree("WSL/Nix", activeWSLNixRoot); err != nil {
 		return err
 	}
-	return validateControllerOperationIdentity(profile)
+	if err := validateControllerOperationIdentity(profile); err != nil {
+		return err
+	}
+	return validateEMDROwnerPreparationIdentity(ownerPreparation)
 }
 
 func planHasExactBind(binds []nativeplan.Bind, expected nativeplan.Bind) bool {

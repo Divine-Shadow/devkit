@@ -491,6 +491,10 @@ func TestManagementWorkspaceRootDerivesActiveWSLNixSourceFromSelectedLane(t *tes
 			},
 		},
 	}
+	ownerCapability := &EMDROwnerPreparationCapability{
+		SocketPath:   EMDROwnerPreparationSocketPath,
+		IdentityPath: EMDROwnerPreparationIdentityPath,
+	}
 	binds, err := workspaceEgressBinds(
 		paths,
 		"dev-workspace",
@@ -502,6 +506,7 @@ func TestManagementWorkspaceRootDerivesActiveWSLNixSourceFromSelectedLane(t *tes
 		filepath.Join(root, ".devkit", "native-broker", "broker.sock"),
 		filepath.Join(root, ".devkit", "native-agents", "dev-workspace-agent2", "resolv.conf"),
 		profile,
+		ownerCapability,
 	)
 	if err != nil {
 		t.Fatal(err)
