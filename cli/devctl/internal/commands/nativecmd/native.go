@@ -73,6 +73,7 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
+	indexSet           bool
 	opts               nativeplan.BuildOptions
 	format             string
 	dryRun             bool
@@ -328,10 +329,11 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 				return parsed, fmt.Errorf("--index must be a positive integer")
 			}
 			parsed.opts.Index = idx
+			parsed.indexSet = true
 			i++
 		case "--gui-target-id":
-			if ctx.Args[0] != "plan" && ctx.Args[0] != "exec" {
-				return parsed, fmt.Errorf("--gui-target-id is only valid for native plan and native exec")
+			if ctx.Args[0] != "plan" && ctx.Args[0] != "exec" && ctx.Args[0] != "prepare" {
+				return parsed, fmt.Errorf("--gui-target-id is only valid for native plan, native exec, and selected native prepare")
 			}
 			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
 				return parsed, fmt.Errorf("--gui-target-id requires a value")
@@ -2017,6 +2019,12 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
+	if parsed.opts.WorkspaceRoot != "" && ctx.Project == "pokeemerald-expansion-shared-power" {
+		return handleSelectedSharedPowerPrepare(ctx, cfg, parsed)
+	}
+	if parsed.opts.GUITargetID != "" {
+		return fmt.Errorf("native prepare --gui-target-id requires the selected Shared Power workspace root")
+	}
 	bootstrapOpts := parsed.opts
 	bootstrapOpts.Index = 1
 	bootstrapOpts.Repo = repo
@@ -2328,6 +2336,9 @@ func prepareNativeGitBootstrapAndWorktrees(
 		return err
 	}
 	worktreeRoot := strings.TrimSpace(opts.WorktreeRoot)
+	if opts.WorkspaceRoot != "" {
+		worktreeRoot = opts.WorkspaceRoot
+	}
 	worktreeRootWasAbsent := false
 	if !dryRun {
 		if _, statErr := os.Lstat(worktreeRoot); errors.Is(statErr, os.ErrNotExist) {

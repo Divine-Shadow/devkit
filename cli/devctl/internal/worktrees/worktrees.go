@@ -947,6 +947,10 @@ func ensureNativeOwnedCommonRepository(
 }
 
 func preflightNativeOwnedWorktreeTargets(worktreesRoot, repo string, first, last int) error {
+	return preflightNativeOwnedWorktreeTargetsAt(worktreesRoot, repo, first, last, false)
+}
+
+func preflightNativeOwnedWorktreeTargetsAt(worktreesRoot, repo string, first, last int, isolatedWorkspace bool) error {
 	if first < 1 || last < first {
 		return fmt.Errorf("native worktree preflight range %d..%d is invalid", first, last)
 	}
@@ -960,6 +964,9 @@ func preflightNativeOwnedWorktreeTargets(worktreesRoot, repo string, first, last
 			return err
 		}
 		worktree := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i), repo)
+		if isolatedWorkspace {
+			worktree = filepath.Join(worktreesRoot, repo)
+		}
 		info, err := os.Lstat(worktree)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -1086,9 +1093,13 @@ func restoreNativeWorktreePayload(worktree, allowedHome, stagingDir string) erro
 }
 
 type NativeOptions struct {
-	DevkitRoot string
-	Repo       string
-	Origin     string
+	// WorkspaceRoot selects the existing isolated Shared Power geometry only.
+	// It must be WorktreeRoot/pokeemerald-agentN for the explicit Index. Git
+	// metadata remains beneath that selected root, never beside sibling lanes.
+	WorkspaceRoot string
+	DevkitRoot    string
+	Repo          string
+	Origin        string
 	// Index selects one slot when positive. A zero index preserves the existing
 	// multi-slot SetupNative behavior for callers that intentionally prepare the
 	// complete declared capacity.
@@ -2408,6 +2419,47 @@ func (plan *NativeResetPlan) Apply() error {
 	return transaction.Commit()
 }
 
+// nativePreparationRoot retains the ordinary prefix geometry unless the
+// caller selects the exact existing Shared Power lane. The selected root owns
+// both its checkout and linked Git common repository.
+func nativePreparationRoot(opts NativeOptions, fallback string) (string, bool, error) {
+	root := strings.TrimSpace(opts.WorktreeRoot)
+	if root == "" {
+		root = fallback
+	}
+	if opts.WorkspaceRoot == "" {
+		return root, false, nil
+	}
+	if opts.Repo != "pokeemerald-expansion-shared-power" || (opts.Index != 1 && opts.Index != 2) || opts.ReconstructSelected {
+		return "", false, fmt.Errorf("isolated native preparation requires a selected Shared Power lane without destructive reconstruction")
+	}
+	selected := opts.WorkspaceRoot
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root || !filepath.IsAbs(selected) ||
+		filepath.Clean(selected) != selected || selected != filepath.Join(root, fmt.Sprintf("pokeemerald-agent%d", opts.Index)) {
+		return "", false, fmt.Errorf("isolated native preparation requires the exact selected workspace root")
+	}
+	if root == "/mnt" || strings.HasPrefix(root, "/mnt/") {
+		return "", false, fmt.Errorf("isolated native preparation rejects /mnt roots")
+	}
+	// Check existing ancestors too: a not-yet-created selected root must not
+	// conceal a symlinked parent before MkdirAll materializes its checkout.
+	for _, boundary := range []string{selected, filepath.Join(selected, ".devkit", "git", fmt.Sprintf("agent%d", opts.Index))} {
+		for path := boundary; path != filepath.Dir(path); path = filepath.Dir(path) {
+			info, err := os.Lstat(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return "", false, fmt.Errorf("inspect isolated native preparation root %s: %w", path, err)
+			}
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return "", false, fmt.Errorf("isolated native preparation root traverses a symlink or non-directory: %s", path)
+			}
+		}
+	}
+	return selected, true, nil
+}
+
 // PreflightNative validates every target in a multi-slot reconstruction before
 // bootstrap identity or transport state is materialized. Existing
 // package-owned worktrees and their exact per-agent homes are accepted;
@@ -2420,15 +2472,18 @@ func PreflightNative(opts NativeOptions) error {
 		return fmt.Errorf("repo is required")
 	}
 	if runtimeagent.IsWorkspaceRootRepo(repo) {
+		if opts.WorkspaceRoot != "" {
+			return fmt.Errorf("isolated native preparation requires the Shared Power repository")
+		}
 		return nil
 	}
 	count := opts.Count
 	if count < 1 {
 		count = 1
 	}
-	worktreesRoot := strings.TrimSpace(opts.WorktreeRoot)
-	if worktreesRoot == "" {
-		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
+	worktreesRoot, isolatedWorkspace, err := nativePreparationRoot(opts, filepath.Join(devRoot, paths.AgentWorktreesDir))
+	if err != nil {
+		return err
 	}
 	first, last := 1, count
 	if opts.Index > 0 {
@@ -2437,7 +2492,7 @@ func PreflightNative(opts NativeOptions) error {
 		}
 		first, last = opts.Index, opts.Index
 	}
-	return preflightNativeOwnedWorktreeTargets(worktreesRoot, repo, first, last)
+	return preflightNativeOwnedWorktreeTargetsAt(worktreesRoot, repo, first, last, isolatedWorkspace)
 }
 
 // SetupNative creates dedicated worktrees for every native agent, including
@@ -2452,6 +2507,9 @@ func SetupNative(opts NativeOptions) error {
 		return fmt.Errorf("repo is required")
 	}
 	if runtimeagent.IsWorkspaceRootRepo(repo) {
+		if opts.WorkspaceRoot != "" {
+			return fmt.Errorf("isolated native preparation requires the Shared Power repository")
+		}
 		return nil
 	}
 	if opts.ReconstructSelected && opts.Index < 1 {
@@ -2469,9 +2527,9 @@ func SetupNative(opts NativeOptions) error {
 	if branchPrefix == "" {
 		branchPrefix = "agent"
 	}
-	worktreesRoot := strings.TrimSpace(opts.WorktreeRoot)
-	if worktreesRoot == "" {
-		worktreesRoot = filepath.Join(devRoot, paths.AgentWorktreesDir)
+	worktreesRoot, isolatedWorkspace, err := nativePreparationRoot(opts, filepath.Join(devRoot, paths.AgentWorktreesDir))
+	if err != nil {
+		return err
 	}
 	validationIndex := 1
 	if opts.Index > 0 {
@@ -2551,6 +2609,9 @@ func SetupNative(opts NativeOptions) error {
 			return err
 		}
 		parent := filepath.Join(worktreesRoot, fmt.Sprintf("agent%d", i))
+		if isolatedWorkspace {
+			parent = worktreesRoot
+		}
 		if !opts.DryRun {
 			_ = os.MkdirAll(parent, 0o755)
 		}

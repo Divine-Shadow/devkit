@@ -63,3 +63,28 @@ The `runtime.core_check` value documents the build gate that proves the repo's
 core app still builds in the paired runtime. Prefer the overlay `maintain` hook
 when it runs the same command. If a core check changes, update both the overlay
 metadata and this page in the same change.
+
+## Isolated Shared Power GUI lanes
+
+Fleet's existing Shared Power GUI targets select one declared lane with the
+native preparation command. For example, agent 2 uses:
+
+```sh
+kit/scripts/devkit -p pokeemerald-expansion-shared-power native prepare \\
+  --repo pokeemerald-expansion-shared-power --index 2 \\
+  --worktree-root /home/bayesartre/dev/project-worktrees \\
+  --state-root /home/bayesartre/dev/.devkit/native-agents \\
+  --workspace-root /home/bayesartre/dev/project-worktrees/pokeemerald-agent2 \\
+  --gui-target-id pokeemerald-agent2 --format json
+```
+
+This prepares only that checkout and its existing home. The same workspace,
+worktree and state roots are required for plan and exec; top-level exec spells
+the state option `--agent-state-root`. Source-declared capacity and immutable
+GUI config selection still constrain the request. The selected root owns the
+portable linked Git metadata, and the sandbox projects the checkout at
+`/workspaces/dev/pokeemerald-expansion-shared-power`. Historical prefix
+worktrees, homes and shared lifecycle manifests are preserved.
+
+The [selected preparation decision](../../docs/decision-framework/governance_decisions/20260905_shared_power_selected_workspace_preparation.md)
+records the ownership and verification contract.
