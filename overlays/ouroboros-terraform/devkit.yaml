@@ -10,7 +10,7 @@ runtime:
   flake: ./overlays/ouroboros-terraform#default
   flake_input_overrides:
     ouroboros-terraform: ../ouroboros-terraform
-  codex_version: 0.152.1
+  codex_version: 0.153.4
   core_check: terraform fmt -check -recursive
   notes: Thin devkit adapter; canonical tool requirements live in ../ouroboros-terraform/flake.nix and devkit.yaml, and devkit must pass the ouroboros-terraform flake input override explicitly.
 native:
@@ -39,7 +39,7 @@ readiness:
     - name: terraform-packer-aws
       command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
     - name: codex-version
-      command: codex --version | grep -q '0.152.1'
+      command: codex --version | grep -q '0.153.4'
     - name: governance-mcp-config
       command: |
         set -euo pipefail

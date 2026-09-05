@@ -10,7 +10,7 @@ defaults:
 runtime:
   canonical: false
   flake: ./overlays/ouro-integration#default
-  codex_version: 0.152.1
+  codex_version: 0.153.4
   core_check: |
     (cd /workspaces/dev/ouroboros-terraform && terraform plan -input=false -no-color)
     (cd /workspaces/dev/ouroboros-ide && scripts/sbt2 "project backend" "assembly")

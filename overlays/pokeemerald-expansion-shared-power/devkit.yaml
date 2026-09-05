@@ -8,7 +8,7 @@ defaults:
   branch_prefix: agent
 runtime:
   flake: ./overlays/pokeemerald-expansion-shared-power#default
-  codex_version: 0.152.1
+  codex_version: 0.153.4
   core_check: make modern
   notes: Shared Power pokeemerald-expansion workspace; current warm hook is intentionally no-op.
 native:
