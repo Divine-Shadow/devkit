@@ -91,7 +91,7 @@ func validateEMDROwnerPreparationCapability(capability EMDROwnerPreparationCapab
 		capability.RequestSchema != EMDROwnerPreparationRequestSchema ||
 		capability.AcceptedSchema != EMDROwnerPreparationAcceptedSchema ||
 		capability.ReceiptSchema != EMDROwnerPreparationReceiptSchema ||
-		strings.Join(capability.Operations, "\x00") != "sources\x00jobs\x00status\x00job-create" {
+		strings.Join(capability.Operations, "\x00") != "fictional-initialize\x00sources\x00jobs\x00status\x00job-create" {
 		return fmt.Errorf("EMDR owner preparation capability does not match the compiled fail-closed contract")
 	}
 	if err := validateControllerStoreExecutable("EMDR owner preparation client", capability.ClientExecutable); err != nil {

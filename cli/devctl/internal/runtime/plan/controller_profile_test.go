@@ -244,7 +244,7 @@ func writeEMDROwnerPreparationCapability(t *testing.T, path string) EMDROwnerPre
 		RequestSchema:    EMDROwnerPreparationRequestSchema,
 		AcceptedSchema:   EMDROwnerPreparationAcceptedSchema,
 		ReceiptSchema:    EMDROwnerPreparationReceiptSchema,
-		Operations:       []string{"sources", "jobs", "status", "job-create"},
+		Operations:       []string{"fictional-initialize", "sources", "jobs", "status", "job-create"},
 	}
 	data, err := json.MarshalIndent(capability, "", "  ")
 	if err != nil {

@@ -405,7 +405,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		RequestSchema:    nativeplan.EMDROwnerPreparationRequestSchema,
 		AcceptedSchema:   nativeplan.EMDROwnerPreparationAcceptedSchema,
 		ReceiptSchema:    nativeplan.EMDROwnerPreparationReceiptSchema,
-		Operations:       []string{"sources", "jobs", "status", "job-create"},
+		Operations:       []string{"fictional-initialize", "sources", "jobs", "status", "job-create"},
 	}
 	ownerManifestBytes, err := json.MarshalIndent(ownerCapability, "", "  ")
 	if err != nil {
