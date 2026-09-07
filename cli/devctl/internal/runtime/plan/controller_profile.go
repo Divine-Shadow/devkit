@@ -161,6 +161,13 @@ type ControllerProfileFleetRecovery struct {
 	SourceRevision string `json:"sourceRevision"`
 }
 
+type ControllerProfileGUIThreadControl struct {
+	Controller     string `json:"controller"`
+	PackagePath    string `json:"packagePath"`
+	ExecutablePath string `json:"executablePath"`
+	SourceRevision string `json:"sourceRevision"`
+}
+
 type ControllerProfileNixOSDeployment struct {
 	SocketPath    string `json:"socketPath"`
 	Operation     string `json:"operation"`
@@ -326,6 +333,7 @@ type ManagementControllerProfile struct {
 	ProductAgentLifecycle ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
 	ProductStationReset   ControllerProfileProductStationReset   `json:"productStationReset"`
 	FleetRecovery         ControllerProfileFleetRecovery         `json:"fleetRecovery"`
+	GUIThreadControl      *ControllerProfileGUIThreadControl     `json:"guiThreadControl,omitempty"`
 	NixOSDeployment       ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
 	SourceRoots           ControllerProfileSourceRoots           `json:"sourceRoots"`
 	Inventories           ControllerProfileInventories           `json:"inventories"`
@@ -477,6 +485,9 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	if err := validateControllerFleetRecovery(profile); err != nil {
 		return err
 	}
+	if err := validateControllerGUIThreadControl(profile); err != nil {
+		return err
+	}
 	deployment := profile.NixOSDeployment
 	if filepath.Clean(deployment.SocketPath) != controllerNixOSDeploymentSocket ||
 		deployment.Operation != controllerNixOSDeploymentOperation ||
@@ -503,6 +514,43 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}
 	if err := validateControllerStoreFile("SSH config", profile.SourceAcquisition.SSHConfigPath); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateControllerGUIThreadControl(profile ManagementControllerProfile) error {
+	reader := profile.GUIThreadControl
+	if reader == nil {
+		return nil
+	}
+	if reader.Controller == "" || reader.Controller != profile.Targets.Controller ||
+		!validControllerGitRevision(reader.SourceRevision) {
+		return fmt.Errorf("Management controller GUI thread control identity is invalid")
+	}
+	packagePath := filepath.Clean(reader.PackagePath)
+	packageRel, err := filepath.Rel(filepath.Clean(ControllerProfileStoreRoot), packagePath)
+	if err != nil || reader.PackagePath != packagePath || packageRel == "." || packageRel == ".." ||
+		strings.Contains(packageRel, string(filepath.Separator)) {
+		return fmt.Errorf("Management controller GUI thread control package is not an immutable store package")
+	}
+	packageInfo, err := os.Lstat(packagePath)
+	if err != nil || packageInfo.Mode()&os.ModeSymlink != 0 || !packageInfo.IsDir() {
+		return fmt.Errorf("Management controller GUI thread control package is unavailable or not a real directory")
+	}
+	if reader.ExecutablePath != filepath.Join(packagePath, "bin", "devops-gui-thread-control") {
+		return fmt.Errorf("Management controller GUI thread control executable does not match its package")
+	}
+	if err := validateControllerStoreExecutable("GUI thread control", reader.ExecutablePath); err != nil {
+		return err
+	}
+	resolved, err := filepath.EvalSymlinks(reader.ExecutablePath)
+	if err != nil {
+		return fmt.Errorf("resolve Management controller GUI thread control executable: %w", err)
+	}
+	resolvedRel, err := filepath.Rel(packagePath, resolved)
+	if err != nil || resolvedRel == "." || resolvedRel == ".." ||
+		strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("Management controller GUI thread control executable resolves outside its package")
 	}
 	return nil
 }

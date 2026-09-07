@@ -57,6 +57,8 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [Product Retained-Reader Manifest Consumption](execplans/product-retained-reader-manifest-20260907.md):
+  consume the exact optional reader artifact without new mounts or effects.
 - [EMDR Owner Preparation Controller Envelope](execplans/emdr-owner-preparation-envelope-20260904.md):
   compose a preparation-only WSL owner socket into the isolated Management
   controller without widening its lifecycle broker or exposing contents.

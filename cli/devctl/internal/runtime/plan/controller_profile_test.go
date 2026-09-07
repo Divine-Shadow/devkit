@@ -145,6 +145,12 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			ExecutablePath: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "fleet-recovery", "bin", "devops-fleet-recovery")),
 			SourceRevision: strings.Repeat("d", 40),
 		},
+		GUIThreadControl: &ControllerProfileGUIThreadControl{
+			Controller:     ManagementControllerNode,
+			PackagePath:    filepath.Join(ControllerProfileStoreRoot, "gui-thread-control"),
+			ExecutablePath: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "gui-thread-control", "bin", "devops-gui-thread-control")),
+			SourceRevision: strings.Repeat("e", 40),
+		},
 		NixOSDeployment: ControllerProfileNixOSDeployment{
 			SocketPath:    controllerNixOSDeploymentSocket,
 			Operation:     controllerNixOSDeploymentOperation,
