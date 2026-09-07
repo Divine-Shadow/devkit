@@ -55,10 +55,12 @@ computation are replaceable. Keep one active writer per source lane to avoid
 collisions, but preserve the business objective and accepted durable effects,
 not the lifetime of a particular execution.
 
+## Completed ExecPlans
+
+- [Product Retained-Reader Manifest Consumption](execplans/product-retained-reader-manifest-20260907.md): completed 2026-09-07; all 12 checks, publication, integrated WSL gates, deployment, fresh manifest consumption and six actual reads passed their contracts. Missing indexes remain unavailable history.
+
 ## Active ExecPlans
 
-- [Product Retained-Reader Manifest Consumption](execplans/product-retained-reader-manifest-20260907.md):
-  consume the exact optional reader artifact without new mounts or effects.
 - [EMDR Owner Preparation Controller Envelope](execplans/emdr-owner-preparation-envelope-20260904.md):
   compose a preparation-only WSL owner socket into the isolated Management
   controller without widening its lifecycle broker or exposing contents.

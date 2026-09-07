@@ -16,9 +16,9 @@ reimplement the reader or broaden controller effects, mounts, or permissions.
 - [x] Recognize the exact optional artifact fields, validate controller,
   immutable package/executable geometry and full source revision, retaining
   strict unknown-field rejection and existing absent-field compatibility.
-- [ ] Pass the existing complete Devkit flake gate, publish cleanly and pin the
+- [x] Pass the existing complete Devkit flake gate, publish cleanly and pin the
   exact published revision in WSL/Nix.
-- [ ] Pass WSL's existing integrated consumer/closure gates and canonical
+- [x] Pass WSL's existing integrated consumer/closure gates and canonical
   activation, then W2 performs the six authorized actual retained-index reads.
 
 ## Decisions and limits
@@ -33,4 +33,17 @@ manifests. Outer bwrap and all Local3/Emerald exclusions remain mandatory.
 
 Use existing `checks.x86_64-linux` outputs, including `devctl-go-tests`, and
 then `management-controller-devkit-profile-consumer` in the full WSL gate.
-No live effect began from the failed candidate. Source repair is in progress.
+No live effect began from the failed candidate. Devkit
+`f9e461b9c80976a385eb1f699d120e3a91896641` passed all 12 existing checks,
+published to master and was consumed by WSL `193ec1ef`. All 56 WSL checks
+and direct/Colmena closure+deriver equality passed. Deployment
+`op-4f2e08d60a103bf292b54939559246ad` succeeded; Root's later EMDR
+release `90551717` retained this exact Devkit input.
+
+Fresh W2 replacement `op-74a0aa269a36f2bb8bacb635ca7e2aba` succeeded with
+the published manifest. Its six actual Product reads at 17:26 UTC all returned
+valid `missing` assessments without timeout or truncation. Both slots have
+unavailable retained history, not evidence of historical inactivity. D2
+received the results through `op-98794e1b25d3622d41c27fc729dc0656`.
+The schema-consumption repair is complete; absent historical indexes do not
+imply another source gate, publication or runtime repair.
