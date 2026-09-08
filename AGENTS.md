@@ -15,6 +15,11 @@ Principles
   captured SQLite row and digest, and mark it ineligible for resume. Missing or
   conflicting identity, objective custody, or SQLite integrity still fails
   closed; never sanitize, truncate, skip, or repair the source rollout in place.
+- Persistent operator workspaces are protected user data, not disposable Product
+  leases. Their working files (including uncommitted changes), Codex database,
+  and session history must be outside reset-owned roots or explicitly excluded
+  from reset. No cleanup or authentication repair may erase them. Ordinary
+  Product execution disposal remains scoped to its declared leased roots.
 - Native `dev-all` Git custody is lane-local. Fresh and reconstructed lanes use
   `.devkit/git/agentN/<repo>.git`; selected-slot reset and bootstrap own exactly
   that lane's common repository. An active sibling retains byte-for-byte

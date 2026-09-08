@@ -2353,9 +2353,6 @@ func isWorkspaceControllerCapabilityTarget(target string) bool {
 	if clean == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationIdentity) ||
-		clean == filepath.Clean(nativeplan.EMDROwnerPreparationSocketPath) ||
-		clean == filepath.Clean(nativeplan.EMDROwnerPreparationIdentityPath) ||
-		clean == filepath.Clean(nativeplan.EMDROwnerPreparationManifestPath) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerWorkLedgerDirectory) ||
 		clean == filepath.Clean(nativeplan.ManagementControllerProfileManifestPath) {
 		return true
@@ -2376,8 +2373,7 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		return fmt.Errorf("inspect package-owned controller capability %s: %w", target, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		if isControllerSocketTarget(target) || target == nativeplan.WorkspaceControllerOperationIdentity ||
-			target == nativeplan.EMDROwnerPreparationIdentityPath {
+		if isControllerSocketTarget(target) || target == nativeplan.WorkspaceControllerOperationIdentity {
 			return fmt.Errorf("controller runtime capability %s must be non-symlink", target)
 		}
 		resolved, resolveErr := filepath.EvalSymlinks(source)
@@ -2410,7 +2406,7 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		}
 		return nil
 	}
-	if target == nativeplan.WorkspaceControllerOperationIdentity || target == nativeplan.EMDROwnerPreparationIdentityPath {
+	if target == nativeplan.WorkspaceControllerOperationIdentity {
 		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o400 {
 			return fmt.Errorf("controller operation identity must be a mode 0400 regular file: %s", source)
 		}
@@ -2429,8 +2425,7 @@ func validateWorkspaceControllerCapability(source, target string) error {
 func isControllerSocketTarget(target string) bool {
 	target = filepath.Clean(strings.TrimSpace(target))
 	return target == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) ||
-		target == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket) ||
-		target == filepath.Clean(nativeplan.EMDROwnerPreparationSocketPath)
+		target == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket)
 }
 
 func validateWorkspaceControllerCapabilityBinding(source, target, mode string) error {
