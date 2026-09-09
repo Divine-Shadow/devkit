@@ -35,26 +35,13 @@ func wholeResetTestIdentities(root string) []nativeSlotProcessIdentity {
 
 func writeWholeResetTestProcess(t *testing.T, pid int, identity nativeSlotProcessIdentity) {
 	t.Helper()
-	procRoot := filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid))
-	if err := os.MkdirAll(filepath.Join(procRoot, "fd"), 0o700); err != nil {
-		t.Fatal(err)
+	for _, path := range []string{identity.hostWorktree, identity.hostHome, identity.stateRoot} {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
-	environ := fmt.Sprintf("DEVKIT_NATIVE_AGENT=%d\x00HOME=%s\x00", identity.index, identity.sandboxHome)
-	if err := os.WriteFile(filepath.Join(procRoot, "environ"), []byte(environ), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fields := []string{"S", "1"}
-	for len(fields) < 20 {
-		fields = append(fields, "0")
-	}
-	fields[19] = strconv.Itoa(100000 + pid)
-	if err := os.WriteFile(
-		filepath.Join(procRoot, "stat"),
-		[]byte(fmt.Sprintf("%d (whole-reset-fixture) %s\n", pid, strings.Join(fields, " "))),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
+	view, home := physicalViewFixture(t, identity, identity.sandboxWorktree)
+	writePhysicalProc(t, pid, 1, view, map[string]string{"DEVKIT_NATIVE_AGENT": strconv.Itoa(identity.index), "HOME": home}, identity.hostWorktree)
 }
 
 func TestSourceDerivedNativeSlotProcessIdentitiesIncludeEveryDeclaredSlot(t *testing.T) {

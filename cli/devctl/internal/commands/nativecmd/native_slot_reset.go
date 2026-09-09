@@ -292,52 +292,10 @@ func nativePathTouchesTargets(path string, targets []string) bool {
 	return false
 }
 
-func nativeProcTouchesTargets(procPath string, targets []string) bool {
-	for _, name := range []string{"cwd", "root", "exe"} {
-		path, err := os.Readlink(filepath.Join(procPath, name))
-		if err == nil && nativePathTouchesTargets(path, targets) {
-			return true
-		}
-	}
-	entries, err := os.ReadDir(filepath.Join(procPath, "fd"))
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		path, err := os.Readlink(filepath.Join(procPath, "fd", entry.Name()))
-		if err == nil && nativePathTouchesTargets(path, targets) {
-			return true
-		}
-	}
-	return false
-}
-
-func nativeProcHasSlotIdentity(env map[string]string, identity nativeSlotProcessIdentity) bool {
-	if env["DEVKIT_NATIVE_AGENT"] != strconv.Itoa(identity.index) {
-		return false
-	}
-	home := filepath.Clean(strings.TrimSpace(env["HOME"]))
-	for _, expected := range []string{identity.hostHome, identity.sandboxHome} {
-		expected = filepath.Clean(strings.TrimSpace(expected))
-		// CODEX_HOME is a child-runtime concern: governed Product work may replace
-		// it with a generated role home while retaining the Devkit slot's exact
-		// agent and HOME identity. Do not make that mutable child context part of
-		// the slot-root ownership witness.
-		if expected != "" && expected != "." && home == expected {
-			return true
-		}
-	}
-	return false
-}
-
 func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*nativeSlotProcessPlan, error) {
-	targets := []string{
-		identity.hostWorktree,
-		identity.sandboxWorktree,
-		identity.hostHome,
-		identity.sandboxHome,
-		identity.stateRoot,
-		identity.sandboxState,
+	targets, err := nativeSlotPhysicalTargets(identity)
+	if err != nil {
+		return nil, err
 	}
 	entries, err := os.ReadDir(nativeSlotProcRoot)
 	if err != nil {
@@ -345,6 +303,7 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 	}
 	processes := map[int]nativeProc{}
 	owned := map[int]bool{}
+	ownedHomes := map[int]string{}
 	starts := map[int]string{}
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
@@ -352,16 +311,35 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 			continue
 		}
 		path := filepath.Join(nativeSlotProcRoot, entry.Name())
+		ppid, start := readNativeProcIdentity(path)
 		environData, environErr := os.ReadFile(filepath.Join(path, "environ"))
 		environ := map[string]string{}
 		if environErr == nil {
 			environ = parseNativeProcEnviron(environData)
 		}
-		touches := nativeProcTouchesTargets(path, targets)
-		ppid, start := readNativeProcIdentity(path)
+		touches, touchErr := nativeProcTouchesTargets(path, identity, targets)
+		selected, ownershipErr := nativeProcHasSlotIdentity(path, environ, identity)
+		finalParent, finalStart := readNativeProcIdentity(path)
+		if finalStart == "" {
+			if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+		}
+		if touches || selected || touchErr != nil || ownershipErr != nil {
+			if start == "" || finalStart != start || finalParent != ppid {
+				return nil, fmt.Errorf("native process %d changed identity during custody observation", pid)
+			}
+			if touchErr != nil {
+				return nil, fmt.Errorf("inspect native process %d physical touch: %w", pid, touchErr)
+			}
+			if ownershipErr != nil {
+				return nil, fmt.Errorf("inspect native process %d physical custody: %w", pid, ownershipErr)
+			}
+		}
 		processes[pid] = nativeProc{pid: pid, ppid: ppid, start: start, environ: environ, touches: touches}
-		if nativeProcHasSlotIdentity(environ, identity) {
+		if selected {
 			owned[pid] = true
+			ownedHomes[pid] = environ["HOME"]
 		}
 	}
 
@@ -372,7 +350,18 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 		changed = false
 		for pid, process := range processes {
 			if !owned[pid] && owned[process.ppid] {
+				conflict, err := nativeProcDescendantConflicts(filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid)), process.environ, ownedHomes[process.ppid], identity)
+				if err != nil || conflict {
+					return nil, fmt.Errorf("native process %d has conflicting descendant custody: %v", pid, err)
+				}
+				if matches, err := nativeProcessStillMatches(pid, process.start); err != nil || !matches {
+					return nil, fmt.Errorf("native descendant %d changed identity during custody observation: %v", pid, err)
+				}
 				owned[pid] = true
+				ownedHomes[pid] = process.environ["HOME"]
+				if ownedHomes[pid] == "" {
+					ownedHomes[pid] = ownedHomes[process.ppid]
+				}
 				changed = true
 			}
 		}

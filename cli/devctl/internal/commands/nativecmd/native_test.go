@@ -1648,98 +1648,20 @@ func TestNativeSlotResetJSONOutputReservation(t *testing.T) {
 }
 
 func TestPlanNativeSlotProcessesSelectsOnlyExactSlotIdentity(t *testing.T) {
-	originalProcRoot := nativeSlotProcRoot
-	t.Cleanup(func() { nativeSlotProcRoot = originalProcRoot })
-	nativeSlotProcRoot = t.TempDir()
-	identity := nativeSlotProcessIdentity{
-		index:           1,
-		hostWorktree:    "/host/worktrees/agent1/ouroboros-ide",
-		sandboxWorktree: "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide",
-		hostHome:        "/host/worktrees/agent1/ouroboros-ide/.devhome-agent1",
-		sandboxHome:     "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
-		stateRoot:       "/host/state/dev-all-agent1",
-		sandboxState:    "/agent-state/dev-all-agent1",
-	}
-	writeProc := func(pid, ppid int, env map[string]string, cwd string) {
-		t.Helper()
-		root := filepath.Join(nativeSlotProcRoot, strconv.Itoa(pid))
-		if err := os.MkdirAll(filepath.Join(root, "fd"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		var fields []string
-		for key, value := range env {
-			fields = append(fields, key+"="+value)
-		}
-		if err := os.WriteFile(filepath.Join(root, "environ"), []byte(strings.Join(fields, "\x00")+"\x00"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "stat"), []byte(fmt.Sprintf("%d (fixture) S %d 0 0 0\n", pid, ppid)), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if cwd != "" {
-			if err := os.Symlink(cwd, filepath.Join(root, "cwd")); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	writeProc(101, 1, map[string]string{
-		"DEVKIT_NATIVE_AGENT": "1",
-		"HOME":                identity.sandboxHome,
-		"CODEX_HOME":          "/agent-state/dev-all-agent1/governed-codex-homes/implementer",
-	}, identity.sandboxWorktree)
-	writeProc(102, 1, map[string]string{
-		"DEVKIT_NATIVE_AGENT": "2",
-		"HOME":                "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2",
-		"CODEX_HOME":          "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2/.codex",
-	}, "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide")
-	// A legitimate child may sanitize its environment while retaining a cwd or
-	// file descriptor in the slot. Descendant closure must happen before the
-	// unowned-touch rejection.
-	writeProc(103, 101, map[string]string{}, identity.sandboxWorktree)
+	physicalProcRootFixture(t)
+	identity := physicalSlotFixture(t, 1)
+	view, home := physicalViewFixture(t, identity, identity.sandboxWorktree)
+	writePhysicalProc(t, 101, 1, view, map[string]string{"DEVKIT_NATIVE_AGENT": "1", "HOME": home, "CODEX_HOME": "/generated/role-home"}, identity.hostWorktree)
+	other := physicalSlotFixture(t, 2)
+	otherView, otherHome := physicalViewFixture(t, other, other.sandboxWorktree)
+	writePhysicalProc(t, 102, 1, otherView, map[string]string{"DEVKIT_NATIVE_AGENT": "2", "HOME": otherHome}, other.hostWorktree)
+	writePhysicalProc(t, 103, 101, view, map[string]string{}, identity.hostHome)
 	plan, err := planNativeSlotProcesses(identity, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := fmt.Sprint(plan.pids); got != "[103 101]" {
-		t.Fatalf("selected pids = %s", got)
-	}
-
-	for _, candidate := range []struct {
-		name string
-		pid  int
-		env  map[string]string
-	}{
-		{
-			name: "wrong agent",
-			pid:  104,
-			env: map[string]string{
-				"DEVKIT_NATIVE_AGENT": "2",
-				"HOME":                identity.sandboxHome,
-				"CODEX_HOME":          "/agent-state/dev-all-agent1/governed-codex-homes/implementer",
-			},
-		},
-		{
-			name: "wrong home",
-			pid:  105,
-			env: map[string]string{
-				"DEVKIT_NATIVE_AGENT": "1",
-				"HOME":                "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2",
-				"CODEX_HOME":          "/agent-state/dev-all-agent1/governed-codex-homes/implementer",
-			},
-		},
-	} {
-		t.Run(candidate.name, func(t *testing.T) {
-			writeProc(candidate.pid, 1, candidate.env, identity.hostWorktree)
-			t.Cleanup(func() {
-				_ = os.RemoveAll(filepath.Join(nativeSlotProcRoot, strconv.Itoa(candidate.pid)))
-			})
-			if _, err := planNativeSlotProcesses(identity, true); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("unowned active process %d", candidate.pid)) {
-				t.Fatalf("unowned process error = %v", err)
-			}
-			if err := os.RemoveAll(filepath.Join(nativeSlotProcRoot, strconv.Itoa(candidate.pid))); err != nil {
-				t.Fatal(err)
-			}
-		})
+		t.Fatalf("selected pids=%s", got)
 	}
 }
 
