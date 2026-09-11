@@ -226,11 +226,12 @@ func executeNativeSlotDestructiveBoundary(boundary nativeSlotDestructiveBoundary
 }
 
 type nativeProc struct {
-	pid     int
-	ppid    int
-	start   string
-	environ map[string]string
-	touches bool
+	pid              int
+	ppid             int
+	start            string
+	environ          map[string]string
+	environAvailable bool
+	touches          bool
 }
 
 var (
@@ -336,7 +337,7 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 				return nil, fmt.Errorf("inspect native process %d physical custody: %w", pid, ownershipErr)
 			}
 		}
-		processes[pid] = nativeProc{pid: pid, ppid: ppid, start: start, environ: environ, touches: touches}
+		processes[pid] = nativeProc{pid: pid, ppid: ppid, start: start, environ: environ, environAvailable: environErr == nil, touches: touches}
 		if selected {
 			owned[pid] = true
 			ownedHomes[pid] = environ["HOME"]
@@ -368,7 +369,19 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 	}
 	for pid, process := range processes {
 		if process.touches && !owned[pid] {
-			return nil, fmt.Errorf("native slot reset found unowned active process %d touching selected slot paths", pid)
+			// Report only this revalidated observation, even if the process has
+			// since exited. Diagnostics never reread /proc or grant custody. The
+			// outer boundary adds post-stop/post-history phase when applicable.
+			// Keep values bounded and omit paths, environment contents and argv.
+			start := "unavailable"
+			if ticks, err := strconv.ParseUint(process.start, 10, 64); err == nil {
+				start = strconv.FormatUint(ticks, 10)
+			}
+			environ := "unavailable"
+			if process.environAvailable {
+				environ = "available"
+			}
+			return nil, fmt.Errorf("native slot reset found unowned active process %d touching selected slot paths: slot_index=%d phase=process-custody-snapshot parent_pid=%d start_ticks=%s physical_touch=true selected_identity=false descendant_owned=false environ=%s reason=no-selected-or-descendant-custody", pid, identity.index, process.ppid, start, environ)
 		}
 	}
 	pids := make([]int, 0, len(owned))

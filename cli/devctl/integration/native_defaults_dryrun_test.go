@@ -1803,14 +1803,41 @@ fi
 			_ = foreignProcess.Wait()
 		}
 	})
+	foreignStat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", foreignProcess.Process.Pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignFields := strings.Fields(string(foreignStat)[strings.LastIndex(string(foreignStat), ")")+1:])
+	if len(foreignFields) < 20 {
+		t.Fatal("fixture process has no start identity")
+	}
 	foreignOutput, foreignErr := runSlotReset()
 	if foreignErr == nil || !strings.Contains(string(foreignOutput), fmt.Sprintf("unowned active process %d", foreignProcess.Process.Pid)) {
 		t.Fatalf("selected reset did not reject the wrong-agent toucher: %v\n%s", foreignErr, foreignOutput)
 	}
+	var refusalExit *exec.ExitError
+	if !errors.As(foreignErr, &refusalExit) || refusalExit.ExitCode() != 2 {
+		t.Fatalf("selected reset changed refusal exit semantics: %v", foreignErr)
+	}
+	for _, want := range []string{
+		"slot_index=1", "phase=process-custody-snapshot",
+		"parent_pid=" + foreignFields[1], "start_ticks=" + foreignFields[19],
+		"physical_touch=true", "selected_identity=false", "descendant_owned=false",
+		"environ=available", "reason=no-selected-or-descendant-custody",
+	} {
+		if !strings.Contains(string(foreignOutput), want) {
+			t.Fatalf("CLI refusal omitted %q: %s", want, foreignOutput)
+		}
+	}
+	if len(foreignOutput) > 1024 || strings.Contains(string(foreignOutput), "CODEX_HOME") || strings.Contains(string(foreignOutput), selectedSandboxHome) {
+		t.Fatalf("CLI refusal leaked process content or exceeded its bound: %s", foreignOutput)
+	}
+	t.Logf("selected reset refusal exit=%d: %s", refusalExit.ExitCode(), foreignOutput)
 	if _, err := os.Stat(filepath.Join(agent1Worktree, "dirty-selected")); err != nil {
 		t.Fatalf("wrong-agent rejection changed selected slot before mutation: %v", err)
 	}
 	for name, pid := range map[string]int{
+		"unowned blocker":     foreignProcess.Process.Pid,
 		"selected root":       selectedProcess.Process.Pid,
 		"selected descendant": selectedDescendantPID,
 		"sibling":             siblingProcess.Process.Pid,

@@ -1,6 +1,7 @@
 package nativecmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -179,6 +180,107 @@ func TestNativeSlotPhysicalCustodyRejectsForeignActualFileDescriptor(t *testing.
 	}
 	if _, err := planNativeSlotProcesses(selected, true); err == nil || !strings.Contains(err.Error(), "unowned active process 401") {
 		t.Fatalf("foreign fd error=%v", err)
+	}
+}
+
+func TestNativeSlotUnownedRefusalRetainsSnapshotAfterExitOrReuse(t *testing.T) {
+	for _, later := range []string{"exit", "reuse", "parent-drift", "unavailable-environ", "unavailable-start"} {
+		t.Run(later, func(t *testing.T) {
+			physicalProcRootFixture(t)
+			selected := physicalSlotFixture(t, 3)
+			secret := strings.Repeat("credential-sentinel-雪\n", 4096)
+			proc := writePhysicalProc(t, 801, 71, "/", map[string]string{"SECRET": secret}, selected.hostWorktree)
+			if err := os.WriteFile(filepath.Join(proc, "cmdline"), []byte(secret), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if later == "unavailable-environ" {
+				if err := os.Remove(filepath.Join(proc, "environ")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if later == "unavailable-start" {
+				stat, err := os.ReadFile(filepath.Join(proc, "stat"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(proc, "stat"), bytes.ReplaceAll(stat, []byte("100801"), []byte(strings.Repeat("9", 10000))), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			plan, refusal := planNativeSlotProcesses(selected, false)
+			if plan != nil || refusal == nil {
+				t.Fatalf("unowned toucher returned plan=%v error=%v", plan, refusal)
+			}
+			// Change the proc fixture before formatting the error, exactly when a
+			// controller could otherwise lose or borrow the blocker's identity.
+			if err := os.RemoveAll(proc); err != nil {
+				t.Fatal(err)
+			}
+			if later == "reuse" || later == "parent-drift" {
+				replacement := writePhysicalProc(t, 801, 99, "/", nil, t.TempDir())
+				if later == "reuse" {
+					stat, err := os.ReadFile(filepath.Join(replacement, "stat"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(replacement, "stat"), bytes.ReplaceAll(stat, []byte("100801"), []byte("200801")), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			text := refusal.Error()
+			start := "100801"
+			if later == "unavailable-start" {
+				start = "unavailable"
+			}
+			for _, want := range []string{"unowned active process 801", "slot_index=3", "phase=process-custody-snapshot", "parent_pid=71", "start_ticks=" + start, "physical_touch=true", "selected_identity=false", "descendant_owned=false", "reason=no-selected-or-descendant-custody"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("refusal lost %q: %s", want, text)
+				}
+			}
+			availability := "available"
+			if later == "unavailable-environ" {
+				availability = "unavailable"
+			}
+			if !strings.Contains(text, "environ="+availability) || len(text) > 512 || strings.Contains(text, "sentinel") || strings.Contains(text, "parent_pid=99") || strings.Contains(text, "200801") || strings.Contains(text, selected.hostWorktree) {
+				t.Fatalf("unbounded, sensitive, or later evidence in refusal: %s", text)
+			}
+			if _, err := os.Stat(selected.hostWorktree); err != nil {
+				t.Fatalf("refusal changed selected slot: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeSlotCustodyObservationDriftNeverProducesAPlan(t *testing.T) {
+	for _, field := range []string{"parent", "start"} {
+		t.Run(field, func(t *testing.T) {
+			physicalProcRootFixture(t)
+			selected := physicalSlotFixture(t, 1)
+			view, home := physicalViewFixture(t, selected, "/workspaces/dev/ouroboros-ide")
+			proc := writePhysicalProc(t, 802, 71, view, map[string]string{"DEVKIT_NATIVE_AGENT": "1", "HOME": home}, selected.hostWorktree)
+			saved := nativeSlotOpenProcessDirectory
+			t.Cleanup(func() { nativeSlotOpenProcessDirectory = saved })
+			nativeSlotOpenProcessDirectory = func(path string) (*os.File, error) {
+				file, err := saved(path)
+				stat, readErr := os.ReadFile(filepath.Join(proc, "stat"))
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				old, replacement := "S 71", "S 99"
+				if field == "start" {
+					old, replacement = "100802", "200802"
+				}
+				if writeErr := os.WriteFile(filepath.Join(proc, "stat"), bytes.ReplaceAll(stat, []byte(old), []byte(replacement)), 0600); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+				return file, err
+			}
+			plan, err := planNativeSlotProcesses(selected, false)
+			if plan != nil || err == nil || !strings.Contains(err.Error(), "changed identity during custody observation") {
+				t.Fatalf("drift returned plan=%v error=%v", plan, err)
+			}
+		})
 	}
 }
 
