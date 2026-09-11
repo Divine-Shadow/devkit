@@ -591,6 +591,12 @@
         {
           devctl = mkProductionDevctl pkgs;
           dev-all-runtime-bundle = runtimeBundle;
+          # Source-checkout reset fixtures consume immutable config bytes via
+          # a test-owned GUI projection manifest, never the host /etc manifest.
+          native-reset-test-config = pkgs.writeText "devkit-native-reset-test-config.toml" ''
+            # Immutable Devkit reset test fixture; never launches Codex.
+            model_provider = "reset-fixture"
+          '';
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {
             inherit pkgs runtimeTools;

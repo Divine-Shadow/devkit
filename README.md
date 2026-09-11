@@ -68,7 +68,7 @@ The primary local gates are:
 
 ```bash
 make -C cli/devctl build
-cd cli/devctl && go test -count=1 ./...
+make -C cli/devctl test
 nix flake check
 make overlay-runtime-smoke
 make native-overlay-matrix
@@ -79,5 +79,14 @@ make postgres-broker-container-smoke
 make retired-runtime-guard
 make nix-overlay-runtime-guard
 ```
+
+The source-checkout Go suite needs Go, Git, OpenSSH, SQLite, GNU tar and
+util-linux. `make -C cli/devctl test` builds `.#native-reset-test-config` and
+passes its immutable path as `DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE`.
+For direct `go test` invocations, supply that same package output explicitly.
+Only the integration binary linker consumes its test-owned GUI projection
+manifest; production still selects the fixed manifest and validates the
+source's store path, geometry, hash and bytes. The portable Nix Go check does
+not replace the source-checkout integration and configuration tests.
 
 Historical migration notes live under `documentation/archive/compose-retirement/`. They are retained for context and are not supported runtime documentation.

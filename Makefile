@@ -31,7 +31,7 @@ run: build-cli
 
 ci-cheap: build-cli
 	@echo "== Go tests =="
-	@cd cli/devctl && go test -count=1 ./...
+	@$(MAKE) -C cli/devctl test
 	@echo "== Nix flake check =="
 	@$(NIX) flake check
 	@$(MAKE) devctl-overlay-runtime-authority

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"devkit/cli/devctl/internal/codexhistory"
 )
 
 func buildDevctlForNativeDefaults(t *testing.T) string {
@@ -73,17 +76,19 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	if len(tags) > 0 {
 		args = append(args, "-tags", strings.Join(tags, ","))
 	}
-	args = append(
-		args,
-		"-ldflags",
-		strings.Join([]string{
-			"-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=" + sshExecutable,
-			"-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=" + knownHosts,
-			"-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=" + envExecutable,
-			"-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=" + gitExecutable,
-			"-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=" + sqliteExecutable,
-		}, " "),
-	)
+	linkerFlags := []string{
+		"-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=" + sshExecutable,
+		"-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=" + knownHosts,
+		"-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=" + envExecutable,
+		"-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=" + gitExecutable,
+		"-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=" + sqliteExecutable,
+	}
+	// This input exists only in the test binary builder. Production callers
+	// still use the fixed /etc manifest and cannot override it via environment.
+	if manifest := os.Getenv("DEVKIT_TEST_GUI_CONFIG_PROJECTION_MANIFEST"); manifest != "" {
+		linkerFlags = append(linkerFlags, "-X=devkit/cli/devctl/internal/runtime/plan.guiCodexConfigProjectionManifestPath="+manifest)
+	}
+	args = append(args, "-ldflags", strings.Join(linkerFlags, " "))
 	args = append(args, "-o", bin, "./")
 	cmd := exec.Command("go", args...)
 	cmd.Dir = filepath.Join("..")
@@ -92,6 +97,44 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 		t.Skipf("go build failed: %v\n%s", err, out)
 	}
 	return bin
+}
+
+func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count int) []byte {
+	t.Helper()
+	source := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
+	if !strings.HasPrefix(source, "/nix/store/") || filepath.Clean(source) != source {
+		t.Fatal("supply DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE from nix build .#native-reset-test-config (or use make test)")
+	}
+	data, err := os.ReadFile(source)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("read immutable reset config fixture: %v", err)
+	}
+	digest := sha256.Sum256(data)
+	records := make([]map[string]any, 0, count)
+	for index := 1; index <= count; index++ {
+		workspace := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index))
+		worktree := filepath.Join(workspace, "ouroboros-ide")
+		home := filepath.Join(workspace, fmt.Sprintf(".devhome-agent%d", index))
+		if index == 1 {
+			home = filepath.Join(worktree, ".devhome-agent1")
+		}
+		records = append(records, map[string]any{
+			"targetId": fmt.Sprintf("reset-fixture-%d", index), "configProfile": "reset-fixture",
+			"project": "dev-all", "repo": "ouroboros-ide", "agentIndex": index,
+			"workspaceRoot": workspace, "hostWorktree": worktree, "hostHome": home,
+			"source": source, "sourceSha256": fmt.Sprintf("%x", digest),
+		})
+	}
+	manifest := filepath.Join(t.TempDir(), "codex-config-projections.json")
+	payload, err := json.Marshal(map[string]any{"schemaVersion": "devkit/gui-codex-config-projections/v1", "projections": records})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVKIT_TEST_GUI_CONFIG_PROJECTION_MANIFEST", manifest)
+	return data
 }
 
 func nativeDefaultsRoot(t *testing.T) string {
@@ -1138,8 +1181,9 @@ func TestNativeTopLevelExecProxySocketDryRun(t *testing.T) {
 }
 
 func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
-	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
+	writeNativeResetGUIConfigFixture(t, filepath.Join(filepath.Dir(root), "agent-worktrees"), 2)
+	bin := buildDevctlForNativeDefaults(t)
 
 	freshOutput, err := runNativeDefaultDryRun(t, bin, root, "fresh-open", "2")
 	if err != nil {
@@ -1169,7 +1213,8 @@ func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
-	worktreeRoot := t.TempDir()
+	worktreeRoot := filepath.Join(t.TempDir(), "agent-worktrees")
+	expectedGUIConfig := writeNativeResetGUIConfigFixture(t, worktreeRoot, 3)
 	root := filepath.Join(base, "devkit")
 	packageDevctl := filepath.Join(root, "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(packageDevctl), 0o755); err != nil {
@@ -1429,6 +1474,22 @@ fi
 		command.Env = env
 		_ = command.Run()
 	})
+	assertDisposedSlotRoot := func(path string) {
+		t.Helper()
+		// Whole-prefix reset preserves an allocated root's physical directory
+		// and disposes its contents. An unallocated slot may remain absent.
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil || !info.IsDir() {
+			t.Fatalf("disposed slot root is not a directory: %s: %v", path, err)
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("disposed slot root retains contents: %s: %v entries=%v", path, err, entries)
+		}
+	}
 
 	output, err := runReset()
 	if err == nil {
@@ -1440,9 +1501,9 @@ fi
 	if _, readErr := os.Lstat(staleMarker); !errors.Is(readErr, os.ErrNotExist) {
 		t.Fatalf("failed reset did not dispose stale package-owned payload: %v", readErr)
 	}
+	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent1"))
+	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent3"))
 	for _, path := range []string{
-		filepath.Join(worktreeRoot, "agent1"),
-		filepath.Join(worktreeRoot, "agent3"),
 		filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git"),
 		brokerSocket,
 		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
@@ -1487,10 +1548,14 @@ fi
 				t.Fatalf("fresh JSON reset prerequisite %s is not absent: %v", absent, err)
 			}
 		}
+		if err := os.MkdirAll(filepath.Dir(selectedWorktree), 0700); err != nil {
+			t.Fatal(err)
+		}
 
 		command := exec.Command(packageDevctl,
 			"-p", "dev-all", "native", "reset",
 			"--repo", "ouroboros-ide", "--index", "1", "--format", "json",
+			"--workspace-root", filepath.Dir(selectedWorktree),
 		)
 		command.Env = env
 		var stdout bytes.Buffer
@@ -1604,8 +1669,13 @@ fi
 		if index == 1 {
 			hostHome = filepath.Join(worktree, ".devhome-agent1")
 		}
-		if _, err := os.Lstat(filepath.Join(hostHome, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("agent%d ordinary reset trusted hostile DEVKIT_CODEX_CONFIG_SOURCE: %v", index, err)
+		actualConfig, err := os.ReadFile(filepath.Join(hostHome, ".codex", "config.toml"))
+		if err != nil || !bytes.Equal(actualConfig, expectedGUIConfig) {
+			t.Fatalf("agent%d reset did not preserve exact immutable GUI config bytes: %v", index, err)
+		}
+		hostileConfig, err := os.ReadFile(filepath.Join(base, ".devkit", "nix-codex-config.toml"))
+		if err != nil || bytes.Equal(actualConfig, hostileConfig) {
+			t.Fatalf("agent%d reset trusted hostile ambient DEVKIT_CODEX_CONFIG_SOURCE: %v", index, err)
 		}
 	}
 	if _, err := os.Lstat(staleMarker); !errors.Is(err, os.ErrNotExist) {
@@ -1684,7 +1754,9 @@ fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectedSandboxHome := "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1"
+	// These fixture processes run in the test's mount view, so HOME must name
+	// their actual selected objects, not an unmounted consumer-side spelling.
+	selectedProcessHome := filepath.Join(agent1Worktree, ".devhome-agent1")
 	selectedProcess := exec.Command(
 		"sh", "-c",
 		`env -i "$1" --pid="$$" -f /dev/null & printf '%s\n' "$!"; wait`,
@@ -1692,7 +1764,7 @@ fi
 	)
 	selectedProcess.Env = append(os.Environ(),
 		"DEVKIT_NATIVE_AGENT=1",
-		"HOME="+selectedSandboxHome,
+		"HOME="+selectedProcessHome,
 		"CODEX_HOME="+filepath.Join(base, "governed-codex-homes", "implementer"),
 	)
 	selectedProcess.Dir = agent1Worktree
@@ -1736,8 +1808,7 @@ fi
 			_ = syscall.Kill(selectedDescendantPID, syscall.SIGKILL)
 		}
 	})
-	siblingSandboxHome := "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2"
-	siblingProcess := startSlotProcess(2, siblingSandboxHome, filepath.Join(siblingSandboxHome, ".codex"), agent2Worktree)
+	siblingProcess := startSlotProcess(2, agent2Home, filepath.Join(agent2Home, ".codex"), agent2Worktree)
 	t.Cleanup(func() {
 		if siblingProcess.Process != nil {
 			_ = siblingProcess.Process.Kill()
@@ -1773,10 +1844,18 @@ fi
 	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "commit", "-m", "advance declared source")
 	runNativeFixtureCommand(t, "git", "-C", sourceRepo, "push", remoteRepo, "main:main")
 	currentHead := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", sourceRepo, "rev-parse", "HEAD"))
+	historyDatabase := filepath.Join(selectedProcessHome, ".codex", "goals_1.sqlite")
+	runNativeFixtureCommand(t, "sqlite3", historyDatabase,
+		"CREATE TABLE goals (goal TEXT); INSERT INTO goals VALUES ('protected-history-sentinel');")
+	historyBefore, err := os.ReadFile(historyDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	override := exec.Command(packageDevctl,
 		"-p", "dev-all", "native", "reset",
 		"--repo", "ouroboros-ide", "--index", "1",
+		"--workspace-root", filepath.Dir(agent1Worktree), "--format", "json",
 		"--worktree-root", filepath.Join(base, "escape"),
 	)
 	override.Env = env
@@ -1788,15 +1867,21 @@ fi
 		t.Fatalf("caller path override changed selected slot before rejection: %v", err)
 	}
 
+	var slotStdout []byte
 	runSlotReset := func() ([]byte, error) {
 		command := exec.Command(packageDevctl,
 			"-p", "dev-all", "native", "reset",
 			"--repo", "ouroboros-ide", "--index", "1",
+			"--workspace-root", filepath.Dir(agent1Worktree), "--format", "json",
 		)
 		command.Env = env
-		return command.CombinedOutput()
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		err := command.Run()
+		slotStdout = append([]byte(nil), stdout.Bytes()...)
+		return append(stderr.Bytes(), stdout.Bytes()...), err
 	}
-	foreignProcess := startSlotProcess(2, selectedSandboxHome, filepath.Join(selectedSandboxHome, ".codex"), agent1Worktree)
+	foreignProcess := startSlotProcess(2, selectedProcessHome, filepath.Join(selectedProcessHome, ".codex"), agent1Worktree)
 	t.Cleanup(func() {
 		if foreignProcess.Process != nil {
 			_ = foreignProcess.Process.Kill()
@@ -1829,8 +1914,11 @@ fi
 			t.Fatalf("CLI refusal omitted %q: %s", want, foreignOutput)
 		}
 	}
-	if len(foreignOutput) > 1024 || strings.Contains(string(foreignOutput), "CODEX_HOME") || strings.Contains(string(foreignOutput), selectedSandboxHome) {
+	if len(slotStdout) != 0 || len(foreignOutput) > 1024 || strings.Contains(string(foreignOutput), "CODEX_HOME") || strings.Contains(string(foreignOutput), selectedProcessHome) || strings.Contains(string(foreignOutput), "protected-history-sentinel") {
 		t.Fatalf("CLI refusal leaked process content or exceeded its bound: %s", foreignOutput)
+	}
+	if after, err := os.ReadFile(historyDatabase); err != nil || !bytes.Equal(after, historyBefore) {
+		t.Fatalf("unowned process refusal changed protected history: %v", err)
 	}
 	t.Logf("selected reset refusal exit=%d: %s", refusalExit.ExitCode(), foreignOutput)
 	if _, err := os.Stat(filepath.Join(agent1Worktree, "dirty-selected")); err != nil {
@@ -1855,11 +1943,77 @@ fi
 	if slotErr != nil {
 		t.Fatalf("per-slot reset failed: %v\n%s", slotErr, slotOutput)
 	}
-	for _, want := range []string{"command: reset", "index: 1", "status: ready", "runtime_ready: 1/1", "repo_ready: 1/1"} {
-		if !strings.Contains(string(slotOutput), want) {
-			t.Fatalf("per-slot reset omitted %q:\n%s", want, slotOutput)
+	var slotReceipt struct {
+		Command  string `json:"command"`
+		Index    int    `json:"index"`
+		Status   string `json:"status"`
+		Head     string `json:"head"`
+		Capacity struct {
+			Total        int `json:"total"`
+			RuntimeReady int `json:"runtime_ready"`
+			RepoReady    int `json:"repo_ready"`
+		} `json:"capacity"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(slotStdout))
+	if err := decoder.Decode(&slotReceipt); err != nil {
+		t.Fatalf("decode selected reset JSON receipt: %v\n%s", err, slotOutput)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		t.Fatalf("selected reset emitted more than one JSON receipt: %v", err)
+	}
+	if slotReceipt.Command != "reset" || slotReceipt.Index != 1 || slotReceipt.Status != "ready" || slotReceipt.Head != currentHead || slotReceipt.Capacity.Total != 1 || slotReceipt.Capacity.RuntimeReady != 1 || slotReceipt.Capacity.RepoReady != 1 {
+		t.Fatalf("unexpected selected reset receipt: %+v", slotReceipt)
+	}
+	// The real CLI must commit history before deleting/reconstructing the home.
+	// Bind its printed custody identity to the actual immutable snapshot bytes.
+	var historyManifestPath, printedBundle string
+	for _, line := range strings.Split(string(slotOutput), "\n") {
+		if strings.HasPrefix(line, "codex_gui_history_custody ") && strings.Contains(line, " status=captured ") {
+			for _, field := range strings.Fields(line) {
+				if value, ok := strings.CutPrefix(field, "manifest="); ok {
+					historyManifestPath = value
+				}
+				if value, ok := strings.CutPrefix(field, "bundle_sha256="); ok {
+					printedBundle = value
+				}
+			}
 		}
 	}
+	manifestBytes, err := os.ReadFile(historyManifestPath)
+	if err != nil {
+		t.Fatalf("read CLI history manifest: %v", err)
+	}
+	var historyManifest struct {
+		Schema string `json:"schema_version"`
+		Status string `json:"status"`
+		Kind   string `json:"reset_kind"`
+		Index  int    `json:"agent_index"`
+		Home   string `json:"source_host_home"`
+		Bundle string `json:"bundle_sha256"`
+		Files  []struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(manifestBytes, &historyManifest); err != nil {
+		t.Fatal(err)
+	}
+	if historyManifest.Schema != codexhistory.SnapshotSchema || historyManifest.Status != "complete" || historyManifest.Kind != "selected-slot-reset" || historyManifest.Index != 1 || historyManifest.Home != selectedProcessHome || historyManifest.Bundle == "" || historyManifest.Bundle != printedBundle {
+		t.Fatalf("CLI history snapshot identity differs from receipt: %+v", historyManifest)
+	}
+	if len(historyManifest.Files) != 1 || historyManifest.Files[0].Path != "goals_1.sqlite" {
+		t.Fatalf("unexpected selected history payload manifest: %+v", historyManifest.Files)
+	}
+	payload := filepath.Join(filepath.Dir(historyManifestPath), "payload", "goals_1.sqlite")
+	capturedHistory, err := os.ReadFile(payload)
+	if err != nil || !bytes.Equal(capturedHistory, historyBefore) || fmt.Sprintf("%x", sha256.Sum256(capturedHistory)) != historyManifest.Files[0].SHA256 {
+		t.Fatalf("CLI reset lost captured history bytes: %v", err)
+	}
+	if strings.Contains(string(slotOutput), "protected-history-sentinel") || strings.Contains(string(manifestBytes), "protected-history-sentinel") {
+		t.Fatal("history content leaked through CLI diagnostics or manifest")
+	}
+	t.Logf("selected reset history: schema=%s bundle_sha256=%s payload_sha256=%s", historyManifest.Schema, historyManifest.Bundle, historyManifest.Files[0].SHA256)
 	if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent1Worktree, "rev-parse", "HEAD")); got != currentHead {
 		t.Fatalf("selected slot HEAD = %s, want declared source %s", got, currentHead)
 	}
@@ -2027,16 +2181,14 @@ fi
 		if err == nil {
 			t.Fatalf("%s unexpectedly succeeded:\n%s", label, output)
 		}
+		for index := 1; index <= 3; index++ {
+			assertDisposedSlotRoot(filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index)))
+			assertDisposedSlotRoot(filepath.Join(base, ".devkit", "native-agents", fmt.Sprintf("dev-all-agent%d", index)))
+		}
 		for _, path := range []string{
-			filepath.Join(base, "agent-worktrees", "agent1"),
-			filepath.Join(base, "agent-worktrees", "agent2"),
-			filepath.Join(base, "agent-worktrees", "agent3"),
-			filepath.Join(base, "agent-worktrees", ".devkit", "git", "agent1", "ouroboros-ide.git"),
-			filepath.Join(base, "agent-worktrees", ".devkit", "git", "agent2", "ouroboros-ide.git"),
-			filepath.Join(base, "agent-worktrees", ".devkit", "git", "agent3", "ouroboros-ide.git"),
-			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent1"),
-			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2"),
-			filepath.Join(base, ".devkit", "native-agents", "dev-all-agent3"),
+			filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git"),
+			filepath.Join(worktreeRoot, ".devkit", "git", "agent2", "ouroboros-ide.git"),
+			filepath.Join(worktreeRoot, ".devkit", "git", "agent3", "ouroboros-ide.git"),
 			filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json"),
 			brokerSocket,
 			filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
