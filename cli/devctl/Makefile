@@ -9,7 +9,7 @@ build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o $(BIN) ./
 
 test:
-	@fixture="$$($(NIX) build --no-link --print-out-paths --no-write-lock-file '../..#native-reset-test-config')" && \
+	@fixture="$$($(NIX) build --no-link --print-out-paths --output-lock-file /dev/null '../..#native-reset-test-config')" && \
 	  DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE="$$fixture" go test -count=1 ./...
 
 clean:
