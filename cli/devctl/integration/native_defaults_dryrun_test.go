@@ -812,7 +812,7 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 				args = append(args, proxySocketArgs...)
 			}
 			cmd := exec.Command(bin, args...)
-			cmd.Env = append(os.Environ(),
+			cmd.Env = isolatedNativeFixtureEnv(
 				"DEVKIT_ROOT="+root,
 				"DEVKIT_NO_TMUX=1",
 				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
@@ -885,7 +885,7 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 				"--proxy-socket", sharedSocket,
 				"--", "true",
 			)
-			cmd.Env = append(os.Environ(),
+			cmd.Env = isolatedNativeFixtureEnv(
 				"DEVKIT_ROOT="+root,
 				"DEVKIT_NO_TMUX=1",
 				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
