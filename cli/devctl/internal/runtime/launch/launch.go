@@ -34,6 +34,12 @@ var (
 )
 
 func Prepare(p nativeplan.Plan) error {
+	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
+		return err
+	}
+	if err := verifyGitBacklink(p, true); err != nil {
+		return err
+	}
 	sshAuthority, err := resolvePackageSSHAuthority()
 	if err != nil {
 		return err
@@ -84,6 +90,9 @@ func Prepare(p nativeplan.Plan) error {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
+	}
+	if err := prepareGitBacklink(p); err != nil {
+		return err
 	}
 	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
 		return err
@@ -2169,6 +2178,12 @@ func BuildManagedAppServerBubblewrap(p nativeplan.Plan, command []string) (Comma
 }
 
 func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (Command, error) {
+	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
+		return Command{}, err
+	}
+	if err := verifyGitBacklink(p, true); err != nil {
+		return Command{}, err
+	}
 	if err := validateManagementControllerProfilePlan(p); err != nil {
 		return Command{}, err
 	}

@@ -255,6 +255,16 @@ func TestProductWorkspaceRootProjectsOnlySelectedLane(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	reverse, err := filepath.Rel(worktreeGitDir, filepath.Join(hostWorktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "gitdir"), []byte(reverse+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commonGitDir, "devkit-owned-common"), []byte("schema=devkit/native-owned-common-repository/v2\nrepository=ouroboros-ide\norigin=fixture\nlane=agent4\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	opts := BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot},
 		Project:          "dev-all",
@@ -1069,6 +1079,17 @@ func TestProductWorkspaceRootKeepsExactLegacyCommonBindDuringSlotMigration(t *te
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reverse, err := filepath.Rel(worktreeGitDir, filepath.Join(hostWorktree, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreeGitDir, "gitdir"), []byte(reverse+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyCommonGitDir, "devkit-owned-common"), []byte("schema=devkit/native-owned-common-repository/v1\nrepository=ouroboros-ide\norigin=fixture\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

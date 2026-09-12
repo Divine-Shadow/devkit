@@ -88,6 +88,9 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	if manifest := os.Getenv("DEVKIT_TEST_GUI_CONFIG_PROJECTION_MANIFEST"); manifest != "" {
 		linkerFlags = append(linkerFlags, "-X=devkit/cli/devctl/internal/runtime/plan.guiCodexConfigProjectionManifestPath="+manifest)
 	}
+	if source := os.Getenv("DEVKIT_TEST_GIT_PROJECTION_GOVERNANCE_SOURCE"); source != "" {
+		linkerFlags = append(linkerFlags, "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceProductGovernanceEnvSource="+source)
+	}
 	args = append(args, "-ldflags", strings.Join(linkerFlags, " "))
 	args = append(args, "-o", bin, "./")
 	cmd := exec.Command("go", args...)
@@ -921,12 +924,47 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 }
 
 func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
+	testNativeTopLevelRelativeMetadata(t, false)
+}
+
+func TestNativeTopLevelSelectedLaneGitReciprocity(t *testing.T) {
+	testNativeTopLevelRelativeMetadata(t, true)
+}
+
+func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
+	repoName := "test-repo"
+	var realBwrap, realEnv, realGit string
+	if selectedLane {
+		repoName = "ouroboros-ide"
+		var err error
+		realBwrap, err = exec.LookPath("bwrap")
+		if err != nil {
+			t.Skip("real bubblewrap unavailable; no native namespace proof")
+		}
+		realEnv, err = exec.LookPath("env")
+		if err != nil {
+			t.Fatal(err)
+		}
+		realGit, err = exec.LookPath("git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(realBwrap, "--unshare-user", "--ro-bind", "/nix/store", "/nix/store", "--proc", "/proc", "--dev", "/dev", realGit, "--version")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("real namespace unavailable, not a PASS: %v: %s", err, out)
+		}
+		source := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
+		if !strings.HasPrefix(source, "/nix/store/") {
+			t.Fatal("use the normal make test immutable config fixture")
+		}
+		t.Setenv("DEVKIT_TEST_GIT_PROJECTION_GOVERNANCE_SOURCE", source)
+	}
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
 	writeNixCodexConfigSource(t, root)
 	devRoot := filepath.Dir(root)
-	repo := filepath.Join(devRoot, "test-repo")
-	bare := filepath.Join(root, "fixture-remotes", "test-repo.git")
+	repo := filepath.Join(devRoot, repoName)
+	bare := filepath.Join(root, "fixture-remotes", repoName+".git")
 	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -981,7 +1019,7 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sshDir, "ssh"), []byte(sshScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin = buildDevctlForNativeDefaultsWithSSHAndTags(t, filepath.Join(sshDir, "ssh"))
+	bin = buildDevctlForNativeDefaultsWithSSHAndTags(t, filepath.Join(sshDir, "ssh"), "devkitintegration")
 
 	hostHome := filepath.Join(root, "host-home")
 	if err := os.MkdirAll(filepath.Join(hostHome, ".ssh"), 0o700); err != nil {
@@ -1009,7 +1047,7 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		bin,
 		"-p", "dev-all",
 		"native", "prepare",
-		"--repo", "test-repo",
+		"--repo", repoName,
 		"--count", "1",
 		"--base-branch", "main",
 		"--branch-prefix", "isolated-agent",
@@ -1032,21 +1070,21 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prepareOut), `"sandbox_worktree": "/workspaces/dev/isolated-top-level/agent1/test-repo"`) {
+	if !strings.Contains(string(prepareOut), `"sandbox_worktree": "/workspaces/dev/isolated-top-level/agent1/`+repoName+`"`) {
 		t.Fatalf("native prepare omitted isolated sandbox projection:\n%s", prepareOut)
 	}
 	sshInvocations, err := os.ReadFile(sshLog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bootstrapConfig := filepath.Join(isolatedRoot, "agent1", "test-repo", ".devhome-agent1", ".ssh", "config")
+	bootstrapConfig := filepath.Join(isolatedRoot, "agent1", repoName, ".devhome-agent1", ".ssh", "config")
 	if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
 		!strings.Contains(string(sshInvocations), "-F "+bootstrapConfig) ||
 		strings.Contains(string(sshInvocations), "/dev/null") {
 		t.Fatalf("native prepare did not use exactly one package-owned SSH fetch:\n%s", sshInvocations)
 	}
 
-	worktree := filepath.Join(isolatedRoot, "agent1", "test-repo")
+	worktree := filepath.Join(isolatedRoot, "agent1", repoName)
 	gitFile, err := os.ReadFile(filepath.Join(worktree, ".git"))
 	if err != nil {
 		t.Fatal(err)
@@ -1064,7 +1102,7 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		t.Fatalf("native prepare emitted non-portable commondir: %q", commondir)
 	}
 	commonDir := filepath.Clean(filepath.Join(gitdir, strings.TrimSpace(string(commondir))))
-	wantCommonDir := filepath.Join(isolatedRoot, ".devkit", "git", "agent1", "test-repo.git")
+	wantCommonDir := filepath.Join(isolatedRoot, ".devkit", "git", "agent1", repoName+".git")
 	if commonDir != wantCommonDir {
 		t.Fatalf("native prepare common directory = %s, want package-owned %s", commonDir, wantCommonDir)
 	}
@@ -1098,11 +1136,37 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+
+	if selectedLane {
+		for path, content := range map[string]string{
+			filepath.Join(root, ".devkit", "ouro8-governance-env.sh"):        "# fixture runtime projection\n",
+			filepath.Join(root, ".devkit", "ouro8-governance-repo-env.json"): "{}\n",
+			filepath.Join(root, "allowlist.txt"):                             "fixture.invalid\n",
+			filepath.Join(root, "nscd-fixture"):                              "fixture bind only\n",
+		} {
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.MkdirAll(filepath.Join(root, "kit", "bin"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "kit", "bin", "devctl"), data, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	execCmd := exec.Command(
 		bin,
 		"-p", "dev-all",
 		"exec", "1",
-		"--repo", "test-repo",
+		"--repo", repoName,
 		"--worktree-root", isolatedRoot,
 		"--worktree-container-root", "/workspaces/dev/isolated-top-level",
 		"--", "true",
@@ -1116,6 +1180,21 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 		"DEVKIT_RUNTIME_SHELL_LAUNCHER=/bin/sh",
 		"PATH="+bwrapDir+string(os.PathListSeparator)+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
+
+	if selectedLane {
+		proxyRoot, err := os.MkdirTemp("/tmp", "dkg-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(proxyRoot) })
+		execCmd = exec.Command(bin, "-p", "dev-all", "exec", "1", "--repo", repoName, "--worktree-root", isolatedRoot,
+			"--workspace-root", filepath.Dir(worktree), "--isolation-profile", "workspace-egress",
+			"--egress-allowlist", filepath.Join(root, "allowlist.txt"), "--proxy-socket", filepath.Join(proxyRoot, "proxy.sock"),
+			"--", realGit, "worktree", "list", "--porcelain")
+		execCmd.Env = isolatedNativeFixtureEnv("DEVKIT_ROOT="+root, "DEVKIT_NO_TMUX=1", "HOME="+hostHome,
+			"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"), "DEVKIT_RUNTIME_BWRAP_BINARY="+realBwrap,
+			"DEVKIT_RUNTIME_SHELL_LAUNCHER="+realEnv, "DEVKIT_INTEGRATION_NSCD_SOURCE="+filepath.Join(root, "nscd-fixture"))
+	}
 	gitProbe := exec.Command("git", "-C", worktree, "rev-parse", "--show-toplevel")
 	gitProbe.Env = execCmd.Env
 	if probeOut, probeErr := gitProbe.CombinedOutput(); probeErr != nil {
@@ -1128,8 +1207,28 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("native exec after isolated prepare: %v\n%s", err, execOut)
 	}
-	if !strings.Contains(string(execOut), "__DEVKIT_ISOLATED_EXEC__=PASS") {
+	if !selectedLane && !strings.Contains(string(execOut), "__DEVKIT_ISOLATED_EXEC__=PASS") {
 		t.Fatalf("native exec suppressed isolated result projection:\n%s", execOut)
+	}
+
+	if selectedLane {
+		if !strings.Contains(string(execOut), "worktree /workspaces/dev/ouroboros-ide\n") || strings.Contains(string(execOut), "prunable") {
+			t.Fatalf("actual CLI reciprocal registration invalid: %s", execOut)
+		}
+		args := append([]string{}, execCmd.Args[1:len(execCmd.Args)-4]...)
+		args = append(args, "--", realGit, "update-ref", "refs/devkit/native-cli-proof", "HEAD")
+		writeCmd := exec.Command(bin, args...)
+		writeCmd.Env = execCmd.Env
+		if out, err := writeCmd.CombinedOutput(); err != nil {
+			t.Fatalf("native CLI ref write: %v: %s", err, out)
+		}
+		run("git", "-C", worktree, "show-ref", "--verify", "refs/devkit/native-cli-proof")
+		for path, want := range map[string][]byte{filepath.Join(worktree, ".git"): gitFile, filepath.Join(gitdir, "commondir"): commondir, filepath.Join(gitdir, "gitdir"): reverseGitdir} {
+			got, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("native CLI changed host pointer %s: %v", path, err)
+			}
+		}
 	}
 
 	projectedRoot := filepath.Join(t.TempDir(), "unrelated", "sandbox", "depth", "product-root")
@@ -1139,7 +1238,7 @@ func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
 	if err := os.Rename(isolatedRoot, projectedRoot); err != nil {
 		t.Fatalf("project owned native root %s -> %s: %v", isolatedRoot, projectedRoot, err)
 	}
-	projectedWorktree := filepath.Join(projectedRoot, "agent1", "test-repo")
+	projectedWorktree := filepath.Join(projectedRoot, "agent1", repoName)
 	run("git", "-C", projectedWorktree, "rev-parse", "--show-toplevel")
 	run("git", "-C", projectedWorktree, "update-ref", "refs/devkit/projected-top-level-proof", "HEAD")
 	run("git", "-C", projectedWorktree, "update-ref", "-d", "refs/devkit/projected-top-level-proof")
@@ -3020,7 +3119,13 @@ native:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(packageDevctl, devctlBytes, 0o755); err != nil {
+		if err := os.WriteFile(packageDevctl+".next", devctlBytes, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// A completed refusal can still have an exiting ProxyCommand holding
+		// the old executable inode. Install the next fixture atomically; do
+		// not truncate that running image or weaken the real SSH-chain check.
+		if err := os.Rename(packageDevctl+".next", packageDevctl); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -39,6 +39,7 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
+	GitBacklink            *GitBacklinkProjection     `json:"git_backlink,omitempty"`
 	Agent                  agent.Spec                 `json:"agent"`
 	GUITargetConfig        *GUITargetConfigProjection `json:"gui_target_config,omitempty"`
 	DevkitHostRoot         string                     `json:"devkit_host_root"`
@@ -526,6 +527,14 @@ func Build(opts BuildOptions) (Plan, error) {
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})
 	}
+	projection, err := gitBacklinkProjection(p)
+	if err != nil {
+		return Plan{}, err
+	}
+	p.GitBacklink = projection
+	if projection != nil {
+		p.Binds = append(p.Binds, Bind{Source: projection.Source, Target: projection.Target, Mode: "ro", Required: true})
+	}
 	p.LauncherArgs = launcherArgs(p)
 	return p, nil
 }
@@ -902,10 +911,10 @@ func gitMetadataBinds(hostWorktree, sandboxWorktree string) []Bind {
 	commonDir := resolveCommondirValue(commondirValue, gitDir)
 	if !filepath.IsAbs(gitdirValue) {
 		if commonDir != "" {
-			// Relative linked-worktree metadata is intentionally portable
-			// across the host dev root and its /workspaces/dev projection.
-			// Mount the common repository only at the sandbox-resolved target;
-			// no host-path alias is part of the normal contract.
+			// Resolve the native forward path to the same common repository.
+			// A selected lane has non-isomorphic reverse geometry; Build adds
+			// its validated read-only backlink projection after this bind.
+			// No host-path alias is part of the normal contract.
 			sandboxCommonDir := resolveCommondirValue(commondirValue, sandboxGitDir)
 			if sandboxCommonDir != "" {
 				return []Bind{{Source: commonDir, Target: sandboxCommonDir, Mode: "rw", Required: true}}

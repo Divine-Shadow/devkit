@@ -859,6 +859,10 @@ func TestSetupNativeIsolatedOwnedRootsUseRelativeCanonicalMetadata(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
+		metadata, err := InspectNativeLaneGitMetadata(worktree, worktreeRoot, "ouroboros-ide", 1)
+		if err != nil || metadata.CommonDir != commonDir || metadata.Worktree != worktree {
+			t.Fatalf("source-owned setup did not admit exact reciprocal projection: %#v %v", metadata, err)
+		}
 		checkBranchAndUpstream(t, worktree, branchPrefix+"1")
 		gitdirs = append(gitdirs, checkRelativeNativeMetadata(
 			t,
