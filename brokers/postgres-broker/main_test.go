@@ -361,6 +361,53 @@ func TestSandboxPostgresEndpointsAreConcurrentAndContainerBound(t *testing.T) {
 	}
 }
 
+func TestSandboxPostgresEndpointBoundsSilentAgentProxyBeforeReady(t *testing.T) {
+	tmp := t.TempDir()
+	socket := filepath.Join(tmp, "silent-agent.sock")
+	agent, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agent.Close()
+	accepted := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		conn, acceptErr := agent.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		close(accepted)
+		<-release
+	}()
+	defer close(release)
+
+	endpoint, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready bytes.Buffer
+	started := time.Now()
+	err = runSandboxPostgresEndpointAtWithin(socket, "managed-postgres", endpoint, &ready, 50*time.Millisecond)
+	if !errors.Is(err, ErrSandboxEndpointLeaseTimeout) {
+		t.Fatalf("silent endpoint error = %v, want lease timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("silent endpoint lease was not bounded: %s", elapsed)
+	}
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("silent agent proxy did not receive the bounded lease request")
+	}
+	if ready.Len() != 0 {
+		t.Fatalf("helper published readiness before lease admission: %q", ready.String())
+	}
+	if _, acceptErr := endpoint.Accept(); acceptErr == nil {
+		t.Fatal("endpoint listener survived failed lease admission")
+	}
+}
+
 func endpointEcho(t *testing.T, prefix string) (string, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

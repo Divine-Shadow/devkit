@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -20,7 +23,13 @@ const (
 	runHeader             = "X-Devkit-Run-ID"
 	credentialHeader      = "X-Devkit-Endpoint-Credential"
 	leaseHeader           = "X-Devkit-Postgres-Lease"
+	sandboxLeaseTimeout   = 5 * time.Second
 )
+
+// ErrSandboxEndpointLeaseTimeout distinguishes an unavailable agent proxy from
+// a rejected container lease. Callers must not wait indefinitely before
+// publishing an in-sandbox PostgreSQL endpoint.
+var ErrSandboxEndpointLeaseTimeout = errors.New("sandbox postgres endpoint lease timed out")
 
 // handleEndpointLease is deliberately outside the Docker API namespace.  The
 // only supported endpoint is a broker-managed Postgres 5432 lease; it is not a
@@ -254,7 +263,11 @@ func runSandboxPostgresEndpoint(socket, containerID string) error {
 }
 
 func runSandboxPostgresEndpointAt(socket, containerID string, listener net.Listener, ready io.Writer) error {
-	lease, err := sandboxLease(socket, containerID)
+	return runSandboxPostgresEndpointAtWithin(socket, containerID, listener, ready, sandboxLeaseTimeout)
+}
+
+func runSandboxPostgresEndpointAtWithin(socket, containerID string, listener net.Listener, ready io.Writer, timeout time.Duration) error {
+	lease, err := sandboxLeaseWithin(socket, containerID, timeout)
 	if err != nil {
 		_ = listener.Close()
 		return err
@@ -282,16 +295,28 @@ func runSandboxPostgresEndpointAt(socket, containerID string, listener net.Liste
 }
 
 func sandboxLease(socket, id string) (string, error) {
+	return sandboxLeaseWithin(socket, id, sandboxLeaseTimeout)
+}
+
+func sandboxLeaseWithin(socket, id string, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		return "", fmt.Errorf("sandbox postgres endpoint lease timeout must be positive")
+	}
 	client, target, err := buildClient("unix://" + socket)
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest(http.MethodPost, target.ResolveReference(&url.URL{Path: endpointLeasePrefix + id}).String(), nil)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.ResolveReference(&url.URL{Path: endpointLeasePrefix + id}).String(), nil)
 	if err != nil {
 		return "", err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("%w after %s", ErrSandboxEndpointLeaseTimeout, timeout)
+		}
 		return "", err
 	}
 	defer resp.Body.Close()
