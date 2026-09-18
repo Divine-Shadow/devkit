@@ -34,6 +34,11 @@ const (
 	managementControllerLinuxDesktopHome    = "/var/lib/codex-linux-desktop/home/.codex"
 	managementControllerLinuxDesktopSocket  = "linux-desktop-auth.sock"
 	managementControllerLinuxDesktopService = "codex-linux-desktop.service"
+	managementControllerAuthRefreshRoot     = "/home/bayesartre/.codex-identities"
+	managementControllerAuthRefreshModel    = "gpt-5.6-terra"
+	managementControllerAuthRefreshEffort   = "medium"
+	managementControllerAuthRefreshTier     = "default"
+	managementControllerAuthRefreshCWD      = "/tmp"
 	controllerOperationStateDirectory       = "/var/lib/fleet-controller-operation"
 	controllerProductAgentSocket            = "/run/fleet-product-agent-lifecycle/control.sock"
 	controllerProductAgentOperation         = "cycle-test"
@@ -325,6 +330,15 @@ type ControllerProfileLinuxDesktopAuth struct {
 	ReloadExecutable string `json:"reloadExecutable"`
 }
 
+type ControllerProfileAuthRefresh struct {
+	IdentityRoot     string `json:"identityRoot"`
+	CodexExecutable  string `json:"codexExecutable"`
+	Model            string `json:"model"`
+	ReasoningEffort  string `json:"reasoningEffort"`
+	ServiceTier      string `json:"serviceTier"`
+	WorkingDirectory string `json:"workingDirectory"`
+}
+
 type ManagementControllerProfile struct {
 	SchemaVersion         string                                 `json:"schemaVersion"`
 	ProfileIdentity       string                                 `json:"profileIdentity"`
@@ -347,6 +361,7 @@ type ManagementControllerProfile struct {
 	RemoteProductGUI      ControllerProfileRemoteProductGUI      `json:"remoteProductGUI"`
 	CodexPermissions      ControllerProfileCodexPermissions      `json:"codexPermissions"`
 	LinuxDesktopAuth      ControllerProfileLinuxDesktopAuth      `json:"linuxDesktopAuth"`
+	AuthRefresh           ControllerProfileAuthRefresh           `json:"authRefresh"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
@@ -436,6 +451,9 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return err
 	}
 	if err := validateControllerLinuxDesktopAuth(profile.LinuxDesktopAuth); err != nil {
+		return err
+	}
+	if err := validateControllerAuthRefresh(profile.AuthRefresh); err != nil {
 		return err
 	}
 	if profile.Schemas != (ControllerProfileSchemas{
@@ -758,6 +776,28 @@ func validateControllerLinuxDesktopAuth(auth ControllerProfileLinuxDesktopAuth) 
 		return fmt.Errorf("Management controller Linux Desktop auth does not match the compiled contract")
 	}
 	if err := validateControllerStoreExecutable("Linux Desktop auth reload", auth.ReloadExecutable); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateControllerAuthRefresh(refresh ControllerProfileAuthRefresh) error {
+	// Auth refresh is an additive v8 capability. Preserve compatibility with
+	// v8 manifests emitted before it was introduced, while validating the full
+	// fixed contract whenever the field is present.
+	if refresh == (ControllerProfileAuthRefresh{}) {
+		return nil
+	}
+	if filepath.Clean(refresh.IdentityRoot) != managementControllerAuthRefreshRoot ||
+		refresh.IdentityRoot != managementControllerAuthRefreshRoot ||
+		refresh.Model != managementControllerAuthRefreshModel ||
+		refresh.ReasoningEffort != managementControllerAuthRefreshEffort ||
+		refresh.ServiceTier != managementControllerAuthRefreshTier ||
+		filepath.Clean(refresh.WorkingDirectory) != managementControllerAuthRefreshCWD ||
+		refresh.WorkingDirectory != managementControllerAuthRefreshCWD {
+		return fmt.Errorf("Management controller auth refresh does not match the compiled contract")
+	}
+	if err := validateControllerStoreExecutable("auth refresh Codex", refresh.CodexExecutable); err != nil {
 		return err
 	}
 	return nil

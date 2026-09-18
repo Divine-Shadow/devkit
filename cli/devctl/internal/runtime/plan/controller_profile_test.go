@@ -210,6 +210,14 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			ServiceName:      managementControllerLinuxDesktopService,
 			ReloadExecutable: writeExecutable(filepath.Join(ControllerProfileStoreRoot, "codex-linux-desktop-reload", "bin", "codex-linux-desktop-reload")),
 		},
+		AuthRefresh: ControllerProfileAuthRefresh{
+			IdentityRoot:     managementControllerAuthRefreshRoot,
+			CodexExecutable:  writeExecutable(filepath.Join(ControllerProfileStoreRoot, "codex", "bin", "codex")),
+			Model:            managementControllerAuthRefreshModel,
+			ReasoningEffort:  managementControllerAuthRefreshEffort,
+			ServiceTier:      managementControllerAuthRefreshTier,
+			WorkingDirectory: managementControllerAuthRefreshCWD,
+		},
 	}
 	data, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
@@ -306,6 +314,47 @@ func TestManagementControllerProfileRecognizesAndValidatesLinuxDesktopAuth(t *te
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decoded); err != nil {
 		t.Fatalf("Linux Desktop auth field rejected: %v", err)
+	}
+}
+
+func TestManagementControllerProfileValidatesAuthRefresh(t *testing.T) {
+	root := t.TempDir()
+	previousStoreRoot := ControllerProfileStoreRoot
+	ControllerProfileStoreRoot = filepath.Join(root, "nix", "store")
+	t.Cleanup(func() { ControllerProfileStoreRoot = previousStoreRoot })
+	codex := filepath.Join(ControllerProfileStoreRoot, "codex", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(codex), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codex, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refresh := ControllerProfileAuthRefresh{
+		IdentityRoot: managementControllerAuthRefreshRoot, CodexExecutable: codex,
+		Model: managementControllerAuthRefreshModel, ReasoningEffort: managementControllerAuthRefreshEffort,
+		ServiceTier: managementControllerAuthRefreshTier, WorkingDirectory: managementControllerAuthRefreshCWD,
+	}
+	if err := validateControllerAuthRefresh(refresh); err != nil {
+		t.Fatalf("valid auth refresh rejected: %v", err)
+	}
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*ControllerProfileAuthRefresh)
+	}{
+		{name: "root", mutate: func(candidate *ControllerProfileAuthRefresh) { candidate.IdentityRoot = "/tmp/identities" }},
+		{name: "executable", mutate: func(candidate *ControllerProfileAuthRefresh) { candidate.CodexExecutable = "/tmp/codex" }},
+		{name: "model", mutate: func(candidate *ControllerProfileAuthRefresh) { candidate.Model = "gpt-6-astra" }},
+		{name: "effort", mutate: func(candidate *ControllerProfileAuthRefresh) { candidate.ReasoningEffort = "high" }},
+		{name: "tier", mutate: func(candidate *ControllerProfileAuthRefresh) { candidate.ServiceTier = "priority" }},
+		{name: "cwd", mutate: func(candidate *ControllerProfileAuthRefresh) { candidate.WorkingDirectory = "/workspace" }},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate := refresh
+			testCase.mutate(&candidate)
+			if err := validateControllerAuthRefresh(candidate); err == nil {
+				t.Fatal("mutated auth refresh accepted")
+			}
+		})
 	}
 }
 
