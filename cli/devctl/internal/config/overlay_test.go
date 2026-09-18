@@ -221,6 +221,21 @@ func TestRuntimeFlakeInputOverrideRootUsesDeclaredMutableHostGeometry(t *testing
 	}
 }
 
+func TestRuntimeFlakeInputOverrideRootKeepsSourceCheckoutSiblingGeometry(t *testing.T) {
+	checkout := "/home/runner/work/devkit/devkit"
+	got := RuntimeFlakeInputOverrideRoot(checkout, "/home/bayesartre/dev")
+	if got != checkout {
+		t.Fatalf("source checkout override root = %q, want %q", got, checkout)
+	}
+	resolved := ResolveRuntimeFlakeInputOverrides(got, map[string]string{
+		"ouroboros-terraform": "../ouroboros-terraform",
+	})
+	want := "path:/home/runner/work/devkit/ouroboros-terraform"
+	if resolved["ouroboros-terraform"] != want {
+		t.Fatalf("source checkout sibling override = %#v, want %q", resolved, want)
+	}
+}
+
 func TestReadAllSkipsMissing(t *testing.T) {
 	cfg, dirPath, err := ReadAll([]string{"/does/not/exist"}, "proj")
 	if err != nil {

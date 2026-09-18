@@ -44,11 +44,20 @@ The `devctl-overlay-runtime-authority` check builds that immutable package,
 resolves the packaged `overlays/dev-all` flake offline, evaluates its delegated
 dev-shell derivation, and executes the packaged devctl's dev-all runtime-matrix
 contract. It also requires the packaged native plan to resolve that immutable
-authority into an absolute root-directed flake reference in the generated
-`nix develop` arguments while mutable worktree and state roots remain separate.
-Packaged lifecycle commands use the root-directed
-`path:.?dir=overlays/dev-all#default` reference so Nix retains that immutable
-root while evaluating the overlay's `path:../..` input.
+authority into an absolute root-directed flake reference while mutable
+worktree and state roots remain separate. The gate compares the packaged
+lock's exact `nixpkgs` and `nixpkgs-playwright` identities (including their
+hashes) against the offline overlay metadata and evaluates the exact dev-shell
+derivation. It then builds the exact packaged runtime shell and Postgres broker
+offline, runs a bounded shell canary to derive its store-owned Bubblewrap, and
+passes all three package-owned paths explicitly to the runtime matrix and
+native-plan checks with ambient selectors unset. Protected runtime execution is
+proved separately by a fresh consumer.
+The configured rooted form remains `path:.?dir=overlays/dev-all#default`, and
+the installed runtime resolves it before Nix evaluation to the direct immutable
+subdirectory reference `path:<authority>/overlays/dev-all#default`. This keeps
+the overlay's `path:../..` input inside that exact packaged authority while
+remaining compatible with Nix versions that do not support `dir` on `path:`.
 
 ## Repo Checks
 

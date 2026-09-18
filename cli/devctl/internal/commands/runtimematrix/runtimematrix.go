@@ -315,6 +315,9 @@ func overlayLocalFlakeRef(overlay string) string {
 }
 
 func overlayRootedFlakeRef(overlay string) string {
+	// This is the configured package-root-relative form. Installed Devctl
+	// resolves it to the matching immutable overlay subdirectory before Nix
+	// evaluates it, because some Nix versions do not support path:?dir=.
 	return "path:.?dir=overlays/" + overlay + "#default"
 }
 

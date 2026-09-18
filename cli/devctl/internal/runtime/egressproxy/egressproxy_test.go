@@ -304,7 +304,7 @@ func TestServeChainsConnectThroughConfiguredUpstreamProxy(t *testing.T) {
 }
 
 func TestConnectUsesExactUnixSocketAndPreservesImmediateTunnelBytes(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := shortSocketTempDir(t)
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -440,7 +440,7 @@ func TestConnectFailsClosedWhenExactUnixSocketIsMissing(t *testing.T) {
 }
 
 func TestConnectCancellationClosesTunnelWithoutWaitingForOpenInput(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := shortSocketTempDir(t)
 	socketPath := filepath.Join(tmp, "consumer.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -481,6 +481,16 @@ func TestConnectCancellationClosesTunnelWithoutWaitingForOpenInput(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("Connect did not propagate cancellation while input remained open")
 	}
+}
+
+func shortSocketTempDir(t *testing.T) string {
+	t.Helper()
+	tmp, err := os.MkdirTemp("", "dke-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	return tmp
 }
 
 func TestDialConnectTargetPreservesBannerBufferedWithUpstreamResponse(t *testing.T) {

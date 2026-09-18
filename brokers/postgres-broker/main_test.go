@@ -1,13 +1,467 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+func TestSandboxPostgresEndpointsAreConcurrentAndContainerBound(t *testing.T) {
+	echoA, closeA := endpointEcho(t, "A:")
+	defer closeA()
+	echoB, closeB := endpointEcho(t, "B:")
+	defer closeB()
+	ports := map[string]string{"postgres-a": echoA, "postgres-b": echoB}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/containers/"), "/json")
+		port := ports[id]
+		if port == "" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"State":{"Running":true},"NetworkSettings":{"Ports":{"5432/tcp":[{"HostPort":"` + port + `"}]}}}`))
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := &requestContext{client: upstream.Client(), target: target, containers: newContainerRegistry()}
+	rc.containers.add("postgres-a", "same-name-a", "run-a", "credential-a")
+	rc.containers.add("postgres-b", "same-name-b", "run-a", "credential-a")
+
+	tmp := t.TempDir()
+	brokerSocket := filepath.Join(tmp, "broker.sock")
+	brokerListener, err := net.Listen("unix", brokerSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer brokerListener.Close()
+	go http.Serve(brokerListener, http.HandlerFunc(rc.handle))
+	agentSocket := filepath.Join(tmp, "agent.sock")
+	agentListener, err := net.Listen("unix", agentSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyClient, proxyTarget, err := buildClient("unix://" + brokerSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &endpointAgentProxy{broker: brokerSocket, runID: "run-a", credential: "credential-a", client: proxyClient, target: proxyTarget}
+	go http.Serve(agentListener, http.HandlerFunc(proxy.handleDocker))
+
+	endpointA, closeHelperA := startSandboxEndpoint(t, agentSocket, "postgres-a")
+	defer closeHelperA()
+	endpointB, closeHelperB := startSandboxEndpoint(t, agentSocket, "postgres-b")
+	defer closeHelperB()
+	if endpointA == endpointB {
+		t.Fatalf("helpers reused endpoint %s", endpointA)
+	}
+	if got := endpointRoundTrip(t, endpointA, "one"); got != "A:one" {
+		t.Fatalf("A target = %q", got)
+	}
+	if got := endpointRoundTrip(t, endpointB, "two"); got != "B:two" {
+		t.Fatalf("B target = %q", got)
+	}
+
+	// A delete plus same-name replacement invalidates A's old helper/lease but
+	// cannot disturb B's independent helper.
+	rc.containers.remove("postgres-a")
+	rc.containers.add("postgres-a-replacement", "same-name-a", "run-b", "credential-b")
+	if got, err := endpointRoundTripResult(endpointA, "stale"); err == nil && got != "" {
+		t.Fatalf("stale A helper reached a target: %q", got)
+	}
+	if got := endpointRoundTrip(t, endpointB, "still-b"); got != "B:still-b" {
+		t.Fatalf("B after A replacement = %q", got)
+	}
+
+	// The credential is injected only by the still-running agent proxy. A
+	// hostile caller at the real broker endpoint cannot substitute it.
+	req, err := http.NewRequest(http.MethodPost, "http://docker"+endpointLeasePrefix+"postgres-b", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(runHeader, "run-a")
+	req.Header.Set(credentialHeader, "hostile")
+	resp, err := proxyClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("hostile credential status = %d", resp.StatusCode)
+	}
+	_ = agentListener.Close()
+	if _, err := sandboxLease(agentSocket, "postgres-b"); err == nil {
+		t.Fatal("agent-proxy exit retained endpoint access")
+	}
+}
+
+func endpointEcho(t *testing.T, prefix string) (string, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				b := make([]byte, 256)
+				n, _ := conn.Read(b)
+				_, _ = conn.Write(append([]byte(prefix), b[:n]...))
+			}()
+		}
+	}()
+	return strconv.Itoa(listener.Addr().(*net.TCPAddr).Port), func() { _ = listener.Close(); <-done }
+}
+
+func startSandboxEndpoint(t *testing.T, socket, id string) (string, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- runSandboxPostgresEndpointAt(socket, id, listener, writer); _ = writer.Close() }()
+	var ready map[string]string
+	if err := json.NewDecoder(reader).Decode(&ready); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := net.JoinHostPort(ready["host"], ready["port"])
+	return endpoint, func() {
+		_ = listener.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("sandbox endpoint did not stop")
+		}
+	}
+}
+
+func endpointRoundTrip(t *testing.T, endpoint, message string) string {
+	t.Helper()
+	got, err := endpointRoundTripResult(endpoint, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func endpointRoundTripResult(endpoint, message string) (string, error) {
+	conn, err := net.DialTimeout("tcp", endpoint, time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	if _, err := io.WriteString(conn, message); err != nil {
+		return "", err
+	}
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.CloseWrite()
+	}
+	got, err := io.ReadAll(conn)
+	return string(got), err
+}
+
+func TestEndpointLeaseRejectsCrossSandboxAndStaleContainer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/json") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"State":{"Running":true},"NetworkSettings":{"Ports":{"5432/tcp":[{"HostPort":"15432"}]}}}`))
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := &requestContext{client: upstream.Client(), target: target, containers: newContainerRegistry()}
+	rc.containers.add("postgres-a", "postgres-a", "agent-a", "credential-a")
+	server := httptest.NewServer(http.HandlerFunc(rc.handle))
+	defer server.Close()
+
+	lease := func(run, credential, id string) *http.Response {
+		req, err := http.NewRequest(http.MethodPost, server.URL+endpointLeasePrefix+id, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(runHeader, run)
+		req.Header.Set(credentialHeader, credential)
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	foreign := lease("agent-b", "credential-b", "postgres-a")
+	if foreign.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-sandbox lease status = %d", foreign.StatusCode)
+	}
+	_ = foreign.Body.Close()
+	for _, id := range []string{"", "post", "postgres"} {
+		resp := lease("agent-a", "credential-a", id)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("non-exact endpoint id %q status = %d", id, resp.StatusCode)
+		}
+		_ = resp.Body.Close()
+	}
+	owned := lease("agent-a", "credential-a", "postgres-a")
+	if owned.StatusCode != http.StatusOK {
+		t.Fatalf("owner lease status = %d", owned.StatusCode)
+	}
+	var grant map[string]string
+	if err := json.NewDecoder(owned.Body).Decode(&grant); err != nil {
+		t.Fatal(err)
+	}
+	_ = owned.Body.Close()
+	if grant["lease"] == "" || grant["port"] != "5432" {
+		t.Fatalf("invalid lease grant: %#v", grant)
+	}
+
+	// Deletion invalidates even a previously issued opaque capability; a
+	// replacement with the same visible name receives different custody.
+	rc.containers.remove("postgres-a")
+	rc.containers.add("postgres-a", "postgres-a", "agent-b", "credential-b")
+	stale, err := http.NewRequest(http.MethodConnect, server.URL+endpointConnectPrefix+"postgres-a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Header.Set(runHeader, "agent-a")
+	stale.Header.Set(credentialHeader, "credential-a")
+	stale.Header.Set(leaseHeader, grant["lease"])
+	staleResp, err := server.Client().Do(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staleResp.Body.Close()
+	if staleResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("stale replacement lease status = %d", staleResp.StatusCode)
+	}
+}
+
+func TestDeleteDrainsRegisteredEndpointStreamBeforeUpstreamReturns(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{"State":{"Running":true},"NetworkSettings":{"Ports":{"5432/tcp":[{"HostPort":"15432"}]}}}`))
+		case http.MethodDelete:
+			close(started)
+			<-release
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	rc := &requestContext{client: upstream.Client(), target: target, containers: newContainerRegistry()}
+	rc.containers.add("full-id", "alias", "run", "credential")
+	rec, err := rc.containers.issueLease("full-id", "run", "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamConn, peer := net.Pipe()
+	defer peer.Close()
+	rc.dialPostgres = func(_, _ string) (net.Conn, error) { return upstreamConn, nil }
+	server := httptest.NewServer(http.HandlerFunc(rc.handle))
+	defer server.Close()
+	client, reader, response := rawEndpointConnect(t, server.URL, "full-id", "run", "credential", rec.Lease)
+	defer client.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status = %d", response.StatusCode)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		request, err := http.NewRequest(http.MethodDelete, server.URL+"/containers/alias", nil)
+		if err != nil {
+			t.Errorf("delete request: %v", err)
+			close(done)
+			return
+		}
+		request.Header.Set(runHeader, "run")
+		request.Header.Set(credentialHeader, "credential")
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Errorf("delete: %v", err)
+		} else {
+			_ = response.Body.Close()
+		}
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("delete did not reach upstream")
+	}
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = reader.Read(make([]byte, 1))
+	if !closedEndpointStream(err) {
+		t.Fatalf("open endpoint stream survived delete admission: %v", err)
+	}
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = peer.Read(make([]byte, 1))
+	if !closedEndpointStream(err) {
+		t.Fatalf("upstream stream survived delete admission: %v", err)
+	}
+	select {
+	case <-done:
+		t.Fatal("delete returned before upstream release")
+	default:
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delete did not finish")
+	}
+}
+
+func TestDialBarrierDeleteReplacementRejectsBeforeTunnelRegistration(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	delivered := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"State":{"Running":true},"NetworkSettings":{"Ports":{"5432/tcp":[{"HostPort":"1"}]}}}`))
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	rc := &requestContext{client: upstream.Client(), target: target, containers: newContainerRegistry()}
+	rc.containers.add("full-id", "alias", "run", "credential")
+	rec, err := rc.containers.issueLease("full-id", "run", "credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.dialPostgres = func(_, _ string) (net.Conn, error) {
+		close(entered)
+		<-release
+		a, b := net.Pipe()
+		go func() {
+			defer b.Close()
+			buf := make([]byte, 1)
+			if n, _ := b.Read(buf); n > 0 {
+				delivered <- struct{}{}
+			}
+		}()
+		return a, nil
+	}
+	server := httptest.NewServer(http.HandlerFunc(rc.handle))
+	defer server.Close()
+	// The second validation after dial is the race boundary: deletion and a
+	// same-name replacement happen while the real CONNECT is held, so no tunnel
+	// can register or deliver a byte to the replacement endpoint.
+	result := make(chan struct {
+		response *http.Response
+		err      error
+	}, 1)
+	go func() {
+		client, _, response, err := rawEndpointConnectResult(server.URL, "full-id", "run", "credential", rec.Lease)
+		if client != nil {
+			defer client.Close()
+		}
+		result <- struct {
+			response *http.Response
+			err      error
+		}{response, err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("CONNECT did not reach dial barrier")
+	}
+	rc.containers.remove("alias")
+	rc.containers.add("replacement", "alias", "other", "other")
+	close(release)
+	select {
+	case got := <-result:
+		if got.err == nil && got.response != nil && got.response.StatusCode == http.StatusOK {
+			t.Fatal("replacement race admitted a tunnel")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CONNECT did not reject after replacement")
+	}
+	select {
+	case <-delivered:
+		t.Fatal("replacement received tunnel payload")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func closedEndpointStream(err error) bool {
+	if err == nil {
+		return false
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) && networkErr.Timeout() {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET)
+}
+
+func rawEndpointConnect(t *testing.T, serverURL, id, runID, credential, lease string) (net.Conn, *bufio.Reader, *http.Response) {
+	t.Helper()
+	conn, reader, response, err := rawEndpointConnectResult(serverURL, id, runID, credential, lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn, reader, response
+}
+
+func rawEndpointConnectResult(serverURL, id, runID, credential, lease string) (net.Conn, *bufio.Reader, *http.Response, error) {
+	endpoint, err := url.Parse(serverURL)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	conn, err := net.Dial("tcp", endpoint.Host)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	request, err := http.NewRequest(http.MethodConnect, "http://"+endpoint.Host+endpointConnectPrefix+id, nil)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, nil, err
+	}
+	request.Header.Set(runHeader, runID)
+	request.Header.Set(credentialHeader, credential)
+	request.Header.Set(leaseHeader, lease)
+	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s: %s\r\n%s: %s\r\n%s: %s\r\n\r\n", request.URL.RequestURI(), endpoint.Host, runHeader, runID, credentialHeader, credential, leaseHeader, lease); err != nil {
+		_ = conn.Close()
+		return nil, nil, nil, err
+	}
+	reader := bufio.NewReader(conn)
+	response, err := http.ReadResponse(reader, request)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, nil, err
+	}
+	return conn, reader, response, nil
+}
 
 func TestStripVersionPrefix(t *testing.T) {
 	cases := map[string]string{

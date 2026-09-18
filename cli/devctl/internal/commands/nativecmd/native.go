@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
@@ -1030,11 +1032,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
 	}
-	if !ctx.DryRun {
-		p, err = isolateManagedEgressProxyForRun(p, os.Getpid())
-		if err != nil {
-			return err
-		}
+	p, err = isolateRuntimeExecutionPlan(p, ctx.DryRun)
+	if err != nil {
+		return err
 	}
 	cleanupProxy, err := ensureManagedEgressProxy(p, ctx.DryRun)
 	if err != nil {
@@ -1043,6 +1043,13 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	defer func() {
 		retErr = errors.Join(retErr, cleanupProxy())
 	}()
+	if !ctx.DryRun && p.PostgresDockerSocket != "" {
+		cleanupPostgres, err := launch.StartPostgresEndpointProxy(p)
+		if err != nil {
+			return err
+		}
+		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
+	}
 	if !ctx.DryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
@@ -1076,6 +1083,15 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	return runCommandPreservingExit(cmd)
 }
 
+const maxUnixSocketPathBytes = 107
+
+func requireUnixSocketPathFits(path, endpoint string) error {
+	if len([]byte(path)) > maxUnixSocketPathBytes {
+		return fmt.Errorf("managed native %s socket path exceeds Linux sockaddr_un limit (%d bytes > %d): %s", endpoint, len([]byte(path)), maxUnixSocketPathBytes, path)
+	}
+	return nil
+}
+
 func isolateManagedEgressProxyForRun(p nativeplan.Plan, pid int) (nativeplan.Plan, error) {
 	if strings.TrimSpace(p.Proxy.AllowlistPath) == "" {
 		return p, nil
@@ -1088,6 +1104,9 @@ func isolateManagedEgressProxyForRun(p nativeplan.Plan, pid int) (nativeplan.Pla
 		return nativeplan.Plan{}, fmt.Errorf("managed native egress proxy requires a positive launcher pid")
 	}
 	runSocketPath := filepath.Join(filepath.Dir(socketPath), fmt.Sprintf(".managed-egress-%d.sock", pid))
+	if err := requireUnixSocketPathFits(runSocketPath, "egress proxy"); err != nil {
+		return nativeplan.Plan{}, err
+	}
 	p.Binds = append([]nativeplan.Bind(nil), p.Binds...)
 	replaced := 0
 	for i := range p.Binds {
@@ -1103,6 +1122,34 @@ func isolateManagedEgressProxyForRun(p nativeplan.Plan, pid int) (nativeplan.Pla
 		return nativeplan.Plan{}, fmt.Errorf("managed native egress proxy socket bind %s must appear exactly once, found %d", socketPath, replaced)
 	}
 	p.Proxy.UnixSocket = runSocketPath
+	if postgresSocket := strings.TrimSpace(p.PostgresDockerSocket); postgresSocket != "" {
+		postgresRunSocket := filepath.Join(filepath.Dir(postgresSocket), fmt.Sprintf(".p-%d.sock", pid))
+		if err := requireUnixSocketPathFits(postgresRunSocket, "postgres endpoint"); err != nil {
+			return nativeplan.Plan{}, err
+		}
+		replaced = 0
+		for i := range p.Binds {
+			if filepath.Clean(p.Binds[i].Source) != filepath.Clean(postgresSocket) ||
+				filepath.Clean(p.Binds[i].Target) != filepath.Clean(postgresSocket) {
+				continue
+			}
+			p.Binds[i].Source = postgresRunSocket
+			p.Binds[i].Target = postgresRunSocket
+			replaced++
+		}
+		if replaced != 1 {
+			return nativeplan.Plan{}, fmt.Errorf("managed native postgres endpoint socket bind %s must appear exactly once, found %d", postgresSocket, replaced)
+		}
+		oldDockerHost := "unix://" + postgresSocket
+		newDockerHost := "unix://" + postgresRunSocket
+		if p.Env == nil || p.Env["DOCKER_HOST"] != oldDockerHost {
+			return nativeplan.Plan{}, fmt.Errorf("managed native postgres endpoint must retain exact Docker host %s", oldDockerHost)
+		}
+		p.Env = maps.Clone(p.Env)
+		p.Env["DOCKER_HOST"] = newDockerHost
+		p.Env["JAVA_TOOL_OPTIONS"] = strings.ReplaceAll(p.Env["JAVA_TOOL_OPTIONS"], oldDockerHost, newDockerHost)
+		p.PostgresDockerSocket = postgresRunSocket
+	}
 	return p, nil
 }
 
@@ -2143,6 +2190,10 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		return err
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
+	p, err = isolateRuntimeExecutionPlan(p, dryRun)
+	if err != nil {
+		return err
+	}
 	cleanupProxy, err := ensureManagedEgressProxy(p, dryRun)
 	if err != nil {
 		return err
@@ -2150,6 +2201,13 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	defer func() {
 		retErr = errors.Join(retErr, cleanupProxy())
 	}()
+	if !dryRun && p.PostgresDockerSocket != "" {
+		cleanupPostgres, err := launch.StartPostgresEndpointProxy(p)
+		if err != nil {
+			return err
+		}
+		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
+	}
 	if !dryRun {
 		if err := launch.Prepare(p); err != nil {
 			return err
@@ -2315,7 +2373,7 @@ func prepareWithManagedEgressProxy(
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
 	}
-	return withManagedEgressProxy(p, dryRun, func() error {
+	return withManagedRuntimeEndpoints(p, dryRun, func(p nativeplan.Plan) error {
 		if dryRun {
 			return nil
 		}
@@ -2324,6 +2382,35 @@ func prepareWithManagedEgressProxy(
 		}
 		return prepare(p)
 	})
+}
+
+func withManagedRuntimeEndpoints(p nativeplan.Plan, dryRun bool, run func(nativeplan.Plan) error) error {
+	runtimePlan := p
+	if !dryRun && runtimePlan.PostgresDockerSocket != "" {
+		var err error
+		runtimePlan, err = isolateManagedRuntimePlan(runtimePlan)
+		if err != nil {
+			return fmt.Errorf("isolate managed runtime endpoints: %w", err)
+		}
+	}
+	cleanupProxy, err := ensureManagedEgressProxy(runtimePlan, dryRun)
+	if err != nil {
+		return err
+	}
+	var cleanupPostgres func() error
+	if !dryRun && runtimePlan.PostgresDockerSocket != "" {
+		cleanupPostgres, err = launch.StartPostgresEndpointProxy(runtimePlan)
+		if err != nil {
+			return errors.Join(err, cleanupProxy())
+		}
+	}
+	runErr := run(runtimePlan)
+	var cleanupErr error
+	if cleanupPostgres != nil {
+		cleanupErr = errors.Join(cleanupErr, cleanupPostgres())
+	}
+	cleanupErr = errors.Join(cleanupErr, cleanupProxy())
+	return errors.Join(runErr, cleanupErr)
 }
 
 func prepareNativeGitBootstrapAndWorktrees(
@@ -2732,83 +2819,104 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 }
 
 func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChecks []repoCheck) (report readiness.Report) {
-	cleanupProxy, err := ensureManagedEgressProxy(p, false)
+	ready := false
+	err := withManagedRuntimeEndpoints(p, false, func(p nativeplan.Plan) error {
+		if err := launch.Prepare(p); err != nil {
+			report.AddRuntime("prepare-state", false, err.Error())
+			return nil
+		}
+		report.AddRuntime("prepare-state", true, "")
+		ready = true
+		dockerSocket := p.BrokerEndpoint
+		if p.PostgresDockerSocket != "" {
+			dockerSocket = p.PostgresDockerSocket
+		}
+		runtimeScript := strings.Join([]string{
+			`test "${DEVKIT_NATIVE_AGENT:-}" = "` + fmt.Sprintf("%d", p.Agent.ID.Index) + `"`,
+			`test -d "$HOME"`,
+			`test -d "$CODEX_ROLLOUT_DIR"`,
+			`test -x /usr/bin/env`,
+			`test -x /bin/sh`,
+			`test "${DOCKER_HOST:-}" = "unix://` + dockerSocket + `"`,
+			`test "${DOCKER_HOST:-}" != "unix:///var/run/docker.sock"`,
+			`test ! -e /var/run/docker.sock`,
+			`pwd >/dev/null`,
+		}, " && ")
+		brokerScript := strings.Join([]string{
+			`broker="${DOCKER_HOST#unix://}"`,
+			`test -n "$broker"`,
+			`test "$broker" != "$DOCKER_HOST"`,
+			`test -S "$broker"`,
+			`curl --unix-socket "$broker" -fsS http://docker/_ping | grep -qx OK`,
+		}, " && ")
+		checks := []sandboxReadinessCheck{
+			{Phase: readiness.PhaseRuntime, Name: "sandbox-command", Command: runtimeScript},
+			{Phase: readiness.PhaseRuntime, Name: "broker-socket", Command: brokerScript},
+		}
+		for _, check := range runtimeChecks {
+			if strings.TrimSpace(check.Command) == "" {
+				continue
+			}
+			checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRuntime, Name: check.Name, Command: check.Command})
+		}
+		for _, check := range repoChecks {
+			if strings.TrimSpace(check.Command) == "" {
+				continue
+			}
+			checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRepo, Name: check.Name, Command: check.Command})
+		}
+		results, err := runSandboxReadinessChecks(p, checks)
+		if err != nil {
+			report.AddRuntime("sandbox-command", false, err.Error())
+			return nil
+		}
+		seen := map[string]struct{}{}
+		for _, result := range results {
+			seen[string(result.Phase)+"\x00"+result.Name] = struct{}{}
+			if result.Phase == readiness.PhaseRepo {
+				report.AddRepo(result.Name, result.OK, result.Detail)
+			} else {
+				report.AddRuntime(result.Name, result.OK, result.Detail)
+			}
+		}
+		for _, check := range checks {
+			key := string(check.Phase) + "\x00" + check.Name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			detail := "readiness batch did not return a result for this check"
+			if check.Phase == readiness.PhaseRepo {
+				report.AddRepo(check.Name, false, detail)
+			} else {
+				report.AddRuntime(check.Name, false, detail)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		report.AddRuntime("prepare-state", false, err.Error())
+		report.AddRuntime("managed-runtime-endpoints", false, err.Error())
+	}
+	if !ready {
 		return report
-	}
-	defer func() {
-		if err := cleanupProxy(); err != nil {
-			report.AddRuntime("managed-egress-cleanup", false, err.Error())
-		}
-	}()
-	if err := launch.Prepare(p); err != nil {
-		report.AddRuntime("prepare-state", false, err.Error())
-		return report
-	}
-	report.AddRuntime("prepare-state", true, "")
-
-	runtimeScript := strings.Join([]string{
-		`test "${DEVKIT_NATIVE_AGENT:-}" = "` + fmt.Sprintf("%d", p.Agent.ID.Index) + `"`,
-		`test -d "$HOME"`,
-		`test -d "$CODEX_ROLLOUT_DIR"`,
-		`test -x /usr/bin/env`,
-		`test -x /bin/sh`,
-		`test "${DOCKER_HOST:-}" = "unix://` + p.BrokerEndpoint + `"`,
-		`test "${DOCKER_HOST:-}" != "unix:///var/run/docker.sock"`,
-		`test ! -e /var/run/docker.sock`,
-		`pwd >/dev/null`,
-	}, " && ")
-	brokerScript := strings.Join([]string{
-		`broker="${DOCKER_HOST#unix://}"`,
-		`test -n "$broker"`,
-		`test "$broker" != "$DOCKER_HOST"`,
-		`test -S "$broker"`,
-		`curl --unix-socket "$broker" -fsS http://docker/_ping | grep -qx OK`,
-	}, " && ")
-	checks := []sandboxReadinessCheck{
-		{Phase: readiness.PhaseRuntime, Name: "sandbox-command", Command: runtimeScript},
-		{Phase: readiness.PhaseRuntime, Name: "broker-socket", Command: brokerScript},
-	}
-	for _, check := range runtimeChecks {
-		if strings.TrimSpace(check.Command) == "" {
-			continue
-		}
-		checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRuntime, Name: check.Name, Command: check.Command})
-	}
-	for _, check := range repoChecks {
-		if strings.TrimSpace(check.Command) == "" {
-			continue
-		}
-		checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRepo, Name: check.Name, Command: check.Command})
-	}
-	results, err := runSandboxReadinessChecks(p, checks)
-	if err != nil {
-		report.AddRuntime("sandbox-command", false, err.Error())
-		return report
-	}
-	seen := map[string]struct{}{}
-	for _, result := range results {
-		seen[string(result.Phase)+"\x00"+result.Name] = struct{}{}
-		if result.Phase == readiness.PhaseRepo {
-			report.AddRepo(result.Name, result.OK, result.Detail)
-		} else {
-			report.AddRuntime(result.Name, result.OK, result.Detail)
-		}
-	}
-	for _, check := range checks {
-		key := string(check.Phase) + "\x00" + check.Name
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		detail := "readiness batch did not return a result for this check"
-		if check.Phase == readiness.PhaseRepo {
-			report.AddRepo(check.Name, false, detail)
-		} else {
-			report.AddRuntime(check.Name, false, detail)
-		}
 	}
 	return report
+}
+
+var readinessRunSequence atomic.Uint64
+
+func isolateManagedRuntimePlan(p nativeplan.Plan) (nativeplan.Plan, error) {
+	// Every real runtime invocation gets its own endpoint pair so simultaneous
+	// admission, readiness, and execution cannot share a capability pathname.
+	const sequenceLimit = uint64(1_000_000)
+	sequence := (readinessRunSequence.Add(1)-1)%sequenceLimit + 1
+	return isolateManagedEgressProxyForRun(p, os.Getpid()*int(sequenceLimit)+int(sequence))
+}
+
+func isolateRuntimeExecutionPlan(p nativeplan.Plan, dryRun bool) (nativeplan.Plan, error) {
+	if dryRun || p.PostgresDockerSocket == "" {
+		return p, nil
+	}
+	return isolateManagedRuntimePlan(p)
 }
 
 type sandboxReadinessCheck struct {

@@ -282,3 +282,13 @@ sibling repository checkouts and creates temporary native Git worktrees.
 `make postgres-broker-container-smoke` starts the Nix-built Postgres broker,
 denies a Redis create request, pulls/creates/starts/inspects/deletes a real
 Postgres container through the broker socket, and then cleans up.
+
+For native sandboxes, the shared broker socket is host-only. The package-owned
+launcher starts a per-agent Docker API proxy. A consumer that already owns an
+exact managed container starts `postgres-broker sandbox-postgres-endpoint
+<agent-docker-socket> <container-id>` and reads its JSON ready record. The
+helper binds an ephemeral `127.0.0.1` port and tunnels only that container. A
+lease is issued only for the exact broker-created container, its Postgres
+`5432/tcp` binding, and the launcher-held run capability. Removing or replacing
+the container invalidates the lease. This is not a general loopback, TCP, SOCKS,
+or Docker socket forwarding path.

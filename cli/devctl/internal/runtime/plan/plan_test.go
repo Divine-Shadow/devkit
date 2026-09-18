@@ -94,13 +94,13 @@ func TestBuildDevAllPlan(t *testing.T) {
 			t.Fatalf("SBT_OPTS missing %q: %q", want, p.Env["SBT_OPTS"])
 		}
 	}
-	if p.Env["DOCKER_HOST"] != "unix:///run/devkit/test-container-broker.sock" {
+	if p.Env["DOCKER_HOST"] != "unix://"+p.PostgresDockerSocket {
 		t.Fatalf("DOCKER_HOST = %q", p.Env["DOCKER_HOST"])
 	}
 	if p.Env["DOCKER_API_VERSION"] != "1.52" {
 		t.Fatalf("DOCKER_API_VERSION = %q", p.Env["DOCKER_API_VERSION"])
 	}
-	if p.Env["JAVA_TOOL_OPTIONS"] != "-Dapi.version=1.52 -Ddocker.api.version=1.52 -Ddocker.host=unix:///run/devkit/test-container-broker.sock" {
+	if p.Env["JAVA_TOOL_OPTIONS"] != "-Dapi.version=1.52 -Ddocker.api.version=1.52 -Ddocker.host=unix://"+p.PostgresDockerSocket {
 		t.Fatalf("JAVA_TOOL_OPTIONS = %q", p.Env["JAVA_TOOL_OPTIONS"])
 	}
 	if p.Env["HTTP_PROXY"] != "" || p.Env["HTTPS_PROXY"] != "" {
@@ -509,6 +509,7 @@ func TestManagementWorkspaceRootDerivesActiveWSLNixSourceFromSelectedLane(t *tes
 		workspaceRoot,
 		filepath.Join(root, "devkit"),
 		filepath.Join(root, "devkit"),
+		filepath.Join(root, ".devkit", "native-agents", "dev-workspace-agent2", "pg", "docker.sock"),
 		filepath.Join(root, ".devkit", "native-broker", "broker.sock"),
 		filepath.Join(root, ".devkit", "native-agents", "dev-workspace-agent2", "resolv.conf"),
 		profile,
@@ -747,7 +748,7 @@ func TestBuildDevAllPreservesExecutableRuntimeAuthorityAgainstHostileConfigRoot(
 	if p.RuntimeAuthorityRoot != trustedRoot {
 		t.Fatalf("runtime authority root = %q, want %q", p.RuntimeAuthorityRoot, trustedRoot)
 	}
-	wantFlake := "path:/trusted/source/devkit?dir=overlays/dev-all#default"
+	wantFlake := "path:/trusted/source/devkit/overlays/dev-all#default"
 	if p.Flake != wantFlake {
 		t.Fatalf("runtime flake = %q, want immutable authority %q", p.Flake, wantFlake)
 	}
@@ -1274,6 +1275,12 @@ func TestBuildNativeSupportsOtherProjects(t *testing.T) {
 	}
 	if p.Agent.StateRoot != "/repo/.devkit/native-agents/codex-agent1" {
 		t.Fatalf("state root = %q", p.Agent.StateRoot)
+	}
+	if p.PostgresDockerSocket != "" {
+		t.Fatalf("non-Product plan received endpoint proxy socket %q", p.PostgresDockerSocket)
+	}
+	if p.Env["DOCKER_HOST"] != "unix:///run/devkit/test-container-broker.sock" {
+		t.Fatalf("non-Product plan changed Docker endpoint: %q", p.Env["DOCKER_HOST"])
 	}
 	if !hasBind(p.Binds, "/repo/agent-worktrees/agent1/ouroboros-ide", "/workspace") {
 		t.Fatalf("native plan must mount agent worktree at /workspace: %#v", p.Binds)

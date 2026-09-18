@@ -72,6 +72,9 @@
           knownHostsFile,
           sqliteExecutable,
           tags ? [ ],
+          controllerSourceInventory ? null,
+          controllerGUIInventory ? null,
+          controllerExecSocket ? null,
         }:
         pkgs.buildGoModule {
           pname = "devkit-devctl";
@@ -90,6 +93,15 @@
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
             "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=${sqliteExecutable}"
+          ]
+          ++ pkgs.lib.optionals (controllerSourceInventory != null) [
+            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerSourceInventory=${controllerSourceInventory}"
+          ]
+          ++ pkgs.lib.optionals (controllerGUIInventory != null) [
+            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerGUIInventory=${controllerGUIInventory}"
+          ]
+          ++ pkgs.lib.optionals (controllerExecSocket != null) [
+            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerExecSocket=${controllerExecSocket}"
           ];
           postInstall = ''
             mkdir -p "$out/kit/bin"
@@ -99,6 +111,8 @@
             cp "$src/kit/proxy/allowlist.txt" "$out/kit/proxy/allowlist.txt"
             cp "$src/flake.nix" "$src/flake.lock" "$out/"
             cp -R "$src/nix" "$src/overlays" "$out/"
+            mkdir -p "$out/brokers"
+            cp -R "$src/brokers/postgres-broker" "$out/brokers/"
           '';
         };
       mkProductionDevctl =
@@ -160,6 +174,7 @@
           runtimeInputs =
             [
               pkgs.bashInteractive
+              pkgs.bubblewrap
               pkgs.curl
               pkgs.nodejs_22
             ]
@@ -694,18 +709,32 @@
           devctl-overlay-runtime-authority-layout =
             let
               devctl = mkProductionDevctl pkgs;
+              controllerFixtureRoot = "/tmp/devkit-overlay-runtime-authority-layout";
+              controllerFixtureSource = "${controllerFixtureRoot}/fleet-inventory.json";
+              controllerFixtureGUI = "${controllerFixtureRoot}/fleet-codex-gui-inventory.json";
+              controllerFixtureSocket = "${controllerFixtureRoot}/fleet-controller-exec/control.sock";
+              fixtureDevctl = mkDevctl {
+                inherit pkgs;
+                sshExecutable = "${pkgs.openssh}/bin/ssh";
+                knownHostsFile = githubSSHKnownHosts;
+                sqliteExecutable = "${pkgs.sqlite}/bin/sqlite3";
+                controllerSourceInventory = controllerFixtureSource;
+                controllerGUIInventory = controllerFixtureGUI;
+                controllerExecSocket = controllerFixtureSocket;
+              };
               broker = self.packages.${pkgs.system}.postgres-broker;
               runtimeShell = mkDevAllRuntimeShell {
                 inherit pkgs runtimeTools;
               };
             in
             pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
-              nativeBuildInputs = [ pkgs.bubblewrap pkgs.coreutils pkgs.gnugrep pkgs.jq ];
+              nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.jq pkgs.socat ];
             } ''
               test -x ${devctl}/kit/bin/devctl
               test -f ${devctl}/flake.nix
               test -f ${devctl}/flake.lock
               test -f ${devctl}/nix/dev-all-runtime-bundle.nix
+              test -f ${devctl}/brokers/postgres-broker/main.go
               test -f ${devctl}/overlays/dev-all/flake.nix
               test -f ${devctl}/overlays/dev-all/runtime.nix
               test -f ${devctl}/overlays/dev-all/devkit.yaml
@@ -867,18 +896,17 @@
                  .agent.sandbox_home == "/agent-state/pokeemerald-agent2/home"' \
                 "$shared_power_plan_a2"
 
-              # Exercise the real installed dev-workspace package path from an
-              # empty environment.  The protected controller files are exact
-              # read-only mount capabilities; this nested namespace supplies
-              # only those paths so the production planner can validate its
-              # complete package-owned geometry without ambient host state.
-              controller_source="$TMPDIR/fleet-inventory.json"
-              controller_gui="$TMPDIR/fleet-codex-gui-inventory.json"
-              controller_exec_dir="$TMPDIR/fleet-controller-exec"
-              controller_exec="$controller_exec_dir/control.sock"
+              # Exercise the same planner in a test-only compiled package
+              # whose three protected controller paths are fixed fixture
+              # values. This avoids a nested bwrap user namespace, which
+              # GitHub's Nix sandbox denies; mkProductionDevctl and its
+              # production --unshare-net profile remain unmodified.
+              controller_source='${controllerFixtureSource}'
+              controller_gui='${controllerFixtureGUI}'
+              controller_exec='${controllerFixtureSocket}'
+              ${pkgs.coreutils}/bin/install -d -m 0700 "$(dirname "$controller_exec")"
               printf '%s\n' '{}' > "$controller_source"
               printf '%s\n' '{}' > "$controller_gui"
-              mkdir -m 0700 "$controller_exec_dir"
               ${pkgs.socat}/bin/socat \
                 UNIX-LISTEN:"$controller_exec",fork,mode=0600 \
                 EXEC:${pkgs.coreutils}/bin/true &
@@ -890,34 +918,19 @@
               done
               test -S "$controller_exec"
               workspace_plan="$TMPDIR/installed-dev-workspace-plan.json"
-              ${pkgs.bubblewrap}/bin/bwrap \
-                --die-with-parent \
-                --unshare-all \
-                --ro-bind /nix/store /nix/store \
-                --proc /proc \
-                --dev /dev \
-                --tmpfs /tmp \
-                --dir /etc \
-                --dir /etc/fleet \
-                --dir /etc/fleet/source \
-                --ro-bind "$controller_source" /etc/fleet/source/fleet-inventory.json \
-                --ro-bind "$controller_gui" /etc/fleet/source/fleet-codex-gui-inventory.json \
-                --dir /run \
-                --ro-bind "$controller_exec_dir" /run/fleet-controller-exec \
-                -- \
-                ${pkgs.coreutils}/bin/env -i \
-                  HOME=/tmp/home \
-                  DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                  DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                  DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                  ${devctl}/kit/bin/devctl -p dev-workspace native plan \
-                    --repo shadow-throne-management \
-                    --index 2 \
-                    --workspace-root /home/bayesartre/dev/control-plane-worktrees/agent2 \
-                    --worktree-root /home/bayesartre/dev/control-plane-worktrees \
-                    --format json > "$workspace_plan"
+              ${pkgs.coreutils}/bin/env -i \
+                HOME=/tmp/home \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${fixtureDevctl}/kit/bin/devctl -p dev-workspace native plan \
+                  --repo shadow-throne-management \
+                  --index 2 \
+                  --workspace-root /home/bayesartre/dev/control-plane-worktrees/agent2 \
+                  --worktree-root /home/bayesartre/dev/control-plane-worktrees \
+                  --format json > "$workspace_plan"
               ${pkgs.jq}/bin/jq -e \
-                --arg devctl '${devctl}' \
+                --arg devctl '${fixtureDevctl}' \
                 '.host_workspace_root == "/home/bayesartre/dev/control-plane-worktrees/agent2" and
                  .sandbox_workspace_root == "/workspaces/dev" and
                  .host_worktree_root == "/home/bayesartre/dev/control-plane-worktrees" and
@@ -940,12 +953,18 @@
                  any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2/.devkit/governance-control-plane" and
                                .target == "/workspaces/dev/.devkit/governance-control-plane" and
                                .mode == "rw" and .required == true) and
+                 any(.binds[]; .source == "${controllerFixtureSource}" and
+                               .target == "${controllerFixtureSource}" and
+                               .mode == "ro" and .required == true) and
+                 any(.binds[]; .source == "${controllerFixtureGUI}" and
+                               .target == "${controllerFixtureGUI}" and
+                               .mode == "ro" and .required == true) and
                  all(.binds[]; .source != "/home/bayesartre/dev" and
                                .source != "/home/bayesartre/dev/control-plane-worktrees" and
                                ((.source | startswith("/mnt")) | not) and
                                ((.target | startswith("/mnt")) | not)) and
-                 any(.binds[]; .source == "/run/fleet-controller-exec/control.sock" and
-                               .target == "/run/fleet-controller-exec/control.sock" and
+                 any(.binds[]; .source == "${controllerFixtureSocket}" and
+                               .target == "${controllerFixtureSocket}" and
                                .mode == "ro" and .required == true) and
                  all(.binds[]; (.source | contains("codex_tailnet_stations_ed25519") | not) and
                                (.target | contains("codex_tailnet_stations_ed25519") | not)) and

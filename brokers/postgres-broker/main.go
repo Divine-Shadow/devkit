@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,35 +44,113 @@ type brokerConfig struct {
 
 type containerRegistry struct {
 	sync.Mutex
-	known map[string]containerRecord
+	known      map[string]containerRecord
+	streams    map[string]map[uint64]func()
+	nextStream uint64
 }
 
 type containerRecord struct {
-	ID   string
-	Name string
+	ID         string
+	Name       string
+	RunID      string
+	Credential string
+	Lease      string
 }
 
 func newContainerRegistry() *containerRegistry {
-	return &containerRegistry{known: make(map[string]containerRecord)}
+	return &containerRegistry{known: make(map[string]containerRecord), streams: make(map[string]map[uint64]func())}
 }
 
-func (c *containerRegistry) add(id, name string) {
+func (c *containerRegistry) add(id, name, runID, credential string) {
 	c.Lock()
 	defer c.Unlock()
-	c.known[id] = containerRecord{ID: id, Name: name}
+	c.known[id] = containerRecord{ID: id, Name: name, RunID: runID, Credential: credential}
 	if name != "" {
-		c.known[name] = containerRecord{ID: id, Name: name}
+		c.known[name] = containerRecord{ID: id, Name: name, RunID: runID, Credential: credential}
 	}
+}
+
+func (c *containerRegistry) issueLease(identifier, runID, credential string) (containerRecord, error) {
+	c.Lock()
+	defer c.Unlock()
+	rec, ok := c.known[identifier]
+	if !ok || rec.ID != identifier {
+		return containerRecord{}, errUnknownContainer
+	}
+	if rec.RunID == "" || rec.RunID != runID || rec.Credential == "" || rec.Credential != credential {
+		return containerRecord{}, errForbidden
+	}
+	lease, err := newOpaqueLease()
+	if err != nil {
+		return containerRecord{}, err
+	}
+	rec.Lease = lease
+	for alias, existing := range c.known {
+		if existing.ID == rec.ID {
+			existing.Lease = lease
+			c.known[alias] = existing
+		}
+	}
+	return rec, nil
+}
+
+func (c *containerRegistry) consumeLease(identifier, runID, credential, lease string) (containerRecord, error) {
+	c.Lock()
+	defer c.Unlock()
+	rec, ok := c.known[identifier]
+	if !ok || rec.ID != identifier {
+		return containerRecord{}, errUnknownContainer
+	}
+	if rec.RunID != runID || rec.Credential != credential || rec.Lease == "" || rec.Lease != lease {
+		return containerRecord{}, errForbidden
+	}
+	return rec, nil
+}
+
+func newOpaqueLease() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func (c *containerRegistry) remove(identifier string) {
 	c.Lock()
 	defer c.Unlock()
+	ids := map[string]bool{}
+	for _, rec := range c.known {
+		if rec.ID == identifier || rec.Name == identifier || strings.HasPrefix(rec.ID, identifier) {
+			ids[rec.ID] = true
+		}
+	}
+	for id := range ids {
+		for _, closeStream := range c.streams[id] {
+			closeStream()
+		}
+		delete(c.streams, id)
+	}
 	for key, rec := range c.known {
-		if rec.ID == identifier || rec.Name == identifier {
+		if ids[rec.ID] {
 			delete(c.known, key)
 		}
 	}
+}
+
+func (c *containerRegistry) registerStream(rec containerRecord, closeStream func()) (func(), bool) {
+	c.Lock()
+	defer c.Unlock()
+	current, ok := c.known[rec.ID]
+	if !ok || current.ID != rec.ID || current.Lease != rec.Lease || current.RunID != rec.RunID || current.Credential != rec.Credential {
+		return nil, false
+	}
+	c.nextStream++
+	id := c.nextStream
+	if c.streams[rec.ID] == nil {
+		c.streams[rec.ID] = map[uint64]func(){}
+	}
+	c.streams[rec.ID][id] = closeStream
+	return func() { c.Lock(); defer c.Unlock(); delete(c.streams[rec.ID], id) }, true
 }
 
 func (c *containerRegistry) match(identifier string) (containerRecord, bool) {
@@ -85,6 +165,17 @@ func (c *containerRegistry) match(identifier string) (containerRecord, bool) {
 	return containerRecord{}, false
 }
 
+func (c *containerRegistry) ownedBy(identifier, runID, credential string) bool {
+	rec, ok := c.match(identifier)
+	if !ok {
+		return false
+	}
+	// Legacy host-only broker consumers do not receive an endpoint lease. Once
+	// a launcher-owned proxy registered a container, every later Docker action
+	// must carry that same non-exported capability.
+	return rec.RunID == "" || (rec.RunID == runID && rec.Credential == credential)
+}
+
 type requestContext struct {
 	policy            *policy
 	client            *http.Client
@@ -93,6 +184,7 @@ type requestContext struct {
 	attachNets        []string
 	brokerSock        string
 	brokerSockAliases []string
+	dialPostgres      func(network, address string) (net.Conn, error)
 }
 
 type policy struct {
@@ -477,6 +569,26 @@ func buildClient(upstream string) (*http.Client, *url.URL, error) {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "agent-proxy":
+			if len(os.Args) != 5 {
+				log.Fatal("usage: postgres-broker agent-proxy <docker-socket> <broker-socket> <launcher-run-id>")
+			}
+			if err := runAgentProxy(os.Args[2], os.Args[3], os.Args[4]); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case "sandbox-postgres-endpoint":
+			if len(os.Args) != 4 {
+				log.Fatal("usage: postgres-broker sandbox-postgres-endpoint <agent-docker-socket> <container-id>")
+			}
+			if err := runSandboxPostgresEndpoint(os.Args[2], os.Args[3]); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+	}
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 	cfg := loadConfig()
 
@@ -574,6 +686,9 @@ func filepathDir(p string) string {
 
 func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
 	log.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("incoming request")
+	if rc.handleEndpointLease(w, r) {
+		return
+	}
 	if rc.handleNoop(w, r) {
 		return
 	}
@@ -587,6 +702,12 @@ func (rc *requestContext) handle(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "broker error", http.StatusInternalServerError)
 		}
 		return
+	}
+	// Endpoint leases are fail-closed at delete admission, not after the
+	// upstream response. A failed delete therefore drains this capability
+	// rather than reopening a potentially recycled host port.
+	if strings.HasPrefix(stripVersionPrefix(r.URL.Path), "/containers/") && r.Method == http.MethodDelete {
+		rc.containers.remove(containerIDFromPath(stripVersionPrefix(r.URL.Path)))
 	}
 	if shouldProxyStreamingRequest(r) {
 		rc.proxyStreaming(w, r)
@@ -684,7 +805,7 @@ func (rc *requestContext) postProcess(r *http.Request, resp *http.Response) erro
 	cleanPath := stripVersionPrefix(r.URL.Path)
 	switch {
 	case cleanPath == "/containers/create" && r.Method == http.MethodPost:
-		id, err := rc.captureContainer(resp, r.URL.Query().Get("name"))
+		id, err := rc.captureContainer(resp, r.URL.Query().Get("name"), r.Header.Get("X-Devkit-Run-ID"), r.Header.Get("X-Devkit-Endpoint-Credential"))
 		if err != nil {
 			return err
 		}
@@ -702,7 +823,7 @@ func (rc *requestContext) postProcess(r *http.Request, resp *http.Response) erro
 	return nil
 }
 
-func (rc *requestContext) captureContainer(resp *http.Response, requestedName string) (string, error) {
+func (rc *requestContext) captureContainer(resp *http.Response, requestedName, runID, credential string) (string, error) {
 	bodyCopy, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -715,7 +836,7 @@ func (rc *requestContext) captureContainer(resp *http.Response, requestedName st
 		return "", err
 	}
 	if payload.ID != "" {
-		rc.containers.add(payload.ID, requestedName)
+		rc.containers.add(payload.ID, requestedName, runID, credential)
 	}
 	return payload.ID, nil
 }
@@ -778,7 +899,7 @@ func (rc *requestContext) authorize(r *http.Request) error {
 	case cleanPath == "/containers/create" && r.Method == http.MethodPost:
 		return rc.authorizeContainerCreate(r)
 	case strings.HasPrefix(cleanPath, "/containers/"):
-		return rc.authorizeContainerAction(cleanPath)
+		return rc.authorizeContainerAction(r, cleanPath)
 	case cleanPath == "/networks" && r.Method == http.MethodGet:
 		return nil
 	case strings.HasPrefix(cleanPath, "/networks/") && r.Method == http.MethodGet:
@@ -1010,13 +1131,16 @@ func samePath(a, b string) bool {
 	return errA == nil && errB == nil && resolvedA == resolvedB
 }
 
-func (rc *requestContext) authorizeContainerAction(cleanPath string) error {
+func (rc *requestContext) authorizeContainerAction(r *http.Request, cleanPath string) error {
 	identifier := containerIDFromPath(cleanPath)
 	if identifier == "" {
 		return errForbidden
 	}
 	if _, ok := rc.containers.match(identifier); !ok {
 		return errUnknownContainer
+	}
+	if !rc.containers.ownedBy(identifier, r.Header.Get("X-Devkit-Run-ID"), r.Header.Get("X-Devkit-Endpoint-Credential")) {
+		return errForbidden
 	}
 	log.WithField("id", identifier).Debug("allowing container action")
 	return nil

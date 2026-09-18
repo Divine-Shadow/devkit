@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +29,119 @@ type Command struct {
 	Path string
 	Args []string
 	Dir  string
+}
+
+const postgresEndpointPingTimeout = 100 * time.Millisecond
+
+// StartPostgresEndpointProxy starts the package-owned host helper before the
+// sandbox is assembled. The shared Docker broker socket is intentionally never
+// projected into the sandbox; only these per-agent sockets are bindable.
+func StartPostgresEndpointProxy(p nativeplan.Plan) (func() error, error) {
+	binary := strings.TrimSpace(p.Env["DEVKIT_RUNTIME_BROKER_BINARY"])
+	if binary == "" || !filepath.IsAbs(binary) || !isExecutable(binary) {
+		return nil, fmt.Errorf("package-owned postgres broker binary is required for endpoint lease")
+	}
+	if strings.TrimSpace(p.BrokerEndpoint) == "" || strings.TrimSpace(p.PostgresDockerSocket) == "" {
+		return nil, fmt.Errorf("postgres endpoint lease paths are required")
+	}
+	if err := os.MkdirAll(filepath.Dir(p.PostgresDockerSocket), 0o700); err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(p.PostgresDockerSocket); err == nil {
+		return nil, fmt.Errorf("postgres endpoint socket already exists: %s", p.PostgresDockerSocket)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect postgres endpoint socket: %w", err)
+	}
+	runID := p.Agent.ID.Name()
+	cmd := exec.Command(binary, "agent-proxy", p.PostgresDockerSocket, p.BrokerEndpoint, runID)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start postgres endpoint proxy: %w", err)
+	}
+	var ownedSocket os.FileInfo
+	cleanup := func() error {
+		var cleanupErr error
+		if cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("stop postgres endpoint proxy: %w", err))
+			}
+		}
+		if err := cmd.Wait(); err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("wait for postgres endpoint proxy: %w", err))
+			}
+		}
+		if ownedSocket != nil {
+			current, err := os.Lstat(p.PostgresDockerSocket)
+			switch {
+			case errors.Is(err, os.ErrNotExist):
+			case err != nil:
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("inspect postgres endpoint socket during cleanup: %w", err))
+			case !os.SameFile(ownedSocket, current):
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("postgres endpoint socket ownership changed before cleanup"))
+			default:
+				if err := os.Remove(p.PostgresDockerSocket); err != nil {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove postgres endpoint socket: %w", err))
+				}
+			}
+		}
+		return cleanupErr
+	}
+	readyDeadline := time.Now().Add(time.Second)
+	for time.Now().Before(readyDeadline) {
+		info, err := os.Lstat(p.PostgresDockerSocket)
+		if err == nil {
+			if info.Mode()&os.ModeSocket == 0 {
+				cleanupErr := cleanup()
+				return nil, errors.Join(fmt.Errorf("postgres endpoint proxy published a non-socket path"), cleanupErr)
+			}
+			ownedSocket = info
+			if err := postgresEndpointPing(p.PostgresDockerSocket); err == nil {
+				return cleanup, nil
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			cleanupErr := cleanup()
+			return nil, errors.Join(fmt.Errorf("inspect postgres endpoint socket: %w", err), cleanupErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cleanupErr := cleanup()
+	return nil, errors.Join(fmt.Errorf("postgres endpoint proxy did not publish a ready per-agent socket"), cleanupErr)
+}
+
+func postgresEndpointPing(socket string) error {
+	conn, err := net.DialTimeout("unix", socket, postgresEndpointPingTimeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// A listener can accept without responding. Bound the complete typed ping
+	// exchange, not just the initial Unix-socket dial, before admitting it.
+	if err := conn.SetDeadline(time.Now().Add(postgresEndpointPingTimeout)); err != nil {
+		return err
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://docker/_ping", nil)
+	if err != nil {
+		return err
+	}
+	if err := request.Write(conn); err != nil {
+		return err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "OK" {
+		return fmt.Errorf("postgres endpoint ping = %s %q", response.Status, body)
+	}
+	return nil
 }
 
 var (
@@ -2586,7 +2702,7 @@ func outerProxyRuntimeCommand(devkitRoot string, project string, runtimeArgs []s
 	return script
 }
 
-func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig, env map[string]string, bridgeProxy bool) []string {
+func shellCommand(devkitRoot string, project string, workdir string, command []string, proxy nativeplan.ProxyConfig, env map[string]string, bridgeProxy bool, postgresBridge ...string) []string {
 	exports := make([]string, 0, len(env))
 	for key, value := range env {
 		exports = append(exports, "export "+key+"="+shellQuote(value))
@@ -2599,6 +2715,9 @@ func shellCommand(devkitRoot string, project string, workdir string, command []s
 	script += "cd " + shellQuote(workdir)
 	if bridgeProxy {
 		script += " && " + proxyBridgeScript(devkitRoot, project, proxy)
+	}
+	if len(postgresBridge) > 0 && postgresBridge[0] != "" {
+		script += " && " + postgresBridge[0]
 	}
 	if len(command) == 0 {
 		if bridgeProxy {

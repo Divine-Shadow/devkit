@@ -14,6 +14,7 @@ test -x "$devctl/kit/bin/devctl"
 test -f "$devctl/flake.nix"
 test -f "$devctl/flake.lock"
 test -f "$devctl/nix/dev-all-runtime-bundle.nix"
+test -f "$devctl/brokers/postgres-broker/main.go"
 test -f "$devctl/overlays/dev-all/flake.nix"
 test -f "$devctl/overlays/dev-all/runtime.nix"
 test ! -e "$devctl/overlays/dev-all/flake.lock"
@@ -26,34 +27,73 @@ export XDG_CACHE_HOME="$tmp_dir/cache"
 export XDG_CONFIG_HOME="$tmp_dir/config"
 mkdir -p "$HOME" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
 
-overlay="path:$devctl?dir=overlays/dev-all"
+overlay="path:$devctl/overlays/dev-all"
+overlay_input=(--override-input devkit "path:$devctl")
+package_root="path:$devctl"
 system="$("${NIX[@]}" eval --impure --raw --expr builtins.currentSystem)"
 
 "${NIX[@]}" flake metadata --offline --json --output-lock-file /dev/null \
+	"${overlay_input[@]}" \
   "$overlay" > "$tmp_dir/metadata.json"
+jq -e -s --arg authority "$devctl" '
+  .[1].locks.nodes.devkit.original.path == "../.." and
+  .[1].locks.nodes.devkit.locked.path == $authority and
+  .[1].locks.nodes.devkit.inputs == .[0].nodes.root.inputs and
+  .[1].locks.nodes.nixpkgs.locked == .[0].nodes.nixpkgs.locked and
+  .[1].locks.nodes["nixpkgs-playwright"].locked == .[0].nodes["nixpkgs-playwright"].locked
+' "$devctl/flake.lock" "$tmp_dir/metadata.json" >/dev/null
 
 shell_drv="$("${NIX[@]}" eval --offline --raw --output-lock-file /dev/null \
+	"${overlay_input[@]}" \
   "$overlay#devShells.$system.dev-all.drvPath")"
 test -n "$shell_drv"
 
-"${NIX[@]}" develop "$overlay#default" --offline \
-  --output-lock-file /dev/null --command bash -lc \
-  'command -v nix >/dev/null && command -v git >/dev/null'
+runtime_shell="$("${NIX[@]}" build --offline --no-link --print-out-paths \
+  "$package_root#dev-all-runtime-shell")"
+broker="$("${NIX[@]}" build --offline --no-link --print-out-paths \
+  "$package_root#postgres-broker")"
+runtime_launcher="$runtime_shell/bin/dev-all-runtime-shell"
+broker_binary="$broker/bin/postgres-broker"
+test -x "$runtime_launcher"
+test -x "$broker_binary"
+runtime_bwrap="$("$runtime_launcher" bash -c 'command -v bwrap')"
+case "$runtime_bwrap" in
+  /nix/store/*/bin/bwrap) ;;
+  *) echo "devctl-overlay-runtime-authority: runtime selected non-store bwrap: $runtime_bwrap" >&2; exit 1 ;;
+esac
+runtime_git="$("$runtime_launcher" bash -c 'command -v git')"
+case "$runtime_git" in
+  /nix/store/*/bin/git) ;;
+  *) echo "devctl-overlay-runtime-authority: runtime selected non-store git: $runtime_git" >&2; exit 1 ;;
+esac
 
 env -u DEVKIT_ROOT -u DEVKIT_OVERLAYS_DIR \
+  -u DEVKIT_RUNTIME_SHELL_LAUNCHER -u DEVKIT_RUNTIME_BROKER_BINARY -u DEVKIT_RUNTIME_BWRAP_BINARY \
+  DEVKIT_RUNTIME_SHELL_LAUNCHER="$runtime_launcher" \
+  DEVKIT_RUNTIME_BROKER_BINARY="$broker_binary" \
+  DEVKIT_RUNTIME_BWRAP_BINARY="$runtime_bwrap" \
   "$devctl/kit/bin/devctl" --dry-run -p dev-all \
   runtime-matrix --overlay dev-all --check >/dev/null
 
 mkdir -p "$tmp_dir/devkit" "$tmp_dir/ouroboros-ide"
-DEVKIT_ROOT="$tmp_dir/devkit" DEVKIT_OVERLAYS_DIR="$devctl/overlays" \
+env -u DEVKIT_ROOT -u DEVKIT_OVERLAYS_DIR \
+  -u DEVKIT_RUNTIME_SHELL_LAUNCHER -u DEVKIT_RUNTIME_BROKER_BINARY -u DEVKIT_RUNTIME_BWRAP_BINARY \
+  DEVKIT_ROOT="$tmp_dir/devkit" DEVKIT_OVERLAYS_DIR="$devctl/overlays" \
+  DEVKIT_RUNTIME_SHELL_LAUNCHER="$runtime_launcher" \
+  DEVKIT_RUNTIME_BROKER_BINARY="$broker_binary" \
+  DEVKIT_RUNTIME_BWRAP_BINARY="$runtime_bwrap" \
   "$devctl/kit/bin/devctl" -p dev-all native plan \
   --repo ouroboros-ide --index 1 --format json > "$tmp_dir/plan.json"
 
 jq -e --arg authority "$devctl" --arg sandbox /workspaces/dev/devkit \
-  --arg flake "path:$devctl?dir=overlays/dev-all#default" '
+  --arg flake "path:$devctl/overlays/dev-all#default" \
+  --arg launcher "$runtime_launcher" --arg broker "$broker_binary" --arg bwrap "$runtime_bwrap" '
   .runtime_authority_root == $authority and
   .devkit_sandbox_root == $sandbox and
   .flake == $flake and
+  .runtime_launcher == $launcher and
+  .bubblewrap_binary == $bwrap and
+  .env.DEVKIT_RUNTIME_BROKER_BINARY == $broker and
   (.runtime_launcher
     | (startswith("/nix/store/") and
        endswith("/bin/dev-all-runtime-shell"))) and

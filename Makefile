@@ -11,7 +11,7 @@ N          ?= 4
 
 NIX       ?= nix --extra-experimental-features 'nix-command flakes'
 
-.PHONY: build-cli health run ci-cheap devctl-overlay-runtime-authority native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-degraded-guard native-codex-home-preservation-guard native-overlay-matrix overlay-runtime-smoke retired-runtime-guard nix-overlay-runtime-guard postgres-broker-container-smoke
+.PHONY: build-cli health run ci-cheap native-reset-custody-gate devctl-overlay-runtime-authority native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-degraded-guard native-codex-home-preservation-guard native-overlay-matrix overlay-runtime-smoke retired-runtime-guard nix-overlay-runtime-guard postgres-broker-container-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -32,6 +32,7 @@ run: build-cli
 ci-cheap: build-cli
 	@echo "== Go tests =="
 	@$(MAKE) -C cli/devctl test
+	@$(MAKE) native-reset-custody-gate
 	@echo "== Nix flake check =="
 	@$(NIX) flake check
 	@$(MAKE) devctl-overlay-runtime-authority
@@ -45,6 +46,16 @@ ci-cheap: build-cli
 	@kit/scripts/retired-runtime-guard
 	@echo "== Overlay Nix runtime guard =="
 	@kit/scripts/nix-overlay-runtime-guard
+
+native-reset-custody-gate:
+	@fixture="$$($(NIX) build --no-link --print-out-paths --output-lock-file /dev/null '.#native-reset-test-config')"; \
+	  log="$$(mktemp)"; \
+	  trap 'rm -f "$$log"' EXIT; \
+	  if ! (cd cli/devctl && DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE="$$fixture" go test -count=1 -v ./integration -run '^TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority$$') >"$$log" 2>&1; then \
+	    cat "$$log"; exit 1; \
+	  fi; \
+	  cat "$$log"; \
+	  grep -F -- '--- PASS: TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority' "$$log" >/dev/null
 
 devctl-overlay-runtime-authority:
 	@echo "== Immutable devctl overlay runtime authority =="

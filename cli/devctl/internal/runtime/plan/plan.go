@@ -68,6 +68,7 @@ type Plan struct {
 	Proxy                  ProxyConfig                `json:"proxy"`
 	DNS                    DNSConfig                  `json:"dns"`
 	BrokerEndpoint         string                     `json:"broker_endpoint"`
+	PostgresDockerSocket   string                     `json:"postgres_docker_socket"`
 	DirectDockerSocket     bool                       `json:"direct_docker_socket"`
 	ResourceLimits         ResourceLimits             `json:"resource_limits"`
 	Notes                  []string                   `json:"notes,omitempty"`
@@ -136,11 +137,21 @@ const WorkspaceProductGovernanceEnvTarget = "/etc/fleet/product-governance.env"
 var WorkspaceControllerExecSocket = "/run/fleet-controller-exec/control.sock"
 
 func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
-	const rootedPrefix = "path:.?"
+	const rootedPrefix = "path:.?dir="
 	if runtimeAuthorityRoot == "" || !strings.HasPrefix(flake, rootedPrefix) {
 		return flake
 	}
-	return "path:" + runtimeAuthorityRoot + "?" + strings.TrimPrefix(flake, rootedPrefix)
+	dirAndFragment := strings.TrimPrefix(flake, rootedPrefix)
+	dir, fragment, hasFragment := strings.Cut(dirAndFragment, "#")
+	dir = filepath.Clean(filepath.FromSlash(dir))
+	if dir == "." || filepath.IsAbs(dir) || dir == ".." || strings.HasPrefix(dir, ".."+string(filepath.Separator)) {
+		return flake
+	}
+	resolved := "path:" + filepath.Join(runtimeAuthorityRoot, dir)
+	if hasFragment {
+		resolved += "#" + fragment
+	}
+	return resolved
 }
 
 func Build(opts BuildOptions) (Plan, error) {
@@ -218,7 +229,14 @@ func Build(opts BuildOptions) (Plan, error) {
 	if broker == "" {
 		broker = "/run/devkit/test-container-broker.sock"
 	}
+	postgresLeasePath := usesPostgresEndpointLease(project, repo)
+	postgresSocketRoot := filepath.Join(paths.HostAgentStateRoot, "pg")
+	postgresDockerSocket := ""
 	dockerHost := "unix://" + broker
+	if postgresLeasePath {
+		postgresDockerSocket = filepath.Join(postgresSocketRoot, "docker.sock")
+		dockerHost = "unix://" + postgresDockerSocket
+	}
 	dockerAPIVersion := "1.52"
 	javaOptions := []string{
 		"-Dapi.version=" + dockerAPIVersion,
@@ -329,10 +347,9 @@ func Build(opts BuildOptions) (Plan, error) {
 		"AWS_SHARED_CREDENTIALS_FILE": filepath.Join(paths.SandboxHome, ".aws", "credentials"),
 		"AWS_SDK_LOAD_CONFIG":         "1",
 	}
-	if IsGovernedRuntimePlan(project, repo) {
-		if brokerBinary := strings.TrimSpace(opts.BrokerBinary); brokerBinary != "" {
-			env["DEVKIT_RUNTIME_BROKER_BINARY"] = filepath.Clean(brokerBinary)
-		}
+	if postgresLeasePath && strings.TrimSpace(opts.BrokerBinary) != "" {
+		brokerBinary := strings.TrimSpace(opts.BrokerBinary)
+		env["DEVKIT_RUNTIME_BROKER_BINARY"] = filepath.Clean(brokerBinary)
 	}
 	env["SBT_CONTROL_PLANE_SERVER_SYSTEM_PROPERTIES"] = sbtControlPlaneServerSystemProperties
 	if proxyURL != "" {
@@ -353,8 +370,12 @@ func Build(opts BuildOptions) (Plan, error) {
 		{Source: paths.HostWorktreeRoot, Target: paths.SandboxWorktreeRoot, Mode: "rw", Required: false},
 		{Source: paths.HostStateRoot, Target: paths.SandboxStateRoot, Mode: "rw", Required: true},
 		{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
-		{Source: broker, Target: broker, Mode: "rw", Required: false},
 		{Source: resolvConf, Target: "/etc/resolv.conf", Mode: "ro", Required: false},
+	}
+	if postgresLeasePath {
+		binds = append(binds, Bind{Source: postgresDockerSocket, Target: postgresDockerSocket, Mode: "rw", Required: true})
+	} else {
+		binds = append(binds, Bind{Source: broker, Target: broker, Mode: "rw", Required: false})
 	}
 	notes := []string{
 		"plan only: no sandbox is launched by this command",
@@ -369,6 +390,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			workspaceRoot,
 			opts.Paths.Root,
 			runtimeAuthorityRoot,
+			postgresDockerSocket,
 			broker,
 			resolvConf,
 			controllerProfile,
@@ -493,8 +515,9 @@ func Build(opts BuildOptions) (Plan, error) {
 			ResolvConf: resolvConf,
 			ManagedBy:  "devkit-host-service",
 		},
-		BrokerEndpoint:     broker,
-		DirectDockerSocket: false,
+		BrokerEndpoint:       broker,
+		PostgresDockerSocket: postgresDockerSocket,
+		DirectDockerSocket:   false,
 		ResourceLimits: ResourceLimits{
 			CPU:    "2",
 			Memory: "4G",
@@ -573,7 +596,11 @@ func javaProxyOptions(proxyURL string) []string {
 	}
 }
 
-func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
+func usesPostgresEndpointLease(project, repo string) bool {
+	return strings.TrimSpace(project) == "dev-all" && strings.TrimSpace(repo) == "ouroboros-ide"
+}
+
+func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -678,7 +705,11 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 	// nsncd exposes DNS through this narrowly scoped Unix capability; network
 	// egress remains restricted to the managed proxy.
 	add(WorkspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
-	add(broker, broker, "rw", false)
+	if postgresDockerSocket != "" {
+		add(postgresDockerSocket, postgresDockerSocket, "rw", true)
+	} else {
+		add(broker, broker, "rw", false)
+	}
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
 	controllerConsumer := strings.TrimSpace(project) == "dev-workspace" &&
 		(strings.TrimSpace(repo) == "shadow-throne-management" ||

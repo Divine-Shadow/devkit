@@ -1,12 +1,15 @@
 package launch
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"devkit/cli/devctl/internal/devkitpaths"
 	"devkit/cli/devctl/internal/gitauthority"
@@ -23,6 +27,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("DEVKIT_LAUNCH_AGENT_PROXY_HELPER") == "1" {
+		os.Exit(runPostgresEndpointProxyHelper())
+	}
 	gitExecutable, err := exec.LookPath("git")
 	if err != nil {
 		panic(err)
@@ -53,6 +60,128 @@ func TestMain(m *testing.M) {
 		return testSSHAuthority, nil
 	}
 	os.Exit(m.Run())
+}
+
+func TestStartPostgresEndpointProxyRejectsPreexistingSocket(t *testing.T) {
+	tmp := shortSocketTempDir(t)
+	socket := filepath.Join(tmp, "postgres.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if _, err := StartPostgresEndpointProxy(postgresEndpointProxyPlan(t, socket)); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("pre-existing endpoint socket accepted: %v", err)
+	}
+	if info, err := os.Lstat(socket); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("pre-existing socket was modified: %#v, %v", info, err)
+	}
+}
+
+func TestStartPostgresEndpointProxyRequiresTypedPingAndCleansFailedSocket(t *testing.T) {
+	t.Setenv("DEVKIT_LAUNCH_AGENT_PROXY_HELPER", "1")
+	t.Setenv("DEVKIT_LAUNCH_AGENT_PROXY_MODE", "path-only")
+	socket := filepath.Join(shortSocketTempDir(t), "postgres.sock")
+	if _, err := StartPostgresEndpointProxy(postgresEndpointProxyPlan(t, socket)); err == nil || !strings.Contains(err.Error(), "ready per-agent socket") {
+		t.Fatalf("pathname-only endpoint admitted: %v", err)
+	}
+	if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed endpoint proxy left socket: %v", err)
+	}
+}
+
+func TestStartPostgresEndpointProxyBoundsSilentAcceptedPingAndCleansSocket(t *testing.T) {
+	t.Setenv("DEVKIT_LAUNCH_AGENT_PROXY_HELPER", "1")
+	t.Setenv("DEVKIT_LAUNCH_AGENT_PROXY_MODE", "silent")
+	socket := filepath.Join(shortSocketTempDir(t), "postgres.sock")
+	started := time.Now()
+	if _, err := StartPostgresEndpointProxy(postgresEndpointProxyPlan(t, socket)); err == nil || !strings.Contains(err.Error(), "ready per-agent socket") {
+		t.Fatalf("silent accepted endpoint admitted: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("silent accepted endpoint cleanup exceeded bounded readiness window: %s", elapsed)
+	}
+	if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("silent accepted endpoint cleanup left socket: %v", err)
+	}
+}
+
+func TestStartPostgresEndpointProxyPingsAndCleansExactSocket(t *testing.T) {
+	t.Setenv("DEVKIT_LAUNCH_AGENT_PROXY_HELPER", "1")
+	t.Setenv("DEVKIT_LAUNCH_AGENT_PROXY_MODE", "ready")
+	socket := filepath.Join(shortSocketTempDir(t), "postgres.sock")
+	cleanup, err := StartPostgresEndpointProxy(postgresEndpointProxyPlan(t, socket))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(socket); err != nil || info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("ready endpoint socket = %#v, %v", info, err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleanup retained endpoint socket: %v", err)
+	}
+}
+
+func postgresEndpointProxyPlan(t *testing.T, socket string) nativeplan.Plan {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nativeplan.Plan{
+		Agent:                agent.Spec{ID: agent.ID{Project: "dev-all", Repo: "ouroboros-ide", Index: 1}},
+		BrokerEndpoint:       filepath.Join(t.TempDir(), "broker.sock"),
+		PostgresDockerSocket: socket,
+		Env:                  map[string]string{"DEVKIT_RUNTIME_BROKER_BINARY": binary},
+	}
+}
+
+func shortSocketTempDir(t *testing.T) string {
+	t.Helper()
+	tmp, err := os.MkdirTemp("", "dke-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	return tmp
+}
+
+func runPostgresEndpointProxyHelper() int {
+	if len(os.Args) != 5 || os.Args[1] != "agent-proxy" {
+		return 2
+	}
+	socket := os.Args[2]
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		return 2
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return 2
+	}
+	defer listener.Close()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return 0
+		}
+		go func() {
+			defer conn.Close()
+			mode := os.Getenv("DEVKIT_LAUNCH_AGENT_PROXY_MODE")
+			if mode == "silent" {
+				select {}
+			}
+			if mode != "ready" {
+				return
+			}
+			if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+				return
+			}
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+		}()
+	}
 }
 
 func TestSandboxPathToHostUsesDeclaredWorkspaceRoot(t *testing.T) {
@@ -760,9 +889,9 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 		"'--symlink' '/run/current-system/sw/bin/env' '/usr/bin/env'",
 		"'--symlink' '/run/current-system/sw/bin/bash' '/usr/bin/bash'",
 		"'--symlink' '/run/current-system/sw/bin/sh' '/bin/sh'",
-		"'--bind' '" + brokerSocket + "' '" + brokerSocket + "'",
+		"'--bind' '" + p.PostgresDockerSocket + "' '" + p.PostgresDockerSocket + "'",
 		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/.cache/shared/coursier'",
-		"'--setenv' 'DOCKER_HOST' 'unix://" + brokerSocket + "'",
+		"'--setenv' 'DOCKER_HOST' 'unix://" + p.PostgresDockerSocket + "'",
 		"'--setenv' 'DEVKIT_GUI_TARGET_ID' ''",
 		"'--setenv' 'OURO_NIX_SANDBOX' '1'",
 		"'--setenv' 'SBT_IVY_HOME' '/workspaces/dev/.cache/shared/ivy2'",
@@ -813,6 +942,9 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 	if strings.Contains(joined, "/var/run/docker.sock") {
 		t.Fatalf("native launcher must not expose /var/run/docker.sock:\n%s", joined)
+	}
+	if strings.Contains(joined, brokerSocket) {
+		t.Fatalf("native launcher must not expose the shared broker socket:\n%s", joined)
 	}
 	p.Env[nativeplan.GUITargetIDEnvironment] = "hostile-ambient-target"
 	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil || !strings.Contains(err.Error(), "undeclared GUI target identity") {

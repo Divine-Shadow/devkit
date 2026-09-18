@@ -1312,8 +1312,15 @@ func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
-	worktreeRoot := filepath.Join(t.TempDir(), "agent-worktrees")
+	worktreeRoot := filepath.Join(base, "agent-worktrees")
 	expectedGUIConfig := writeNativeResetGUIConfigFixture(t, worktreeRoot, 3)
+	governanceSource := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
+	if !strings.HasPrefix(governanceSource, "/nix/store/") || filepath.Clean(governanceSource) != governanceSource {
+		t.Fatal("supply DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE from nix build .#native-reset-test-config (or use make test)")
+	}
+	// This is a link-time test fixture only; production keeps its fixed
+	// source-derived governance projection path.
+	t.Setenv("DEVKIT_TEST_GIT_PROJECTION_GOVERNANCE_SOURCE", governanceSource)
 	root := filepath.Join(base, "devkit")
 	packageDevctl := filepath.Join(root, "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(packageDevctl), 0o755); err != nil {
@@ -2835,12 +2842,22 @@ func TestMain(m *testing.M) {
 }
 
 func runNativeResetBrokerHelper() int {
+	if len(os.Args) == 5 && os.Args[1] == "agent-proxy" {
+		return serveNativeResetBrokerSocket(os.Args[2])
+	}
 	listen := strings.TrimSpace(os.Getenv("BROKER_LISTEN"))
 	if listen == "" {
 		return 2
 	}
 	socket := strings.TrimPrefix(listen, "unix://")
-	if socket == listen || strings.TrimSpace(socket) == "" {
+	if socket == listen {
+		return 2
+	}
+	return serveNativeResetBrokerSocket(socket)
+}
+
+func serveNativeResetBrokerSocket(socket string) int {
+	if strings.TrimSpace(socket) == "" {
 		return 2
 	}
 	if err := os.MkdirAll(filepath.Dir(socket), 0o755); err != nil {
@@ -2857,7 +2874,13 @@ func runNativeResetBrokerHelper() int {
 		if err != nil {
 			return 0
 		}
-		_ = conn.Close()
+		go func() {
+			defer conn.Close()
+			if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+				return
+			}
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+		}()
 	}
 }
 

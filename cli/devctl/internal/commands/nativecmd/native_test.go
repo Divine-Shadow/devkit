@@ -38,6 +38,38 @@ func TestRepoChecksForUsesExplicitRepoCheckOnly(t *testing.T) {
 	}
 }
 
+func TestMain(m *testing.M) {
+	if os.Getenv("DEVKIT_NATIVECMD_ENDPOINT_HELPER") == "1" {
+		os.Exit(runNativecmdEndpointHelper())
+	}
+	os.Exit(m.Run())
+}
+
+func runNativecmdEndpointHelper() int {
+	if len(os.Args) != 5 || os.Args[1] != "agent-proxy" {
+		return 2
+	}
+	socket := os.Args[2]
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		return 2
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return 2
+	}
+	defer listener.Close()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return 0
+		}
+		go func() {
+			defer conn.Close()
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+		}()
+	}
+}
+
 func TestParsePlanArgsRecognizesManagedAppServerOnlyForExec(t *testing.T) {
 	ctx := &cmdregistry.Context{Args: []string{"exec", "--managed-app-server", "--", "codex", "app-server"}}
 	parsed, err := parsePlanArgs(ctx, true, false)
@@ -1737,7 +1769,8 @@ func TestExitCodeFromError(t *testing.T) {
 }
 
 func TestIsolateManagedEgressProxyForRunUsesLauncherOwnedSocket(t *testing.T) {
-	sharedSocket := "/home/me/dev/.devkit/native-egress/dev-workspace-agent1-workspace-egress.sock"
+	sharedSocket := "/home/bayesartre/dev/.devkit/native-egress/dev-workspace-agent1-workspace-egress.sock"
+	postgresSocket := "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent1/pg/docker.sock"
 	p := nativeplan.Plan{
 		Proxy: nativeplan.ProxyConfig{
 			UnixSocket:    sharedSocket,
@@ -1746,6 +1779,12 @@ func TestIsolateManagedEgressProxyForRunUsesLauncherOwnedSocket(t *testing.T) {
 		Binds: []nativeplan.Bind{
 			{Source: "/nix/store", Target: "/nix/store", Mode: "ro", Required: true},
 			{Source: sharedSocket, Target: sharedSocket, Mode: "rw", Required: true},
+			{Source: postgresSocket, Target: postgresSocket, Mode: "rw", Required: true},
+		},
+		PostgresDockerSocket: postgresSocket,
+		Env: map[string]string{
+			"DOCKER_HOST":       "unix://" + postgresSocket,
+			"JAVA_TOOL_OPTIONS": "-Ddocker.host=unix://" + postgresSocket,
 		},
 	}
 
@@ -1753,15 +1792,60 @@ func TestIsolateManagedEgressProxyForRunUsesLauncherOwnedSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("isolateManagedEgressProxyForRun: %v", err)
 	}
-	wantSocket := "/home/me/dev/.devkit/native-egress/.managed-egress-4242.sock"
+	wantSocket := "/home/bayesartre/dev/.devkit/native-egress/.managed-egress-4242.sock"
 	if got.Proxy.UnixSocket != wantSocket {
 		t.Fatalf("proxy socket = %q, want %q", got.Proxy.UnixSocket, wantSocket)
 	}
 	if got.Binds[1].Source != wantSocket || got.Binds[1].Target != wantSocket {
 		t.Fatalf("proxy bind = %#v", got.Binds[1])
 	}
-	if p.Proxy.UnixSocket != sharedSocket || p.Binds[1].Source != sharedSocket || p.Binds[1].Target != sharedSocket {
+	wantPostgres := "/home/bayesartre/dev/.devkit/native-agents/dev-all-agent1/pg/.p-4242.sock"
+	for layout, sockets := range map[string]map[string]string{
+		"canonical": {"egress": wantSocket, "postgres": wantPostgres},
+		"hosted": {
+			"egress":   "/home/runner/work/devkit/devkit/.devkit/native-egress/.managed-egress-4242.sock",
+			"postgres": "/home/runner/work/devkit/devkit/.devkit/native-agents/dev-all-agent1/pg/.p-4242.sock",
+		},
+	} {
+		for endpoint, socket := range sockets {
+			if got := len([]byte(socket)); got > maxUnixSocketPathBytes {
+				t.Fatalf("%s %s socket length = %d, limit %d: %s", layout, endpoint, got, maxUnixSocketPathBytes, socket)
+			}
+		}
+	}
+	if got.PostgresDockerSocket != wantPostgres || got.Binds[2].Source != wantPostgres || got.Binds[2].Target != wantPostgres ||
+		got.Env["DOCKER_HOST"] != "unix://"+wantPostgres || !strings.Contains(got.Env["JAVA_TOOL_OPTIONS"], "unix://"+wantPostgres) {
+		t.Fatalf("postgres endpoint custody rewrite = %#v", got)
+	}
+	if p.Proxy.UnixSocket != sharedSocket || p.Binds[1].Source != sharedSocket || p.Binds[1].Target != sharedSocket || p.PostgresDockerSocket != postgresSocket || p.Env["DOCKER_HOST"] != "unix://"+postgresSocket {
 		t.Fatalf("input plan mutated: %#v", p)
+	}
+}
+
+func TestIsolateManagedEgressProxyForRunRejectsOverlongDerivedSocketPaths(t *testing.T) {
+	longDir := "/" + strings.Repeat("a", maxUnixSocketPathBytes)
+	shortSocket := "/tmp/egress.sock"
+	postgresSocket := filepath.Join(longDir, "docker.sock")
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{UnixSocket: shortSocket, AllowlistPath: "/tmp/allowlist.txt"},
+		Binds: []nativeplan.Bind{
+			{Source: shortSocket, Target: shortSocket, Mode: "rw", Required: true},
+			{Source: postgresSocket, Target: postgresSocket, Mode: "rw", Required: true},
+		},
+		PostgresDockerSocket: postgresSocket,
+		Env:                  map[string]string{"DOCKER_HOST": "unix://" + postgresSocket},
+	}
+	if _, err := isolateManagedEgressProxyForRun(p, 9); err == nil || !strings.Contains(err.Error(), "postgres endpoint socket path exceeds Linux sockaddr_un limit") {
+		t.Fatalf("postgres overlong socket error = %v", err)
+	}
+
+	p.PostgresDockerSocket = ""
+	p.Binds = p.Binds[:1]
+	p.Proxy.UnixSocket = filepath.Join(longDir, "egress.sock")
+	p.Binds[0].Source = p.Proxy.UnixSocket
+	p.Binds[0].Target = p.Proxy.UnixSocket
+	if _, err := isolateManagedEgressProxyForRun(p, 9); err == nil || !strings.Contains(err.Error(), "egress proxy socket path exceeds Linux sockaddr_un limit") {
+		t.Fatalf("egress overlong socket error = %v", err)
 	}
 }
 
@@ -1775,6 +1859,101 @@ func TestIsolateManagedEgressProxyForRunRequiresExactSocketBind(t *testing.T) {
 	_, err := isolateManagedEgressProxyForRun(p, 9)
 	if err == nil || !strings.Contains(err.Error(), "must appear exactly once") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestIsolateManagedRuntimePlanUsesOnePrivateEndpointPlanWithoutMutatingInput(t *testing.T) {
+	sharedSocket := "/home/me/dev/.devkit/native-egress/dev-all-agent1.sock"
+	postgresSocket := "/home/me/dev/.devkit/native-agents/dev-all-agent1/pg/docker.sock"
+	p := nativeplan.Plan{
+		Proxy: nativeplan.ProxyConfig{UnixSocket: sharedSocket, AllowlistPath: "/home/me/dev/devkit/kit/proxy/allowlist.txt"},
+		Binds: []nativeplan.Bind{
+			{Source: sharedSocket, Target: sharedSocket, Mode: "rw", Required: true},
+			{Source: postgresSocket, Target: postgresSocket, Mode: "rw", Required: true},
+		},
+		PostgresDockerSocket: postgresSocket,
+		Env: map[string]string{
+			"DOCKER_HOST":       "unix://" + postgresSocket,
+			"JAVA_TOOL_OPTIONS": "-Ddocker.host=unix://" + postgresSocket,
+		},
+	}
+
+	got, err := isolateRuntimeExecutionPlan(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Proxy.UnixSocket == sharedSocket || got.PostgresDockerSocket == postgresSocket {
+		t.Fatalf("readiness retained shared endpoint geometry: %#v", got)
+	}
+	if got.Binds[0].Source != got.Proxy.UnixSocket || got.Binds[0].Target != got.Proxy.UnixSocket ||
+		got.Binds[1].Source != got.PostgresDockerSocket || got.Binds[1].Target != got.PostgresDockerSocket ||
+		got.Env["DOCKER_HOST"] != "unix://"+got.PostgresDockerSocket ||
+		!strings.Contains(got.Env["JAVA_TOOL_OPTIONS"], "unix://"+got.PostgresDockerSocket) {
+		t.Fatalf("readiness helpers and sandbox would consume divergent endpoint geometry: %#v", got)
+	}
+	if p.Proxy.UnixSocket != sharedSocket || p.PostgresDockerSocket != postgresSocket ||
+		p.Binds[0].Source != sharedSocket || p.Binds[1].Source != postgresSocket || p.Env["DOCKER_HOST"] != "unix://"+postgresSocket {
+		t.Fatalf("readiness isolation mutated input plan: %#v", p)
+	}
+	dryRun, err := isolateRuntimeExecutionPlan(p, true)
+	if err != nil || !reflect.DeepEqual(dryRun, p) {
+		t.Fatalf("dry-run execution isolation changed plan: %#v, %v", dryRun, err)
+	}
+}
+
+func TestWithManagedRuntimeEndpointsPreparesOneLivePrivatePostgresPlan(t *testing.T) {
+	t.Setenv("DEVKIT_NATIVECMD_ENDPOINT_HELPER", "1")
+	tmp := shortSocketTempDir(t)
+	allowlist := filepath.Join(tmp, "allowlist.txt")
+	if err := os.WriteFile(allowlist, []byte("ssh.github.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedProxy := filepath.Join(tmp, "shared-egress.sock")
+	sharedPostgres := filepath.Join(tmp, "shared-postgres.sock")
+	p := nativeplan.Plan{
+		Agent: nativeagent.Spec{ID: nativeagent.ID{Project: "dev-all", Repo: "ouroboros-ide", Index: 1}},
+		Proxy: nativeplan.ProxyConfig{UnixSocket: sharedProxy, AllowlistPath: allowlist},
+		Binds: []nativeplan.Bind{
+			{Source: sharedProxy, Target: sharedProxy, Mode: "rw", Required: true},
+			{Source: sharedPostgres, Target: sharedPostgres, Mode: "rw", Required: true},
+		},
+		BrokerEndpoint:       filepath.Join(tmp, "broker.sock"),
+		PostgresDockerSocket: sharedPostgres,
+		Env: map[string]string{
+			"DEVKIT_RUNTIME_BROKER_BINARY": binary,
+			"DOCKER_HOST":                  "unix://" + sharedPostgres,
+			"JAVA_TOOL_OPTIONS":            "-Ddocker.host=unix://" + sharedPostgres,
+		},
+	}
+	callbackRan := false
+	err = withManagedRuntimeEndpoints(p, false, func(got nativeplan.Plan) error {
+		callbackRan = true
+		if got.PostgresDockerSocket == sharedPostgres || got.Proxy.UnixSocket == sharedProxy {
+			return fmt.Errorf("callback received stable endpoint plan")
+		}
+		info, err := os.Lstat(got.PostgresDockerSocket)
+		if err != nil || info.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("private postgres socket is not live: %v", err)
+		}
+		if got.Binds[0].Source != got.Proxy.UnixSocket || got.Binds[1].Source != got.PostgresDockerSocket ||
+			got.Env["DOCKER_HOST"] != "unix://"+got.PostgresDockerSocket {
+			return fmt.Errorf("callback received divergent private endpoint plan")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !callbackRan {
+		t.Fatal("private endpoint callback did not run")
+	}
+	if p.Proxy.UnixSocket != sharedProxy || p.PostgresDockerSocket != sharedPostgres ||
+		p.Binds[0].Source != sharedProxy || p.Binds[1].Source != sharedPostgres || p.Env["DOCKER_HOST"] != "unix://"+sharedPostgres {
+		t.Fatalf("shared input plan mutated: %#v", p)
 	}
 }
 
@@ -1829,7 +2008,7 @@ func TestWithManagedEgressProxyEstablishesSocketBeforeBootstrapAndCleansUp(t *te
 
 func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) {
 	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
-	tmp := t.TempDir()
+	tmp := shortSocketTempDir(t)
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1861,7 +2040,7 @@ func TestWithManagedEgressProxyCleansExactSocketWhenCallbackFails(t *testing.T) 
 
 func TestEnsureManagedEgressProxyRefusesArbitraryExistingListener(t *testing.T) {
 	t.Setenv("DEVKIT_NATIVE_ISOLATION_PROFILE", "")
-	tmp := t.TempDir()
+	tmp := shortSocketTempDir(t)
 	allowlistPath := filepath.Join(tmp, "allowlist.txt")
 	if err := os.WriteFile(allowlistPath, []byte("ssh.github.com\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1885,6 +2064,16 @@ func TestEnsureManagedEgressProxyRefusesArbitraryExistingListener(t *testing.T) 
 	if !unixSocketAccepts(socketPath) {
 		t.Fatal("existing listener was mutated while being refused")
 	}
+}
+
+func shortSocketTempDir(t *testing.T) string {
+	t.Helper()
+	tmp, err := os.MkdirTemp("", "dke-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	return tmp
 }
 
 func TestRunCommandPreservingExitProjectsStdoutByteExactly(t *testing.T) {

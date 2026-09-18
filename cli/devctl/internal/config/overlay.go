@@ -252,15 +252,16 @@ func ResolveRuntimeFlakeInputOverrides(devkitRoot string, overrides map[string]s
 }
 
 // RuntimeFlakeInputOverrideRoot returns the logical mutable Devkit checkout
-// root used by source-declared sibling input overrides. Package-owned overlays
-// live under /nix/store, but an absolute native host root deliberately keeps
-// consumer state outside that immutable package. In that installed shape,
-// "../repo" still means the sibling of <hostRoot>/devkit, not a made-up path
-// beneath the store object.
+// root used by source-declared sibling input overrides. Source checkouts keep
+// their actual root, so "../repo" selects their real sibling. Package-owned
+// overlays live under /nix/store, where an absolute native host root
+// deliberately keeps consumer state outside that immutable package. Only in
+// that installed shape, "../repo" means the sibling of <hostRoot>/devkit.
 func RuntimeFlakeInputOverrideRoot(devkitRoot, nativeHostRoot string) string {
 	devkitRoot = filepath.Clean(strings.TrimSpace(devkitRoot))
 	nativeHostRoot = strings.TrimSpace(nativeHostRoot)
-	if nativeHostRoot == "" || !filepath.IsAbs(nativeHostRoot) {
+	if nativeHostRoot == "" || !filepath.IsAbs(nativeHostRoot) ||
+		(devkitRoot != "/nix/store" && !strings.HasPrefix(devkitRoot, "/nix/store/")) {
 		return devkitRoot
 	}
 	return filepath.Join(filepath.Clean(nativeHostRoot), "devkit")
