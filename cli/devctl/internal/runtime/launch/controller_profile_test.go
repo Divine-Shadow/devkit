@@ -115,6 +115,7 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 			EventSchema:   profile.NixOSDeployment.EventSchema,
 			ServiceUser:   profile.NixOSDeployment.ServiceUser,
 		},
+		AuthRefresh: profile.AuthRefresh,
 		SourceInventories: controllerOperationInventories{
 			Fleet: controllerOperationFileIdentity{
 				Path: profile.Inventories.Fleet.Path, SHA256: profile.Inventories.Fleet.SHA256,
@@ -381,6 +382,14 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		Group:         "fleet-deployment-operators",
 		NoFollow:      true,
 	}
+	profile.AuthRefresh = nativeplan.ControllerProfileAuthRefresh{
+		IdentityRoot:     "/home/bayesartre/.codex-identities",
+		CodexExecutable:  writeExecutable(filepath.Join(operationStoreRoot, "codex", "bin", "codex")),
+		Model:            "gpt-5.6-terra",
+		ReasoningEffort:  "medium",
+		ServiceTier:      "default",
+		WorkingDirectory: "/tmp",
+	}
 	remoteWorkspaceRoot := filepath.Dir(base.Agent.HostWorktree)
 	remoteHostHome := filepath.Join(remoteWorkspaceRoot, ".devhome-agent2")
 	remoteHome := filepath.Join(remoteHostHome, ".codex")
@@ -434,6 +443,91 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	writeTestFile(t, manifestPath, string(manifestBytes)+"\n")
 
 	writeControllerOperationIdentityFixture(t, profile, operationStoreRoot)
+	// A new consumer first reads the manifest profile, then validates the
+	// broker identity it was handed. Exercise both strict decoders against the
+	// same published authRefresh contract before continuing with launch setup.
+	if decoded, err := nativeplan.LoadManagementControllerProfile(manifestPath); err != nil {
+		t.Fatalf("fresh consumer plan decoder rejected authRefresh: %v", err)
+	} else if decoded.AuthRefresh != profile.AuthRefresh {
+		t.Fatalf("fresh consumer plan decoder changed authRefresh: %#v", decoded.AuthRefresh)
+	}
+	manifestObject := strings.TrimSpace(string(manifestBytes))
+	writeManifest := func(t *testing.T, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, testCase := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "unknown field", data: append(append([]byte{}, manifestObject[:len(manifestObject)-1]...), []byte(`,"unexpected":true}`)...), want: "unknown field"},
+		{name: "trailing JSON", data: append(append([]byte{}, manifestBytes...), []byte(`{}`)...), want: "trailing JSON value"},
+		{name: "malformed JSON", data: []byte(`{"authRefresh":`), want: "unexpected EOF"},
+	} {
+		t.Run("fresh consumer plan decoder rejects "+testCase.name, func(t *testing.T) {
+			writeManifest(t, testCase.data)
+			t.Cleanup(func() { writeManifest(t, append(manifestBytes, '\n')) })
+			if _, err := nativeplan.LoadManagementControllerProfile(manifestPath); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("manifest error = %v, want %q", err, testCase.want)
+			}
+		})
+	}
+	writeManifest(t, append(manifestBytes, '\n'))
+	if err := validateControllerOperationIdentity(profile); err != nil {
+		t.Fatalf("fresh consumer launch decoder rejected authRefresh identity: %v", err)
+	}
+	identityBytes, err := os.ReadFile(operationIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeIdentity := func(t *testing.T, data []byte) {
+		t.Helper()
+		if err := os.Chmod(operationIdentity, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(operationIdentity, data, 0o400); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(operationIdentity, 0o400); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identityObject := strings.TrimSpace(string(identityBytes))
+	for _, testCase := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "unknown field", data: append(append([]byte{}, identityObject[:len(identityObject)-1]...), []byte(`,"unexpected":true}`)...), want: "unknown field"},
+		{name: "trailing JSON", data: append(append([]byte{}, identityBytes...), []byte(`{}`)...), want: "trailing JSON value"},
+		{name: "malformed JSON", data: []byte(`{"authRefresh":`), want: "unexpected EOF"},
+	} {
+		t.Run("fresh consumer launch decoder rejects "+testCase.name, func(t *testing.T) {
+			writeIdentity(t, testCase.data)
+			t.Cleanup(func() { writeIdentity(t, identityBytes) })
+			if err := validateControllerOperationIdentity(profile); err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("identity error = %v, want %q", err, testCase.want)
+			}
+		})
+	}
+	writeIdentity(t, identityBytes)
+	var mismatchedIdentity controllerOperationIdentity
+	if err := json.Unmarshal(identityBytes, &mismatchedIdentity); err != nil {
+		t.Fatal(err)
+	}
+	mismatchedIdentity.AuthRefresh.Model = "gpt-6-astra"
+	mismatchedBytes, err := json.Marshal(mismatchedIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeIdentity(t, mismatchedBytes)
+	if err := validateControllerOperationIdentity(profile); err == nil || !strings.Contains(err.Error(), "auth refresh does not match the profile") {
+		t.Fatalf("mismatched authRefresh identity error = %v, want profile mismatch", err)
+	}
+	writeIdentity(t, identityBytes)
 
 	skillsStoreRoot := withManagementSkillsStoreRoot(t)
 	skills := writeManagementSkillsFixture(t, skillsStoreRoot, "aaaaaaaa-management-skills", strings.Repeat("d", 40), map[string]string{
@@ -499,6 +593,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	}
 	for _, forbidden := range []string{
 		"/home/bayesartre/.ssh",
+		"/home/bayesartre/.codex-identities",
 		"/mnt/",
 		"/var/lib/fleet-controller-operation",
 		execSocket,

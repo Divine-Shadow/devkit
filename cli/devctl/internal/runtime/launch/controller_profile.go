@@ -97,13 +97,18 @@ type controllerOperationIdentity struct {
 	ProductAgentLifecycle controllerOperationProductAgentLifecycle `json:"productAgentLifecycle"`
 	ProductStationReset   controllerOperationProductStationReset   `json:"productStationReset"`
 	NixOSDeployment       controllerOperationNixOSDeployment       `json:"nixosDeployment"`
-	SourceInventories     controllerOperationInventories           `json:"sourceInventories"`
-	SourceRoots           controllerOperationSourceRoots           `json:"sourceRoots"`
-	Targets               controllerOperationTargets               `json:"targets"`
-	Schemas               nativeplan.ControllerProfileSchemas      `json:"schemas"`
-	Kinds                 []string                                 `json:"kinds"`
-	ServerPID             int                                      `json:"serverPid"`
-	StartedAt             string                                   `json:"startedAt"`
+	// AuthRefresh is carried through the broker identity so a fresh controller
+	// can prove that its protected typed refresh capability is the same one
+	// admitted by the manifest decoder. It is a contract descriptor only; it
+	// does not contain identity material.
+	AuthRefresh       nativeplan.ControllerProfileAuthRefresh `json:"authRefresh"`
+	SourceInventories controllerOperationInventories          `json:"sourceInventories"`
+	SourceRoots       controllerOperationSourceRoots          `json:"sourceRoots"`
+	Targets           controllerOperationTargets              `json:"targets"`
+	Schemas           nativeplan.ControllerProfileSchemas     `json:"schemas"`
+	Kinds             []string                                `json:"kinds"`
+	ServerPID         int                                     `json:"serverPid"`
+	StartedAt         string                                  `json:"startedAt"`
 }
 
 var controllerOperationStoreRoot = "/nix/store"
@@ -331,6 +336,9 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 		ServiceUser:   profile.NixOSDeployment.ServiceUser,
 	}) {
 		return fmt.Errorf("controller operation identity NixOS deployment effect does not match the profile")
+	}
+	if identity.AuthRefresh != profile.AuthRefresh {
+		return fmt.Errorf("controller operation identity auth refresh does not match the profile")
 	}
 	expectedKinds := append([]string(nil), profile.Kinds...)
 	actualKinds := append([]string(nil), identity.Kinds...)
