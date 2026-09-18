@@ -142,7 +142,25 @@ func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count i
 
 func nativeDefaultsRoot(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	return populateNativeDefaultsRoot(t, t.TempDir())
+}
+
+func shortNativeDefaultsRoot(t *testing.T) string {
+	t.Helper()
+	parent, err := os.MkdirTemp("/tmp", "dkr-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(parent) })
+	root := filepath.Join(parent, "devkit")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return populateNativeDefaultsRoot(t, root)
+}
+
+func populateNativeDefaultsRoot(t *testing.T, root string) string {
+	t.Helper()
 	write := func(p, s string) {
 		t.Helper()
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -961,6 +979,9 @@ func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
 	}
 	bin := buildDevctlForNativeDefaults(t)
 	root := nativeDefaultsRoot(t)
+	if selectedLane {
+		root = shortNativeDefaultsRoot(t)
+	}
 	writeNixCodexConfigSource(t, root)
 	devRoot := filepath.Dir(root)
 	repo := filepath.Join(devRoot, repoName)
@@ -1059,6 +1080,7 @@ func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
 	prepare.Env = isolatedNativeFixtureEnv(
 		"DEVKIT_ROOT="+root,
 		"DEVKIT_NO_TMUX=1",
+		"DEVKIT_INTEGRATION_BROKER_HELPER=1",
 		"HOME="+hostHome,
 		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
 		"PATH="+sshDir+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -1174,6 +1196,7 @@ func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
 	execCmd.Env = isolatedNativeFixtureEnv(
 		"DEVKIT_ROOT="+root,
 		"DEVKIT_NO_TMUX=1",
+		"DEVKIT_INTEGRATION_BROKER_HELPER=1",
 		"HOME="+hostHome,
 		"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
 		"DEVKIT_RUNTIME_BWRAP_BINARY="+filepath.Join(bwrapDir, "bwrap"),
@@ -1192,6 +1215,7 @@ func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
 			"--egress-allowlist", filepath.Join(root, "allowlist.txt"), "--proxy-socket", filepath.Join(proxyRoot, "proxy.sock"),
 			"--", realGit, "worktree", "list", "--porcelain")
 		execCmd.Env = isolatedNativeFixtureEnv("DEVKIT_ROOT="+root, "DEVKIT_NO_TMUX=1", "HOME="+hostHome,
+			"DEVKIT_INTEGRATION_BROKER_HELPER=1",
 			"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"), "DEVKIT_RUNTIME_BWRAP_BINARY="+realBwrap,
 			"DEVKIT_RUNTIME_SHELL_LAUNCHER="+realEnv, "DEVKIT_INTEGRATION_NSCD_SOURCE="+filepath.Join(root, "nscd-fixture"))
 	}
