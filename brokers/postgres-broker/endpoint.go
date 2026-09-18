@@ -200,18 +200,10 @@ func (p *endpointAgentProxy) handleDocker(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, "broker response", http.StatusBadGateway)
-		return
-	}
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	// Docker log and attach responses may remain open indefinitely. Forward the
+	// broker response as it arrives so the sandbox sees readiness output without
+	// waiting for EOF, while retaining the request context for cancellation.
+	copyResponse(w, resp)
 }
 
 func (p *endpointAgentProxy) proxyConnect(w http.ResponseWriter, r *http.Request) {

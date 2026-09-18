@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,10 +17,258 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestEndpointAgentProxyStreamsDockerResponsesWithoutBuffering(t *testing.T) {
+	readyFrames := [][]byte{
+		dockerRawStreamFrame(1, []byte("database ready\n")),
+		dockerRawStreamFrame(2, []byte("migration ready\n")),
+	}
+	releaseFollow := make(chan struct{})
+	var releaseFollowOnce sync.Once
+	releaseFollowStream := func() { releaseFollowOnce.Do(func() { close(releaseFollow) }) }
+	upstreamCanceled := make(chan struct{})
+	upstreamRequests := make(chan *http.Request, 8)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests <- r.Clone(r.Context())
+		switch r.URL.Path {
+		case "/v1.52/containers/managed/logs":
+			w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
+			w.Header().Set("X-Upstream-Status", "follow")
+			w.WriteHeader(http.StatusPartialContent)
+			for _, frame := range readyFrames {
+				writeSplitDockerRawStreamFrame(w, frame)
+			}
+			select {
+			case <-releaseFollow:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write(dockerRawStreamFrame(1, []byte("complete\n")))
+		case "/v1.52/containers/finite/logs":
+			w.Header().Set("X-Upstream-Status", "finite")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("finite response\n"))
+		case "/v1.52/containers/cancel/logs":
+			w.WriteHeader(http.StatusOK)
+			writeSplitDockerRawStreamFrame(w, dockerRawStreamFrame(1, []byte("cancel ready\n")))
+			<-r.Context().Done()
+			close(upstreamCanceled)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	// Run before httptest.Server.Close on failure, so a pre-release assertion
+	// failure cannot leave the open follow handler blocking server teardown.
+	defer releaseFollowStream()
+
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := &requestContext{
+		policy:     mustPolicy(t, []string{"postgres:latest"}, true),
+		client:     upstream.Client(),
+		target:     target,
+		containers: newContainerRegistry(),
+	}
+	for _, id := range []string{"managed", "finite", "cancel"} {
+		rc.containers.add(id, id, "agent-run", "agent-credential")
+	}
+
+	tmp := t.TempDir()
+	brokerSocket := filepath.Join(tmp, "broker.sock")
+	serveEndpointProxy(t, brokerSocket, http.HandlerFunc(rc.handle))
+	brokerClient, brokerTarget, err := buildClient("unix://" + brokerSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(brokerClient.CloseIdleConnections)
+	agentSocket := filepath.Join(tmp, "agent.sock")
+	agent := &endpointAgentProxy{
+		broker:     brokerSocket,
+		runID:      "agent-run",
+		credential: "agent-credential",
+		client:     brokerClient,
+		target:     brokerTarget,
+	}
+	serveEndpointProxy(t, agentSocket, http.HandlerFunc(agent.handleDocker))
+	agentClient, agentTarget, err := buildClient("unix://" + agentSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(agentClient.CloseIdleConnections)
+
+	request := func(ctx context.Context, proxyTarget *url.URL, id string) *http.Request {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyTarget.ResolveReference(&url.URL{
+			Path:     "/v1.52/containers/" + id + "/logs",
+			RawQuery: "follow=1&stdout=1",
+		}).String(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The per-agent proxy must overwrite caller-supplied capability values.
+		req.Header.Set(runHeader, "hostile-run")
+		req.Header.Set(credentialHeader, "hostile-credential")
+		return req
+	}
+	assertForwarded := func(path string) {
+		t.Helper()
+		select {
+		case got := <-upstreamRequests:
+			if got.URL.Path != path || got.URL.RawQuery != "follow=1&stdout=1" {
+				t.Fatalf("forwarded request = %s?%s", got.URL.Path, got.URL.RawQuery)
+			}
+			if got.Method != http.MethodGet || got.Header.Get(runHeader) != "agent-run" || got.Header.Get(credentialHeader) != "agent-credential" {
+				t.Fatalf("forwarded request lost proxy authority/method: method=%s run=%q credential=%q", got.Method, got.Header.Get(runHeader), got.Header.Get(credentialHeader))
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("upstream did not receive %s", path)
+		}
+	}
+
+	followCtx, followCancel := context.WithTimeout(context.Background(), time.Second)
+	defer followCancel()
+	follow, err := agentClient.Do(request(followCtx, agentTarget, "managed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if follow.StatusCode != http.StatusPartialContent || follow.Header.Get("X-Upstream-Status") != "follow" {
+		t.Fatalf("follow response = %s headers=%v", follow.Status, follow.Header)
+	}
+	for i, want := range [][]byte{[]byte("database ready\n"), []byte("migration ready\n")} {
+		stream, gotReady, err := readDockerRawStreamFrame(follow.Body)
+		if err != nil || stream != byte(i+1) || !bytes.Equal(gotReady, want) {
+			t.Fatalf("follow frame %d = stream=%d payload=%q err=%v", i, stream, gotReady, err)
+		}
+	}
+	assertForwarded("/v1.52/containers/managed/logs")
+	releaseFollowStream()
+	stream, complete, err := readDockerRawStreamFrame(follow.Body)
+	if err != nil || stream != 1 || string(complete) != "complete\n" {
+		t.Fatalf("follow completion = stream=%d payload=%q err=%v", stream, complete, err)
+	}
+	_ = follow.Body.Close()
+
+	finite, err := agentClient.Do(request(context.Background(), agentTarget, "finite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finiteBody, finiteErr := io.ReadAll(finite.Body)
+	_ = finite.Body.Close()
+	if finiteErr != nil || finite.StatusCode != http.StatusCreated || finite.Header.Get("X-Upstream-Status") != "finite" || string(finiteBody) != "finite response\n" {
+		t.Fatalf("finite response = status=%s headers=%v body=%q err=%v", finite.Status, finite.Header, finiteBody, finiteErr)
+	}
+	assertForwarded("/v1.52/containers/finite/logs")
+
+	unknown, err := agentClient.Do(request(context.Background(), agentTarget, "unknown"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unknown.Body.Close()
+	if unknown.StatusCode != http.StatusForbidden {
+		t.Fatalf("unknown response status = %d", unknown.StatusCode)
+	}
+	wrongSocket := filepath.Join(tmp, "wrong-agent.sock")
+	wrongAgent := &endpointAgentProxy{
+		broker:     brokerSocket,
+		runID:      "agent-run",
+		credential: "wrong-credential",
+		client:     brokerClient,
+		target:     brokerTarget,
+	}
+	serveEndpointProxy(t, wrongSocket, http.HandlerFunc(wrongAgent.handleDocker))
+	wrongClient, wrongTarget, err := buildClient("unix://" + wrongSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(wrongClient.CloseIdleConnections)
+	unauthorized, err := wrongClient.Do(request(context.Background(), wrongTarget, "managed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusForbidden {
+		t.Fatalf("unauthorized response status = %d", unauthorized.StatusCode)
+	}
+	select {
+	case got := <-upstreamRequests:
+		t.Fatalf("denied request reached upstream: %s", got.URL.Path)
+	default:
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	canceled, err := agentClient.Do(request(cancelCtx, agentTarget, "cancel"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, gotReady, err := readDockerRawStreamFrame(canceled.Body)
+	if err != nil || stream != 1 || string(gotReady) != "cancel ready\n" {
+		t.Fatalf("cancel readiness = stream=%d payload=%q err=%v", stream, gotReady, err)
+	}
+	assertForwarded("/v1.52/containers/cancel/logs")
+	cancel()
+	_ = canceled.Body.Close()
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("upstream follow request survived client cancellation")
+	}
+}
+
+func dockerRawStreamFrame(stream byte, payload []byte) []byte {
+	frame := make([]byte, 8+len(payload))
+	frame[0] = stream
+	binary.BigEndian.PutUint32(frame[4:8], uint32(len(payload)))
+	copy(frame[8:], payload)
+	return frame
+}
+
+func writeSplitDockerRawStreamFrame(w http.ResponseWriter, frame []byte) {
+	flusher := w.(http.Flusher)
+	for _, chunk := range [][]byte{frame[:3], frame[3:8], frame[8:10], frame[10:]} {
+		if len(chunk) == 0 {
+			continue
+		}
+		_, _ = w.Write(chunk)
+		flusher.Flush()
+	}
+}
+
+func readDockerRawStreamFrame(r io.Reader) (byte, []byte, error) {
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return 0, nil, err
+	}
+	if header[1] != 0 || header[2] != 0 || header[3] != 0 {
+		return 0, nil, fmt.Errorf("invalid Docker raw-stream header %v", header[:4])
+	}
+	payload := make([]byte, binary.BigEndian.Uint32(header[4:]))
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return 0, nil, err
+	}
+	return header[0], payload, nil
+}
+
+func serveEndpointProxy(t *testing.T, socket string, handler http.Handler) {
+	t.Helper()
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+	})
+}
 
 func TestSandboxPostgresEndpointsAreConcurrentAndContainerBound(t *testing.T) {
 	echoA, closeA := endpointEcho(t, "A:")

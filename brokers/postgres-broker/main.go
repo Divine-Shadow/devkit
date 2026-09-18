@@ -1211,6 +1211,9 @@ func copyResponse(w http.ResponseWriter, resp *http.Response) {
 	w.WriteHeader(resp.StatusCode)
 	writer := io.Writer(w)
 	if fl, ok := w.(http.Flusher); ok {
+		// Commit headers before waiting for the first upstream frame. This is
+		// essential for follow-mode Docker APIs, whose response can stay open.
+		fl.Flush()
 		writer = &flushWriter{w: w, fl: fl}
 	}
 	_, _ = io.Copy(writer, resp.Body)
