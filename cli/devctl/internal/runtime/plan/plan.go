@@ -201,14 +201,11 @@ func Build(opts BuildOptions) (Plan, error) {
 	} else if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
 		if project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) {
-			suffix := fmt.Sprintf(".devhome-agent%d", index)
+			paths.SandboxHome = agent.PersistentDevAllHome(paths.SandboxWorktree, index)
 			if index == 1 {
-				paths.SandboxHome = filepath.Join(paths.SandboxWorktree, suffix)
 				if resolved, err := filepath.EvalSymlinks(paths.HostWorktree); err == nil {
-					paths.HostHome = filepath.Join(filepath.Clean(resolved), suffix)
+					paths.HostHome = agent.PersistentDevAllHome(filepath.Clean(resolved), index)
 				}
-			} else {
-				paths.SandboxHome = filepath.Join(filepath.Dir(paths.SandboxWorktree), suffix)
 			}
 		}
 	}

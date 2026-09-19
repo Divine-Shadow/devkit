@@ -1120,6 +1120,47 @@ func TestBuildClient_TCP(t *testing.T) {
 	}
 }
 
+func TestBuildClientDialContextHonorsCanceledContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		upstream string
+		network  string
+		address  string
+	}{
+		{
+			name:     "unix",
+			upstream: "unix:///definitely-not-a-live-agent-proxy.sock",
+			network:  "unix",
+			address:  "ignored",
+		},
+		{
+			name:     "tcp",
+			upstream: "tcp://203.0.113.1:5432",
+			network:  "tcp",
+			address:  "ignored",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			client, _, err := buildClient(testCase.upstream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.CloseIdleConnections()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			started := time.Now()
+			_, err = client.Transport.(*http.Transport).DialContext(ctx, testCase.network, testCase.address)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled dial error = %v, want context cancellation", err)
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("canceled dial ignored context for %s", elapsed)
+			}
+		})
+	}
+}
+
 func TestPolicy_AllowsMultipleImages(t *testing.T) {
 	p := mustPolicy(t, []string{"postgres:latest", "minio/minio:latest"}, true)
 	if !p.matchesImage("minio/minio:latest") {

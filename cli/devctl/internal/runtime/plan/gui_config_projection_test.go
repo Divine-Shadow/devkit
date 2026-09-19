@@ -202,6 +202,28 @@ func TestGUITargetConfigProjectionBindsEveryGeometryField(t *testing.T) {
 	}
 }
 
+func TestGUITargetConfigProjectionRejectsAgentOneSiblingHomeInsteadOfProtectedLegacyHome(t *testing.T) {
+	storeRoot := filepath.Join(t.TempDir(), "nix", "store")
+	manifestPath := filepath.Join(t.TempDir(), "manifest.json")
+	worktree := "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide"
+	geometry := guiTargetGeometry{
+		Project:       "dev-all",
+		Repo:          "ouroboros-ide",
+		AgentIndex:    1,
+		WorkspaceRoot: filepath.Dir(worktree),
+		HostWorktree:  worktree,
+		HostHome:      worktree + "/.devhome-agent1",
+	}
+	record := guiConfigRecordForGeometry(geometry, "protected-agent1", "product-governance", filepath.Join(storeRoot, "config.toml"), strings.Repeat("a", 64))
+	// The sibling path is a different persistent-home identity. Accepting it
+	// would seed a second home and strand the protected legacy history.
+	record.HostHome = filepath.Dir(worktree) + "/.devhome-agent1"
+	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record})
+	if _, err := loadGUITargetConfigProjectionFrom(manifestPath, storeRoot, record.TargetID, geometry); err == nil || !strings.Contains(err.Error(), "hostHome geometry mismatch") {
+		t.Fatalf("sibling agent1 home was accepted or wrong error returned: %v", err)
+	}
+}
+
 func TestGUITargetConfigProjectionRejectsNonStoreSource(t *testing.T) {
 	root := t.TempDir()
 	storeRoot := filepath.Join(root, "nix", "store")

@@ -542,6 +542,10 @@ func buildClient(upstream string) (*http.Client, *url.URL, error) {
 	}
 
 	transport := &http.Transport{DisableCompression: true}
+	// Keep the caller's deadline authoritative. In particular, the bounded
+	// sandbox endpoint lease must not be extended by the transport's old fixed
+	// ten-second dial timeout when an agent proxy is unavailable.
+	dialer := &net.Dialer{}
 
 	switch parsed.Scheme {
 	case "unix", "":
@@ -550,7 +554,7 @@ func buildClient(upstream string) (*http.Client, *url.URL, error) {
 			socketPath = upstream
 		}
 		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.DialTimeout("unix", socketPath, 10*time.Second)
+			return dialer.DialContext(ctx, "unix", socketPath)
 		}
 		return &http.Client{Transport: transport, Timeout: 0}, &url.URL{Scheme: "http", Host: "docker"}, nil
 	case "tcp":
@@ -560,7 +564,7 @@ func buildClient(upstream string) (*http.Client, *url.URL, error) {
 			if target == "" {
 				target = addr
 			}
-			return net.DialTimeout("tcp", target, 10*time.Second)
+			return dialer.DialContext(ctx, "tcp", target)
 		}
 		return &http.Client{Transport: transport, Timeout: 0}, &url.URL{Scheme: "http", Host: host}, nil
 	default:

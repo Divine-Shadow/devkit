@@ -36,6 +36,24 @@ type Paths struct {
 	SandboxHome           string
 }
 
+// PersistentDevAllHome returns the source-owned persistent Codex home for a
+// dev-all worktree. Agent one intentionally retains the legacy repo-local
+// layout. Its history is protected data and must not be "migrated" by silently
+// selecting the sibling agent-root path used by later lanes.
+//
+// Keep this rule in one place: plan construction must use the same geometry as
+// direct native lifecycle helpers and GUI config projection records.
+func PersistentDevAllHome(worktree string, index int) string {
+	if index < 1 {
+		index = 1
+	}
+	suffix := fmt.Sprintf(".devhome-agent%d", index)
+	if index == 1 {
+		return filepath.Join(worktree, suffix)
+	}
+	return filepath.Join(filepath.Dir(worktree), suffix)
+}
+
 func ResolvePaths(cfg PathConfig) (Paths, error) {
 	devkitRoot := strings.TrimSpace(cfg.DevkitRoot)
 	if devkitRoot == "" {
@@ -93,14 +111,8 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 	hostHome := filepath.Join(hostAgentStateRoot, "home")
 	sandboxHome := filepath.Join(sandboxAgentStateRoot, "home")
 	if project == "dev-all" && !workspaceRoot {
-		suffix := fmt.Sprintf(".devhome-agent%d", index)
-		if index == 1 {
-			hostHome = filepath.Join(hostWorktree, suffix)
-			sandboxHome = filepath.Join(sandboxWorktree, suffix)
-		} else {
-			hostHome = filepath.Join(filepath.Dir(hostWorktree), suffix)
-			sandboxHome = filepath.Join(filepath.Dir(sandboxWorktree), suffix)
-		}
+		hostHome = PersistentDevAllHome(hostWorktree, index)
+		sandboxHome = PersistentDevAllHome(sandboxWorktree, index)
 	}
 	return Paths{
 		DevRoot:               devRoot,

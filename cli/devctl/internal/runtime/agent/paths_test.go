@@ -2,6 +2,20 @@ package agent
 
 import "testing"
 
+func TestPersistentDevAllHomeKeepsAgentOneProtectedLegacyGeometry(t *testing.T) {
+	worktree := "/home/me/dev/agent-worktrees/agent1/ouroboros-ide"
+	if got, want := PersistentDevAllHome(worktree, 1), worktree+"/.devhome-agent1"; got != want {
+		t.Fatalf("agent1 persistent home = %q, want protected legacy path %q", got, want)
+	}
+	if got, forbidden := PersistentDevAllHome(worktree, 1), "/home/me/dev/agent-worktrees/agent1/.devhome-agent1"; got == forbidden {
+		t.Fatalf("agent1 selected sibling home %q instead of protected legacy geometry", got)
+	}
+	worktree = "/home/me/dev/agent-worktrees/agent2/ouroboros-ide"
+	if got, want := PersistentDevAllHome(worktree, 2), "/home/me/dev/agent-worktrees/agent2/.devhome-agent2"; got != want {
+		t.Fatalf("agent2 persistent home = %q, want %q", got, want)
+	}
+}
+
 func TestResolvePathsDedicatedAgentOne(t *testing.T) {
 	got, err := ResolvePaths(PathConfig{
 		DevkitRoot:        "/home/me/dev/devkit",
