@@ -37,7 +37,7 @@
           hashicorpArch = "amd64";
           goArch = "amd64";
           codexAsset = "codex-package-x86_64-unknown-linux-musl";
-          codexHash = "sha256-qCIYfhokIMYcWSZyG/vYeHAe2VVHybsNTeRJiha6GCE=";
+          codexHash = "sha256-/G4+O4Xyz31mRSDuXGan/kqhK659RoNPR+LxZf0Nb3g=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -48,14 +48,14 @@
           hashicorpArch = "arm64";
           goArch = "arm64";
           codexAsset = "codex-package-aarch64-unknown-linux-musl";
-          codexHash = "sha256-/DlcsEOhCTqw2zT0Sroxmb+qnOZAzZvn/ViPRLDaZKQ=";
+          codexHash = "sha256-l9k+Ed9y08JnctsBnm6ou3LCRlANRrmMdgg58yQDVeY=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
-      codexVersion = "0.153.4";
+      codexVersion = "0.154.0";
       codexReleaseTag = "rust-v${codexVersion}";
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
       mkDevAllRuntimeBundle =
@@ -818,7 +818,7 @@
                 '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-terraform.git' \
                 ${devctl}/overlays/ouroboros-terraform/devkit.yaml
               grep -Fx \
-                "      command: codex --version | grep -q '0.153.4'" \
+                "      command: codex --version | grep -q '0.154.0'" \
                 ${devctl}/overlays/ouroboros-terraform/devkit.yaml
 
               pokeemerald_plan="$TMPDIR/installed-pokeemerald-plan.json"

@@ -61,6 +61,8 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [Codex 0.154.0 runtime](execplans/codex-0.154.0-runtime-20260922.md): advance the immutable Codex bundle and every ordinary overlay runtime identity without changing lifecycle semantics.
+
 - [Native selected-lane Git reciprocal projection](execplans/native-git-reciprocal-projection-20260912.md): validate and project the selected reverse pointer without changing host or sibling Git custody; unpublished review candidate.
 
 - [Retire the EMDR appliance dependency](execplans/emdr-appliance-retirement-20260908.md): remove the retired preparation capability from ordinary Management launch; preserve generic controller validation and user workspace data.
