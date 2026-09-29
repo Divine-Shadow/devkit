@@ -42,6 +42,7 @@ type Plan struct {
 	GitBacklink            *GitBacklinkProjection     `json:"git_backlink,omitempty"`
 	Agent                  agent.Spec                 `json:"agent"`
 	GUITargetConfig        *GUITargetConfigProjection `json:"gui_target_config,omitempty"`
+	CallbackReturn         *CallbackReturnProjection  `json:"callback_return,omitempty"`
 	DevkitHostRoot         string                     `json:"devkit_host_root"`
 	RuntimeAuthorityRoot   string                     `json:"runtime_authority_root"`
 	DevkitSandboxRoot      string                     `json:"devkit_sandbox_root"`
@@ -339,10 +340,13 @@ func Build(opts BuildOptions) (Plan, error) {
 		// Reserve the GUI target claim for every sandbox. Ordinary plans
 		// explicitly erase hostile ambient state; an inventory-validated GUI
 		// selection replaces this sentinel below.
-		GUITargetIDEnvironment:        "",
-		"AWS_CONFIG_FILE":             filepath.Join(paths.SandboxHome, ".aws", "config"),
-		"AWS_SHARED_CREDENTIALS_FILE": filepath.Join(paths.SandboxHome, ".aws", "credentials"),
-		"AWS_SDK_LOAD_CONFIG":         "1",
+		GUITargetIDEnvironment:            "",
+		CallbackReturnManifestEnvironment: "",
+		CallbackReturnClientEnvironment:   "",
+		CallbackReturnProfileEnvironment:  "",
+		"AWS_CONFIG_FILE":                 filepath.Join(paths.SandboxHome, ".aws", "config"),
+		"AWS_SHARED_CREDENTIALS_FILE":     filepath.Join(paths.SandboxHome, ".aws", "credentials"),
+		"AWS_SDK_LOAD_CONFIG":             "1",
 	}
 	if postgresLeasePath && strings.TrimSpace(opts.BrokerBinary) != "" {
 		brokerBinary := strings.TrimSpace(opts.BrokerBinary)
@@ -543,6 +547,20 @@ func Build(opts BuildOptions) (Plan, error) {
 		}
 		p.GUITargetConfig = &projection
 		p.Env[GUITargetIDEnvironment] = projection.TargetID
+	}
+	callbackReturn, err := loadCallbackReturnProjection(p)
+	if err != nil {
+		return Plan{}, err
+	}
+	if callbackReturn != nil {
+		p.CallbackReturn = callbackReturn
+		p.Binds = append(p.Binds,
+			Bind{Source: CallbackReturnManifestSource, Target: CallbackReturnManifestTarget, Mode: "ro", Required: true},
+			Bind{Source: callbackReturn.HandleParent, Target: callbackReturn.HandleParent, Mode: "ro", Required: true},
+		)
+		p.Env[CallbackReturnManifestEnvironment] = CallbackReturnManifestTarget
+		p.Env[CallbackReturnClientEnvironment] = callbackReturn.FleetExecutable
+		p.Env[CallbackReturnProfileEnvironment] = CallbackReturnProfileIdentity
 	}
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})

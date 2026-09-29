@@ -2294,6 +2294,9 @@ func BuildManagedAppServerBubblewrap(p nativeplan.Plan, command []string) (Comma
 }
 
 func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (Command, error) {
+	if err := validateCallbackReturnProjectionPlan(p); err != nil {
+		return Command{}, err
+	}
 	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
 		return Command{}, err
 	}
@@ -2477,6 +2480,65 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 		args = append(args, runtimeArgs...)
 	}
 	return Command{Path: bubblewrapBinary, Args: args, Dir: p.DevkitHostRoot}, nil
+}
+
+func validateCallbackReturnProjectionPlan(p nativeplan.Plan) error {
+	if p.CallbackReturn == nil {
+		for _, key := range []string{
+			nativeplan.CallbackReturnManifestEnvironment,
+			nativeplan.CallbackReturnClientEnvironment,
+			nativeplan.CallbackReturnProfileEnvironment,
+		} {
+			if p.Env[key] != "" {
+				return fmt.Errorf("ordinary sandbox carries undeclared callback-return identity %q", key)
+			}
+		}
+		for _, bind := range p.Binds {
+			if filepath.Clean(bind.Target) == nativeplan.CallbackReturnManifestTarget ||
+				filepath.Clean(bind.Target) == nativeplan.CallbackReturnStableParent {
+				return fmt.Errorf("ordinary sandbox carries undeclared callback-return bind %s", bind.Target)
+			}
+		}
+		return nil
+	}
+	projection := p.CallbackReturn
+	if p.Env[nativeplan.CallbackReturnProfileEnvironment] != nativeplan.CallbackReturnProfileIdentity ||
+		p.Env[nativeplan.CallbackReturnManifestEnvironment] != nativeplan.CallbackReturnManifestTarget ||
+		p.Env[nativeplan.CallbackReturnClientEnvironment] != projection.FleetExecutable ||
+		p.GUITargetConfig == nil || p.GUITargetConfig.TargetID != projection.TargetID ||
+		p.Agent.ID.Index != projection.AgentIndex {
+		return fmt.Errorf("callback-return projection identity does not match its selected GUI target")
+	}
+	manifestBinds, parentBinds := 0, 0
+	for _, bind := range p.Binds {
+		switch filepath.Clean(bind.Target) {
+		case nativeplan.CallbackReturnManifestTarget:
+			manifestBinds++
+			if bind.Source != nativeplan.CallbackReturnManifestSource || bind.Mode != "ro" || !bind.Required {
+				return fmt.Errorf("callback-return manifest bind must be the exact read-only package-owned path")
+			}
+		case filepath.Clean(projection.HandleParent):
+			parentBinds++
+			if bind.Source != projection.HandleParent || bind.Mode != "ro" || !bind.Required {
+				return fmt.Errorf("callback-return stable parent bind must be exact and read-only")
+			}
+		}
+	}
+	if manifestBinds != 1 || parentBinds != 1 {
+		return fmt.Errorf("callback-return projection requires exactly one manifest and stable parent bind")
+	}
+	// The stable parent is required for admission. The per-app-server child
+	// directory/socket is deliberately checked by the post-launch capability
+	// canary so a fresh app-server does not depend on a pre-existing socket.
+	info, err := os.Lstat(projection.HandleParent)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("callback-return stable parent is unavailable or invalid")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Getuid() {
+		return fmt.Errorf("callback-return stable parent owner changed after plan construction")
+	}
+	return nil
 }
 
 func isWorkspaceControllerCapabilityTarget(target string) bool {

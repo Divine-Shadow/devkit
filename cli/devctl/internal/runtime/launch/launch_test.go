@@ -312,6 +312,46 @@ func withProductGovernanceEnvironmentFixture(t *testing.T) {
 	})
 }
 
+func TestCallbackReturnProjectionRejectsUndeclaredClaimsAndInvalidAdmissionBinds(t *testing.T) {
+	ordinary := nativeplan.Plan{Env: map[string]string{
+		nativeplan.CallbackReturnManifestEnvironment: nativeplan.CallbackReturnManifestTarget,
+		nativeplan.CallbackReturnClientEnvironment:   "/nix/store/hostile/bin/fleet-control",
+	}}
+	if err := validateCallbackReturnProjectionPlan(ordinary); err == nil || !strings.Contains(err.Error(), "undeclared callback-return") {
+		t.Fatalf("ordinary plan callback claim was accepted: %v", err)
+	}
+
+	parent := t.TempDir()
+	projection := &nativeplan.CallbackReturnProjection{
+		TargetID: "darksteel-2", AgentIndex: 2, HandleParent: parent,
+		HandleDirectory: filepath.Join(parent, "darksteel-2"), FleetExecutable: "/nix/store/fixture/bin/fleet-control",
+	}
+	selected := nativeplan.Plan{
+		Agent:           agent.Spec{ID: agent.ID{Index: 2}},
+		GUITargetConfig: &nativeplan.GUITargetConfigProjection{TargetID: "darksteel-2"},
+		CallbackReturn:  projection,
+		Env: map[string]string{
+			nativeplan.CallbackReturnProfileEnvironment:  nativeplan.CallbackReturnProfileIdentity,
+			nativeplan.CallbackReturnManifestEnvironment: nativeplan.CallbackReturnManifestTarget,
+			nativeplan.CallbackReturnClientEnvironment:   projection.FleetExecutable,
+		},
+		Binds: []nativeplan.Bind{
+			{Source: nativeplan.CallbackReturnManifestSource, Target: nativeplan.CallbackReturnManifestTarget, Mode: "ro", Required: true},
+			{Source: parent, Target: parent, Mode: "rw", Required: true},
+		},
+	}
+	if err := validateCallbackReturnProjectionPlan(selected); err == nil || !strings.Contains(err.Error(), "stable parent bind") {
+		t.Fatalf("writable stable parent bind was accepted: %v", err)
+	}
+	selected.Binds[1].Mode = "ro"
+	selected.CallbackReturn.HandleParent = filepath.Join(parent, "missing")
+	selected.CallbackReturn.HandleDirectory = filepath.Join(selected.CallbackReturn.HandleParent, "darksteel-2")
+	selected.Binds[1] = nativeplan.Bind{Source: selected.CallbackReturn.HandleParent, Target: selected.CallbackReturn.HandleParent, Mode: "ro", Required: true}
+	if err := validateCallbackReturnProjectionPlan(selected); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("missing stable parent was accepted: %v", err)
+	}
+}
+
 func TestWorkspaceControllerCapabilityValidationRejectsSymlinkAndWrongSocketMode(t *testing.T) {
 	root, err := os.MkdirTemp("/tmp", "devkit-exec-handle-")
 	if err != nil {
