@@ -385,7 +385,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	profile.AuthRefresh = nativeplan.ControllerProfileAuthRefresh{
 		IdentityRoot:     "/home/bayesartre/.codex-identities",
 		CodexExecutable:  writeExecutable(filepath.Join(operationStoreRoot, "codex", "bin", "codex")),
-		Model:            "gpt-5.6-terra",
+		Model:            "gpt-6.1-sol",
 		ReasoningEffort:  "medium",
 		ServiceTier:      "default",
 		WorkingDirectory: "/tmp",

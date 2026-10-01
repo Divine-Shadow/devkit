@@ -35,7 +35,7 @@ const (
 	managementControllerLinuxDesktopSocket  = "linux-desktop-auth.sock"
 	managementControllerLinuxDesktopService = "codex-linux-desktop.service"
 	managementControllerAuthRefreshRoot     = "/home/bayesartre/.codex-identities"
-	managementControllerAuthRefreshModel    = "gpt-5.6-terra"
+	managementControllerAuthRefreshModel    = "gpt-6.1-sol"
 	managementControllerAuthRefreshEffort   = "medium"
 	managementControllerAuthRefreshTier     = "default"
 	managementControllerAuthRefreshCWD      = "/tmp"

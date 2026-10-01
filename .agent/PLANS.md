@@ -87,3 +87,5 @@ not the lifetime of a particular execution.
 - [Immutable Management Runtime Skills](execplans/immutable-management-runtime-skills.md):
   make fresh Management consumers validate and link the manifest-bound
   immutable Management skill package instead of mutable workspace copies.
+
+- [Codex 0.159.3 and GPT-6.1 Sol runtime](execplans/codex-0.159.3-sol-runtime-20261001.md): isolated source preparation; activation remains parent-coordinated.
