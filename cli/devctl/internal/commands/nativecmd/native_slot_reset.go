@@ -624,7 +624,6 @@ func nativeSlotMutationRoots(
 		{name: "selected-state", path: selectedPlan.Agent.StateRoot},
 		{name: "shared-git-coordination", path: coordinationRoot},
 		{name: "shared-native-manifest", path: filepath.Dir(manifestPath)},
-		{name: "shared-runtime-broker", path: brokerCfg.StateRoot},
 	}
 	if proxySocket := strings.TrimSpace(selectedPlan.Proxy.UnixSocket); proxySocket != "" {
 		roots = append(roots, nativeSlotMutationRoot{
@@ -3688,25 +3687,6 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		return err
 	}
 
-	brokerCreated := false
-	brokerCreatedPID := 0
-	cleanupCreatedBroker := func() error {
-		if !brokerCreated {
-			return nil
-		}
-		status, err := broker.Inspect(brokerCfg)
-		if err != nil {
-			return err
-		}
-		if !status.Running {
-			return nil
-		}
-		if status.PID != brokerCreatedPID {
-			return fmt.Errorf("shared broker process changed from created pid %d to pid %d during failed slot reconstruction", brokerCreatedPID, status.PID)
-		}
-		_, err = broker.Stop(brokerCfg, false)
-		return err
-	}
 	cleanupFailedSlot := func(cause error) error {
 		if ctx.DryRun {
 			return cause
@@ -3716,32 +3696,23 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 			// Never dispose files beneath an unowned live process. The failure is
 			// terminal and typed; a later canonical reconstruction may retry after
 			// the external effect has been reconciled.
-			return errors.Join(cause, processErr, cleanupCreatedBroker())
+			return errors.Join(cause, processErr)
 		}
 		if processErr = cleanupProcesses.Stop(); processErr != nil {
-			return errors.Join(cause, processErr, cleanupCreatedBroker())
+			return errors.Join(cause, processErr)
 		}
 		cleanupPlan, planErr := wtx.PlanNativeSlotReset(resetOptions)
 		if planErr != nil {
-			return errors.Join(cause, processErr, fmt.Errorf("plan selected-slot cleanup after failed reconstruction: %w", planErr), cleanupCreatedBroker())
+			return errors.Join(cause, processErr, fmt.Errorf("plan selected-slot cleanup after failed reconstruction: %w", planErr))
 		}
 		cleanupErr := cleanupPlan.Apply()
-		brokerErr := cleanupCreatedBroker()
-		return errors.Join(cause, processErr, cleanupErr, brokerErr)
+		return errors.Join(cause, processErr, cleanupErr)
 	}
 
 	if !ctx.DryRun {
-		beforeBroker, err := broker.Inspect(brokerCfg)
+		status, err := broker.EnsureReady(context.Background(), brokerCfg, false)
 		if err != nil {
 			return cleanupFailedSlot(err)
-		}
-		status, err := broker.Start(context.Background(), brokerCfg, false)
-		if err != nil {
-			return cleanupFailedSlot(err)
-		}
-		if !beforeBroker.Running && status.Running {
-			brokerCreated = true
-			brokerCreatedPID = status.PID
 		}
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, status)
 		opts = lifecyclePlanOptions(ctx, cfg, lifecycleParsed, declaredRepo, brokerCfg)
@@ -3782,7 +3753,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err := prepareNativeGitBootstrapAndWorktrees(bootstrapPlan, worktreeOptions, ctx.DryRun); err != nil {
 		return cleanupFailedSlot(err)
 	}
-	if err := prepareWithManagedEgressProxy(selectedPlan, ctx.DryRun, launch.Prepare); err != nil {
+	if err := prepareWithManagedEgressProxy(selectedPlan, brokerCfg, ctx.DryRun, launch.Prepare); err != nil {
 		return cleanupFailedSlot(err)
 	}
 	planArgs := planArgs{opts: opts, skipRepoChecks: lifecycleParsed.skipRepoChecks}
@@ -3790,7 +3761,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return cleanupFailedSlot(err)
 	}
-	report := runReadinessReport(selectedPlan, runtimeChecks, repoChecks)
+	report := runReadinessReport(selectedPlan, brokerCfg, runtimeChecks, repoChecks)
 	summary := capacity.Build(map[int]readiness.Report{parsed.index: report})
 	if err := lifecycleReadinessError(summary, lifecycleParsed); err != nil {
 		data, marshalErr := json.Marshal(summary)

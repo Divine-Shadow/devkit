@@ -670,10 +670,10 @@ func parseListenAddr(addr string) (string, string) {
 }
 
 func ensureSocketAbsent(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		if err := os.Remove(path); err != nil {
-			return err
-		}
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("refusing preexisting broker endpoint: %s", path)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return err

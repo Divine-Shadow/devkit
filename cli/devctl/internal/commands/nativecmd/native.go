@@ -804,7 +804,7 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
 	status := lifecycleStatus{Command: "ensure-ready", Runtime: "native", Repo: repo, Count: count, ReadinessMode: parsed.readinessMode}
-	brokerCfg, brokerStatus, err := lifecycleEnsureReadyBroker(ctx, parsed, brokerCfg, runtimebroker.Start)
+	brokerCfg, brokerStatus, err := lifecycleEnsureReadyBroker(ctx, parsed, brokerCfg, runtimebroker.EnsureReady)
 	if err != nil {
 		return err
 	}
@@ -816,7 +816,7 @@ func handleLifecycleEnsureReady(ctx *cmdregistry.Context) error {
 		status.Message = "dry run: broker action was planned; readiness was not launched"
 		return printLifecycleStatus(status, parsed.format)
 	}
-	summary, err := lifecycleCapacity(ctx, parsed, opts, count)
+	summary, err := lifecycleCapacity(ctx, parsed, opts, brokerCfg, count)
 	if err != nil {
 		return err
 	}
@@ -1033,6 +1033,10 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		return err
 	}
 	p, err = isolateRuntimeExecutionPlan(p, ctx.DryRun)
+	if err != nil {
+		return err
+	}
+	p, err = ensureNativeBrokerEndpoint(p, brokerCfg, ctx.DryRun)
 	if err != nil {
 		return err
 	}
@@ -1654,29 +1658,20 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 		}
 	}
 	status := lifecycleStatus{Command: command, Runtime: "native", Repo: repo, Count: count, ReadinessMode: parsed.readinessMode}
-	stopBrokerOnFailure := false
+
 	if !parsed.skipBroker {
-		brokerBefore, err := runtimebroker.Inspect(brokerCfg)
+		selected, err := runtimebroker.SelectConfig(brokerCfg)
 		if err != nil {
 			return err
 		}
-		brokerStatus, err := runtimebroker.Start(context.Background(), brokerCfg, ctx.DryRun)
+		brokerCfg = selected
+		brokerStatus, err := runtimebroker.EnsureReady(context.Background(), brokerCfg, ctx.DryRun)
 		if err != nil {
 			return err
 		}
-		stopBrokerOnFailure = !ctx.DryRun && !brokerBefore.Running && brokerStatus.Running
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
 		status.attachBrokerStatus(brokerStatus, false)
 	}
-	defer func() {
-		if retErr == nil || !stopBrokerOnFailure {
-			return
-		}
-		_, stopErr := runtimebroker.Stop(brokerCfg, false)
-		if stopErr != nil {
-			retErr = errors.Join(retErr, fmt.Errorf("rollback native broker after lifecycle failure: %w", stopErr))
-		}
-	}()
 	planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
 	if !parsed.skipPrepare {
 		bootstrapOpts := planOpts
@@ -1698,7 +1693,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 			if err != nil {
 				return err
 			}
-			if err := prepareWithManagedEgressProxy(p, ctx.DryRun, launch.Prepare); err != nil {
+			if err := prepareWithManagedEgressProxy(p, brokerCfg, ctx.DryRun, launch.Prepare); err != nil {
 				return err
 			}
 			status.Agents = append(status.Agents, preparedLifecycleAgent{
@@ -1718,7 +1713,7 @@ func lifecycleUp(ctx *cmdregistry.Context, parsed lifecycleArgs, command string)
 		status.ManifestPath = manifestPath
 	}
 	if !parsed.skipReady && !ctx.DryRun {
-		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
+		summary, err := lifecycleCapacity(ctx, parsed, planOpts, brokerCfg, count)
 		if err != nil {
 			return err
 		}
@@ -1748,17 +1743,14 @@ func lifecycleDown(ctx *cmdregistry.Context, parsed lifecycleArgs) error {
 		return err
 	}
 	status := lifecycleStatus{Command: "down", Runtime: "native", Repo: repo, Count: count}
-	status.attachBrokerStatus(brokerStatus, true)
+	status.attachBrokerStatus(brokerStatus, false)
 	return printLifecycleStatus(status, parsed.format)
 }
 
 func lifecycleStopOnly(ctx *cmdregistry.Context, parsed lifecycleArgs) error {
-	cfg, _, _, _, _, err := lifecycleDefaults(ctx, parsed)
-	if err != nil {
-		return err
-	}
-	brokerCfg := lifecycleBrokerConfig(ctx, cfg, parsed)
-	_, err = runtimebroker.Stop(brokerCfg, ctx.DryRun)
+	// Target teardown does not own the station broker. The existing explicit
+	// broker stop command is the serialized deliberate owner stop boundary.
+	_, _, _, _, _, err := lifecycleDefaults(ctx, parsed)
 	return err
 }
 
@@ -1781,7 +1773,7 @@ func lifecycleStatusCommand(ctx *cmdregistry.Context, parsed lifecycleArgs) erro
 		status.ReadinessMode = parsed.readinessMode
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, brokerStatus)
 		planOpts := lifecyclePlanOptions(ctx, cfg, parsed, repo, brokerCfg)
-		summary, err := lifecycleCapacity(ctx, parsed, planOpts, count)
+		summary, err := lifecycleCapacity(ctx, parsed, planOpts, brokerCfg, count)
 		if err == nil {
 			status.attachCapacity(summary)
 		} else {
@@ -1839,7 +1831,7 @@ func lifecycleLogs(ctx *cmdregistry.Context, parsed lifecycleArgs) error {
 	return nil
 }
 
-func lifecycleCapacity(ctx *cmdregistry.Context, parsed lifecycleArgs, opts nativeplan.BuildOptions, count int) (capacity.Summary, error) {
+func lifecycleCapacity(ctx *cmdregistry.Context, parsed lifecycleArgs, opts nativeplan.BuildOptions, brokerCfg runtimebroker.Config, count int) (capacity.Summary, error) {
 	planArgs := planArgs{
 		opts:           opts,
 		repoCheck:      parsed.repoCheck,
@@ -1857,7 +1849,7 @@ func lifecycleCapacity(ctx *cmdregistry.Context, parsed lifecycleArgs, opts nati
 		if err != nil {
 			return capacity.Summary{}, err
 		}
-		reports[i] = runReadinessReport(p, runtimeChecks, repoChecks)
+		reports[i] = runReadinessReport(p, brokerCfg, runtimeChecks, repoChecks)
 	}
 	return capacity.Build(reports), nil
 }
@@ -2118,6 +2110,7 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 		}
 		if err := prepareWithManagedEgressProxy(
 			p,
+			nativePlanBrokerConfig(ctx, cfg, opts),
 			ctx.DryRun || parsed.dryRun,
 			launch.Prepare,
 		); err != nil {
@@ -2191,6 +2184,10 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
 	p, err = isolateRuntimeExecutionPlan(p, dryRun)
+	if err != nil {
+		return err
+	}
+	p, err = ensureNativeBrokerEndpoint(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), dryRun)
 	if err != nil {
 		return err
 	}
@@ -2367,13 +2364,14 @@ func withManagedEgressProxy(p nativeplan.Plan, dryRun bool, run func() error) er
 
 func prepareWithManagedEgressProxy(
 	p nativeplan.Plan,
+	brokerCfg runtimebroker.Config,
 	dryRun bool,
 	prepare func(nativeplan.Plan) error,
 ) error {
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
 	}
-	return withManagedRuntimeEndpoints(p, dryRun, func(p nativeplan.Plan) error {
+	return withManagedRuntimeEndpoints(p, brokerCfg, dryRun, func(p nativeplan.Plan) error {
 		if dryRun {
 			return nil
 		}
@@ -2384,7 +2382,7 @@ func prepareWithManagedEgressProxy(
 	})
 }
 
-func withManagedRuntimeEndpoints(p nativeplan.Plan, dryRun bool, run func(nativeplan.Plan) error) error {
+func withManagedRuntimeEndpoints(p nativeplan.Plan, brokerCfg runtimebroker.Config, dryRun bool, run func(nativeplan.Plan) error) error {
 	runtimePlan := p
 	if !dryRun && runtimePlan.PostgresDockerSocket != "" {
 		var err error
@@ -2392,6 +2390,11 @@ func withManagedRuntimeEndpoints(p nativeplan.Plan, dryRun bool, run func(native
 		if err != nil {
 			return fmt.Errorf("isolate managed runtime endpoints: %w", err)
 		}
+	}
+	var brokerErr error
+	runtimePlan, brokerErr = ensureNativeBrokerEndpoint(runtimePlan, brokerCfg, dryRun)
+	if brokerErr != nil {
+		return brokerErr
 	}
 	cleanupProxy, err := ensureManagedEgressProxy(runtimePlan, dryRun)
 	if err != nil {
@@ -2596,7 +2599,7 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	report := runReadinessReport(p, runtimeChecks, repoChecks)
+	report := runReadinessReport(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), runtimeChecks, repoChecks)
 	switch parsed.format {
 	case "", "json":
 		data, err := json.MarshalIndent(struct {
@@ -2686,6 +2689,7 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	brokerCfg := nativePlanBrokerConfig(ctx, cfg, parsed.opts)
 	reports := make(map[int]readiness.Report, count)
 	for i := 1; i <= count; i++ {
 		opts := parsed.opts
@@ -2695,7 +2699,7 @@ func handleCapacity(ctx *cmdregistry.Context) error {
 		if err != nil {
 			return err
 		}
-		reports[i] = runReadinessReport(p, runtimeChecks, repoChecks)
+		reports[i] = runReadinessReport(p, brokerCfg, runtimeChecks, repoChecks)
 	}
 	summary := capacity.Build(reports)
 	switch parsed.format {
@@ -2818,9 +2822,9 @@ func repoChecksFor(ctx *cmdregistry.Context, parsed planArgs) ([]repoCheck, erro
 	return checks, nil
 }
 
-func runReadinessReport(p nativeplan.Plan, runtimeChecks []runtimeCheck, repoChecks []repoCheck) (report readiness.Report) {
+func runReadinessReport(p nativeplan.Plan, brokerCfg runtimebroker.Config, runtimeChecks []runtimeCheck, repoChecks []repoCheck) (report readiness.Report) {
 	ready := false
-	err := withManagedRuntimeEndpoints(p, false, func(p nativeplan.Plan) error {
+	err := withManagedRuntimeEndpoints(p, brokerCfg, false, func(p nativeplan.Plan) error {
 		if err := launch.Prepare(p); err != nil {
 			report.AddRuntime("prepare-state", false, err.Error())
 			return nil
@@ -3032,4 +3036,28 @@ func detail(err error, out string) string {
 
 func nativeShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func nativePlanBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, opts nativeplan.BuildOptions) runtimebroker.Config {
+	return lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{brokerSocket: opts.BrokerEndpoint})
+}
+
+var acquireNativeBrokerEndpoint = runtimebroker.EnsureEndpointReady
+
+func ensureNativeBrokerEndpoint(p nativeplan.Plan, brokerCfg runtimebroker.Config, dryRun bool) (nativeplan.Plan, error) {
+	if dryRun || strings.TrimSpace(p.BrokerEndpoint) == "" {
+		return p, nil
+	}
+	brokerCfg = runtimebroker.Normalize(brokerCfg)
+	if brokerCfg.Socket != p.BrokerEndpoint {
+		return p, fmt.Errorf("native plan endpoint differs from requested source broker binding")
+	}
+	binary, err := acquireNativeBrokerEndpoint(context.Background(), brokerCfg, false)
+	if err != nil {
+		return p, fmt.Errorf("shared native broker prerequisite: %w", err)
+	}
+	if p.PostgresDockerSocket != "" {
+		p.Env["DEVKIT_RUNTIME_BROKER_BINARY"] = binary
+	}
+	return p, nil
 }

@@ -52,9 +52,13 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 	if err != nil {
 		return args{}, err
 	}
+	hostRoot := resolveBrokerPath(ctx.Paths.Root, strings.TrimSpace(overlayCfg.Native.HostRoot))
+	if hostRoot == "" {
+		hostRoot = ctx.Paths.Root
+	}
 	cfg := runtimebroker.Config{
-		DevkitRoot:    ctx.Paths.Root,
-		Socket:        resolveBrokerPath(ctx.Paths.Root, overlayCfg.Broker.Socket),
+		DevkitRoot:    hostRoot,
+		Socket:        resolveBrokerPath(hostRoot, overlayCfg.Broker.Socket),
 		Upstream:      strings.TrimSpace(overlayCfg.Broker.Upstream),
 		AllowedImages: append([]string{}, overlayCfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(overlayCfg.Broker.LogLevel),
@@ -71,7 +75,7 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--socket requires a value")
 			}
-			parsed.cfg.Socket = resolveBrokerPath(ctx.Paths.Root, ctx.Args[i+1])
+			parsed.cfg.Socket = resolveBrokerPath(hostRoot, ctx.Args[i+1])
 			i++
 		case "--upstream":
 			if i+1 >= len(ctx.Args) {
@@ -115,6 +119,9 @@ func parse(ctx *cmdregistry.Context) (args, error) {
 	}
 	if len(cliAllowedImages) > 0 {
 		parsed.cfg.AllowedImages = cliAllowedImages
+	}
+	if parsed.cfg.StateRoot == "" && parsed.cfg.Socket != "" {
+		parsed.cfg.StateRoot = filepath.Dir(parsed.cfg.Socket)
 	}
 	parsed.cfg = runtimebroker.Normalize(parsed.cfg)
 	return parsed, nil

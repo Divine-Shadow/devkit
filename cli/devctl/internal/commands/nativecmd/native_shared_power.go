@@ -77,7 +77,7 @@ func handleSelectedSharedPowerPrepare(ctx *cmdregistry.Context, cfg config.Overl
 	if err != nil {
 		return err
 	}
-	if err := prepareWithManagedEgressProxy(p, dryRun, launch.Prepare); err != nil {
+	if err := prepareWithManagedEgressProxy(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), dryRun, launch.Prepare); err != nil {
 		return err
 	}
 	// A selected GUI invocation cannot replace the shared prefix manifest.
