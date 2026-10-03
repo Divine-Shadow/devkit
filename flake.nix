@@ -142,6 +142,7 @@
           doCheck = true;
           checkPhase = ''
             runHook preCheck
+            export DEVKIT_BROKER_PACKAGE_TEST_BINARY=${self.packages.${pkgs.system}.postgres-broker}/bin/postgres-broker
             # The integration package and repository-layout contract tests are
             # exercised from the source checkout, where their real host and
             # repository prerequisites exist. Keep this derivation hermetic and
@@ -657,6 +658,11 @@
             inherit pkgs runtimeTools;
           };
           devctl-go-tests = mkDevctlGoTests pkgs;
+          native-broker-shared-lifetime = import ./nix/checks/native-broker-lifetime.nix {
+            inherit pkgs;
+            devctl = mkProductionDevctl pkgs;
+            broker = self.packages.${pkgs.system}.postgres-broker;
+          };
           management-inspection-cli = mkProductionDevctl pkgs;
           devctl-openssh-executable-authority =
             let

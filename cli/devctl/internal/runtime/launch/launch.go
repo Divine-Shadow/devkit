@@ -90,6 +90,7 @@ func StartPostgresEndpointProxy(p nativeplan.Plan) (func() error, error) {
 		return cleanupErr
 	}
 	readyDeadline := time.Now().Add(time.Second)
+	var lastPingError error
 	for time.Now().Before(readyDeadline) {
 		info, err := os.Lstat(p.PostgresDockerSocket)
 		if err == nil {
@@ -97,9 +98,19 @@ func StartPostgresEndpointProxy(p nativeplan.Plan) (func() error, error) {
 				cleanupErr := cleanup()
 				return nil, errors.Join(fmt.Errorf("postgres endpoint proxy published a non-socket path"), cleanupErr)
 			}
-			ownedSocket = info
-			if err := postgresEndpointPing(p.PostgresDockerSocket); err == nil {
-				return cleanup, nil
+
+			if ownedSocket == nil {
+				ownedSocket = info
+			} else if !os.SameFile(ownedSocket, info) {
+				return nil, errors.Join(fmt.Errorf("postgres endpoint socket changed during readiness"), cleanup())
+			}
+			lastPingError = postgresEndpointPing(p.PostgresDockerSocket)
+			if lastPingError == nil {
+				current, statErr := os.Lstat(p.PostgresDockerSocket)
+				if statErr == nil && os.SameFile(ownedSocket, current) {
+					return cleanup, nil
+				}
+				return nil, errors.Join(fmt.Errorf("postgres endpoint socket changed during admission"), cleanup())
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			cleanupErr := cleanup()
@@ -108,7 +119,7 @@ func StartPostgresEndpointProxy(p nativeplan.Plan) (func() error, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	cleanupErr := cleanup()
-	return nil, errors.Join(fmt.Errorf("postgres endpoint proxy did not publish a ready per-agent socket"), cleanupErr)
+	return nil, errors.Join(fmt.Errorf("postgres endpoint proxy did not publish a ready per-agent socket: %v", lastPingError), cleanupErr)
 }
 
 func postgresEndpointPing(socket string) error {
@@ -134,11 +145,11 @@ func postgresEndpointPing(socket string) error {
 		return err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
+	body, err := io.ReadAll(io.LimitReader(response.Body, 33))
 	if err != nil {
 		return err
 	}
-	if response.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "OK" {
+	if len(body) > 32 || response.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) != "OK" {
 		return fmt.Errorf("postgres endpoint ping = %s %q", response.Status, body)
 	}
 	return nil

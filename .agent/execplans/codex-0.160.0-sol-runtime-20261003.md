@@ -32,3 +32,19 @@ Do not infer entitlement denial from the old 0.154 catalog.
 
 Outcome: scoped package subject, no publication, pins, rollout or model change.
 Gate/realization evidence is retained under /tmp/fleet-refresh-task19-codex0160-*.
+
+
+Current canonical source reconciliation at 2026-10-03T20:34UTC succeeded through
+the unchanged existing Git interface in the foreground SSH session. The failed
+detached worker inherited a session-scoped temporary login shell after its
+session ended; no launcher/config/credential repair or new authority is needed.
+Current master/main refs were f2cf37a, efadae6c and WSL e93544cb. Preserve all
+historical release/disabled subjects and normal Git custody; no force/history loss.
+
+The fetched WSL e93544cb actually selects published broker c4a9f64 (repair ref
+readback verified), not unpublished ceb7a6c/7e3c47b/f7e8fda receiver work. Merge
+only that already accepted broker code so the server update cannot regress the
+current fixed station owner. Exact broker source remains c4; no observer code
+or new broker feature enters this release. Its existing native lifetime check
+makes the final declared Devkit owner gate 13 checks, plus both-system eval and
+actual package identity. The original b153 12-check acceptance stays preserved.

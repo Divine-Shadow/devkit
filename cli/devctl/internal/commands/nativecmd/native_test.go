@@ -1902,6 +1902,10 @@ func TestIsolateManagedRuntimePlanUsesOnePrivateEndpointPlanWithoutMutatingInput
 }
 
 func TestWithManagedRuntimeEndpointsPreparesOneLivePrivatePostgresPlan(t *testing.T) {
+	originalAcquire := acquireNativeBrokerEndpoint
+	t.Cleanup(func() { acquireNativeBrokerEndpoint = originalAcquire })
+	acquireNativeBrokerEndpoint = func(_ context.Context, _ runtimebroker.Config, _ bool) (string, error) { return os.Executable() }
+
 	t.Setenv("DEVKIT_NATIVECMD_ENDPOINT_HELPER", "1")
 	tmp := shortSocketTempDir(t)
 	allowlist := filepath.Join(tmp, "allowlist.txt")
@@ -1930,7 +1934,7 @@ func TestWithManagedRuntimeEndpointsPreparesOneLivePrivatePostgresPlan(t *testin
 		},
 	}
 	callbackRan := false
-	err = withManagedRuntimeEndpoints(p, false, func(got nativeplan.Plan) error {
+	err = withManagedRuntimeEndpoints(p, runtimebroker.Config{Socket: p.BrokerEndpoint}, false, func(got nativeplan.Plan) error {
 		callbackRan = true
 		if got.PostgresDockerSocket == sharedPostgres || got.Proxy.UnixSocket == sharedProxy {
 			return fmt.Errorf("callback received stable endpoint plan")
@@ -2247,7 +2251,6 @@ func TestNativeSlotMutationRootsCoverTheCompleteReconstructionContract(t *testin
 		"selected-state=/home/bayesartre/dev/.devkit/native-agents/dev-all-agent3",
 		"shared-git-coordination=/home/bayesartre/dev/agent-worktrees/.devkit/git",
 		"shared-native-manifest=/home/bayesartre/dev/.devkit/native-agents/manifests",
-		"shared-runtime-broker=/home/bayesartre/dev/.devkit/native-broker",
 		"managed-egress=/home/bayesartre/dev/.devkit/native-egress",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -2287,4 +2290,24 @@ func captureStdout(t *testing.T, fn func() error) string {
 		t.Fatalf("read stdout: %v", readErr)
 	}
 	return string(data)
+}
+
+func TestOrdinaryNativeAdmissionCarriesSourcePolicyBeforeConsumer(t *testing.T) {
+	original := acquireNativeBrokerEndpoint
+	t.Cleanup(func() { acquireNativeBrokerEndpoint = original })
+	requested := runtimebroker.Config{DevkitRoot: "/source/dev", Socket: "/source/dev/.devkit/native-broker/broker.sock", StateRoot: "/source/dev/.devkit/native-broker", Upstream: "unix:///source/docker.sock", AllowedImages: []string{"postgres:latest", "samcli/build-python3.13"}, AllowPulls: false, LogLevel: "debug"}
+	acquired := false
+	acquireNativeBrokerEndpoint = func(_ context.Context, got runtimebroker.Config, _ bool) (string, error) {
+		acquired = true
+		if !reflect.DeepEqual(got, runtimebroker.Normalize(requested)) {
+			t.Fatalf("requested project policy lost: %#v", got)
+		}
+		return "", fmt.Errorf("incompatible source policy")
+	}
+	p := nativeplan.Plan{BrokerEndpoint: requested.Socket}
+	consumerRan := false
+	err := withManagedRuntimeEndpoints(p, requested, false, func(nativeplan.Plan) error { consumerRan = true; return nil })
+	if err == nil || !strings.Contains(err.Error(), "incompatible source policy") || !acquired || consumerRan {
+		t.Fatalf("policy refusal crossed consumer boundary: err=%v acquired=%t consumer=%t", err, acquired, consumerRan)
+	}
 }

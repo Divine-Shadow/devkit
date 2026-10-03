@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,13 +27,15 @@ func TestMain(m *testing.M) {
 			os.Exit(2)
 		}
 		defer listener.Close()
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				os.Exit(0)
+
+		_ = http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/_ping" {
+				w.WriteHeader(404)
+				return
 			}
-			_ = conn.Close()
-		}
+			w.Write([]byte("OK"))
+		}))
+
 	}
 	os.Exit(m.Run())
 }
@@ -179,85 +182,52 @@ func TestInspectRejectsReusedLivePID(t *testing.T) {
 	}
 }
 
-func TestStartIgnoresReusedPIDAndStartsBroker(t *testing.T) {
+func TestStartRefusesReusedPIDWithoutMutation(t *testing.T) {
 	tmp := t.TempDir()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve test executable: %v", err)
-	}
-	cfg := Config{
-		StateRoot:    tmp,
-		Socket:       filepath.Join(tmp, "broker.sock"),
-		Binary:       executable,
-		StartTimeout: 2 * time.Second,
-	}
+	executable, _ := os.Executable()
+	cfg := Normalize(Config{StateRoot: tmp, Socket: filepath.Join(tmp, "broker.sock"), Binary: executable})
 	if err := writeState(cfg, State{PID: os.Getpid(), Binary: "/not/postgres-broker", Socket: cfg.Socket}); err != nil {
-		t.Fatalf("write state: %v", err)
+		t.Fatal(err)
 	}
-	t.Setenv(brokerTestHelperMode, "listen")
-
-	status, err := Start(context.Background(), cfg, false)
-	if err != nil {
-		t.Fatalf("Start: %v", err)
+	before, _ := os.ReadFile(StateFile(cfg))
+	if _, err := Start(context.Background(), cfg, false); err == nil || !strings.Contains(err.Error(), "foreign broker binding") {
+		t.Fatalf("foreign PID admitted: %v", err)
 	}
-	if !status.Running || !status.SocketExists {
-		t.Fatalf("broker was not started after pid reuse: %#v", status)
+	after, _ := os.ReadFile(StateFile(cfg))
+	if string(before) != string(after) || !processRunning(os.Getpid()) {
+		t.Fatal("foreign state/process was changed")
 	}
-	if status.PID == os.Getpid() {
-		t.Fatalf("reused pid %d remained broker authority", status.PID)
-	}
-	if _, err := Stop(cfg, false); err != nil {
-		t.Fatalf("stop replacement broker: %v", err)
+	if _, err := os.Stat(stopIntentFile(cfg)); !os.IsNotExist(err) {
+		t.Fatal("foreign refusal wrote stop intent")
 	}
 }
-
-func TestStartDoesNotSignalSameBinaryForDifferentBrokerSocket(t *testing.T) {
+func TestStartRefusesSameBinaryForDifferentBrokerSocket(t *testing.T) {
 	tmp := t.TempDir()
 	foreignSocket := filepath.Join(tmp, "foreign.sock")
 	foreign := startBrokerTestHelper(t, "listen", "BROKER_LISTEN=unix://"+foreignSocket)
 	waitForBrokerTestSocket(t, foreignSocket)
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve test executable: %v", err)
-	}
-	cfg := Config{
-		StateRoot:    filepath.Join(tmp, "state"),
-		Socket:       filepath.Join(tmp, "broker.sock"),
-		Binary:       executable,
-		StartTimeout: 2 * time.Second,
-	}
-	if err := os.MkdirAll(cfg.StateRoot, 0o700); err != nil {
-		t.Fatalf("mkdir state root: %v", err)
-	}
+	executable, _ := os.Executable()
+	cfg := Normalize(Config{StateRoot: filepath.Join(tmp, "state"), Socket: filepath.Join(tmp, "broker.sock"), Binary: executable})
 	if err := writeState(cfg, State{PID: foreign.Process.Pid, Binary: executable, Socket: cfg.Socket}); err != nil {
-		t.Fatalf("write state: %v", err)
+		t.Fatal(err)
 	}
-	t.Setenv(brokerTestHelperMode, "listen")
-
-	status, err := Start(context.Background(), cfg, false)
-	if err != nil {
-		t.Fatalf("Start: %v", err)
+	before, _ := os.ReadFile(StateFile(cfg))
+	if _, err := Start(context.Background(), cfg, false); err == nil {
+		t.Fatal("foreign same-binary process admitted")
 	}
-	if !status.Running || !status.SocketExists {
-		t.Fatalf("replacement broker is not ready: %#v", status)
-	}
-	if !processRunning(foreign.Process.Pid) || !socketAcceptsConnections(foreignSocket) {
-		t.Fatalf("same-binary foreign broker pid %d was disturbed", foreign.Process.Pid)
-	}
-	if _, err := Stop(cfg, false); err != nil {
-		t.Fatalf("stop replacement broker: %v", err)
+	after, _ := os.ReadFile(StateFile(cfg))
+	if string(before) != string(after) || !processRunning(foreign.Process.Pid) || !socketAcceptsConnections(foreignSocket) {
+		t.Fatal("foreign broker disturbed")
 	}
 }
-
 func TestInspectRejectsManagedProcessWithoutLiveSocket(t *testing.T) {
 	tmp := t.TempDir()
-	cfg := Config{StateRoot: tmp, Socket: filepath.Join(tmp, "broker.sock")}
+	executable, _ := os.Executable()
+	cfg := Normalize(Config{StateRoot: tmp, Socket: filepath.Join(tmp, "broker.sock"), Binary: executable})
 	process := startBrokerTestHelper(t, "sleep", "BROKER_LISTEN=unix://"+cfg.Socket)
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve test executable: %v", err)
-	}
-	if err := writeState(cfg, State{PID: process.Process.Pid, Binary: executable, Socket: cfg.Socket}); err != nil {
+	ticks, _ := processStart(process.Process.Pid)
+	state := stateFixture(cfg, process.Process.Pid, ticks)
+	if err := writeState(cfg, state); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 
@@ -268,45 +238,34 @@ func TestInspectRejectsManagedProcessWithoutLiveSocket(t *testing.T) {
 	if status.Running {
 		t.Fatalf("managed process without a live socket was reported running: %#v", status)
 	}
-	if !status.StaleState || !strings.Contains(status.Message, "not accepting connections") {
+	if !status.StaleState || !strings.Contains(status.Message, "socket identity") {
 		t.Fatalf("dead socket was not classified as stale: %#v", status)
 	}
 }
 
-func TestStartReplacesManagedProcessWithDeadSocket(t *testing.T) {
+func TestStartPreservesLivingUnreadyOwner(t *testing.T) {
 	tmp := t.TempDir()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve test executable: %v", err)
+	executable, _ := os.Executable()
+	cfg := Normalize(Config{StateRoot: tmp, Socket: filepath.Join(tmp, "broker.sock"), Binary: executable})
+	process := startBrokerTestHelper(t, "sleep")
+	ticks, _ := processStart(process.Process.Pid)
+	if err := writeState(cfg, stateFixture(cfg, process.Process.Pid, ticks)); err != nil {
+		t.Fatal(err)
 	}
-	cfg := Config{
-		StateRoot:    tmp,
-		Socket:       filepath.Join(tmp, "broker.sock"),
-		Binary:       executable,
-		StartTimeout: 2 * time.Second,
+	before, _ := os.ReadFile(StateFile(cfg))
+	if _, err := EnsureReady(context.Background(), cfg, false); err == nil {
+		t.Fatal("living unready broker admitted")
 	}
-	stale := startBrokerTestHelper(t, "sleep", "BROKER_LISTEN=unix://"+cfg.Socket)
-	if err := writeState(cfg, State{PID: stale.Process.Pid, Binary: executable, Socket: cfg.Socket}); err != nil {
-		t.Fatalf("write state: %v", err)
+	after, _ := os.ReadFile(StateFile(cfg))
+	if string(before) != string(after) || !processRunning(process.Process.Pid) {
+		t.Fatal("living owner disturbed by readiness failure")
 	}
-	t.Setenv(brokerTestHelperMode, "listen")
-
-	status, err := Start(context.Background(), cfg, false)
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if !status.Running || !status.SocketExists {
-		t.Fatalf("replacement broker is not ready: %#v", status)
-	}
-	if status.PID == stale.Process.Pid {
-		t.Fatalf("stale broker pid %d was reused", status.PID)
-	}
-	if processRunning(stale.Process.Pid) {
-		t.Fatalf("stale managed broker pid %d remains alive", stale.Process.Pid)
-	}
-	if _, err := Stop(cfg, false); err != nil {
-		t.Fatalf("stop replacement broker: %v", err)
-	}
+}
+func stateFixture(cfg Config, pid int, ticks uint64) State {
+	cfg = Normalize(cfg)
+	return State{PID: pid, StartTicks: ticks, Socket: cfg.Socket, Upstream: cfg.Upstream, Binary: cfg.Binary,
+		AllowedImages: cfg.AllowedImages, SocketBindAliases: cfg.SocketBindAliases, AllowPulls: cfg.AllowPulls,
+		LogLevel: cfg.LogLevel, LogPath: LogPath(cfg), StartedAt: time.Now()}
 }
 
 func startBrokerTestHelper(t *testing.T, mode string, extraEnv ...string) *exec.Cmd {
