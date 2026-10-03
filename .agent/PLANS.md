@@ -89,3 +89,5 @@ not the lifetime of a particular execution.
   immutable Management skill package instead of mutable workspace copies.
 
 - [Codex 0.159.3 and GPT-6.1 Sol runtime](execplans/codex-0.159.3-sol-runtime-20261001.md): isolated source preparation; activation remains parent-coordinated.
+
+- [Codex 0.160.0 / Sol 6.1 package](execplans/codex-0.160.0-sol-runtime-20261003.md): existing commissioned server update, isolated from broker/observer work.
