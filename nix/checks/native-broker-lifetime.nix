@@ -1,4 +1,4 @@
-{ pkgs, devctl, broker }:
+{ pkgs, devctl, broker, stationObserver }:
 let
   ownerRoot = "/home/bayesartre/dev/.devkit/native-broker";
   sharedSocket = "${ownerRoot}/broker.sock";
@@ -15,7 +15,7 @@ let
     fi
     exec ${pkgs.systemd}/bin/systemctl "$@"
   '';
-  ownerManifest = pkgs.writeText "fixture-native-broker-owner.json" (builtins.toJSON {
+  ownerPolicy = {
     schemaVersion = "devkit-native-broker-owner/v1";
     service = "devkit-native-broker.service";
     systemctl = "${fixtureSystemctl}";
@@ -28,7 +28,20 @@ let
     socketAliases = [ "/workspaces/dev/dev/.devkit/native-broker/broker.sock" ];
     allowPulls = true;
     logLevel = "info";
+  };
+  observationManifest = pkgs.writeText "fixture-native-broker-observation.json" (builtins.toJSON {
+    schemaVersion = "devkit-native-broker-observation/v1";
+    inherit (ownerPolicy) service binary;
   });
+  selectedObserver = stationObserver.overrideAttrs (old: {
+    ldflags = (old.ldflags or []) ++ [
+      "-X=devkit/cli/devctl/internal/runtime/broker.packageObservationManifest=${observationManifest}"
+    ];
+  });
+  ownerManifest = pkgs.writeText "fixture-native-broker-owner.json" (builtins.toJSON (ownerPolicy // {
+    systemdRun = "${pkgs.systemd}/bin/systemd-run";
+    observationExecutable = "${selectedObserver}/bin/station-broker-observe";
+  }));
   selectedDevctl = devctl.overrideAttrs (old: {
     ldflags = (old.ldflags or []) ++ [
       "-X=devkit/cli/devctl/internal/runtime/broker.packageOwnerManifest=${ownerManifest}"
@@ -73,6 +86,19 @@ let
     '';
     postInstall = "";
   });
+  restrictedObservation = pkgs.writeText "fixture-restricted-owner.py" ''
+    import os, subprocess, sys
+    pid = int(sys.argv[1])
+    try:
+      os.readlink("/proc/%d/exe" % pid)
+    except PermissionError:
+      pass
+    else:
+      raise AssertionError("fixture did not reproduce restricted executable observation")
+    completed = subprocess.run(["${ownerProbe}/bin/fixture-owner-acquire"], capture_output=True, text=True, timeout=12)
+    assert completed.returncode == 0, (completed.returncode, completed.stdout, completed.stderr)
+    assert completed.stdout.strip() == "${broker}/bin/postgres-broker", completed.stdout
+  '';
   concurrent = pkgs.writeText "fixture-concurrent-owner.py" ''
     import concurrent.futures, subprocess, sys
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
@@ -271,6 +297,14 @@ in pkgs.testers.runNixOSTest {
     machine.succeed("grep 'devkit-native-broker.service' /proc/" + str(original["pid"]) + "/cgroup")
     machine.succeed("${user "${pkgs.python3}/bin/python ${concurrent} ${ownerProbe}/bin/fixture-owner-acquire"}")
     assert json.loads(machine.succeed("cat ${ownerRoot}/broker.json")) == original
+
+    # Two independent restricted consumers must observe the retained host owner
+    # through the actual packaged helper while direct Readlink is unavailable.
+    for _ in range(2):
+      machine.succeed("${user "${pkgs.bubblewrap}/bin/bwrap --unshare-user --uid 1000 --gid 100 --ro-bind / / --dev /dev --proc /proc ${pkgs.python3}/bin/python ${restrictedObservation}"} " + str(original["pid"]))
+      assert json.loads(machine.succeed("cat ${ownerRoot}/broker.json")) == original
+    machine.fail("${user "${selectedObserver}/bin/station-broker-observe"} " + str(original["pid"]) + " " + str(original["startTicks"] + 1))
+    machine.fail("${user "${selectedObserver}/bin/station-broker-observe 1 1"}")
 
     machine.succeed("${user "systemctl --user start fixture-target-a.service fixture-target-b.service"}")
     for endpoint in ["agent-a.sock", "agent-b.sock"]:

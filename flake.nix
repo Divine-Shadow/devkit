@@ -606,6 +606,11 @@
         in
         {
           devctl = mkProductionDevctl pkgs;
+          station-broker-observer = (mkProductionDevctl pkgs).overrideAttrs (_: {
+            pname = "devkit-station-broker-observer";
+            subPackages = [ "cmd/station-broker-observe" ];
+            postInstall = "";
+          });
           dev-all-runtime-bundle = runtimeBundle;
           # Source-checkout reset fixtures consume immutable config bytes via
           # a test-owned GUI projection manifest, never the host /etc manifest.
@@ -662,6 +667,7 @@
             inherit pkgs;
             devctl = mkProductionDevctl pkgs;
             broker = self.packages.${pkgs.system}.postgres-broker;
+            stationObserver = self.packages.${pkgs.system}.station-broker-observer;
           };
           management-inspection-cli = mkProductionDevctl pkgs;
           devctl-openssh-executable-authority =

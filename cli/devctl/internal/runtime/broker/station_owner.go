@@ -28,18 +28,20 @@ type LegacySocketWitness struct {
 type StationOwner struct {
 	LegacyWitness *LegacySocketWitness `json:"legacyWitness,omitempty"`
 
-	SchemaVersion string   `json:"schemaVersion"`
-	Service       string   `json:"service"`
-	Systemctl     string   `json:"systemctl"`
-	HostRoot      string   `json:"hostRoot"`
-	StateRoot     string   `json:"stateRoot"`
-	Socket        string   `json:"socket"`
-	Binary        string   `json:"binary"`
-	Upstream      string   `json:"upstream"`
-	AllowedImages []string `json:"allowedImages"`
-	SocketAliases []string `json:"socketAliases"`
-	AllowPulls    bool     `json:"allowPulls"`
-	LogLevel      string   `json:"logLevel"`
+	SchemaVersion         string   `json:"schemaVersion"`
+	Service               string   `json:"service"`
+	Systemctl             string   `json:"systemctl"`
+	SystemdRun            string   `json:"systemdRun"`
+	ObservationExecutable string   `json:"observationExecutable"`
+	HostRoot              string   `json:"hostRoot"`
+	StateRoot             string   `json:"stateRoot"`
+	Socket                string   `json:"socket"`
+	Binary                string   `json:"binary"`
+	Upstream              string   `json:"upstream"`
+	AllowedImages         []string `json:"allowedImages"`
+	SocketAliases         []string `json:"socketAliases"`
+	AllowPulls            bool     `json:"allowPulls"`
+	LogLevel              string   `json:"logLevel"`
 }
 
 func SelectConfig(c Config) (Config, error) { return selectedStationOwner(c) }
@@ -66,12 +68,12 @@ func bindStationOwner(c Config, owner StationOwner) (Config, error) {
 	if owner.SchemaVersion != "devkit-native-broker-owner/v1" || owner.Service != StationOwnerService {
 		return c, fmt.Errorf("station broker owner identity is unsupported")
 	}
-	for _, path := range []string{owner.Systemctl, owner.HostRoot, owner.StateRoot, owner.Socket, owner.Binary} {
+	for _, path := range []string{owner.Systemctl, owner.SystemdRun, owner.ObservationExecutable, owner.HostRoot, owner.StateRoot, owner.Socket, owner.Binary} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 			return c, fmt.Errorf("station broker owner contains a noncanonical absolute path")
 		}
 	}
-	if !strings.HasPrefix(owner.Systemctl, "/nix/store/") || !strings.HasPrefix(owner.Binary, "/nix/store/") || filepath.Dir(owner.Socket) != owner.StateRoot {
+	if !strings.HasPrefix(owner.Systemctl, "/nix/store/") || !strings.HasPrefix(owner.SystemdRun, "/nix/store/") || !strings.HasPrefix(owner.ObservationExecutable, "/nix/store/") || !strings.HasPrefix(owner.Binary, "/nix/store/") || filepath.Dir(owner.Socket) != owner.StateRoot {
 		return c, fmt.Errorf("station broker executable or state geometry is not source selected")
 	}
 	// Project declarations must select this station endpoint. The complete

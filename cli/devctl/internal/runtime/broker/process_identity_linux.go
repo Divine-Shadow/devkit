@@ -36,6 +36,16 @@ func managedProcess(c Config, state *State) bool {
 	if state == nil || state.PID < 1 || state.StartTicks == 0 {
 		return false
 	}
+	if c.Owner != nil && !inStationOwner() {
+		return observedStationProcess(c, state)
+	}
+	return directManagedProcess(c, state)
+}
+
+func directManagedProcess(c Config, state *State) bool {
+	if state == nil || state.PID < 1 || state.StartTicks == 0 {
+		return false
+	}
 	before, err := processStart(state.PID)
 	if err != nil || before != state.StartTicks {
 		return false

@@ -13,7 +13,7 @@ func requestedOwnerFixture(t *testing.T) (Config, StationOwner) {
 	root := t.TempDir()
 	c := Config{DevkitRoot: root, StateRoot: filepath.Join(root, "owner"), Socket: filepath.Join(root, "owner", "broker.sock"), Upstream: DefaultUpstream, AllowedImages: []string{"postgres:latest", "testcontainers/ryuk:0.7.0"}, AllowPulls: true}
 	normalized := Normalize(c)
-	owner := StationOwner{SchemaVersion: "devkit-native-broker-owner/v1", Service: StationOwnerService, Systemctl: "/nix/store/fixture-systemd/bin/systemctl", HostRoot: root, StateRoot: c.StateRoot, Socket: c.Socket, Binary: "/nix/store/fixture-broker/bin/postgres-broker", Upstream: c.Upstream, AllowedImages: c.AllowedImages, SocketAliases: normalized.SocketBindAliases, AllowPulls: true, LogLevel: "info"}
+	owner := StationOwner{SchemaVersion: "devkit-native-broker-owner/v1", Service: StationOwnerService, Systemctl: "/nix/store/fixture-systemd/bin/systemctl", SystemdRun: "/nix/store/fixture-systemd/bin/systemd-run", ObservationExecutable: "/nix/store/fixture-observer/bin/station-broker-observe", HostRoot: root, StateRoot: c.StateRoot, Socket: c.Socket, Binary: "/nix/store/fixture-broker/bin/postgres-broker", Upstream: c.Upstream, AllowedImages: c.AllowedImages, SocketAliases: normalized.SocketBindAliases, AllowPulls: true, LogLevel: "info"}
 	return c, owner
 }
 

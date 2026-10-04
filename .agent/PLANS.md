@@ -61,6 +61,8 @@ not the lifetime of a particular execution.
 
 ## Active ExecPlans
 
+- [Ordinary controller recovery](execplans/ordinary-controller-recovery-20261004.md): restore the accepted launcher and communication frontier through reviewed bounded source and separately held Nix recovery.
+
 - [Codex 0.154.0 runtime](execplans/codex-0.154.0-runtime-20260922.md): advance the immutable Codex bundle and every ordinary overlay runtime identity without changing lifecycle semantics.
 
 - [Native selected-lane Git reciprocal projection](execplans/native-git-reciprocal-projection-20260912.md): validate and project the selected reverse pointer without changing host or sibling Git custody; unpublished review candidate.
