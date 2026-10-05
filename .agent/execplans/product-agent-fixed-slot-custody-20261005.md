@@ -27,3 +27,5 @@ fresh lease/readiness, exact native workspace topology and useful completion.
 
 Phase: clean fetched-main isolated source writer; design/API inspection complete;
 first explicit fixed-slot provider, source re-entry verifier and meaningful capture/refusal/mutation fixtures implemented. Full exact-candidate gates, implementation review, publication and runtime acceptance outstanding.
+
+First candidate693bc202 passed all exact x86 gates and actual provider build. Independent implementation review required complete retained-payload verification in addition to source verification. Shared validator verification and missing/changed/extra/symlink refusal fixtures now address that finding; successor exact gates and review remain pending. No source publication or runtime effect.

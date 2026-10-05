@@ -91,7 +91,7 @@ func main() {
 	value, err := readBindings(packageBindings)
 	if err == nil {
 		args := os.Args[1:]
-		verify := len(args) == 4 && args[0] == "verify"
+		verify := len(args) == 4 && (args[0] == "verify" || args[0] == "verify-bundle")
 		selection := args
 		if verify {
 			selection = args[1:3]
@@ -99,7 +99,11 @@ func main() {
 		var options codexhistory.SnapshotOptions
 		options, err = optionsFor(value, selection)
 		if err == nil && verify {
-			err = codexhistory.VerifyCapturedSource(options, args[3])
+			if args[0] == "verify-bundle" {
+				err = codexhistory.VerifyCapturedBundle(options, args[3])
+			} else {
+				err = codexhistory.VerifyCapturedSource(options, args[3])
+			}
 			if err == nil {
 				err = json.NewEncoder(os.Stdout).Encode(map[string]string{"status": "verified", "manifestPath": args[3]})
 			}

@@ -86,3 +86,41 @@ func TestFixedProductRetirementDoesNotBroadenOrdinaryDevAllGeometry(t *testing.T
 		t.Fatal("undeclared fixed slot admitted")
 	}
 }
+
+func TestFixedProductRetirementRefusesLostOrChangedRetainedPayload(t *testing.T) {
+	for _, mode := range []string{"missing", "changed", "extra", "symlink"} {
+		t.Run(mode, func(t *testing.T) {
+			f := fixedFixture(t)
+			rel := "sessions/fixed.jsonl"
+			createStateDatabase(t, f, filepath.Join(f.options.SandboxHome, ".codex", rel))
+			writeTestFile(t, filepath.Join(f.codexRoot, rel), "{\"type\":\"session_meta\",\"payload\":{\"id\":\"gui-thread\"}}\n")
+			r, err := Capture(f.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := filepath.Join(filepath.Dir(r.ManifestPath), "payload")
+			member := filepath.Join(payload, rel)
+			switch mode {
+			case "missing":
+				err = os.Remove(member)
+			case "changed":
+				err = os.WriteFile(member, []byte("tampered\n"), 0o600)
+			case "extra":
+				err = os.WriteFile(filepath.Join(payload, "extra.txt"), []byte("unexpected"), 0o600)
+			case "symlink":
+				if err = os.Remove(member); err == nil {
+					err = os.Symlink(filepath.Join(f.codexRoot, rel), member)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := VerifyCapturedBundle(f.options, r.ManifestPath); err == nil {
+				t.Fatal("damaged retained bundle accepted")
+			}
+			if err := VerifyCapturedSource(f.options, r.ManifestPath); err == nil {
+				t.Fatal("intact source hid damaged retained bundle")
+			}
+		})
+	}
+}

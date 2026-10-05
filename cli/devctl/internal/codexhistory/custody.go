@@ -1074,48 +1074,62 @@ func boundedText(value string) string {
 // VerifyCapturedSource closes a later teardown/re-entry window against changes
 // to an already captured source. It uses the same enumerator and stable source
 // set/hash verifier as Capture; it never repairs, imports or rewrites history.
-func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
+func readFixedSnapshot(options SnapshotOptions, manifestPath string) (snapshotManifest, map[string]manifestFile, error) {
 	if err := validateOptions(options); err != nil {
-		return err
+		return snapshotManifest{}, nil, err
 	}
 	if options.ResetKind != "fixed-product-slot-retirement" {
-		return fmt.Errorf("source verification requires fixed Product retirement")
+		return snapshotManifest{}, nil, fmt.Errorf("source verification requires fixed Product retirement")
 	}
 	root, err := CustodyRoot(options.StateRoot, options.Project)
 	if err != nil {
-		return err
+		return snapshotManifest{}, nil, err
 	}
 	agentRoot := filepath.Join(root, "agent"+strconv.Itoa(options.AgentIndex))
 	if filepath.Base(manifestPath) != "manifest.json" || filepath.Dir(filepath.Dir(manifestPath)) != agentRoot {
-		return fmt.Errorf("history manifest escapes source-declared fixed-slot custody")
+		return snapshotManifest{}, nil, fmt.Errorf("history manifest escapes source-declared fixed-slot custody")
 	}
 	info, err := os.Lstat(manifestPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("unsupported history manifest")
+		return snapshotManifest{}, nil, fmt.Errorf("unsupported history manifest")
 	}
 	file, err := os.Open(manifestPath)
 	if err != nil {
-		return err
+		return snapshotManifest{}, nil, err
 	}
 	defer file.Close()
 	var manifest snapshotManifest
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&manifest); err != nil {
-		return err
+		return snapshotManifest{}, nil, err
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return fmt.Errorf("history manifest must contain one object")
+		return snapshotManifest{}, nil, fmt.Errorf("history manifest must contain one object")
 	}
 	if manifest.SchemaVersion != SnapshotSchema || manifest.Status != "complete" || manifest.Project != options.Project || manifest.ResetKind != options.ResetKind || manifest.AgentIndex != options.AgentIndex || manifest.SourceHostHome != filepath.Clean(options.HostHome) || manifest.SourceSandboxHome != filepath.Clean(options.SandboxHome) || len(manifest.Files) != manifest.FileCount || aggregateHash(manifest.Files) != manifest.BundleSHA256 {
-		return fmt.Errorf("history manifest does not bind the captured fixed-slot source")
+		return snapshotManifest{}, nil, fmt.Errorf("history manifest does not bind the captured fixed-slot source")
 	}
 	fileSet := make(map[string]manifestFile, len(manifest.Files))
 	for _, record := range manifest.Files {
 		if _, exists := fileSet[record.Path]; exists {
-			return fmt.Errorf("duplicate history manifest member")
+			return snapshotManifest{}, nil, fmt.Errorf("duplicate history manifest member")
+		}
+		if record.Path == "" || filepath.ToSlash(filepath.Clean(record.Path)) != record.Path || filepath.IsAbs(record.Path) || record.Path == ".." || strings.HasPrefix(record.Path, "../") {
+			return snapshotManifest{}, nil, fmt.Errorf("unsupported history manifest member path")
 		}
 		fileSet[record.Path] = record
+	}
+	return manifest, fileSet, nil
+}
+
+func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
+	if err := VerifyCapturedBundle(options, manifestPath); err != nil {
+		return err
+	}
+	_, fileSet, err := readFixedSnapshot(options, manifestPath)
+	if err != nil {
+		return err
 	}
 	hostCodex := filepath.Join(filepath.Clean(options.HostHome), ".codex")
 	files, directories, exists, err := enumerateHistory(hostCodex)
@@ -1132,4 +1146,61 @@ func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
 		}
 	}
 	return verifySourceSetStable(hostCodex, files, directories, exists, fileSet)
+}
+
+// VerifyCapturedBundle proves every retained payload member still has the exact
+// bytes accepted by Capture. Extra, missing, escaping or symlinked members fail.
+func VerifyCapturedBundle(options SnapshotOptions, manifestPath string) error {
+	manifest, fileSet, err := readFixedSnapshot(options, manifestPath)
+	if err != nil {
+		return err
+	}
+	payload := filepath.Join(filepath.Dir(manifestPath), "payload")
+	files, directories, exists, err := enumerateHistory(payload)
+	if err != nil {
+		return err
+	}
+	if !exists || len(files) != manifest.FileCount {
+		return fmt.Errorf("retained history payload is incomplete")
+	}
+	seen := make(map[string]bool, len(files))
+	err = filepath.WalkDir(payload, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == payload {
+			return nil
+		}
+		rel, err := filepath.Rel(payload, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("retained history payload contains a symlink")
+		}
+		if info.IsDir() {
+			if _, ok := historyDirectories[strings.Split(rel, "/")[0]]; !ok {
+				return fmt.Errorf("retained history payload contains an unsupported directory")
+			}
+			return nil
+		}
+		record, ok := fileSet[rel]
+		if !ok || !info.Mode().IsRegular() || record.Bytes != info.Size() {
+			return fmt.Errorf("retained history payload contains an unsupported or changed member")
+		}
+		seen[rel] = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(seen) != len(fileSet) {
+		return fmt.Errorf("retained history payload has missing members")
+	}
+	return verifySourceSetStable(payload, files, directories, exists, fileSet)
 }
