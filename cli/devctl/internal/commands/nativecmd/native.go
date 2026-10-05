@@ -88,6 +88,7 @@ type planArgs struct {
 	readinessMode      string
 	readinessModeSet   bool
 	managedAppServer   bool
+	softwareOnly       bool
 	command            []string
 }
 
@@ -171,6 +172,7 @@ type topExecArgs struct {
 	worktreeContainerRoot   string
 	agentStateContainerRoot string
 	managedAppServer        bool
+	softwareOnly            bool
 	command                 []string
 }
 
@@ -369,6 +371,11 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			i++
 		case "--dry-run":
 			parsed.dryRun = true
+		case "--software-only":
+			if !allowCommand {
+				return parsed, fmt.Errorf("--software-only is only valid for native exec")
+			}
+			parsed.softwareOnly = true
 		case "--managed-app-server":
 			if !allowCommand {
 				return parsed, fmt.Errorf("--managed-app-server is only valid for native exec")
@@ -982,6 +989,11 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.agentStateRoot = ctx.Args[i+1]
 			i++
+		case "--software-only":
+			if attach {
+				return parsed, fmt.Errorf("--software-only is only valid for exec")
+			}
+			parsed.softwareOnly = true
 		case "--managed-app-server":
 			parsed.managedAppServer = true
 		case "--":
@@ -999,6 +1011,9 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 }
 
 func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) (retErr error) {
+	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.guiTargetID, ctx.Project, parsed.managedAppServer, command); err != nil {
+		return err
+	}
 	if err := ensureNativeLifecycleProject(ctx); err != nil {
 		return err
 	}
@@ -1029,6 +1044,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
+	if err := validateSoftwareOnlyNativePlan(parsed.softwareOnly, p); err != nil {
+		return err
+	}
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
 	}
@@ -1055,7 +1073,7 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
 	}
 	if !ctx.DryRun {
-		if err := launch.Prepare(p); err != nil {
+		if err := prepareNativeExec(p, parsed.softwareOnly); err != nil {
 			return err
 		}
 	}
@@ -2163,6 +2181,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if parsed.repoCheck != "" {
 		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
+	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.opts.GUITargetID, ctx.Project, parsed.managedAppServer, parsed.command); err != nil {
+		return err
+	}
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 	if err != nil {
 		return err
@@ -2178,6 +2199,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	if p.Launcher != "bubblewrap" {
 		return fmt.Errorf("native exec currently supports --launcher bubblewrap only")
+	}
+	if err := validateSoftwareOnlyNativePlan(parsed.softwareOnly, p); err != nil {
+		return err
 	}
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
@@ -2206,7 +2230,7 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
 	}
 	if !dryRun {
-		if err := launch.Prepare(p); err != nil {
+		if err := prepareNativeExec(p, parsed.softwareOnly); err != nil {
 			return err
 		}
 	}

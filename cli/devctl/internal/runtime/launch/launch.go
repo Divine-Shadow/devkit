@@ -161,6 +161,23 @@ var (
 )
 
 func Prepare(p nativeplan.Plan) error {
+	return prepare(p, false)
+}
+
+// PrepareSoftwareOnly converges public software/configuration for an existing
+// native home. Credential hydration remains the operator's separate effect.
+// It never selects alternate credential roots or suppresses hydration errors.
+func PrepareSoftwareOnly(p nativeplan.Plan) error {
+	for _, dir := range []string{p.Agent.HostHome, filepath.Join(p.Agent.HostHome, ".codex")} {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("software-only preparation requires an existing real native home: %s", dir)
+		}
+	}
+	return prepare(p, true)
+}
+
+func prepare(p nativeplan.Plan, softwareOnly bool) error {
 	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
 		return err
 	}
@@ -221,8 +238,10 @@ func Prepare(p nativeplan.Plan) error {
 	if err := prepareGitBacklink(p); err != nil {
 		return err
 	}
-	if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
-		return err
+	if !softwareOnly {
+		if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
+			return err
+		}
 	}
 	if err := ensureCodexShellHook(p); err != nil {
 		return err
@@ -236,20 +255,22 @@ func Prepare(p nativeplan.Plan) error {
 	if err := capCodexTUILog(p.Agent.HostHome); err != nil {
 		return err
 	}
-	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
-		return err
-	}
-	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
-		return err
-	}
-	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
-		return err
-	}
-	if err := SeedTerraformProviderCredentials(p); err != nil {
-		return err
-	}
-	if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
-		return err
+	if !softwareOnly {
+		if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
+			return err
+		}
+		if err := SeedSSH(p.Agent.HostHome, false); err != nil {
+			return err
+		}
+		if err := SeedAWS(p.Agent.HostHome, false); err != nil {
+			return err
+		}
+		if err := SeedTerraformProviderCredentials(p); err != nil {
+			return err
+		}
+		if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
+			return err
+		}
 	}
 	if err := ensureResolvConf(p.DNS.ResolvConf); err != nil {
 		return err
