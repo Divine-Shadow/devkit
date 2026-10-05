@@ -345,10 +345,14 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 }
 
 func validateOptions(options SnapshotOptions) error {
-	if strings.TrimSpace(options.Project) != "dev-all" {
-		return fmt.Errorf("Codex GUI history custody is restricted to the exact dev-all project")
+	fixedProduct := options.Project == "product-agent" && options.ResetKind == "fixed-product-slot-retirement"
+	if strings.TrimSpace(options.Project) != "dev-all" && !fixedProduct {
+		return fmt.Errorf("Codex GUI history custody project and reset kind are not source-declared")
 	}
-	if options.ResetKind != "selected-slot-reset" &&
+	if options.ResetKind == "fixed-product-slot-retirement" && (!fixedProduct || options.AgentIndex > 2) {
+		return fmt.Errorf("fixed Product history custody requires one exact declared slot")
+	}
+	if !fixedProduct && options.ResetKind != "selected-slot-reset" &&
 		options.ResetKind != "whole-prefix-reset" &&
 		options.ResetKind != "manifest-shrink-retirement" {
 		return fmt.Errorf("Codex GUI history custody reset kind is not source-declared")
@@ -370,7 +374,7 @@ func validateOptions(options SnapshotOptions) error {
 		if workspaceRoot == "" {
 			return fmt.Errorf("selected-slot Codex GUI history custody requires a workspace root")
 		}
-	case "whole-prefix-reset", "manifest-shrink-retirement":
+	case "whole-prefix-reset", "manifest-shrink-retirement", "fixed-product-slot-retirement":
 		if workspaceRoot != "" {
 			return fmt.Errorf("%s Codex GUI history custody must remain in the global state-root boundary", options.ResetKind)
 		}
@@ -1065,4 +1069,67 @@ func boundedText(value string) string {
 		return value[:512] + "..."
 	}
 	return value
+}
+
+// VerifyCapturedSource closes a later teardown/re-entry window against changes
+// to an already captured source. It uses the same enumerator and stable source
+// set/hash verifier as Capture; it never repairs, imports or rewrites history.
+func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
+	if err := validateOptions(options); err != nil {
+		return err
+	}
+	if options.ResetKind != "fixed-product-slot-retirement" {
+		return fmt.Errorf("source verification requires fixed Product retirement")
+	}
+	root, err := CustodyRoot(options.StateRoot, options.Project)
+	if err != nil {
+		return err
+	}
+	agentRoot := filepath.Join(root, "agent"+strconv.Itoa(options.AgentIndex))
+	if filepath.Base(manifestPath) != "manifest.json" || filepath.Dir(filepath.Dir(manifestPath)) != agentRoot {
+		return fmt.Errorf("history manifest escapes source-declared fixed-slot custody")
+	}
+	info, err := os.Lstat(manifestPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unsupported history manifest")
+	}
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	var manifest snapshotManifest
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("history manifest must contain one object")
+	}
+	if manifest.SchemaVersion != SnapshotSchema || manifest.Status != "complete" || manifest.Project != options.Project || manifest.ResetKind != options.ResetKind || manifest.AgentIndex != options.AgentIndex || manifest.SourceHostHome != filepath.Clean(options.HostHome) || manifest.SourceSandboxHome != filepath.Clean(options.SandboxHome) || len(manifest.Files) != manifest.FileCount || aggregateHash(manifest.Files) != manifest.BundleSHA256 {
+		return fmt.Errorf("history manifest does not bind the captured fixed-slot source")
+	}
+	fileSet := make(map[string]manifestFile, len(manifest.Files))
+	for _, record := range manifest.Files {
+		if _, exists := fileSet[record.Path]; exists {
+			return fmt.Errorf("duplicate history manifest member")
+		}
+		fileSet[record.Path] = record
+	}
+	hostCodex := filepath.Join(filepath.Clean(options.HostHome), ".codex")
+	files, directories, exists, err := enumerateHistory(hostCodex)
+	if err != nil {
+		return err
+	}
+	if len(files) != len(fileSet) {
+		return fmt.Errorf("captured fixed-slot history source set changed")
+	}
+	for _, file := range files {
+		record, ok := fileSet[file.relPath]
+		if !ok || record.Bytes != file.size {
+			return fmt.Errorf("captured fixed-slot history source member changed")
+		}
+	}
+	return verifySourceSetStable(hostCodex, files, directories, exists, fileSet)
 }

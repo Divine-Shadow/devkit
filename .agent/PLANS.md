@@ -93,3 +93,5 @@ not the lifetime of a particular execution.
 - [Codex 0.159.3 and GPT-6.1 Sol runtime](execplans/codex-0.159.3-sol-runtime-20261001.md): isolated source preparation; activation remains parent-coordinated.
 
 - [Codex 0.160.0 / Sol 6.1 package](execplans/codex-0.160.0-sol-runtime-20261003.md): existing commissioned server update, isolated from broker/observer work.
+
+- [Fixed Product-agent reconstruction preservation](execplans/product-agent-fixed-slot-custody-20261005.md): repair the existing cold-history provider and exact-slot lifecycle before independently judged Agent1 reconstruction.

@@ -606,6 +606,11 @@
         in
         {
           devctl = mkProductionDevctl pkgs;
+          codex-gui-history-custody = (mkProductionDevctl pkgs).overrideAttrs (_: {
+            pname = "devkit-codex-gui-history-custody";
+            subPackages = [ "cmd/codex-gui-history-custody" ];
+            postInstall = "";
+          });
           station-broker-observer = (mkProductionDevctl pkgs).overrideAttrs (_: {
             pname = "devkit-station-broker-observer";
             subPackages = [ "cmd/station-broker-observe" ];
@@ -663,6 +668,21 @@
             inherit pkgs runtimeTools;
           };
           devctl-go-tests = mkDevctlGoTests pkgs;
+          fixed-slot-history-provider =
+            let provider = self.packages.${pkgs.system}.codex-gui-history-custody;
+            in pkgs.runCommand "devkit-fixed-slot-history-provider-authority" {
+              nativeBuildInputs = [ pkgs.gnugrep ];
+            } ''
+              if env -i ${provider}/bin/codex-gui-history-custody 1 host > result 2> refusal; then
+                echo 'unbound history provider unexpectedly admitted a source' >&2
+                exit 1
+              fi
+              grep -Fx 'cold-history custody has no package-owned fixed-slot bindings' refusal
+              grep -aqF '${pkgs.sqlite}/bin/sqlite3' ${provider}/bin/codex-gui-history-custody
+              mkdir -p "$out"
+              cp refusal "$out/refusal"
+            '';
+
           native-broker-shared-lifetime = import ./nix/checks/native-broker-lifetime.nix {
             inherit pkgs;
             devctl = mkProductionDevctl pkgs;
