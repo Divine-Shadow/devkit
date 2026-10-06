@@ -1,0 +1,591 @@
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -34,6 +34,9 @@
+ 
+ #[path = "client_tool_metadata.rs"]
+ mod tool_metadata;
++
++#[path = "client_tool_witness.rs"]
++mod tool_witness;
+ 
+ use crate::CodexResponsesHeaders;
+ use crate::tools::ExecutedToolCalls;
+@@ -1755,6 +1758,7 @@
+                 request.input = input;
+             }
+             inference_trace_attempt.record_started(&request);
++            tool_witness::record_http(&self.client.state.thread_id, responses_metadata, &request);
+             let client = ApiResponsesClient::new(
+                 transport,
+                 client_setup.api_provider,
+@@ -2049,6 +2053,14 @@
+             }
+             if !previous_response_id_from_untraced_warmup {
+                 inference_trace_attempt.record_started(&ws_request);
++            }
++            if !warmup {
++                tool_witness::record_websocket(
++                    &self.client.state.thread_id,
++                    responses_metadata,
++                    &request,
++                    &ws_request,
++                );
+             }
+ 
+             let websocket_connection =
+--- /dev/null
++++ b/codex-rs/core/src/client_tool_witness.rs
+@@ -0,0 +1,215 @@
++//! Temporary, exact-subject declaration evidence for the retained TC01 consumer.
++//!
++//! This records prepared requests, never provider receipt. It reads only lowered tool
++//! declarations and emits bounded identifiers; prompts, schemas and headers are excluded.
++
++use codex_api::ResponseCreateWsRequest;
++use codex_api::ResponsesApiRequest;
++use codex_api::ResponsesWsRequest;
++use codex_protocol::ThreadId;
++use codex_protocol::models::ResponseItem;
++use serde::Serialize;
++use serde_json::Value;
++use serde_json::value::RawValue;
++use std::collections::BTreeSet;
++
++use crate::responses_metadata::CodexResponsesMetadata;
++use crate::responses_metadata::CodexResponsesRequestKind;
++
++const SUBJECT_THREAD_ID: &str = "01a107d7-4be2-71e3-91c3-299ad135b69d";
++const MAX_NAMES: usize = 128;
++const MAX_DECLARATION_ENTRIES: usize = 256;
++const MAX_NAME_BYTES: usize = 128;
++const MAX_RAW_DECLARATION_BYTES: usize = 1024 * 1024;
++
++#[derive(Debug, PartialEq, Serialize)]
++#[serde(tag = "status", rename_all = "snake_case")]
++enum Inventory {
++    Available {
++        names: Vec<String>,
++        additional_tools_sets: usize,
++    },
++    Unavailable {
++        reason: &'static str,
++    },
++}
++
++pub(super) fn record_http(
++    thread_id: &ThreadId,
++    metadata: &CodexResponsesMetadata,
++    request: &ResponsesApiRequest,
++) {
++    let Some(turn_id) = subject_turn(thread_id, metadata) else {
++        return;
++    };
++    let view = ResponseCreateWsRequest::from(request);
++    let names = inventory(view.tools, view.input);
++    emit(
++        turn_id, "http", &names, &names, /*inherits_previous_response*/ false,
++    );
++}
++
++pub(super) fn record_websocket(
++    thread_id: &ThreadId,
++    metadata: &CodexResponsesMetadata,
++    request: &ResponsesApiRequest,
++    wire_request: &ResponsesWsRequest<'_>,
++) {
++    let Some(turn_id) = subject_turn(thread_id, metadata) else {
++        return;
++    };
++    let logical = ResponseCreateWsRequest::from(request);
++    let ResponsesWsRequest::ResponseCreate(wire) = wire_request;
++    // A delta can omit AdditionalTools already sent in prewarm or an earlier request.
++    // Preserve the complete logical inventory separately; an empty delta is not absence.
++    emit(
++        turn_id,
++        "websocket",
++        &inventory(logical.tools, logical.input),
++        &inventory(wire.tools, wire.input),
++        wire.previous_response_id.is_some(),
++    );
++}
++
++fn subject_turn<'a>(thread_id: &ThreadId, metadata: &'a CodexResponsesMetadata) -> Option<&'a str> {
++    if thread_id.to_string() != SUBJECT_THREAD_ID
++        || !matches!(metadata.request_kind, Some(CodexResponsesRequestKind::Turn))
++    {
++        return None;
++    }
++    metadata
++        .turn_id
++        .as_deref()
++        .filter(|id| id.len() == 36 && uuid::Uuid::try_parse(id).is_ok())
++}
++
++fn emit(
++    turn_id: &str,
++    transport: &'static str,
++    logical: &Inventory,
++    transmitted: &Inventory,
++    inherits_previous_response: bool,
++) {
++    let unavailable =
++        || r#"{"status":"unavailable","reason":"projection_serialization_failed"}"#.to_owned();
++    let logical = serde_json::to_string(logical).unwrap_or_else(|_| unavailable());
++    let transmitted = serde_json::to_string(transmitted).unwrap_or_else(|_| unavailable());
++    tracing::info!(
++        target: "codex_core::native_tool_witness",
++        thread_id = SUBJECT_THREAD_ID,
++        turn_id,
++        phase = "prepared_outbound",
++        transport,
++        logical = %logical,
++        transmitted = %transmitted,
++        inherits_previous_response,
++        "native declaration witness"
++    );
++}
++
++fn inventory(tools: Option<&RawValue>, input: &[ResponseItem]) -> Inventory {
++    let mut names = BTreeSet::new();
++    let mut additional_tools_sets = 0;
++    let mut remaining_entries = MAX_DECLARATION_ENTRIES;
++    let result = (|| {
++        if let Some(tools) = tools {
++            if tools.get().len() > MAX_RAW_DECLARATION_BYTES {
++                return Err("declaration_bytes_exceeded");
++            }
++            let tools: Value =
++                serde_json::from_str(tools.get()).map_err(|_| "invalid_declaration_json")?;
++            let tools = tools.as_array().ok_or("unsupported_declaration_shape")?;
++            if tools.len() > MAX_NAMES {
++                return Err("declaration_count_exceeded");
++            }
++            for tool in tools {
++                append_tool(tool, &mut names, &mut remaining_entries)?;
++            }
++        }
++        for item in input {
++            if let ResponseItem::AdditionalTools { tools, .. } = item {
++                additional_tools_sets += 1;
++                if additional_tools_sets > MAX_NAMES || tools.len() > MAX_NAMES {
++                    return Err("declaration_count_exceeded");
++                }
++                for tool in tools {
++                    append_tool(tool, &mut names, &mut remaining_entries)?;
++                }
++            }
++        }
++        Ok(())
++    })();
++    match result {
++        Ok(()) => Inventory::Available {
++            names: names.into_iter().collect(),
++            additional_tools_sets,
++        },
++        Err(reason) => Inventory::Unavailable { reason },
++    }
++}
++
++fn append_tool(
++    tool: &Value,
++    names: &mut BTreeSet<String>,
++    remaining_entries: &mut usize,
++) -> Result<(), &'static str> {
++    *remaining_entries = remaining_entries
++        .checked_sub(1)
++        .ok_or("declaration_entries_exceeded")?;
++    match tool.get("type").and_then(Value::as_str) {
++        Some("function" | "custom") => insert_name(tool.get("name"), names),
++        Some("namespace") => {
++            let namespace = valid_name(tool.get("name"))?;
++            insert_name(tool.get("name"), names)?;
++            let tools = tool
++                .get("tools")
++                .and_then(Value::as_array)
++                .ok_or("unsupported_declaration_shape")?;
++            if tools.len() > MAX_NAMES {
++                return Err("declaration_count_exceeded");
++            }
++            for tool in tools {
++                *remaining_entries = remaining_entries
++                    .checked_sub(1)
++                    .ok_or("declaration_entries_exceeded")?;
++                if !matches!(
++                    tool.get("type").and_then(Value::as_str),
++                    Some("function" | "custom")
++                ) {
++                    return Err("unsupported_declaration_shape");
++                }
++                let name = valid_name(tool.get("name"))?;
++                insert_name(Some(&Value::String(format!("{namespace}.{name}"))), names)?;
++            }
++            Ok(())
++        }
++        Some("tool_search") => insert_name(Some(&Value::String("tool_search".to_owned())), names),
++        Some("web_search") => insert_name(Some(&Value::String("web_search".to_owned())), names),
++        _ => Err("unsupported_declaration_shape"),
++    }
++}
++
++fn valid_name(value: Option<&Value>) -> Result<&str, &'static str> {
++    let name = value.and_then(Value::as_str).ok_or("invalid_identifier")?;
++    if name.is_empty()
++        || name.len() > MAX_NAME_BYTES
++        || !name
++            .bytes()
++            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
++    {
++        return Err("invalid_identifier");
++    }
++    Ok(name)
++}
++
++fn insert_name(value: Option<&Value>, names: &mut BTreeSet<String>) -> Result<(), &'static str> {
++    names.insert(valid_name(value)?.to_owned());
++    if names.len() > MAX_NAMES {
++        return Err("declaration_count_exceeded");
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++#[path = "client_tool_witness_tests.rs"]
++mod tests;
+--- /dev/null
++++ b/codex-rs/core/src/client_tool_witness_tests.rs
+@@ -0,0 +1,335 @@
++use super::*;
++use pretty_assertions::assert_eq;
++use serde_json::json;
++use std::io::Write;
++use std::sync::Arc;
++use std::sync::Mutex;
++
++const TURN_ID: &str = "01a10f05-5521-7180-839f-aab11b85fe26";
++const PRIVATE: &str = "PRIVATE_PROMPT_SCHEMA_HEADER_RESPONSE_SENTINEL";
++
++fn fixture() -> (ThreadId, CodexResponsesMetadata, ResponsesApiRequest) {
++    let thread_id = ThreadId::from_string(SUBJECT_THREAD_ID).unwrap();
++    let mut metadata = CodexResponsesMetadata::new(
++        "installation".into(),
++        "session".into(),
++        SUBJECT_THREAD_ID.into(),
++        "window".into(),
++    );
++    metadata.turn_id = Some(TURN_ID.into());
++    metadata.request_kind = Some(CodexResponsesRequestKind::Turn);
++    let declarations = vec![json!({
++        "type": "namespace", "name": "governance", "description": PRIVATE,
++        "tools": [{"type": "function", "name": "workspace_topology", "description": PRIVATE,
++                   "parameters": {"type": "object", "properties": {"private": {"description": PRIVATE}}}}]
++    })];
++    let request = ResponsesApiRequest {
++        model: "gpt-6.1-sol".into(),
++        instructions: PRIVATE.into(),
++        input: vec![
++            ResponseItem::AdditionalTools {
++                id: None,
++                role: "developer".into(),
++                tools: declarations,
++            },
++            serde_json::from_value(json!({"type": "message", "role": "user",
++                "content": [{"type": "input_text", "text": PRIVATE}]}))
++            .unwrap(),
++        ],
++        tools: None,
++        tool_choice: "auto".into(),
++        parallel_tool_calls: true,
++        reasoning: None,
++        store: false,
++        stream: true,
++        stream_options: None,
++        include: vec![],
++        service_tier: None,
++        prompt_cache_key: Some(PRIVATE.into()),
++        text: None,
++        client_metadata: Some(std::collections::HashMap::from([(
++            "private".into(),
++            PRIVATE.into(),
++        )])),
++        access_programs: None,
++    };
++    (thread_id, metadata, request)
++}
++
++#[derive(Clone)]
++struct Capture(Arc<Mutex<Vec<u8>>>);
++
++impl Write for Capture {
++    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
++        self.0.lock().unwrap().extend_from_slice(bytes);
++        Ok(bytes.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++fn capture(run: impl FnOnce()) -> String {
++    let output = Arc::new(Mutex::new(Vec::new()));
++    let writer = Capture(Arc::clone(&output));
++    let subscriber = tracing_subscriber::fmt()
++        .with_ansi(false)
++        .without_time()
++        .with_max_level(tracing::Level::INFO)
++        .with_writer(move || writer.clone())
++        .finish();
++    tracing::subscriber::with_default(subscriber, run);
++    String::from_utf8(output.lock().unwrap().clone()).unwrap()
++}
++
++#[test]
++fn http_emits_names_only_and_preserves_the_entire_request() {
++    let (thread_id, metadata, request) = fixture();
++    let before = serde_json::to_value(&request).unwrap();
++    let output = capture(|| record_http(&thread_id, &metadata, &request));
++    assert_eq!(serde_json::to_value(&request).unwrap(), before);
++    let inventory = Inventory::Available {
++        names: vec!["governance".into(), "governance.workspace_topology".into()],
++        additional_tools_sets: 1,
++    };
++    let expected = serde_json::to_string(&inventory).unwrap();
++    assert!(output.contains(&format!("logical={expected}")));
++    assert!(output.contains(&format!("transmitted={expected}")));
++    assert!(output.contains("phase=\"prepared_outbound\""));
++    assert!(!output.contains(PRIVATE));
++}
++
++#[test]
++fn incremental_websocket_keeps_complete_names_separate_from_empty_delta() {
++    let (thread_id, metadata, request) = fixture();
++    let wire = ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
++        previous_response_id: Some(PRIVATE.into()),
++        input: &[],
++        ..ResponseCreateWsRequest::from(&request)
++    });
++    let before = (
++        serde_json::to_value(&request).unwrap(),
++        serde_json::to_value(&wire).unwrap(),
++    );
++    let output = capture(|| record_websocket(&thread_id, &metadata, &request, &wire));
++    assert_eq!(
++        (
++            serde_json::to_value(&request).unwrap(),
++            serde_json::to_value(&wire).unwrap()
++        ),
++        before
++    );
++    assert!(output.contains("governance.workspace_topology"));
++    assert!(output.contains(
++        "transmitted={\"status\":\"available\",\"names\":[],\"additional_tools_sets\":0}"
++    ));
++    assert!(output.contains("inherits_previous_response=true"));
++    assert!(!output.contains(PRIVATE));
++}
++
++#[test]
++fn spoofed_metadata_other_threads_and_non_turn_requests_emit_nothing() {
++    let (thread_id, mut metadata, request) = fixture();
++    let other_thread = ThreadId::from_string("01a10e3b-02ea-7af2-be04-ed9fb904b29e").unwrap();
++    assert_eq!(
++        capture(|| record_http(&other_thread, &metadata, &request)),
++        ""
++    );
++    for kind in [
++        None,
++        Some(CodexResponsesRequestKind::Memory),
++        Some(CodexResponsesRequestKind::Prewarm),
++    ] {
++        metadata.request_kind = kind;
++        assert_eq!(capture(|| record_http(&thread_id, &metadata, &request)), "");
++    }
++    metadata.request_kind = Some(CodexResponsesRequestKind::Turn);
++    for id in [None, Some(PRIVATE.into()), Some(String::new())] {
++        metadata.turn_id = id;
++        assert_eq!(capture(|| record_http(&thread_id, &metadata, &request)), "");
++    }
++}
++
++#[test]
++fn native_serializers_project_function_custom_namespace_and_hosted_names() {
++    use codex_tools::*;
++    use std::collections::BTreeMap;
++    let function = |name: &str| ResponsesApiTool {
++        name: name.into(),
++        description: PRIVATE.into(),
++        strict: false,
++        defer_loading: None,
++        parameters: JsonSchema::object(
++            BTreeMap::new(),
++            /*required*/ None,
++            /*additional_properties*/ None,
++        ),
++        output_schema: None,
++    };
++    let tools = vec![
++        ToolSpec::Function(function("lookup")),
++        ToolSpec::Namespace(ResponsesApiNamespace {
++            name: "governance".into(),
++            description: PRIVATE.into(),
++            tools: vec![ResponsesApiNamespaceTool::Function(function(
++                "workspace_topology",
++            ))],
++        }),
++        ToolSpec::Freeform(FreeformTool {
++            name: "exec".into(),
++            description: PRIVATE.into(),
++            defer_loading: None,
++            format: FreeformToolFormat {
++                r#type: "grammar".into(),
++                syntax: "lark".into(),
++                definition: PRIVATE.into(),
++            },
++        }),
++        ToolSpec::ToolSearch {
++            execution: "client".into(),
++            description: PRIVATE.into(),
++            parameters: JsonSchema::object(
++                BTreeMap::new(),
++                /*required*/ None,
++                /*additional_properties*/ None,
++            ),
++        },
++        ToolSpec::WebSearch {
++            external_web_access: None,
++            indexed_web_access: None,
++            filters: None,
++            user_location: None,
++            search_context_size: None,
++            search_content_types: None,
++        },
++    ];
++    let names = vec![
++        "exec",
++        "governance",
++        "governance.workspace_topology",
++        "lookup",
++        "tool_search",
++        "web_search",
++    ];
++    let raw = create_tools_raw_json_for_responses_api(&tools).unwrap();
++    assert_eq!(
++        inventory(Some(&raw), &[]),
++        Inventory::Available {
++            names: names.iter().map(|name| (*name).into()).collect(),
++            additional_tools_sets: 0,
++        }
++    );
++    let standard = vec![ResponseItem::AdditionalTools {
++        id: None,
++        role: "developer".into(),
++        tools: create_tools_json_for_responses_api(&tools).unwrap(),
++    }];
++    assert_eq!(
++        inventory(None, &standard),
++        Inventory::Available {
++            names: names.into_iter().map(str::to_owned).collect(),
++            additional_tools_sets: 1,
++        }
++    );
++    let lite = vec![ResponseItem::AdditionalTools {
++        id: None,
++        role: "developer".into(),
++        tools: create_tools_json_for_responses_lite(&tools).unwrap(),
++    }];
++    assert_eq!(
++        inventory(None, &lite),
++        Inventory::Available {
++            names: vec![
++                "functions",
++                "functions.exec",
++                "functions.lookup",
++                "governance",
++                "governance.workspace_topology",
++                "tool_search",
++                "web_search"
++            ]
++            .into_iter()
++            .map(str::to_owned)
++            .collect(),
++            additional_tools_sets: 1,
++        }
++    );
++}
++
++#[test]
++fn unsupported_invalid_and_over_limit_evidence_is_unavailable_not_empty() {
++    for (tools, reason) in [
++        (
++            json!([{"type":"future_unknown", "private":PRIVATE}]),
++            "unsupported_declaration_shape",
++        ),
++        (
++            json!([{"type":"function", "name":"private\nidentifier"}]),
++            "invalid_identifier",
++        ),
++        (
++            json!(
++                (0..=MAX_NAMES)
++                    .map(|i| json!({"type":"function", "name":format!("tool_{i}")}))
++                    .collect::<Vec<_>>()
++            ),
++            "declaration_count_exceeded",
++        ),
++        (
++            json!([{"type":"function", "name":"safe", "description":"x".repeat(MAX_RAW_DECLARATION_BYTES)}]),
++            "declaration_bytes_exceeded",
++        ),
++    ] {
++        let tools = serde_json::value::to_raw_value(&tools).unwrap();
++        assert_eq!(
++            inventory(Some(&tools), &[]),
++            Inventory::Unavailable { reason }
++        );
++    }
++}
++
++#[test]
++fn duplicate_entry_budget_is_shared_across_top_level_and_additional_tools() {
++    let declaration = json!({"type":"function", "name":"safe"});
++    let top_level = serde_json::value::to_raw_value(&vec![declaration.clone(); MAX_NAMES]).unwrap();
++    let mut input = vec![ResponseItem::AdditionalTools {
++        id: None,
++        role: "developer".into(),
++        tools: vec![declaration.clone(); MAX_NAMES],
++    }];
++    assert_eq!(
++        inventory(Some(&top_level), &input),
++        Inventory::Available {
++            names: vec!["safe".into()],
++            additional_tools_sets: 1,
++        }
++    );
++    input.push(ResponseItem::AdditionalTools {
++        id: None,
++        role: "developer".into(),
++        tools: vec![declaration],
++    });
++    assert_eq!(
++        inventory(Some(&top_level), &input),
++        Inventory::Unavailable {
++            reason: "declaration_entries_exceeded",
++        }
++    );
++}
++
++#[test]
++fn namespace_children_also_consume_the_shared_duplicate_entry_budget() {
++    let namespace = json!({"type":"namespace", "name":"functions",
++        "tools":vec![json!({"type":"function", "name":"safe"}); MAX_NAMES]});
++    let input = vec![ResponseItem::AdditionalTools {
++        id: None,
++        role: "developer".into(),
++        tools: vec![namespace.clone(), namespace],
++    }];
++    assert_eq!(
++        inventory(None, &input),
++        Inventory::Unavailable {
++            reason: "declaration_entries_exceeded",
++        }
++    );
++}

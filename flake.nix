@@ -3,13 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    codex-native-tool-witness-source = {
+      url = "github:openai/codex/a956835d020762cb2b570053af06f643a11c0ecc";
+      flake = false;
+    };
+    codex-native-tool-witness-rust-overlay = {
+      url = "github:oxalica/rust-overlay/e60029353d0c48d216bc4b065168ccd4079c166f";
+      flake = false;
+    };
     # Keep Playwright browser revisions compatible with the current
     # ouroboros-ide/frontend lockfile.
     nixpkgs-playwright.url = "github:NixOS/nixpkgs/f86a612cb49b3ca434c9b87f2049797656a0138d";
   };
 
   outputs =
-    { self, nixpkgs, nixpkgs-playwright, ... }:
+    { self, nixpkgs, nixpkgs-playwright, codex-native-tool-witness-source, codex-native-tool-witness-rust-overlay, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -639,6 +647,17 @@
           };
 
           default = self.packages.${pkgs.system}.postgres-broker;
+        } // nixpkgs.lib.optionalAttrs (pkgs.system == "x86_64-linux") {
+          codex-native-tool-witness = import ./nix/codex-native-tool-witness {
+            inherit pkgs;
+            source = codex-native-tool-witness-source;
+            rustOverlaySource = codex-native-tool-witness-rust-overlay;
+            officialCodex = nixpkgs.lib.findFirst
+              (package: (package.pname or "") == "codex")
+              (throw "dev-all must expose its pinned official Codex bundle")
+              ((self.devShells.${pkgs.system}.dev-all.nativeBuildInputs or [ ])
+                ++ (self.devShells.${pkgs.system}.dev-all.buildInputs or [ ]));
+          };
         }
       );
 

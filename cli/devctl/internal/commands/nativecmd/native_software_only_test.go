@@ -12,7 +12,7 @@ func TestSoftwareOnlyNativeStartupRejectsOtherEffectsBeforePreparation(t *testin
 		"-c", `projects."/workspaces/dev/ouroboros-ide".trust_level="trusted"`,
 		"-c", `projects."/home/bayesartre/dev/agent-worktrees/agent3/ouroboros-ide".trust_level="trusted"`,
 		"--listen", "unix:///workspaces/dev/.devhome-agent3/.codex/a3-app.sock", "--analytics-default-enabled"}
-	if err := validateSoftwareOnlyNativeAppServerCommand(accepted, selected); err != nil {
+	if err := validateSoftwareOnlyNativeAppServerCommand(accepted, selected, softwareOnlyGUITarget); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func([]string) []string{
@@ -27,7 +27,7 @@ func TestSoftwareOnlyNativeStartupRejectsOtherEffectsBeforePreparation(t *testin
 		func(c []string) []string { return c[2:] },
 	} {
 		invalid := mutate(append([]string{}, accepted...))
-		if err := validateSoftwareOnlyNativeAppServerCommand(invalid, selected); err == nil {
+		if err := validateSoftwareOnlyNativeAppServerCommand(invalid, selected, softwareOnlyGUITarget); err == nil {
 			t.Fatalf("accepted caller effect: %v", invalid)
 		}
 	}
@@ -35,7 +35,7 @@ func TestSoftwareOnlyNativeStartupRejectsOtherEffectsBeforePreparation(t *testin
 		target, project string
 		managed         bool
 	}{
-		{"shadow-throne-local-2", "dev-all", false},
+		{"shadow-throne-local-1", "dev-all", false},
 		{softwareOnlyGUITarget, "dev-workspace", false},
 		{softwareOnlyGUITarget, "dev-all", true},
 	} {
@@ -63,5 +63,31 @@ func TestSoftwareOnlySelectorReachesBothNativeExecParsers(t *testing.T) {
 	top, err := parseTopExecArgs(&cmdregistry.Context{Args: []string{"3", "--software-only", "--gui-target-id", softwareOnlyGUITarget, "--", "/run/current-system/sw/bin/fleet-governed-app-server", "--", "/nix/store/owned-selected-codex/bin/codex", "app-server"}}, false)
 	if err != nil || !top.softwareOnly {
 		t.Fatalf("top exec selector: %#v %v", top, err)
+	}
+}
+
+func TestSoftwareOnlyLocal2AppServerCommandRejectsSiblingGeometry(t *testing.T) {
+	selected := "/nix/store/owned-selected-codex/bin/codex"
+	command := []string{"/run/current-system/sw/bin/fleet-governed-app-server", "--", selected, "app-server",
+		"-c", `projects."/workspaces/dev/ouroboros-ide".trust_level="trusted"`,
+		"-c", `projects."/home/bayesartre/dev/agent-worktrees/agent2/ouroboros-ide".trust_level="trusted"`,
+		"--listen", "unix:///workspaces/dev/.devhome-agent2/.codex/a2-app.sock", "--analytics-default-enabled"}
+	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, "shadow-throne-local-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, softwareOnlyGUITarget); err == nil {
+		t.Fatal("Local2 argv admitted as Local3")
+	}
+	for _, mutate := range []func([]string){
+		func(c []string) {
+			c[7] = `projects."/home/bayesartre/dev/agent-worktrees/agent3/ouroboros-ide".trust_level="trusted"`
+		},
+		func(c []string) { c[9] = "unix:///workspaces/dev/.devhome-agent3/.codex/a3-app.sock" },
+	} {
+		invalid := append([]string{}, command...)
+		mutate(invalid)
+		if err := validateSoftwareOnlyNativeAppServerCommand(invalid, selected, "shadow-throne-local-2"); err == nil {
+			t.Fatalf("sibling geometry admitted: %v", invalid)
+		}
 	}
 }

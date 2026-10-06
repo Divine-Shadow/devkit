@@ -12,7 +12,22 @@ import (
 )
 
 const softwareOnlyGUITarget = "shadow-throne-local-3"
-const softwareOnlyHostWorkspace = "/home/bayesartre/dev/agent-worktrees/agent3"
+
+func softwareOnlyNativeAgentIndex(targetID string) int {
+	switch targetID {
+	case "shadow-throne-local-2":
+		return 2
+	case softwareOnlyGUITarget:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func softwareOnlyNativeHostWorkspace(index int) string {
+	return "/home/bayesartre/dev/agent-worktrees/agent" + strconv.Itoa(index)
+}
+
 const softwareOnlySandboxWorkspace = "/workspaces/dev"
 
 // This selected-system executable is source-owned authority. Native callers
@@ -23,8 +38,8 @@ func validateSoftwareOnlyNativeAppServer(enabled bool, targetID, project string,
 	if !enabled {
 		return nil
 	}
-	if targetID != softwareOnlyGUITarget || project != "dev-all" || managed {
-		return fmt.Errorf("software-only startup requires the selected Local3 dev-all app-server")
+	if softwareOnlyNativeAgentIndex(targetID) == 0 || project != "dev-all" || managed {
+		return fmt.Errorf("software-only startup requires the selected Local2 or Local3 dev-all app-server")
 	}
 	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" {
 		return fmt.Errorf("software-only startup permits only the selected governed Codex app-server command")
@@ -33,10 +48,15 @@ func validateSoftwareOnlyNativeAppServer(enabled bool, targetID, project string,
 	if err != nil {
 		return fmt.Errorf("resolve source-selected software-only Codex executable: %w", err)
 	}
-	return validateSoftwareOnlyNativeAppServerCommand(command, selected)
+	return validateSoftwareOnlyNativeAppServerCommand(command, selected, targetID)
 }
 
-func validateSoftwareOnlyNativeAppServerCommand(command []string, selected string) error {
+func validateSoftwareOnlyNativeAppServerCommand(command []string, selected, targetID string) error {
+	index := softwareOnlyNativeAgentIndex(targetID)
+	if index == 0 {
+		return fmt.Errorf("software-only startup requires the selected Local2 or Local3 target")
+	}
+	hostWorkspace := softwareOnlyNativeHostWorkspace(index)
 	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" {
 		return fmt.Errorf("software-only startup permits only the selected governed Codex app-server command")
 	}
@@ -47,12 +67,12 @@ func validateSoftwareOnlyNativeAppServerCommand(command []string, selected strin
 	// Exact equality rejects alternative listeners, home/config overrides,
 	// arbitrary -c values and additional executable arguments.
 	expected := []string{selected, "app-server"}
-	for _, path := range []string{softwareOnlySandboxWorkspace + "/ouroboros-ide", softwareOnlyHostWorkspace + "/ouroboros-ide"} {
+	for _, path := range []string{softwareOnlySandboxWorkspace + "/ouroboros-ide", hostWorkspace + "/ouroboros-ide"} {
 		expected = append(expected, "-c", "projects."+strconv.Quote(path)+`.trust_level="trusted"`)
 	}
-	expected = append(expected, "--listen", "unix://"+softwareOnlySandboxWorkspace+"/.devhome-agent3/.codex/a3-app.sock", "--analytics-default-enabled")
+	expected = append(expected, "--listen", "unix://"+softwareOnlySandboxWorkspace+"/.devhome-agent"+strconv.Itoa(index)+"/.codex/a"+strconv.Itoa(index)+"-app.sock", "--analytics-default-enabled")
 	if !reflect.DeepEqual(command[2:], expected) {
-		return fmt.Errorf("software-only startup requires the exact source-owned Local3 app-server argv")
+		return fmt.Errorf("software-only startup requires the exact source-owned Local2 or Local3 app-server argv")
 	}
 	return nil
 }
@@ -61,15 +81,21 @@ func validateSoftwareOnlyNativePlan(enabled bool, p nativeplan.Plan) error {
 	if !enabled {
 		return nil
 	}
-	if p.GUITargetConfig == nil || p.GUITargetConfig.TargetID != softwareOnlyGUITarget ||
-		p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" || p.Agent.ID.Index != 3 ||
-		p.HostWorkspaceRoot != softwareOnlyHostWorkspace || p.SandboxWorkspaceRoot != softwareOnlySandboxWorkspace ||
-		p.Agent.HostWorktree != softwareOnlyHostWorkspace+"/ouroboros-ide" ||
-		p.Agent.HostHome != softwareOnlyHostWorkspace+"/.devhome-agent3" ||
+	if p.GUITargetConfig == nil {
+		return fmt.Errorf("software-only startup lacks the source-selected GUI config")
+	}
+	index := softwareOnlyNativeAgentIndex(p.GUITargetConfig.TargetID)
+	hostWorkspace := softwareOnlyNativeHostWorkspace(index)
+	homeName := "/.devhome-agent" + strconv.Itoa(index)
+	if index == 0 ||
+		p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" || p.Agent.ID.Index != index ||
+		p.HostWorkspaceRoot != hostWorkspace || p.SandboxWorkspaceRoot != softwareOnlySandboxWorkspace ||
+		p.Agent.HostWorktree != hostWorkspace+"/ouroboros-ide" ||
+		p.Agent.HostHome != hostWorkspace+homeName ||
 		p.Agent.SandboxWorktree != softwareOnlySandboxWorkspace+"/ouroboros-ide" ||
-		p.Agent.SandboxHome != softwareOnlySandboxWorkspace+"/.devhome-agent3" ||
+		p.Agent.SandboxHome != softwareOnlySandboxWorkspace+homeName ||
 		p.IsolationProfile != "workspace-egress" {
-		return fmt.Errorf("software-only startup plan differs from the selected Local3 config and geometry")
+		return fmt.Errorf("software-only startup plan differs from the selected Local2 or Local3 config and geometry")
 	}
 	return nil
 }

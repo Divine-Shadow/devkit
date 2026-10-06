@@ -1,5 +1,39 @@
 {
   "nodes": {
+    "codex-native-tool-witness-rust-overlay": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791189933,
+        "narHash": "sha256-Y8eN7ki0Urx4Ojf4w1xSpWg8uk/3lJqK+E0Oth77rH0=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "e60029353d0c48d216bc4b065168ccd4079c166f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "e60029353d0c48d216bc4b065168ccd4079c166f",
+        "type": "github"
+      }
+    },
+    "codex-native-tool-witness-source": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790874817,
+        "narHash": "sha256-UFPv9UK0MBYZfpZ3QlkTXa19ykHwIEo3JdwPtUUrJls=",
+        "owner": "openai",
+        "repo": "codex",
+        "rev": "a956835d020762cb2b570053af06f643a11c0ecc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "openai",
+        "repo": "codex",
+        "rev": "a956835d020762cb2b570053af06f643a11c0ecc",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767313136,
@@ -34,6 +68,8 @@
     },
     "root": {
       "inputs": {
+        "codex-native-tool-witness-rust-overlay": "codex-native-tool-witness-rust-overlay",
+        "codex-native-tool-witness-source": "codex-native-tool-witness-source",
         "nixpkgs": "nixpkgs",
         "nixpkgs-playwright": "nixpkgs-playwright"
       }
