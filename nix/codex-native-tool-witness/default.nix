@@ -49,6 +49,9 @@ in pkgs.runCommand "codex-0.160.0-native-tool-witness" {
   chmod u+w "$out" "$out/bin" "$out/bin/codex"
   rm "$out/bin/codex"
   install -m 0755 ${native}/bin/codex "$out/bin/codex"
+  # The authoritative WSL package exposes the bundled ripgrep in bin as well.
+  ln -s ../codex-path/rg "$out/bin/rg"
+  test -x "$out/bin/rg"
   mkdir -p "$out/share/codex-native-tool-witness"
   cat > "$out/share/codex-native-tool-witness/source.json" <<'EOF'
   {"upstreamRevision":"a956835d020762cb2b570053af06f643a11c0ecc","upstreamVersion":"0.160.0","rustVersion":"1.95.0","patchSHA256":"bbc1f58be409b883adb9bcfef453a130d85ebb9c9cecd7d2b086c6d239ea7cbe","subject":"01a107d7-4be2-71e3-91c3-299ad135b69d","phase":"prepared_outbound","executableTarget":"x86_64-unknown-linux-gnu","resourcesFromOfficialRelease":"rust-v0.160.0"}
