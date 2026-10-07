@@ -20,7 +20,7 @@ import (
 
 func managedGitFixturePlan(t *testing.T, home, socket string) nativeplan.Plan {
 	t.Helper()
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "authority with ' quote")
 	devctl := filepath.Join(root, "kit", "bin", "devctl")
 	writeTestFile(t, devctl, "#!/bin/sh\nexit 0\n")
 	if err := os.Chmod(devctl, 0o755); err != nil {
@@ -77,6 +77,7 @@ func TestManagedRuntimeGitSSHCommandOverridesExpiredConfigWithRealOpenSSH(t *tes
 			current := filepath.Join(t.TempDir(), ".managed-egress-123.sock")
 			p := managedGitFixturePlan(t, home, current)
 			cfg := buildGitSSHConfigWithProxyCommand(home, []string{"id_ed25519", "id_rsa"}, "expired-connector --socket "+old)
+			cfg += "Host other.example\n  HostName alternate.example\n  Port 2222\n  User fixture-user\n  IdentityFile /owned-public-fixture/other-key\n  StrictHostKeyChecking yes\n  BatchMode yes\n  IdentitiesOnly yes\n  UserKnownHostsFile /owned-public-fixture/other-hosts\n"
 			writeTestFile(t, filepath.Join(home, ".ssh", "config"), cfg)
 			command := managedGitEnvironment(t, p)
 			bash, err := exec.LookPath("bash")
@@ -87,9 +88,25 @@ func TestManagedRuntimeGitSSHCommandOverridesExpiredConfigWithRealOpenSSH(t *tes
 			if err != nil {
 				t.Fatalf("real SSH config: %v: %s", err, out)
 			}
-			for _, want := range []string{"hostname ssh.github.com", "port 443", "strictHostKeyChecking yes", "batchmode yes", "identitiesonly yes", "userknownhostsfile " + filepath.Join(home, ".ssh", "known_hosts"), "identityfile " + filepath.Join(home, ".ssh", "id_ed25519"), "--socket " + current} {
+			for _, want := range []string{"hostname ssh.github.com", "port 443", "strictHostKeyChecking true", "batchmode yes", "identitiesonly yes", "userknownhostsfile " + filepath.Join(home, ".ssh", "known_hosts"), "identityfile " + filepath.Join(home, ".ssh", "id_ed25519")} {
 				if !strings.Contains(strings.ToLower(string(out)), strings.ToLower(want)) {
 					t.Fatalf("real OpenSSH omitted %q: %s", want, out)
+				}
+			}
+			expectedProxy, err := gitManagedProxyCommand(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(out), "\nproxycommand "+expectedProxy+"\n") {
+				t.Fatalf("real OpenSSH proxy differs from owned command: %s", out)
+			}
+			otherHost, err := exec.Command(bash, "-c", command+" -G other.example").CombinedOutput()
+			if err != nil {
+				t.Fatalf("other Host config: %v %s", err, otherHost)
+			}
+			for _, want := range []string{"hostname alternate.example", "port 2222", "user fixture-user", "identityfile /owned-public-fixture/other-key", "userknownhostsfile /owned-public-fixture/other-hosts", "stricthostkeychecking true", "batchmode yes", "identitiesonly yes", "\nproxycommand " + expectedProxy + "\n"} {
+				if !strings.Contains(string(otherHost), want) {
+					t.Fatalf("other Host policy changed %q: %s", want, otherHost)
 				}
 			}
 			if strings.Contains(string(out), old) {
@@ -104,6 +121,9 @@ func TestManagedRuntimeGitSSHCommandOverridesExpiredConfigWithRealOpenSSH(t *tes
 			}
 			q := p
 			q.Proxy.UnixSocket = filepath.Join(filepath.Dir(current), ".managed-egress-124.sock")
+			q.Binds = append([]nativeplan.Bind(nil), p.Binds...)
+			q.Binds[0].Source = q.Proxy.UnixSocket
+			q.Binds[0].Target = q.Proxy.UnixSocket
 			other := managedGitEnvironment(t, q)
 			if strings.Contains(other, current) || !strings.Contains(other, q.Proxy.UnixSocket) || managedGitEnvironment(t, p) != command {
 				t.Fatal("readiness/sibling connector replaced active execution")

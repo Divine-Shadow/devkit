@@ -11,6 +11,9 @@ shared config rewrite, history reset, or unrelated runtime effect is authorized.
 - Isolated canonical source from published Devkit bd41538; sole writer.
 - Bind Git SSH command and variant in the cloned sandbox environment to the
   current immutable runtime plan and package SSH/host-key authority.
+- First exact gate retained failed: fixture lacked package connector; real SSH
+  canonical StrictHostKeyChecking output is true for configured yes. Retain all
+  business/refusal assertions and supply those explicit fixture preconditions.
 - Pending owned top-level/nested Git fixtures, credential-access fixture,
   execution/sibling isolation, full x86 checks, and independent review.
 - Publication and composed Runtime selection remain separate boundaries.

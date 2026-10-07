@@ -1196,6 +1196,12 @@ func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
 	nativeplan.WorkspaceControllerExecSocket = execSocket
 	t.Cleanup(func() { nativeplan.WorkspaceControllerExecSocket = previousExecSocket })
+	// The runtime plan now also consumes the package-owned Git connector.
+	connector := filepath.Join(devkitRoot, "kit", "bin", "devctl")
+	writeTestFile(t, connector, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(connector, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
 		HostRoot:         devRoot,
@@ -1278,6 +1284,12 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The runtime plan now also consumes the package-owned Git connector.
+	connector := filepath.Join(devkitRoot, "kit", "bin", "devctl")
+	writeTestFile(t, connector, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(connector, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{

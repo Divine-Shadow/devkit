@@ -548,6 +548,12 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	}
 	proxySocket := filepath.Join(root, "proxy.sock")
 	listenControllerTestSocket(t, proxySocket)
+	// The runtime plan now also consumes the package-owned Git connector.
+	connector := filepath.Join(devkitRoot, "kit", "bin", "devctl")
+	writeTestFile(t, connector, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(connector, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
 		Project:          "dev-workspace",
