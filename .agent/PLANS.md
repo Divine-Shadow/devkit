@@ -60,6 +60,7 @@ not the lifetime of a particular execution.
 - [Product Retained-Reader Manifest Consumption](execplans/product-retained-reader-manifest-20260907.md): completed 2026-09-07; all 12 checks, publication, integrated WSL gates, deployment, fresh manifest consumption and six actual reads passed their contracts. Missing indexes remain unavailable history.
 
 ## Active ExecPlans
+- [Derpinator preserving native history](execplans/derpinator-preserving-history-20261007.md): exact cold-goal and rollout projection during normal preparation; source review/gates before parent-owned runtime judgment.
 - [Standard native fleet software-only preparation](execplans/fleet-software-only-native-20261007.md): source-class admission, immutable execution binding, no credential hydration; runtime activation remains held.
 
 

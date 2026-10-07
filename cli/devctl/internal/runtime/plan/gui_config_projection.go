@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -34,12 +36,16 @@ var guiCodexConfigProjectionManifestPath = "/etc/fleet/source/codex-config-proje
 // GUI target. Geometry is validated while the plan is built and intentionally
 // omitted here so launch consumers cannot reinterpret it.
 type GUITargetConfigProjection struct {
-	TargetID              string `json:"targetId"`
-	ConfigProfile         string `json:"configProfile"`
-	Source                string `json:"source"`
-	SourceSHA256          string `json:"sourceSha256"`
-	Kind                  string `json:"kind,omitempty"`
-	ExpectedExecutionHost string `json:"expectedExecutionHost,omitempty"`
+	TargetID                      string `json:"targetId"`
+	ConfigProfile                 string `json:"configProfile"`
+	Source                        string `json:"source"`
+	SourceSHA256                  string `json:"sourceSha256"`
+	Kind                          string `json:"kind,omitempty"`
+	ExpectedExecutionHost         string `json:"expectedExecutionHost,omitempty"`
+	RetainedHistoryManifest       string `json:"retainedHistoryManifest,omitempty"`
+	RetainedHistoryManifestSHA256 string `json:"retainedHistoryManifestSha256,omitempty"`
+	RetainedHistoryBundleSHA256   string `json:"retainedHistoryBundleSha256,omitempty"`
+	RetainedHistoryThreadID       string `json:"retainedHistoryThreadId,omitempty"`
 }
 
 type guiCodexConfigProjectionManifest struct {
@@ -48,18 +54,22 @@ type guiCodexConfigProjectionManifest struct {
 }
 
 type guiCodexConfigProjectionRecord struct {
-	TargetID              string `json:"targetId"`
-	ConfigProfile         string `json:"configProfile"`
-	Project               string `json:"project"`
-	Repo                  string `json:"repo"`
-	AgentIndex            int    `json:"agentIndex"`
-	WorkspaceRoot         string `json:"workspaceRoot"`
-	HostWorktree          string `json:"hostWorktree"`
-	HostHome              string `json:"hostHome"`
-	Source                string `json:"source"`
-	SourceSHA256          string `json:"sourceSha256"`
-	Kind                  string `json:"kind,omitempty"`
-	ExpectedExecutionHost string `json:"expectedExecutionHost,omitempty"`
+	TargetID                      string `json:"targetId"`
+	ConfigProfile                 string `json:"configProfile"`
+	Project                       string `json:"project"`
+	Repo                          string `json:"repo"`
+	AgentIndex                    int    `json:"agentIndex"`
+	WorkspaceRoot                 string `json:"workspaceRoot"`
+	HostWorktree                  string `json:"hostWorktree"`
+	HostHome                      string `json:"hostHome"`
+	Source                        string `json:"source"`
+	SourceSHA256                  string `json:"sourceSha256"`
+	Kind                          string `json:"kind,omitempty"`
+	ExpectedExecutionHost         string `json:"expectedExecutionHost,omitempty"`
+	RetainedHistoryManifest       string `json:"retainedHistoryManifest,omitempty"`
+	RetainedHistoryManifestSHA256 string `json:"retainedHistoryManifestSha256,omitempty"`
+	RetainedHistoryBundleSHA256   string `json:"retainedHistoryBundleSha256,omitempty"`
+	RetainedHistoryThreadID       string `json:"retainedHistoryThreadId,omitempty"`
 }
 
 type guiTargetGeometry struct {
@@ -151,6 +161,8 @@ func loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, storeRoot 
 		TargetID: selected.TargetID, ConfigProfile: selected.ConfigProfile,
 		Source: selected.Source, SourceSHA256: selected.SourceSHA256,
 		Kind: selected.Kind, ExpectedExecutionHost: selected.ExpectedExecutionHost,
+		RetainedHistoryManifest: selected.RetainedHistoryManifest, RetainedHistoryManifestSHA256: selected.RetainedHistoryManifestSHA256,
+		RetainedHistoryBundleSHA256: selected.RetainedHistoryBundleSHA256, RetainedHistoryThreadID: selected.RetainedHistoryThreadID,
 	}, nil
 }
 
@@ -220,6 +232,8 @@ func loadGUITargetConfigProjectionFrom(manifestPath, storeRoot, targetID string,
 		Source:        selected.Source,
 		SourceSHA256:  selected.SourceSHA256,
 		Kind:          selected.Kind, ExpectedExecutionHost: selected.ExpectedExecutionHost,
+		RetainedHistoryManifest: selected.RetainedHistoryManifest, RetainedHistoryManifestSHA256: selected.RetainedHistoryManifestSHA256,
+		RetainedHistoryBundleSHA256: selected.RetainedHistoryBundleSHA256, RetainedHistoryThreadID: selected.RetainedHistoryThreadID,
 	}, nil
 }
 
@@ -258,6 +272,22 @@ func validateGUITargetConfigProjectionRecord(record guiCodexConfigProjectionReco
 	}
 	if err := validateGUITargetConfigSourceIdentity(record.Source, record.SourceSHA256, storeRoot); err != nil {
 		return fmt.Errorf("GUI Codex config projection targetId %q: %w", record.TargetID, err)
+	}
+	present := record.RetainedHistoryManifest != "" || record.RetainedHistoryManifestSHA256 != "" || record.RetainedHistoryBundleSHA256 != "" || record.RetainedHistoryThreadID != ""
+	if present {
+		expectedRoot := filepath.Join(geometry.WorkspaceRoot, ".devkit", "codex-gui-history", "dev-all", "agent"+strconv.Itoa(geometry.AgentIndex))
+		if geometry.Project != "dev-all" || geometry.Repo != "ouroboros-ide" || (record.Kind != "devkit-agent" && record.Kind != "local-wsl-devkit-agent") || record.RetainedHistoryManifest != filepath.Clean(record.RetainedHistoryManifest) || filepath.Base(record.RetainedHistoryManifest) != "manifest.json" || filepath.Dir(filepath.Dir(record.RetainedHistoryManifest)) != expectedRoot {
+			return fmt.Errorf("retained history binding differs from selected native geometry")
+		}
+		for _, value := range []string{record.RetainedHistoryManifestSHA256, record.RetainedHistoryBundleSHA256} {
+			decoded, err := hex.DecodeString(value)
+			if err != nil || len(decoded) != sha256.Size || value != strings.ToLower(value) {
+				return fmt.Errorf("invalid retained history digest")
+			}
+		}
+		if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString(record.RetainedHistoryThreadID) {
+			return fmt.Errorf("invalid retained history thread identity")
+		}
 	}
 	return nil
 }

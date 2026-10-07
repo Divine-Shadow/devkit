@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"devkit/cli/devctl/internal/codexhistory"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -237,6 +238,13 @@ func prepare(p nativeplan.Plan, softwareOnly bool) error {
 	}
 	if err := prepareGitBacklink(p); err != nil {
 		return err
+	}
+	if selected := p.GUITargetConfig; selected != nil && selected.RetainedHistoryManifest != "" {
+		options := codexhistory.SnapshotOptions{Project: p.Agent.ID.Project, ResetKind: "selected-slot-reset", AgentIndex: p.Agent.ID.Index, HostWorktree: p.Agent.HostWorktree, HostHome: p.Agent.HostHome, SandboxHome: p.Agent.SandboxHome, StateRoot: p.Agent.StateRoot, WorkspaceRoot: p.HostWorkspaceRoot}
+		binding := codexhistory.PreparationProjection{ManifestPath: selected.RetainedHistoryManifest, ManifestSHA256: selected.RetainedHistoryManifestSHA256, BundleSHA256: selected.RetainedHistoryBundleSHA256, ThreadID: selected.RetainedHistoryThreadID}
+		if err := codexhistory.ProjectPreparationHistory(options, binding); err != nil {
+			return fmt.Errorf("retained native preparation history: %w", err)
+		}
 	}
 	if !softwareOnly {
 		if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {

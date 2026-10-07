@@ -1,0 +1,274 @@
+package codexhistory
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const projectionTestThread = "01a068da-e98a-7f30-88d7-7682bd2abbb8"
+
+type preparationFixture struct {
+	captureFixture
+	binding    PreparationProjection
+	rollout    string
+	cold       map[string][]byte
+	coldInfo   map[string]os.FileInfo
+	before     []byte
+	beforeInfo os.FileInfo
+	protected  map[string][]byte
+}
+
+func newPreparationFixture(t *testing.T) preparationFixture {
+	t.Helper()
+	// This gate must execute real SQLite assertions, never become a skip.
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Fatal("projection gate requires the Nix-supplied sqlite3 fixture executable")
+	}
+	f := newCaptureFixture(t)
+	rel := "sessions/2026/09/03/rollout-2026-09-03T19-59-32-" + projectionTestThread + ".jsonl"
+	rollout := filepath.Join(f.codexRoot, rel)
+	writeTestFile(t, rollout, `{"type":"session_meta","payload":{"id":"`+projectionTestThread+`"}}`+"\n"+`{"type":"event","payload":{}}`+"\n")
+	runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "state_5.sqlite"), "CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT,source TEXT,title TEXT); INSERT INTO threads VALUES("+sqlQuote(projectionTestThread)+","+sqlQuote(filepath.Join(f.options.SandboxHome, ".codex", rel))+",'vscode','retained objective');")
+	goals := filepath.Join(f.codexRoot, "goals_1.sqlite")
+	runSQLite(t, f.sqlite, goals, "CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY,id TEXT,objective TEXT,status TEXT,token_usage INTEGER,time_usage_secs INTEGER,created_at INTEGER,updated_at INTEGER); INSERT INTO thread_goals VALUES("+sqlQuote(projectionTestThread)+",'original-goal-id','retained objective','blocked',7,11,101,202); CREATE TABLE thread_goal_continuation_deferrals(thread_id TEXT);")
+	result, err := Capture(f.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FileCount != 3 || result.GUIRollouts != 1 {
+		t.Fatalf("unexpected cold fixture: %+v", result)
+	}
+	mb, err := os.ReadFile(result.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := preparationFixture{captureFixture: f, binding: PreparationProjection{result.ManifestPath, projectionDigest(mb), result.BundleSHA256, projectionTestThread}, rollout: rel, cold: map[string][]byte{}, coldInfo: map[string]os.FileInfo{}, protected: map[string][]byte{}}
+	for _, record := range readManifest(t, result.ManifestPath).Files {
+		path := filepath.Join(filepath.Dir(result.ManifestPath), "payload", record.Path)
+		p.cold[record.Path] = mustProjectionRead(t, path)
+		p.coldInfo[record.Path] = mustProjectionStat(t, path)
+	}
+	for _, name := range []string{"goals_1.sqlite", "state_5.sqlite", rel} {
+		if err := os.Remove(filepath.Join(f.codexRoot, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runSQLite(t, f.sqlite, goals, "CREATE TABLE _sqlx_migrations(version INTEGER); INSERT INTO _sqlx_migrations VALUES(1); CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY); CREATE TABLE thread_goal_continuation_deferrals(thread_id TEXT);")
+	p.before = mustProjectionRead(t, goals)
+	p.beforeInfo = mustProjectionStat(t, goals)
+	for _, name := range []string{"state_5.sqlite", "auth.json", "config.toml"} {
+		writeTestFile(t, filepath.Join(f.codexRoot, name), "protected synthetic sentinel: "+name+"\n")
+		p.protected[name] = mustProjectionRead(t, filepath.Join(f.codexRoot, name))
+	}
+	return p
+}
+func mustProjectionRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return b
+}
+func mustProjectionStat(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	i, e := os.Stat(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return i
+}
+func (f preparationFixture) journalDir() string {
+	return filepath.Join(f.codexRoot, ".retained-history-projection", f.binding.ManifestSHA256)
+}
+func (f preparationFixture) assertColdAndProtected(t *testing.T) {
+	t.Helper()
+	for rel, b := range f.cold {
+		p := filepath.Join(filepath.Dir(f.binding.ManifestPath), "payload", rel)
+		if !bytes.Equal(b, mustProjectionRead(t, p)) || !os.SameFile(f.coldInfo[rel], mustProjectionStat(t, p)) {
+			t.Fatalf("cold member changed: %s", rel)
+		}
+	}
+	for rel, b := range f.protected {
+		if !bytes.Equal(b, mustProjectionRead(t, filepath.Join(f.codexRoot, rel))) {
+			t.Fatalf("protected current member changed: %s", rel)
+		}
+	}
+}
+func (f preparationFixture) assertCommitted(t *testing.T) {
+	t.Helper()
+	f.assertColdAndProtected(t)
+	for _, rel := range []string{"goals_1.sqlite", f.rollout} {
+		p := filepath.Join(f.codexRoot, rel)
+		if !bytes.Equal(f.cold[rel], mustProjectionRead(t, p)) {
+			t.Fatalf("wrong projection: %s", rel)
+		}
+		if os.SameFile(f.coldInfo[rel], mustProjectionStat(t, p)) {
+			t.Fatalf("cold original linked: %s", rel)
+		}
+	}
+	archive := filepath.Join(f.journalDir(), "before-goals.sqlite")
+	if !bytes.Equal(f.before, mustProjectionRead(t, archive)) || !os.SameFile(f.beforeInfo, mustProjectionStat(t, archive)) {
+		t.Fatal("original current empty goals inode/bytes were not preserved")
+	}
+	for _, rel := range []string{"pending-goals.sqlite", "pending-rollout.jsonl", "journal.committed"} {
+		if _, e := os.Lstat(filepath.Join(f.journalDir(), rel)); !errors.Is(e, os.ErrNotExist) {
+			t.Fatalf("staging alias survived commit: %s", rel)
+		}
+	}
+	if !bytes.Contains(mustProjectionRead(t, filepath.Join(f.journalDir(), "journal.json")), []byte(`"status":"committed"`)) {
+		t.Fatal("no committed journal")
+	}
+}
+
+func TestPreparationProjectionPreservesHistoryAndCurrentState(t *testing.T) {
+	f := newPreparationFixture(t)
+	if e := ProjectPreparationHistory(f.options, f.binding); e != nil {
+		t.Fatal(e)
+	}
+	f.assertCommitted(t)
+	b, e := exec.Command(f.sqlite, "-readonly", "-batch", filepath.Join(f.codexRoot, "goals_1.sqlite"), "SELECT id||'|'||token_usage||'|'||time_usage_secs||'|'||created_at||'|'||updated_at FROM thread_goals;").Output()
+	if e != nil || string(b) != "original-goal-id|7|11|101|202\n" {
+		t.Fatalf("goal lifetime/accounting changed: %q %v", b, e)
+	}
+	// A committed preparation permits an existing healthy native owner and append.
+	writeTestFile(t, filepath.Join(f.codexRoot, "a1-app.sock"), "synthetic active marker")
+	file, e := os.OpenFile(filepath.Join(f.codexRoot, f.rollout), os.O_WRONLY|os.O_APPEND, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = file.WriteString(`{"type":"event","payload":{}}` + "\n")
+	file.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e := ProjectPreparationHistory(f.options, f.binding); e != nil {
+		t.Fatalf("committed healthy continuation refused: %v", e)
+	}
+	f.assertColdAndProtected(t)
+	if e := os.Remove(filepath.Join(f.codexRoot, "goals_1.sqlite")); e != nil {
+		t.Fatal(e)
+	}
+	if e := ProjectPreparationHistory(f.options, f.binding); e == nil {
+		t.Fatal("committed replay accepted missing goals")
+	}
+}
+
+func TestPreparationProjectionRecoversDurableTransitions(t *testing.T) {
+	rel := "sessions/2026/09/03/rollout-2026-09-03T19-59-32-" + projectionTestThread + ".jsonl"
+	for _, point := range []string{"before-retirement", "after-retirement", "installed-goals_1.sqlite", "installed-" + rel, "before-commit", "commit-artifact-written"} {
+		t.Run(point, func(t *testing.T) {
+			f := newPreparationFixture(t)
+			sentinel := errors.New("owned interruption")
+			preparationProjectionCheckpoint = func(s string) error {
+				if s == point {
+					return sentinel
+				}
+				return nil
+			}
+			t.Cleanup(func() { preparationProjectionCheckpoint = nil })
+			e := ProjectPreparationHistory(f.options, f.binding)
+			preparationProjectionCheckpoint = nil
+			if !errors.Is(e, sentinel) {
+				t.Fatalf("did not exercise transition %s: %v", point, e)
+			}
+			f.assertColdAndProtected(t)
+			if e := ProjectPreparationHistory(f.options, f.binding); e != nil {
+				t.Fatalf("actual journal recovery: %v", e)
+			}
+			f.assertCommitted(t)
+		})
+	}
+}
+
+func TestPreparationProjectionRefusesUnsafeInitialState(t *testing.T) {
+	for _, name := range []string{"nonempty-goals", "nonempty-other-business-table", "sidecar", "live-socket", "rollout-collision", "symlink-goals", "extra-cold-member", "changed-cold-member", "manifest-digest", "partial-binding", "foreign-journal", "unjournaled-stage"} {
+		t.Run(name, func(t *testing.T) {
+			f := newPreparationFixture(t)
+			switch name {
+			case "nonempty-goals":
+				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "INSERT INTO thread_goals VALUES('another-thread');")
+			case "nonempty-other-business-table":
+				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "INSERT INTO thread_goal_continuation_deferrals VALUES('another-thread');")
+			case "sidecar":
+				writeTestFile(t, filepath.Join(f.codexRoot, "goals_1.sqlite-wal"), "sidecar")
+			case "live-socket":
+				writeTestFile(t, filepath.Join(f.codexRoot, "a1-app.sock"), "owned marker")
+			case "rollout-collision":
+				writeTestFile(t, filepath.Join(f.codexRoot, f.rollout), "foreign rollout")
+			case "symlink-goals":
+				if e := os.Rename(filepath.Join(f.codexRoot, "goals_1.sqlite"), filepath.Join(f.codexRoot, "foreign.sqlite")); e != nil {
+					t.Fatal(e)
+				}
+				if e := os.Symlink("foreign.sqlite", filepath.Join(f.codexRoot, "goals_1.sqlite")); e != nil {
+					t.Fatal(e)
+				}
+			case "extra-cold-member":
+				writeTestFile(t, filepath.Join(filepath.Dir(f.binding.ManifestPath), "payload", "sessions", "extra.jsonl"), "extra")
+			case "changed-cold-member":
+				writeTestFile(t, filepath.Join(filepath.Dir(f.binding.ManifestPath), "payload", f.rollout), "changed")
+			case "manifest-digest":
+				f.binding.ManifestSHA256 = strings.Repeat("0", 64)
+			case "partial-binding":
+				f.binding.ManifestPath = ""
+			case "foreign-journal":
+				writeTestFile(t, filepath.Join(f.journalDir(), "journal.json"), `{"schema":"foreign"}`)
+			case "unjournaled-stage":
+				writeTestFile(t, filepath.Join(f.journalDir(), "pending-goals.sqlite"), "unadmitted")
+			}
+			before := mustProjectionRead(t, filepath.Join(f.codexRoot, "goals_1.sqlite"))
+			if e := ProjectPreparationHistory(f.options, f.binding); e == nil {
+				t.Fatalf("accepted %s", name)
+			}
+			if !bytes.Equal(before, mustProjectionRead(t, filepath.Join(f.codexRoot, "goals_1.sqlite"))) {
+				t.Fatal("refusal changed current goal bytes")
+			}
+			for rel, b := range f.protected {
+				if !bytes.Equal(b, mustProjectionRead(t, filepath.Join(f.codexRoot, rel))) {
+					t.Fatalf("refusal changed %s", rel)
+				}
+			}
+		})
+	}
+}
+
+func TestPreparationProjectionRecoveryRefusesNewSidecarsAndLiveOwner(t *testing.T) {
+	for _, name := range []string{"sidecar", "socket"} {
+		t.Run(name, func(t *testing.T) {
+			f := newPreparationFixture(t)
+			stop := errors.New("pause after retirement")
+			preparationProjectionCheckpoint = func(s string) error {
+				if s == "after-retirement" {
+					return stop
+				}
+				return nil
+			}
+			t.Cleanup(func() { preparationProjectionCheckpoint = nil })
+			e := ProjectPreparationHistory(f.options, f.binding)
+			preparationProjectionCheckpoint = nil
+			if !errors.Is(e, stop) {
+				t.Fatal(e)
+			}
+			nameOnDisk := "goals_1.sqlite-shm"
+			if name == "socket" {
+				nameOnDisk = "a1-app.sock"
+			}
+			writeTestFile(t, filepath.Join(f.codexRoot, nameOnDisk), "owning refusal witness")
+			if e := ProjectPreparationHistory(f.options, f.binding); e == nil {
+				t.Fatal("recovery accepted new sidecar/owner")
+			}
+			if _, e := os.Lstat(filepath.Join(f.codexRoot, "goals_1.sqlite")); !errors.Is(e, os.ErrNotExist) {
+				t.Fatal("rejected recovery installed a goal")
+			}
+			f.assertColdAndProtected(t)
+			if !bytes.Equal(f.before, mustProjectionRead(t, filepath.Join(f.journalDir(), "before-goals.sqlite"))) {
+				t.Fatal("refusal lost original current goals")
+			}
+		})
+	}
+}
