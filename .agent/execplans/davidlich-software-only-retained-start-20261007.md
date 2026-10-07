@@ -22,3 +22,5 @@ Ordinary SeedAWS(force=false) is conditional local file hydration, not an AWS AP
 ## Progress
 
 - Isolated accepted-base candidate created. No shared/runtime changes.
+
+- Preserved first Management seal178d and exact failed fixture gate. Successor uses existing devkit-agent project projection for actual inventory without project; fixture retains geometry and reconstructs only canonical sorted epoch lists after rename. Applicable gates/review remain pending.
