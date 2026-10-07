@@ -2482,6 +2482,15 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 	args = append(args, bindArgs...)
 	args = append(args, symlinkArgs...)
 
+	gitSSHCommand, err := managedRuntimeGitSSHCommand(p)
+	if err != nil {
+		return Command{}, err
+	}
+	if gitSSHCommand != "" {
+		launchEnv["GIT_SSH_COMMAND"] = gitSSHCommand
+		launchEnv["GIT_SSH_VARIANT"] = "ssh"
+	}
+
 	keys := make([]string, 0, len(launchEnv))
 	for key := range launchEnv {
 		keys = append(keys, key)

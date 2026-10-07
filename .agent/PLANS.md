@@ -102,3 +102,5 @@ not the lifetime of a particular execution.
 - [Davidlich retained software-only start](execplans/davidlich-software-only-retained-start-20261007.md): canonical maintenance preparation; runtime effects held.
 
 - [Davidlich explicit legacy broker retirement](execplans/davidlich-explicit-legacy-broker-stop-20261007.md): existing stop/start compatibility maintenance; runtime effects held.
+
+- [Managed native Git transport lifetime](execplans/managed-native-git-egress-lifetime-20261007.md): current owned execution connector without credential hydration or shared config mutation.

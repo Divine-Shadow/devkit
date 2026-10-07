@@ -54,6 +54,12 @@ func testPrepareSoftwareOnlyCredentialFixture(t *testing.T, nested bool) {
 	if err := PrepareSoftwareOnly(p); err != nil {
 		t.Fatalf("software-only Prepare: %v", err)
 	}
+	// Constructing the current Git transport must obey the same full-directory
+	// no-access guard as software-only preparation.
+	gitPlan := managedGitFixturePlan(t, p.Agent.SandboxHome, filepath.Join(devRoot, ".managed-egress-321.sock"))
+	if _, err := managedRuntimeGitSSHCommand(gitPlan); err != nil {
+		t.Fatalf("software-only Git command: %v", err)
+	}
 	buffer := make([]byte, 8192)
 	n, err := syscall.Read(fd, buffer)
 	if n > 0 || (err != nil && err != syscall.EAGAIN) {
