@@ -1047,6 +1047,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err := validateSoftwareOnlyNativePlan(parsed.softwareOnly, p); err != nil {
 		return err
 	}
+	if err := validateSoftwareOnlyNativePreparedCommand(parsed.softwareOnly, p, command); err != nil {
+		return err
+	}
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
 	}
@@ -2201,6 +2204,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		return fmt.Errorf("native exec currently supports --launcher bubblewrap only")
 	}
 	if err := validateSoftwareOnlyNativePlan(parsed.softwareOnly, p); err != nil {
+		return err
+	}
+	if err := validateSoftwareOnlyNativePreparedCommand(parsed.softwareOnly, p, parsed.command); err != nil {
 		return err
 	}
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {

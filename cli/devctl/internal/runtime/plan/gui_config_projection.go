@@ -34,10 +34,12 @@ var guiCodexConfigProjectionManifestPath = "/etc/fleet/source/codex-config-proje
 // GUI target. Geometry is validated while the plan is built and intentionally
 // omitted here so launch consumers cannot reinterpret it.
 type GUITargetConfigProjection struct {
-	TargetID      string `json:"targetId"`
-	ConfigProfile string `json:"configProfile"`
-	Source        string `json:"source"`
-	SourceSHA256  string `json:"sourceSha256"`
+	TargetID              string `json:"targetId"`
+	ConfigProfile         string `json:"configProfile"`
+	Source                string `json:"source"`
+	SourceSHA256          string `json:"sourceSha256"`
+	Kind                  string `json:"kind,omitempty"`
+	ExpectedExecutionHost string `json:"expectedExecutionHost,omitempty"`
 }
 
 type guiCodexConfigProjectionManifest struct {
@@ -46,16 +48,18 @@ type guiCodexConfigProjectionManifest struct {
 }
 
 type guiCodexConfigProjectionRecord struct {
-	TargetID      string `json:"targetId"`
-	ConfigProfile string `json:"configProfile"`
-	Project       string `json:"project"`
-	Repo          string `json:"repo"`
-	AgentIndex    int    `json:"agentIndex"`
-	WorkspaceRoot string `json:"workspaceRoot"`
-	HostWorktree  string `json:"hostWorktree"`
-	HostHome      string `json:"hostHome"`
-	Source        string `json:"source"`
-	SourceSHA256  string `json:"sourceSha256"`
+	TargetID              string `json:"targetId"`
+	ConfigProfile         string `json:"configProfile"`
+	Project               string `json:"project"`
+	Repo                  string `json:"repo"`
+	AgentIndex            int    `json:"agentIndex"`
+	WorkspaceRoot         string `json:"workspaceRoot"`
+	HostWorktree          string `json:"hostWorktree"`
+	HostHome              string `json:"hostHome"`
+	Source                string `json:"source"`
+	SourceSHA256          string `json:"sourceSha256"`
+	Kind                  string `json:"kind,omitempty"`
+	ExpectedExecutionHost string `json:"expectedExecutionHost,omitempty"`
 }
 
 type guiTargetGeometry struct {
@@ -146,6 +150,7 @@ func loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, storeRoot 
 	return GUITargetConfigProjection{
 		TargetID: selected.TargetID, ConfigProfile: selected.ConfigProfile,
 		Source: selected.Source, SourceSHA256: selected.SourceSHA256,
+		Kind: selected.Kind, ExpectedExecutionHost: selected.ExpectedExecutionHost,
 	}, nil
 }
 
@@ -214,6 +219,7 @@ func loadGUITargetConfigProjectionFrom(manifestPath, storeRoot, targetID string,
 		ConfigProfile: selected.ConfigProfile,
 		Source:        selected.Source,
 		SourceSHA256:  selected.SourceSHA256,
+		Kind:          selected.Kind, ExpectedExecutionHost: selected.ExpectedExecutionHost,
 	}, nil
 }
 

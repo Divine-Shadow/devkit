@@ -377,3 +377,36 @@ func writeGUIConfigManifest(t *testing.T, path string, records []guiCodexConfigP
 		t.Fatal(err)
 	}
 }
+
+func TestGUITargetProjectionCarriesSourceClassAndHostThroughBothSelectors(t *testing.T) {
+	p, err := Build(BuildOptions{Paths: devkitpaths.Paths{Root: "/repo/devkit"}, Project: "dev-all", Repo: "ouroboros-ide", Index: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := guiConfigRecordForPlan(p, "new-source-owned-station-2", "product-governance", "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-gui-config.toml", strings.Repeat("a", sha256.Size*2))
+	record.Kind, record.ExpectedExecutionHost = "devkit-agent", "new-source-host"
+	manifestPath := filepath.Join(t.TempDir(), "codex-config-projections.json")
+	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record})
+	geometry := guiTargetGeometryForPlan(p)
+	exact, err := loadGUITargetConfigProjectionFrom(manifestPath, "/nix/store", record.TargetID, geometry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unique, err := loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, "/nix/store", geometry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exact != unique || exact.Kind != record.Kind || exact.ExpectedExecutionHost != record.ExpectedExecutionHost {
+		t.Fatalf("source class/host lost: exact=%#v unique=%#v", exact, unique)
+	}
+	// Ordinary legacy records remain readable, but expose no invented authority.
+	record.Kind, record.ExpectedExecutionHost = "", ""
+	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record})
+	legacy, err := loadGUITargetConfigProjectionFrom(manifestPath, "/nix/store", record.TargetID, geometry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Kind != "" || legacy.ExpectedExecutionHost != "" {
+		t.Fatal("legacy metadata invented")
+	}
+}

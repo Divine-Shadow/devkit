@@ -2,7 +2,6 @@ package nativecmd
 
 import (
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
-	"path/filepath"
 	"testing"
 )
 
@@ -12,7 +11,7 @@ func TestSoftwareOnlyDavidlichPreservesMountedCurrentAndNestedHome(t *testing.T)
 		"-c", `projects."/workspaces/dev/ouroboros-ide".trust_level="trusted"`,
 		"-c", `projects."/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide".trust_level="trusted"`,
 		"--listen", "unix:///workspaces/dev/ouroboros-ide/.devhome-agent1/.codex/a1-app.sock", "--analytics-default-enabled"}
-	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, softwareOnlyRemoteGUITarget); err != nil {
+	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, testSoftwareOnlyNativePlan("devkit-agent", softwareOnlyRemoteGUITarget, "davidlich-nix", 1)); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func([]string){
@@ -27,22 +26,16 @@ func TestSoftwareOnlyDavidlichPreservesMountedCurrentAndNestedHome(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			c := append([]string{}, command...)
 			mutate(c)
-			if err := validateSoftwareOnlyNativeAppServerCommand(c, selected, softwareOnlyRemoteGUITarget); err == nil {
+			if err := validateSoftwareOnlyNativeAppServerCommand(c, selected, testSoftwareOnlyNativePlan("devkit-agent", softwareOnlyRemoteGUITarget, "davidlich-nix", 1)); err == nil {
 				t.Fatal("foreign executable/home/effect admitted")
 			}
 		})
 	}
-	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, "davidlich-2"); err == nil {
+	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, testSoftwareOnlyNativePlan("devkit-agent", "davidlich-2", "davidlich-nix", 2)); err == nil {
 		t.Fatal("unselected sibling admitted")
 	}
-	hostHome, sandboxHome := softwareOnlyNativeHomes(softwareOnlyRemoteGUITarget)
-	p := nativeplan.Plan{GUITargetConfig: &nativeplan.GUITargetConfigProjection{TargetID: softwareOnlyRemoteGUITarget}, HostWorkspaceRoot: softwareOnlyNativeHostWorkspace(1), SandboxWorkspaceRoot: softwareOnlySandboxWorkspace, IsolationProfile: "workspace-egress"}
-	p.Agent.ID.Project, p.Agent.ID.Repo, p.Agent.ID.Index = "dev-all", "ouroboros-ide", 1
-	p.Agent.HostWorktree = filepath.Join(p.HostWorkspaceRoot, "ouroboros-ide")
-	p.Agent.HostHome = hostHome
-	p.Agent.SandboxWorktree = filepath.Join(softwareOnlySandboxWorkspace, "ouroboros-ide")
-	p.Agent.SandboxHome = sandboxHome
-	if err := validateSoftwareOnlyNativePlan(true, p); err != nil {
+	p := testSoftwareOnlyNativePlan("devkit-agent", softwareOnlyRemoteGUITarget, "davidlich-nix", 1)
+	if err := validateSoftwareOnlyNativePlanOnHost(p, "davidlich-nix"); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*nativeplan.Plan){
@@ -57,7 +50,7 @@ func TestSoftwareOnlyDavidlichPreservesMountedCurrentAndNestedHome(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			q := p
 			mutate(&q)
-			if err := validateSoftwareOnlyNativePlan(true, q); err == nil {
+			if err := validateSoftwareOnlyNativePlanOnHost(q, "davidlich-nix"); err == nil {
 				t.Fatal("foreign native plan admitted")
 			}
 		})

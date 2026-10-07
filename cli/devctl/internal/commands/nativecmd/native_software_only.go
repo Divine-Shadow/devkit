@@ -15,29 +15,15 @@ import (
 const softwareOnlyGUITarget = "shadow-throne-local-3"
 const softwareOnlyRemoteGUITarget = "davidlich-1"
 
-func softwareOnlyNativeAgentIndex(targetID string) int {
-	switch targetID {
-	case "shadow-throne-local-2":
-		return 2
-	case softwareOnlyGUITarget:
-		return 3
-	case softwareOnlyRemoteGUITarget:
-		return 1
-	default:
-		return 0
-	}
-}
-
 func softwareOnlyNativeHostWorkspace(index int) string {
 	return "/home/bayesartre/dev/agent-worktrees/agent" + strconv.Itoa(index)
 }
 
 const softwareOnlySandboxWorkspace = "/workspaces/dev"
 
-func softwareOnlyNativeHomes(targetID string) (string, string) {
-	index := softwareOnlyNativeAgentIndex(targetID)
+func softwareOnlyNativeHomes(index int) (string, string) {
 	host, sandbox := softwareOnlyNativeHostWorkspace(index), softwareOnlySandboxWorkspace
-	if targetID == softwareOnlyRemoteGUITarget {
+	if index == 1 {
 		host, sandbox = filepath.Join(host, "ouroboros-ide"), filepath.Join(sandbox, "ouroboros-ide")
 	}
 	home := ".devhome-agent" + strconv.Itoa(index)
@@ -48,26 +34,34 @@ func softwareOnlyNativeHomes(targetID string) (string, string) {
 // cannot substitute it through an argument, environment variable or PATH.
 var softwareOnlySelectedCodexExecutable = "/run/current-system/sw/bin/codex"
 
+// Reject other executable effects before constructing a plan. Target class,
+// execution host and complete argv are proved from the immutable selected plan.
 func validateSoftwareOnlyNativeAppServer(enabled bool, targetID, project string, managed bool, command []string) error {
 	if !enabled {
 		return nil
 	}
-	if softwareOnlyNativeAgentIndex(targetID) == 0 || project != "dev-all" || managed {
-		return fmt.Errorf("software-only startup requires the selected Local2, Local3 or retained Davidlich-1 dev-all app-server")
+	if targetID == "" || targetID != strings.TrimSpace(targetID) || project != "dev-all" || managed {
+		return fmt.Errorf("software-only startup requires a source-selected native dev-all app-server")
 	}
-	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" {
+	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" || command[3] != "app-server" {
 		return fmt.Errorf("software-only startup permits only the selected governed Codex app-server command")
+	}
+	return nil
+}
+
+func validateSoftwareOnlyNativePreparedCommand(enabled bool, p nativeplan.Plan, command []string) error {
+	if !enabled {
+		return nil
 	}
 	selected, err := filepath.EvalSymlinks(softwareOnlySelectedCodexExecutable)
 	if err != nil {
 		return fmt.Errorf("resolve source-selected software-only Codex executable: %w", err)
 	}
-	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, targetID); err != nil {
+	if err := validateSoftwareOnlyNativeAppServerCommand(command, selected, p); err != nil {
 		return err
 	}
-	if targetID == softwareOnlyRemoteGUITarget {
-		host, _ := softwareOnlyNativeHomes(targetID)
-		current := filepath.Join(host, ".codex", "packages", "standalone", "current", "bin", "codex")
+	if p.GUITargetConfig.Kind == "devkit-agent" {
+		current := filepath.Join(p.Agent.HostHome, ".codex", "packages", "standalone", "current", "bin", "codex")
 		immediate, err := os.Readlink(current)
 		if err != nil || immediate != selected {
 			return fmt.Errorf("software-only remote current does not directly target selected Codex")
@@ -80,33 +74,28 @@ func validateSoftwareOnlyNativeAppServer(enabled bool, targetID, project string,
 	return nil
 }
 
-func validateSoftwareOnlyNativeAppServerCommand(command []string, selected, targetID string) error {
-	index := softwareOnlyNativeAgentIndex(targetID)
-	if index == 0 {
-		return fmt.Errorf("software-only startup requires the selected Local2, Local3 or retained Davidlich-1 target")
+func validateSoftwareOnlyNativeAppServerCommand(command []string, selected string, p nativeplan.Plan) error {
+	if p.GUITargetConfig == nil || (p.GUITargetConfig.Kind != "local-wsl-devkit-agent" && p.GUITargetConfig.Kind != "devkit-agent") {
+		return fmt.Errorf("software-only startup lacks the source-selected standard native target class")
 	}
-	hostWorkspace := softwareOnlyNativeHostWorkspace(index)
 	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" {
 		return fmt.Errorf("software-only startup permits only the selected governed Codex app-server command")
 	}
-	_, sandboxHome := softwareOnlyNativeHomes(targetID)
 	runtimeExecutable := selected
-	if targetID == softwareOnlyRemoteGUITarget {
-		runtimeExecutable = filepath.Join(sandboxHome, ".codex", "packages", "standalone", "current", "bin", "codex")
+	if p.GUITargetConfig.Kind == "devkit-agent" {
+		runtimeExecutable = filepath.Join(p.Agent.SandboxHome, ".codex", "packages", "standalone", "current", "bin", "codex")
 	}
 	if !strings.HasPrefix(selected, "/nix/store/") || filepath.Clean(selected) != selected || command[2] != runtimeExecutable {
 		return fmt.Errorf("software-only startup Codex executable differs from the selected system package")
 	}
-	// These are the unchanged Management trust paths for this exact target.
-	// Exact equality rejects alternative listeners, home/config overrides,
-	// arbitrary -c values and additional executable arguments.
+	// Exact source-owned trust paths and listener reject config/home overrides.
 	expected := []string{runtimeExecutable, "app-server"}
-	for _, path := range []string{softwareOnlySandboxWorkspace + "/ouroboros-ide", hostWorkspace + "/ouroboros-ide"} {
-		expected = append(expected, "-c", "projects."+strconv.Quote(path)+`.trust_level="trusted"`)
+	for _, trustPath := range []string{p.Agent.SandboxWorktree, p.Agent.HostWorktree} {
+		expected = append(expected, "-c", "projects."+strconv.Quote(trustPath)+`.trust_level="trusted"`)
 	}
-	expected = append(expected, "--listen", "unix://"+filepath.Join(sandboxHome, ".codex", "a"+strconv.Itoa(index)+"-app.sock"), "--analytics-default-enabled")
+	expected = append(expected, "--listen", "unix://"+filepath.Join(p.Agent.SandboxHome, ".codex", "a"+strconv.Itoa(p.Agent.ID.Index)+"-app.sock"), "--analytics-default-enabled")
 	if !reflect.DeepEqual(command[2:], expected) {
-		return fmt.Errorf("software-only startup requires the exact source-owned Local2, Local3 or retained Davidlich-1 app-server argv")
+		return fmt.Errorf("software-only startup requires the exact source-owned native app-server argv")
 	}
 	return nil
 }
@@ -115,21 +104,32 @@ func validateSoftwareOnlyNativePlan(enabled bool, p nativeplan.Plan) error {
 	if !enabled {
 		return nil
 	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("read software-only execution hostname: %w", err)
+	}
+	return validateSoftwareOnlyNativePlanOnHost(p, hostname)
+}
+
+func validateSoftwareOnlyNativePlanOnHost(p nativeplan.Plan, hostname string) error {
 	if p.GUITargetConfig == nil {
 		return fmt.Errorf("software-only startup lacks the source-selected GUI config")
 	}
-	index := softwareOnlyNativeAgentIndex(p.GUITargetConfig.TargetID)
+	selected := p.GUITargetConfig
+	if (selected.Kind != "local-wsl-devkit-agent" && selected.Kind != "devkit-agent") ||
+		selected.ExpectedExecutionHost == "" || selected.ExpectedExecutionHost != strings.TrimSpace(selected.ExpectedExecutionHost) ||
+		hostname != selected.ExpectedExecutionHost {
+		return fmt.Errorf("software-only startup target class or execution host differs from the immutable selected projection")
+	}
+	index := p.Agent.ID.Index
 	hostWorkspace := softwareOnlyNativeHostWorkspace(index)
-	hostHome, sandboxHome := softwareOnlyNativeHomes(p.GUITargetConfig.TargetID)
-	if index == 0 ||
-		p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" || p.Agent.ID.Index != index ||
+	hostHome, sandboxHome := softwareOnlyNativeHomes(index)
+	if index < 1 || p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" ||
 		p.HostWorkspaceRoot != hostWorkspace || p.SandboxWorkspaceRoot != softwareOnlySandboxWorkspace ||
-		p.Agent.HostWorktree != hostWorkspace+"/ouroboros-ide" ||
-		p.Agent.HostHome != hostHome ||
-		p.Agent.SandboxWorktree != softwareOnlySandboxWorkspace+"/ouroboros-ide" ||
-		p.Agent.SandboxHome != sandboxHome ||
+		p.Agent.HostWorktree != hostWorkspace+"/ouroboros-ide" || p.Agent.HostHome != hostHome ||
+		p.Agent.SandboxWorktree != softwareOnlySandboxWorkspace+"/ouroboros-ide" || p.Agent.SandboxHome != sandboxHome ||
 		p.IsolationProfile != "workspace-egress" {
-		return fmt.Errorf("software-only startup plan differs from the selected Local2, Local3 or retained Davidlich-1 config and geometry")
+		return fmt.Errorf("software-only startup plan differs from the source-selected standard native geometry")
 	}
 	return nil
 }
