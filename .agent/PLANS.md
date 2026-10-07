@@ -97,3 +97,5 @@ not the lifetime of a particular execution.
 - [Fixed Product-agent reconstruction preservation](execplans/product-agent-fixed-slot-custody-20261005.md): repair the existing cold-history provider and exact-slot lifecycle before independently judged Agent1 reconstruction.
 
 - [Davidlich retained software-only start](execplans/davidlich-software-only-retained-start-20261007.md): canonical maintenance preparation; runtime effects held.
+
+- [Davidlich explicit legacy broker retirement](execplans/davidlich-explicit-legacy-broker-stop-20261007.md): existing stop/start compatibility maintenance; runtime effects held.

@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -20,13 +22,30 @@ func TestMain(m *testing.M) {
 		for {
 			time.Sleep(time.Hour)
 		}
-	case "listen":
+	case "listen", "listen-close", "listen-term-drain":
 		path := strings.TrimPrefix(os.Getenv("BROKER_LISTEN"), "unix://")
 		listener, err := net.Listen("unix", path)
 		if err != nil {
 			os.Exit(2)
 		}
 		defer listener.Close()
+		mode := os.Getenv(brokerTestHelperMode)
+		if mode != "listen" {
+			closed := make(chan os.Signal, 1)
+			requested := syscall.SIGUSR1
+			if mode == "listen-term-drain" {
+				requested = syscall.SIGTERM
+			}
+			signal.Notify(closed, requested)
+			go func() {
+				<-closed
+				_ = listener.Close()
+				if mode == "listen-term-drain" {
+					time.Sleep(6 * time.Second)
+					os.Exit(0)
+				}
+			}()
+		}
 
 		_ = http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/_ping" {
@@ -35,7 +54,11 @@ func TestMain(m *testing.M) {
 			}
 			w.Write([]byte("OK"))
 		}))
-
+		if mode != "listen" {
+			for {
+				time.Sleep(time.Hour)
+			}
+		}
 	}
 	os.Exit(m.Run())
 }

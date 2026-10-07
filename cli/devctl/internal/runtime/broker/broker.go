@@ -437,11 +437,12 @@ func startSelected(ctx context.Context, c Config, dryRun, explicit bool) (Status
 }
 
 type stopIntent struct {
-	Generation  int64  `json:"generation"`
-	InProgress  bool   `json:"inProgress"`
-	RecordedPID int    `json:"recordedPID,omitempty"`
-	StateSHA256 string `json:"stateSHA256,omitempty"`
-	PIDSHA256   string `json:"pidSHA256,omitempty"`
+	Generation       int64  `json:"generation"`
+	InProgress       bool   `json:"inProgress"`
+	RecordedPID      int    `json:"recordedPID,omitempty"`
+	StateSHA256      string `json:"stateSHA256,omitempty"`
+	PIDSHA256        string `json:"pidSHA256,omitempty"`
+	LegacyStartTicks uint64 `json:"legacyStartTicks,omitempty"`
 }
 
 func readStopIntent(c Config, g *lifecycleGuard) (*stopIntent, error) {

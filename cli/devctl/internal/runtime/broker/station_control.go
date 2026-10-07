@@ -172,6 +172,9 @@ func requestStationStop(c Config, dryRun bool) (Status, error) {
 		previousIntent.RecordedPID == status.State.PID && previousIntent.StateSHA256 == status.StateDigest && previousIntent.PIDSHA256 != "" {
 		status.PID, status.PIDDigest, status.BindingError = previousIntent.RecordedPID, previousIntent.PIDSHA256, ""
 	}
+	if handled, result, err := stopWitnessedLegacy(c, g, status, dryRun); handled {
+		return result, err
+	}
 	if status.BindingError != "" {
 		return status, fmt.Errorf("refusing foreign broker stop binding: %s", status.BindingError)
 	}
