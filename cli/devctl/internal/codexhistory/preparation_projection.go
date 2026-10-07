@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -299,7 +300,92 @@ func (d *projectionDir) members(prefix string, seen map[string]bool) error {
 	return nil
 }
 
+// These are the native goals schema and successful migration identities used
+// by packaged Codex 0.160. Preparation refuses a different family before
+// retiring an existing empty database; no SQL rows are merged or manufactured.
+func projectionNativeGoals(executable, path string) error {
+	expected := map[string]string{"_sqlx_migrations": `[{"cid":0,"name":"version","type":"BIGINT","notnull":0,"dflt_value":null,"pk":1},{"cid":1,"name":"description","type":"TEXT","notnull":1,"dflt_value":null,"pk":0},{"cid":2,"name":"installed_on","type":"TIMESTAMP","notnull":1,"dflt_value":"CURRENT_TIMESTAMP","pk":0},{"cid":3,"name":"success","type":"BOOLEAN","notnull":1,"dflt_value":null,"pk":0},{"cid":4,"name":"checksum","type":"BLOB","notnull":1,"dflt_value":null,"pk":0},{"cid":5,"name":"execution_time","type":"BIGINT","notnull":1,"dflt_value":null,"pk":0}]`, "thread_goals": `[{"cid":0,"name":"thread_id","type":"TEXT","notnull":1,"dflt_value":null,"pk":1},{"cid":1,"name":"goal_id","type":"TEXT","notnull":1,"dflt_value":null,"pk":0},{"cid":2,"name":"objective","type":"TEXT","notnull":1,"dflt_value":null,"pk":0},{"cid":3,"name":"status","type":"TEXT","notnull":1,"dflt_value":null,"pk":0},{"cid":4,"name":"token_budget","type":"INTEGER","notnull":0,"dflt_value":null,"pk":0},{"cid":5,"name":"tokens_used","type":"INTEGER","notnull":1,"dflt_value":"0","pk":0},{"cid":6,"name":"time_used_seconds","type":"INTEGER","notnull":1,"dflt_value":"0","pk":0},{"cid":7,"name":"created_at_ms","type":"INTEGER","notnull":1,"dflt_value":null,"pk":0},{"cid":8,"name":"updated_at_ms","type":"INTEGER","notnull":1,"dflt_value":null,"pk":0}]`, "thread_goal_continuation_deferrals": `[{"cid":0,"name":"thread_id","type":"TEXT","notnull":1,"dflt_value":null,"pk":1}]`}
+	for table, wantJSON := range expected {
+		actual, err := projectionSQLite(executable, path, "PRAGMA table_info("+table+");")
+		if err != nil {
+			return err
+		}
+		var got, want []map[string]any
+		if json.Unmarshal(actual, &got) != nil || json.Unmarshal([]byte(wantJSON), &want) != nil || !reflect.DeepEqual(got, want) {
+			return errors.New("history projection refuses a non-native goals schema")
+		}
+	}
+	actual, err := projectionSQLite(executable, path, "SELECT version,success,lower(hex(checksum)) AS checksum FROM _sqlx_migrations ORDER BY version;")
+	if err != nil {
+		return err
+	}
+	var got, want []map[string]any
+	if json.Unmarshal(actual, &got) != nil || json.Unmarshal([]byte(`[{"version":1,"success":1,"checksum":"8ce6280244a0b4b39c7c37c7f67aff1670ec963d2401cdf2abcfea9904102db6cd99b7bedf366267791a45eb12f17713"},{"version":2,"success":1,"checksum":"f3ff7de2fd89914820bef371081e885fd17df18a6fbdc432399a83255a8a01aa32fb7eea5e4de21a17bda3da16c49584"}]`), &want) != nil || !reflect.DeepEqual(got, want) {
+		return errors.New("history projection refuses unsupported native goals migrations")
+	}
+	actual, err = projectionSQLite(executable, path, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
+	if err != nil {
+		return err
+	}
+	var tables []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(actual, &tables) != nil || len(tables) != len(expected) {
+		return errors.New("history projection refuses a foreign goals table family")
+	}
+	for _, table := range tables {
+		if _, ok := expected[table.Name]; !ok {
+			return errors.New("history projection refuses a foreign goals table family")
+		}
+	}
+	return projectionQuickCheck(executable, path)
+}
+
+// Native writers may append or checkpoint while a committed no-write replay
+// verifies custody. Inspect regular ownership and only the retained prefix;
+// never require a stable appended suffix, file size or modification time.
+func (d *projectionDir) verifyPrefix(rel string, prefix []byte) error {
+	parent, name, err := d.parent(rel, false)
+	if err != nil {
+		return err
+	}
+	defer parent.f.Close()
+	fd, err := syscall.Openat(int(parent.f.Fd()), name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), name)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < int64(len(prefix)) {
+		return errors.New("committed history member is unsupported")
+	}
+	if err := projectionOwned(f); err != nil {
+		return err
+	}
+	if len(prefix) > 0 {
+		if err := projectionCheckpoint("before-committed-prefix-read"); err != nil {
+			return err
+		}
+		actual := make([]byte, len(prefix))
+		if _, err := io.ReadFull(f, actual); err != nil || !bytes.Equal(actual, prefix) {
+			return errors.New("projected native history lost its original prefix")
+		}
+	}
+	named, err := os.Lstat(parent.path(name))
+	if err != nil || !os.SameFile(info, named) {
+		return errors.New("committed history pathname changed")
+	}
+	return nil
+}
+
 func projectionEmptyGoals(executable, path string) error {
+	if err := projectionNativeGoals(executable, path); err != nil {
+		return err
+	}
 	var tables []struct {
 		Name string `json:"name"`
 	}
@@ -473,11 +559,10 @@ func ProjectPreparationHistory(options SnapshotOptions, binding PreparationProje
 		}
 		journal = existing
 		if journal.Status == "committed" {
-			if _, err := target.read(goal.Path, 128<<20); err != nil {
+			if err := target.verifyPrefix(goal.Path, nil); err != nil {
 				return errors.New("committed native goals family is missing or unsupported")
 			}
-			b, err := target.read(rollout.Path, 128<<20)
-			if err != nil || !bytes.HasPrefix(b, data[rolloutRel]) {
+			if err := target.verifyPrefix(rollout.Path, data[rolloutRel]); err != nil {
 				return errors.New("projected native history lost its original prefix")
 			}
 			if journal.Before != nil {
@@ -524,7 +609,7 @@ func ProjectPreparationHistory(options SnapshotOptions, binding PreparationProje
 		if err := projectionQuickCheck(executable, jdir.externalPath("cold-state.sqlite")); err != nil {
 			return err
 		}
-		if err := projectionQuickCheck(executable, jdir.externalPath("pending-goals.sqlite")); err != nil {
+		if err := projectionNativeGoals(executable, jdir.externalPath("pending-goals.sqlite")); err != nil {
 			return err
 		}
 		var rows []struct {

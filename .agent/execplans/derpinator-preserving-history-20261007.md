@@ -76,3 +76,11 @@ sealed independent review and durable composition before Runtime judgment.
 
 Source repair, publication and new runtime operation are not yet accepted.
 No shared consumer, cold source, credentials or user workspace has been changed.
+
+2026-10-07 review correction: exact packaged 0.160 goals schema and both
+successful migration identities are required for the cold/current family. Tests
+use the real column names/types and reject malformed empty schema/migrations.
+Committed replay verifies only retained prefix and owned regular goal existence;
+healthy append/checkpoint suffix activity does not require another idle boundary.
+Actual declared devkit-agent/local-wsl-devkit-agent kind is preserved by both
+strict projection readers. Exact complete source member set is rechecked.

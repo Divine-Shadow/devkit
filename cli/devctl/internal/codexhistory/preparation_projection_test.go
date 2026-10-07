@@ -35,7 +35,7 @@ func newPreparationFixture(t *testing.T) preparationFixture {
 	writeTestFile(t, rollout, `{"type":"session_meta","payload":{"id":"`+projectionTestThread+`"}}`+"\n"+`{"type":"event","payload":{}}`+"\n")
 	runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "state_5.sqlite"), "CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT,source TEXT,title TEXT); INSERT INTO threads VALUES("+sqlQuote(projectionTestThread)+","+sqlQuote(filepath.Join(f.options.SandboxHome, ".codex", rel))+",'vscode','retained objective');")
 	goals := filepath.Join(f.codexRoot, "goals_1.sqlite")
-	runSQLite(t, f.sqlite, goals, "CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY,id TEXT,objective TEXT,status TEXT,token_usage INTEGER,time_usage_secs INTEGER,created_at INTEGER,updated_at INTEGER); INSERT INTO thread_goals VALUES("+sqlQuote(projectionTestThread)+",'original-goal-id','retained objective','blocked',7,11,101,202); CREATE TABLE thread_goal_continuation_deferrals(thread_id TEXT);")
+	runSQLite(t, f.sqlite, goals, "CREATE TABLE _sqlx_migrations(version BIGINT PRIMARY KEY,description TEXT NOT NULL,installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,success BOOLEAN NOT NULL,checksum BLOB NOT NULL,execution_time BIGINT NOT NULL); CREATE TABLE thread_goals(thread_id TEXT NOT NULL PRIMARY KEY,goal_id TEXT NOT NULL,objective TEXT NOT NULL,status TEXT NOT NULL,token_budget INTEGER,tokens_used INTEGER NOT NULL DEFAULT 0,time_used_seconds INTEGER NOT NULL DEFAULT 0,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL); CREATE TABLE thread_goal_continuation_deferrals(thread_id TEXT NOT NULL PRIMARY KEY); INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES(1,'thread goals',1,X'8CE6280244A0B4B39C7C37C7F67AFF1670EC963D2401CDF2ABCFEA9904102DB6CD99B7BEDF366267791A45EB12F17713',0); INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES(2,'thread goal continuation deferrals',1,X'F3FF7DE2FD89914820BEF371081E885FD17DF18A6FBDC432399A83255A8A01AA32FB7EEA5E4DE21A17BDA3DA16C49584',0);"+" INSERT INTO thread_goals VALUES("+sqlQuote(projectionTestThread)+",'original-goal-id','retained objective','blocked',NULL,7,11,101,202);")
 	result, err := Capture(f.options)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func newPreparationFixture(t *testing.T) preparationFixture {
 			t.Fatal(err)
 		}
 	}
-	runSQLite(t, f.sqlite, goals, "CREATE TABLE _sqlx_migrations(version INTEGER); INSERT INTO _sqlx_migrations VALUES(1); CREATE TABLE thread_goals(thread_id TEXT PRIMARY KEY); CREATE TABLE thread_goal_continuation_deferrals(thread_id TEXT);")
+	runSQLite(t, f.sqlite, goals, "CREATE TABLE _sqlx_migrations(version BIGINT PRIMARY KEY,description TEXT NOT NULL,installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,success BOOLEAN NOT NULL,checksum BLOB NOT NULL,execution_time BIGINT NOT NULL); CREATE TABLE thread_goals(thread_id TEXT NOT NULL PRIMARY KEY,goal_id TEXT NOT NULL,objective TEXT NOT NULL,status TEXT NOT NULL,token_budget INTEGER,tokens_used INTEGER NOT NULL DEFAULT 0,time_used_seconds INTEGER NOT NULL DEFAULT 0,created_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL); CREATE TABLE thread_goal_continuation_deferrals(thread_id TEXT NOT NULL PRIMARY KEY); INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES(1,'thread goals',1,X'8CE6280244A0B4B39C7C37C7F67AFF1670EC963D2401CDF2ABCFEA9904102DB6CD99B7BEDF366267791A45EB12F17713',0); INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES(2,'thread goal continuation deferrals',1,X'F3FF7DE2FD89914820BEF371081E885FD17DF18A6FBDC432399A83255A8A01AA32FB7EEA5E4DE21A17BDA3DA16C49584',0);")
 	p.before = mustProjectionRead(t, goals)
 	p.beforeInfo = mustProjectionStat(t, goals)
 	for _, name := range []string{"state_5.sqlite", "auth.json", "config.toml"} {
@@ -132,7 +132,7 @@ func TestPreparationProjectionPreservesHistoryAndCurrentState(t *testing.T) {
 		t.Fatal(e)
 	}
 	f.assertCommitted(t)
-	b, e := exec.Command(f.sqlite, "-readonly", "-batch", filepath.Join(f.codexRoot, "goals_1.sqlite"), "SELECT id||'|'||token_usage||'|'||time_usage_secs||'|'||created_at||'|'||updated_at FROM thread_goals;").Output()
+	b, e := exec.Command(f.sqlite, "-readonly", "-batch", filepath.Join(f.codexRoot, "goals_1.sqlite"), "SELECT goal_id||'|'||tokens_used||'|'||time_used_seconds||'|'||created_at_ms||'|'||updated_at_ms FROM thread_goals;").Output()
 	if e != nil || string(b) != "original-goal-id|7|11|101|202\n" {
 		t.Fatalf("goal lifetime/accounting changed: %q %v", b, e)
 	}
@@ -187,12 +187,16 @@ func TestPreparationProjectionRecoversDurableTransitions(t *testing.T) {
 }
 
 func TestPreparationProjectionRefusesUnsafeInitialState(t *testing.T) {
-	for _, name := range []string{"nonempty-goals", "nonempty-other-business-table", "sidecar", "live-socket", "rollout-collision", "symlink-goals", "extra-cold-member", "changed-cold-member", "manifest-digest", "partial-binding", "foreign-journal", "unjournaled-stage"} {
+	for _, name := range []string{"nonempty-goals", "nonempty-other-business-table", "sidecar", "live-socket", "rollout-collision", "symlink-goals", "extra-cold-member", "changed-cold-member", "manifest-digest", "partial-binding", "foreign-journal", "unjournaled-stage", "malformed-empty-schema", "migration-drift"} {
 		t.Run(name, func(t *testing.T) {
 			f := newPreparationFixture(t)
 			switch name {
+			case "malformed-empty-schema":
+				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "DROP TABLE thread_goals; CREATE TABLE thread_goals(thread_id TEXT);")
+			case "migration-drift":
+				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "UPDATE _sqlx_migrations SET success=0 WHERE version=2;")
 			case "nonempty-goals":
-				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "INSERT INTO thread_goals VALUES('another-thread');")
+				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "INSERT INTO thread_goals VALUES('another-thread','other-goal','other objective','active',NULL,0,0,10,20);")
 			case "nonempty-other-business-table":
 				runSQLite(t, f.sqlite, filepath.Join(f.codexRoot, "goals_1.sqlite"), "INSERT INTO thread_goal_continuation_deferrals VALUES('another-thread');")
 			case "sidecar":
@@ -271,4 +275,38 @@ func TestPreparationProjectionRecoveryRefusesNewSidecarsAndLiveOwner(t *testing.
 			}
 		})
 	}
+}
+
+func TestPreparationProjectionCommittedReplayAllowsSuffixActivity(t *testing.T) {
+	f := newPreparationFixture(t)
+	if err := ProjectPreparationHistory(f.options, f.binding); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(f.codexRoot, "a1-app.sock"), "healthy synthetic owner")
+	reached := false
+	preparationProjectionCheckpoint = func(point string) error {
+		if point != "before-committed-prefix-read" {
+			return nil
+		}
+		reached = true
+		file, err := os.OpenFile(filepath.Join(f.codexRoot, f.rollout), os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			return err
+		}
+		_, err = file.WriteString(strings.Repeat("ordinary appended suffix\n", 4096))
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
+	t.Cleanup(func() { preparationProjectionCheckpoint = nil })
+	if err := ProjectPreparationHistory(f.options, f.binding); err != nil {
+		t.Fatalf("live append made committed continuation fail: %v", err)
+	}
+	preparationProjectionCheckpoint = nil
+	if !reached {
+		t.Fatal("did not exercise append after the retained member was opened")
+	}
+	f.assertColdAndProtected(t)
 }
