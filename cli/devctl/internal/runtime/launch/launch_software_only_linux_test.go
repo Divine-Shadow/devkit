@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,13 +10,24 @@ import (
 )
 
 func TestPrepareSoftwareOnlyNeverOpensOrChangesOwnedCredentialFixtures(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprint("nested-home-", nested), func(t *testing.T) { testPrepareSoftwareOnlyCredentialFixture(t, nested) })
+	}
+}
+
+func testPrepareSoftwareOnlyCredentialFixture(t *testing.T, nested bool) {
 	storeRoot := withManagementSkillsStoreRoot(t)
 	fixture := writeManagementSkillsFixture(t, storeRoot, "software-only-management-skills", strings.Repeat("a", 40), map[string]string{
 		"fleet-health-hypervisor/SKILL.md": "owned public software fixture\n",
 	})
 	devRoot := filepath.Join(t.TempDir(), "dev")
 	hostHome := filepath.Join(t.TempDir(), "existing-home")
+	if nested {
+		hostHome = filepath.Join(t.TempDir(), "ouroboros-ide", ".devhome-agent1")
+	}
 	p := prepareManagementSkillsFixture(t, fixture, devRoot, hostHome)
+	history := filepath.Join(hostHome, ".codex", "rollouts", "retained-history.fixture")
+	writeTestFile(t, history, "OWNED_RETAINED_HISTORY\n")
 	callerHome := filepath.Join(t.TempDir(), "owned-caller")
 	authSource := filepath.Join(callerHome, "auth.json")
 	authTarget := filepath.Join(hostHome, ".codex", "auth.json")
@@ -46,6 +58,9 @@ func TestPrepareSoftwareOnlyNeverOpensOrChangesOwnedCredentialFixtures(t *testin
 	n, err := syscall.Read(fd, buffer)
 	if n > 0 || (err != nil && err != syscall.EAGAIN) {
 		t.Fatalf("software-only preparation accessed or changed a credential fixture: events=%d err=%v", n, err)
+	}
+	if data, err := os.ReadFile(history); err != nil || string(data) != "OWNED_RETAINED_HISTORY\n" {
+		t.Fatal("retained fixture history changed")
 	}
 	if _, err := os.Stat(filepath.Join(hostHome, ".codex", "management-runtime-skills.json")); err != nil {
 		t.Fatalf("public software did not converge: %v", err)

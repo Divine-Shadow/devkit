@@ -95,3 +95,5 @@ not the lifetime of a particular execution.
 - [Codex 0.160.0 / Sol 6.1 package](execplans/codex-0.160.0-sol-runtime-20261003.md): existing commissioned server update, isolated from broker/observer work.
 
 - [Fixed Product-agent reconstruction preservation](execplans/product-agent-fixed-slot-custody-20261005.md): repair the existing cold-history provider and exact-slot lifecycle before independently judged Agent1 reconstruction.
+
+- [Davidlich retained software-only start](execplans/davidlich-software-only-retained-start-20261007.md): canonical maintenance preparation; runtime effects held.
