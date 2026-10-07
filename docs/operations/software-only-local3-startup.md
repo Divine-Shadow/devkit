@@ -5,11 +5,14 @@ constructor. Normal native preparation also hydrates credentials, including AWS,
 even when seeding is not forced. The user reserves hydration separately.
 
 The existing typed `gui.start-app-server` operation accepts `--software-only`
-only for exact `shadow-throne-local-3`. It preserves the selected source/config,
+for the source inventory-selected standard native dev-all target class, including
+`shadow-throne-local-3`. It preserves the selected source/config,
 native isolation, lifecycle lease, ordinary supported idle drain and all refusal
-gates. It rejects reset/reconstruct/force modes, route overrides and other targets.
+gates. It rejects reset/reconstruct modes, route overrides and unsupported target
+classes. The existing typed force selector can be combined with software-only
+under the same owning leases and supported idle handoff.
 The derived command passes the selector to selected Devctl's native exec, which
-permits only this inventory target's Codex app-server. Its public receipt includes
+permits only the selected native inventory target's Codex app-server. Its public receipt includes
 `software_only_preparation: true`.
 
 Software preparation requires an existing real native home and `.codex` directory.

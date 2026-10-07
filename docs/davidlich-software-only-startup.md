@@ -7,3 +7,11 @@ The owning Fleet controller must admit and forward the typed software-only reque
 This mode reuses PrepareSoftwareOnly, requires the existing real home and Codex directory, skips credential hydration and legacy Codex state migration, and retains normal public configuration, topology, binds, backlinks and existing access. It does not promise zero credential I/O by the subsequently started process; authenticated native execution consumes existing access under its existing authority. Ordinary preparation remains unchanged.
 
 Publication is source-only. Installed controller and target selection, safe consumer handoff and retained-thread execution belong to the owning Runtime institution.
+
+The existing typed software-only mode may now carry the existing force-restart
+selection through the owning controller and station leases. This intentionally
+changes only the former combined-mode refusal; reset/reconstruct, overrides,
+unsupported classes and unleased calls remain refused. The supported idle
+handoff is required before invocation. Source-selected retained history may be
+projected only by the bounded normal preparation contract documented in
+[preserving native preparation](operations/preserving-native-history-preparation.md).
