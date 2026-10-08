@@ -66,6 +66,7 @@
       codexVersion = "0.160.0";
       codexReleaseTag = "rust-v${codexVersion}";
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
+      managedGitSSHConfig = ./nix/managed-git-ssh-config;
       mkDevAllRuntimeBundle =
         { pkgs, pkgsPlaywright }:
         import ./nix/dev-all-runtime-bundle.nix {
@@ -98,6 +99,7 @@
             "-w"
             "-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=${sshExecutable}"
             "-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=${knownHostsFile}"
+            "-X=devkit/cli/devctl/internal/sshauthority.packageManagedGitConfig=${managedGitSSHConfig}"
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
             "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=${sqliteExecutable}"

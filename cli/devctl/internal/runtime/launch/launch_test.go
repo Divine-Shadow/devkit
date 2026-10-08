@@ -52,7 +52,11 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	defer os.Remove(knownHostsPath)
-	testSSHAuthority, err := sshauthority.New(testExecutable, knownHostsPath)
+	managedConfigPath, err := filepath.Abs("../../../../../nix/managed-git-ssh-config")
+	if err != nil {
+		panic(err)
+	}
+	testSSHAuthority, err := sshauthority.NewManaged(testExecutable, knownHostsPath, managedConfigPath)
 	if err != nil {
 		panic(err)
 	}

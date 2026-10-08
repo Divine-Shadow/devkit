@@ -16,20 +16,24 @@ var packageExecutable string
 // It is deliberately not discovered from a caller home or the network.
 var packageKnownHosts string
 
+// packageManagedGitConfig comes from the same immutable source composition.
+var packageManagedGitConfig string
+
 // Authority is the single source-controlled OpenSSH executable and host-key
 // authority.
 // Production code obtains it only through Package. New exists so tests can
 // inject immutable fixture inputs without adding a runtime flag or environment
 // override.
 type Authority struct {
-	executable     string
-	knownHostsFile string
+	executable       string
+	knownHostsFile   string
+	managedGitConfig string
 }
 
 // Package resolves the executable and pinned host keys selected by the Devkit
 // package build.
 func Package() (Authority, error) {
-	return New(packageExecutable, packageKnownHosts)
+	return NewManaged(packageExecutable, packageKnownHosts, packageManagedGitConfig)
 }
 
 // New validates explicitly injected executable and host-key authorities.
@@ -65,6 +69,47 @@ func New(executable, knownHostsFile string) (Authority, error) {
 		return Authority{}, fmt.Errorf("package-owned SSH known-hosts is empty: %s", knownHostsFile)
 	}
 	return Authority{executable: executable, knownHostsFile: knownHostsFile}, nil
+}
+
+// NewManaged binds the immutable config used by the standard native Git class.
+// Tests inject owned public fixtures; production receives only package inputs.
+func NewManaged(executable, knownHostsFile, configPath string) (Authority, error) {
+	a, err := New(executable, knownHostsFile)
+	if err != nil {
+		return Authority{}, err
+	}
+	configPath = strings.TrimSpace(configPath)
+	if !filepath.IsAbs(configPath) {
+		return Authority{}, fmt.Errorf("package-owned managed Git SSH config must be absolute")
+	}
+	configPath = filepath.Clean(configPath)
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		return Authority{}, fmt.Errorf("package-owned managed Git SSH config: %w", err)
+	}
+	if strings.TrimSpace(string(config)) == "" {
+		return Authority{}, fmt.Errorf("package-owned managed Git SSH config is empty")
+	}
+	a.managedGitConfig = configPath
+	return a, nil
+}
+
+// ManagedGitCommand carries the source-owned bindings inside GIT_SSH_COMMAND.
+// Existing env-i/MCP projection forwards that command and GIT_SSH_VARIANT only.
+// Rendering opens no consumer config, identity, or credential directory.
+func (a Authority) ManagedGitCommand(home string) (string, error) {
+	if a.managedGitConfig == "" {
+		return "", fmt.Errorf("package-owned managed Git SSH config is not bound")
+	}
+	if !filepath.IsAbs(home) || home != strings.TrimSpace(home) || strings.ContainsAny(home, "\x00\r\n") {
+		return "", fmt.Errorf("managed Git SSH requires an absolute source-selected home")
+	}
+	command, err := a.Command(a.managedGitConfig)
+	if err != nil {
+		return "", err
+	}
+	return "DEVKIT_MANAGED_GIT_HOME=" + shellQuote(filepath.Clean(home)) +
+		" DEVKIT_MANAGED_GIT_KNOWN_HOSTS=" + shellQuote(a.knownHostsFile) + " " + command, nil
 }
 
 // Executable returns the validated absolute executable path.

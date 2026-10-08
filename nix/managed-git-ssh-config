@@ -1,0 +1,14 @@
+# Managed GitHub policy is selected only for the standard Product native class.
+# The command binds both variables from its immutable plan/SSH authority.
+Host github.com ssh.github.com
+  HostName ssh.github.com
+  Port 443
+  User git
+  IdentityFile "${DEVKIT_MANAGED_GIT_HOME}/.ssh/id_ed25519"
+  IdentityFile "${DEVKIT_MANAGED_GIT_HOME}/.ssh/id_rsa"
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile "${DEVKIT_MANAGED_GIT_KNOWN_HOSTS}"
+Host * !github.com !ssh.github.com
+  Include "${DEVKIT_MANAGED_GIT_HOME}/.ssh/config"

@@ -60,6 +60,13 @@ func testPrepareSoftwareOnlyCredentialFixture(t *testing.T, nested bool) {
 	if _, err := managedRuntimeGitSSHCommand(gitPlan); err != nil {
 		t.Fatalf("software-only Git command: %v", err)
 	}
+	authority, err := resolvePackageSSHAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.ManagedGitCommand(p.Agent.SandboxHome); err != nil {
+		t.Fatal(err)
+	}
 	buffer := make([]byte, 8192)
 	n, err := syscall.Read(fd, buffer)
 	if n > 0 || (err != nil && err != syscall.EAGAIN) {

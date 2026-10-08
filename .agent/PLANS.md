@@ -104,3 +104,5 @@ not the lifetime of a particular execution.
 - [Davidlich explicit legacy broker retirement](execplans/davidlich-explicit-legacy-broker-stop-20261007.md): existing stop/start compatibility maintenance; runtime effects held.
 
 - [Managed native Git transport lifetime](execplans/managed-native-git-egress-lifetime-20261007.md): current owned execution connector without credential hydration or shared config mutation.
+
+- [Standard native GitHub SSH projection](execplans/managed-native-git-home-projection-20261008.md): immutable trust/current-home managed policy without shared SSH mutation; coordinated adoption pending.
