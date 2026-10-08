@@ -73,11 +73,15 @@ func standardManagedGitPlan(p nativeplan.Plan) (bool, error) {
 	sandbox := "/workspaces/dev"
 	repo := workspace + "/ouroboros-ide"
 	homeName := fmt.Sprintf(".devhome-agent%d", index)
+	hostHomeRoot, sandboxHomeRoot := workspace, sandbox
+	if index == 1 {
+		hostHomeRoot, sandboxHomeRoot = repo, sandbox+"/ouroboros-ide"
+	}
 	if index < 1 || p.GUITargetConfig.ExpectedExecutionHost == "" ||
 		p.HostWorkspaceRoot != workspace || p.SandboxWorkspaceRoot != sandbox ||
-		p.Agent.HostWorktree != repo || p.Agent.HostHome != repo+"/"+homeName ||
+		p.Agent.HostWorktree != repo || p.Agent.HostHome != hostHomeRoot+"/"+homeName ||
 		p.Agent.SandboxWorktree != sandbox+"/ouroboros-ide" ||
-		p.Agent.SandboxHome != sandbox+"/ouroboros-ide/"+homeName {
+		p.Agent.SandboxHome != sandboxHomeRoot+"/"+homeName {
 		return false, fmt.Errorf("managed Git SSH policy plan differs from the source-selected standard native geometry")
 	}
 	return true, nil

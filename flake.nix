@@ -160,6 +160,9 @@
             # host fixtures that would prove a different execution path.
             packages="$(go list ./... | grep -v '/integration$' | grep -v '/internal/config$')"
             go test -count=1 $packages
+            # Emit concrete owned SSH stage/cleanup evidence with the same
+            # complete package source; this adds no live/native consumer probe.
+            go test -count=1 -v -run '^TestStandardManagedGit' ./internal/runtime/launch
             go test -run '^$' ./internal/config
             runHook postCheck
           '';

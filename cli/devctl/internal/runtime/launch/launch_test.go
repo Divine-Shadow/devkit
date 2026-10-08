@@ -27,6 +27,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("DEVKIT_OWNED_GIT_PROXY_FIXTURE") == "1" {
+		runOwnedGitProxyHelper()
+		os.Exit(1)
+	}
 	if os.Getenv("DEVKIT_LAUNCH_AGENT_PROXY_HELPER") == "1" {
 		os.Exit(runPostgresEndpointProxyHelper())
 	}

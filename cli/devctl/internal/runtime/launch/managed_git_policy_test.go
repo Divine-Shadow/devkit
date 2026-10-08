@@ -16,22 +16,27 @@ import (
 	"devkit/cli/devctl/internal/sshauthority"
 )
 
-func standardManagedGitFixture(t *testing.T) nativeplan.Plan {
+func standardManagedGitFixture(t *testing.T, index int, kind string) nativeplan.Plan {
 	t.Helper()
 	p := managedGitFixturePlan(t, "/workspaces/dev/ouroboros-ide/.devhome-agent1", filepath.Join(t.TempDir(), "owned-current.sock"))
 	p.Agent.ID.Repo = "ouroboros-ide"
-	p.Agent.ID.Index = 1
-	p.HostWorkspaceRoot = "/home/bayesartre/dev/agent-worktrees/agent1"
+	p.Agent.ID.Index = index
+	p.HostWorkspaceRoot = fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d", index)
 	p.SandboxWorkspaceRoot = "/workspaces/dev"
 	p.Agent.HostWorktree = p.HostWorkspaceRoot + "/ouroboros-ide"
-	p.Agent.HostHome = p.Agent.HostWorktree + "/.devhome-agent1"
+	p.Agent.HostHome = fmt.Sprintf("%s/.devhome-agent%d", p.HostWorkspaceRoot, index)
+	p.Agent.SandboxHome = fmt.Sprintf("/workspaces/dev/.devhome-agent%d", index)
+	if index == 1 {
+		p.Agent.HostHome = p.Agent.HostWorktree + "/.devhome-agent1"
+		p.Agent.SandboxHome = "/workspaces/dev/ouroboros-ide/.devhome-agent1"
+	}
 	p.Agent.SandboxWorktree = "/workspaces/dev/ouroboros-ide"
-	p.GUITargetConfig = &nativeplan.GUITargetConfigProjection{Kind: "local-wsl-devkit-agent", ExpectedExecutionHost: "source-selected-fixture-host"}
+	p.GUITargetConfig = &nativeplan.GUITargetConfigProjection{Kind: kind, ExpectedExecutionHost: "source-selected-fixture-host"}
 	return p
 }
 
 func TestStandardManagedGitPolicySelectionAndRefusals(t *testing.T) {
-	p := standardManagedGitFixture(t)
+	p := standardManagedGitFixture(t, 1, "local-wsl-devkit-agent")
 	command, err := managedRuntimeGitSSHCommand(p)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +57,7 @@ func TestStandardManagedGitPolicySelectionAndRefusals(t *testing.T) {
 	if _, err := managedRuntimeGitSSHCommand(p); err == nil || !strings.Contains(err.Error(), "standard native geometry") {
 		t.Fatalf("accepted mismatched standard home: %v", err)
 	}
-	p = standardManagedGitFixture(t)
+	p = standardManagedGitFixture(t, 1, "local-wsl-devkit-agent")
 	p.GUITargetConfig = nil
 	legacy, err := managedRuntimeGitSSHCommand(p)
 	if err != nil || strings.Contains(legacy, "DEVKIT_MANAGED_GIT_HOME=") {
@@ -233,6 +238,27 @@ func TestStandardManagedGitRealHostKeyAdmissionAndIdentityExpansion(t *testing.T
 				t.Fatal(err)
 			}
 			serverDone := make(chan error, 1)
+			serverCtx, serverCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			joined := false
+			joinServer := func() error {
+				if joined {
+					return nil
+				}
+				select {
+				case err := <-serverDone:
+					joined = true
+					return err
+				case <-time.After(12 * time.Second):
+					return fmt.Errorf("owned server did not terminate and reap")
+				}
+			}
+			t.Cleanup(func() {
+				_ = listener.Close()
+				serverCancel()
+				if err := joinServer(); err != nil {
+					t.Errorf("owned server all-branch cleanup: %v", err)
+				}
+			})
 			go func() {
 				conn, err := listener.Accept()
 				if err != nil {
@@ -241,15 +267,13 @@ func TestStandardManagedGitRealHostKeyAdmissionAndIdentityExpansion(t *testing.T
 				}
 				defer conn.Close()
 				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				server := exec.CommandContext(ctx, sshd, "-i", "-e", "-f", serverConfig)
+				server := exec.CommandContext(serverCtx, sshd, "-i", "-e", "-f", serverConfig)
 				server.Stdin, server.Stdout = conn, conn
 				var log bytes.Buffer
 				server.Stderr = &log
 				err = server.Run()
-				if ctx.Err() != nil {
-					serverDone <- ctx.Err()
+				if serverCtx.Err() != nil {
+					serverDone <- serverCtx.Err()
 					return
 				}
 				if server.ProcessState == nil || !server.ProcessState.Exited() {
@@ -291,18 +315,40 @@ func TestStandardManagedGitRealHostKeyAdmissionAndIdentityExpansion(t *testing.T
 					t.Fatalf("wrong host key was not rejected: %s", out)
 				}
 			}
-			select {
-			case err := <-serverDone:
-				if err != nil {
-					t.Fatalf("owned server cleanup: %v", err)
-				}
-			case <-time.After(12 * time.Second):
-				t.Fatal("owned server did not terminate and reap")
+			if err := joinServer(); err != nil {
+				t.Fatalf("owned server cleanup: %v", err)
 			}
 			t.Logf("real OpenSSH case=%s exact_stage_verified=true authentication_success=false owned_ssh_and_sshd_reaped=true", name)
 		})
 	}
 	if b, err := os.ReadFile(filepath.Join(home, ".ssh", "config")); err != nil || string(b) != cfg {
 		t.Fatal("saved config changed")
+	}
+}
+
+func TestStandardManagedGitPolicyPreservesAllExistingStandardLaneGeometries(t *testing.T) {
+	for _, row := range []struct {
+		index int
+		kind  string
+	}{
+		{1, "local-wsl-devkit-agent"}, {2, "local-wsl-devkit-agent"}, {3, "local-wsl-devkit-agent"},
+		{1, "devkit-agent"}, {2, "devkit-agent"},
+	} {
+		t.Run(fmt.Sprintf("%s-agent%d", row.kind, row.index), func(t *testing.T) {
+			p := standardManagedGitFixture(t, row.index, row.kind)
+			command, err := managedRuntimeGitSSHCommand(p)
+			if err != nil || !strings.Contains(command, "DEVKIT_MANAGED_GIT_HOME="+shellQuote(p.Agent.SandboxHome)) {
+				t.Fatalf("valid standard geometry refused: %v %s", err, command)
+			}
+			p.Agent.SandboxHome += "/changed"
+			if _, err := managedRuntimeGitSSHCommand(p); err == nil {
+				t.Fatal("changed standard geometry admitted")
+			}
+			p = standardManagedGitFixture(t, row.index, row.kind)
+			p.Agent.HostHome += "/changed"
+			if _, err := managedRuntimeGitSSHCommand(p); err == nil {
+				t.Fatal("changed host home admitted")
+			}
+		})
 	}
 }

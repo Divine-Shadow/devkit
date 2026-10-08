@@ -14,7 +14,7 @@ Verify immutable package linkage, source-selected standard geometry and caller r
 - Reproduced old path selection with real OpenSSH 10.0p2. Preserved failed expanded-IdentityFile -G expectation: -G retains the token; connection diagnostics perform expansion.
 - Private real ssh/sshd hostkey experiment: missing old trust refuses before authentication; exact synthetic key matches and reaches intentional authentication refusal; wrong key refuses. Current-home identity paths expand. No network listener, actual account authentication or user credentials.
 - Implemented immutable GitHub policy and inline source-bound home/hostkeys within GIT_SSH_COMMAND, preserving existing two-field launcher/MCP projection. Conditional Include preserves other-host policy but OpenSSH may still parse/open inactive public Includes at execution; construction remains no-access.
-- Added source-owned regression fixtures. Terminal gates and final independent review pending.
+- Added source-owned regression fixtures. Independent review found the first selector wrongly imposed agent1 nested homes on valid agent2/3 lane-root homes; preserved 9ccd as a rejected source subject. Corrected exact existing index-dependent geometry and added Local1/2/3 plus remote1/2 cases. Original gate worker stayed bound to its sealed source and stopped at actual whole-source failure: child proxy cwd made TestMain configuration lookup fail. Corrected helper early startup preserves its EOF/exit behavior without fixture configuration dependence; server cleanup now cancels and joins on all branches. A separate successor owns corrected gates. Terminal successor gates and final review pending.
 
 ## Decisions and remaining boundary
 

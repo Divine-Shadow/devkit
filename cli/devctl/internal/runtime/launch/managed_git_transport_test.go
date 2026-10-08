@@ -145,6 +145,10 @@ func TestManagedRuntimeGitOwnedProxyHelper(t *testing.T) {
 	if os.Getenv("DEVKIT_OWNED_GIT_PROXY_FIXTURE") != "1" {
 		return
 	}
+	runOwnedGitProxyHelper()
+}
+
+func runOwnedGitProxyHelper() {
 	var socket string
 	for i, a := range os.Args {
 		if a == "--socket" && i+1 < len(os.Args) {
