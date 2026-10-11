@@ -178,6 +178,13 @@ kit/scripts/devkit -p dev-all broker status --format json
 kit/scripts/devkit -p dev-all logs --repo ouroboros-ide --tail 50 --format json
 ```
 
+The selected station owner also supplies `broker assess-recovery --format json`
+for a bounded read of its existing recovery predicates. The request accepts no
+caller-selected broker root, PID, unit, policy, witness, or transport. Its
+`classification` is a snapshot, never stop/start permission; the lifecycle
+command revalidates every binding before an effect. Operators must use an
+admitted station route and coordinate every consumer of the shared endpoint.
+
 If brokered OCI commands fail, confirm that `DOCKER_HOST` points at the
 broker socket in `exec`, that the socket exists, and that the requested image is
 allowed by overlay policy.

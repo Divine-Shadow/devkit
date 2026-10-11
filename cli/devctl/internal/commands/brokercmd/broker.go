@@ -26,6 +26,25 @@ func handle(ctx *cmdregistry.Context) error {
 	if len(ctx.Args) == 0 {
 		return fmt.Errorf("Usage: broker start|status|stop [--socket PATH] [--allow-image IMAGE] [--format text|json]")
 	}
+	if ctx.Args[0] == "assess-recovery" {
+		if ctx.Project != "dev-all" || len(ctx.Args) != 3 || ctx.Args[1] != "--format" || ctx.Args[2] != "json" {
+			return fmt.Errorf("broker assess-recovery requires exact dev-all profile and --format json")
+		}
+		parsed, err := parse(ctx)
+		if err != nil {
+			return err
+		}
+		assessment, err := runtimebroker.AssessRecovery(parsed.cfg)
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(assessment)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stdout, string(data))
+		return nil
+	}
 	parsed, err := parse(ctx)
 	if err != nil {
 		return err
