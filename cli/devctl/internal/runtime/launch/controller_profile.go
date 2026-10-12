@@ -114,6 +114,9 @@ type controllerOperationIdentity struct {
 var controllerOperationStoreRoot = "/nix/store"
 
 func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
+	if err := validateControllerServiceOwnerClientPlan(p); err != nil {
+		return err
+	}
 	if strings.TrimSpace(p.ControllerProfile) == "" {
 		return nil
 	}

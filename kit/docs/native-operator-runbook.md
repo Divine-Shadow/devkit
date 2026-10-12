@@ -299,3 +299,28 @@ lease is issued only for the exact broker-created container, its Postgres
 `5432/tcp` binding, and the launcher-held run capability. Removing or replacing
 the container invalidates the lease. This is not a general loopback, TCP, SOCKS,
 or Docker socket forwarding path.
+
+### Fixed Shadow controller-service-owner client projection
+
+The accepted Product service-owner app is supplied by canonical WSL composition.
+Devkit adds its fixed Unix socket and immutable `owner.json` only to
+`dev-workspace` agent1 `shadow-throne-management` with the existing Management
+controller profile. Source2 and other projects receive neither projection.
+The installed NixOS static role selects the existing `bayesartre` peer and
+`root` owner; no caller can choose accounts, paths, units or commands. Missing
+role selection grants nothing; a selected role with absent/invalid socket fails
+closed. The config remains a symlink into the already read-only Nix store so
+the actual Product client can verify its immutable real path.
+
+The owner unit keeps a root-owned, users-group runtime parent (0750) and socket
+(0770), with its journal outside that runtime directory and outside the broker
+store. The consumer receives no host manager bus or writable journal. Its
+Product client verifies the server's kernel peer identity and uses only the
+published fixed protocol. Source publication/package checks are not live
+owner installation, impact admission or a restart receipt.
+
+Broker cold start leaves the independent owner socket alive. An owner-unit
+replacement retires its runtime inode: the normal owning controller/profile
+lifecycle must rebind a fresh consumer rather than treating a retained socket
+bind as live or retrying an uncertain restart with a new key. Pending journal
+reconciliation remains with the accepted Product/Runtime contract.

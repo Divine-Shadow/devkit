@@ -755,6 +755,11 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
 		}
 	}
+	ownerBinds, err := controllerServiceOwnerClientBinds(project, index, repo, controllerProfile)
+	if err != nil {
+		return nil, err
+	}
+	binds = append(binds, ownerBinds...)
 	return binds, nil
 }
 

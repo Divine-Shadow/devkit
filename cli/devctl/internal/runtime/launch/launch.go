@@ -2459,6 +2459,17 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 	_ = addBind("ro", "/etc/group", "/etc/group", false)
 
 	for _, bind := range p.Binds {
+		if bind.Target == nativeplan.ControllerServiceOwnerConfig {
+			// A regular bind would hide the immutable real path required by
+			// the actual Product client. /nix/store is already read-only.
+			resolved, err := nativeplan.ResolveControllerServiceOwnerConfig()
+			if err != nil {
+				return Command{}, err
+			}
+			addDir(filepath.Dir(bind.Target))
+			symlinkArgs = append(symlinkArgs, "--symlink", resolved, bind.Target)
+			continue
+		}
 		if bind.Target == "/nix/store" || bind.Target == "/etc/resolv.conf" {
 			continue
 		}
