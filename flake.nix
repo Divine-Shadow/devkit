@@ -713,6 +713,14 @@
             broker = self.packages.${pkgs.system}.postgres-broker;
             stationObserver = self.packages.${pkgs.system}.station-broker-observer;
           };
+          native-cli-fixed-owner-consequences = import ./nix/checks/native-broker-lifetime.nix {
+            inherit pkgs;
+            devctl = mkProductionDevctl pkgs;
+            broker = self.packages.${pkgs.system}.postgres-broker;
+            stationObserver = self.packages.${pkgs.system}.station-broker-observer;
+            cliConsequences = true;
+            nativeResetConfig = self.packages.${pkgs.system}.native-reset-test-config;
+          };
           management-inspection-cli = mkProductionDevctl pkgs;
           devctl-openssh-executable-authority =
             let

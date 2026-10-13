@@ -68,6 +68,12 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	if err != nil {
 		t.Skip("sqlite3 is supplied by the Nix test closure")
 	}
+	// Match the existing package recipe's third SSH input; keep the source
+	// policy and each fixture's executable/host-key authority unchanged.
+	managedGitConfig, err := filepath.Abs("../../../nix/managed-git-ssh-config")
+	if err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(t.TempDir(), "runtime", "kit", "bin", "devctl")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
@@ -79,9 +85,13 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	linkerFlags := []string{
 		"-X=devkit/cli/devctl/internal/sshauthority.packageExecutable=" + sshExecutable,
 		"-X=devkit/cli/devctl/internal/sshauthority.packageKnownHosts=" + knownHosts,
+		"-X=devkit/cli/devctl/internal/sshauthority.packageManagedGitConfig=" + managedGitConfig,
 		"-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=" + envExecutable,
 		"-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=" + gitExecutable,
 		"-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=" + sqliteExecutable,
+	}
+	if owner := nativeStationFixture(t); owner != nil {
+		linkerFlags = append(linkerFlags, "-X=devkit/cli/devctl/internal/runtime/broker.packageOwnerManifest="+os.Getenv(nativeStationFixtureEnvironment))
 	}
 	// This input exists only in the test binary builder. Production callers
 	// still use the fixed /etc manifest and cannot override it via environment.
@@ -187,6 +197,7 @@ native:
 hooks:
   warm: echo warm-native
 `)
+	bindNativeStationFixture(t, root)
 	return root
 }
 
@@ -787,6 +798,7 @@ func TestRetiredRuntimeNamespaceIsRejectedForNonFlakeProjectDryRun(t *testing.T)
 }
 
 func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
+	requireNativeStationFixture(t)
 	bin := buildDevctlForNativeDefaults(t)
 	bwrapDir := fakeBwrapDir(t)
 	socketRoot, err := os.MkdirTemp("", "dkx-")
@@ -855,6 +867,7 @@ func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 }
 
 func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T) {
+	requireNativeStationFixture(t)
 	bin := buildDevctlForNativeDefaultsWithTags(t, "devkitintegration")
 	root := nativeDefaultsRoot(t)
 	writeNixCodexConfigSource(t, root)
@@ -942,10 +955,12 @@ func TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit(t *testing.T)
 }
 
 func TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata(t *testing.T) {
+	requireNativeStationFixture(t)
 	testNativeTopLevelRelativeMetadata(t, false)
 }
 
 func TestNativeTopLevelSelectedLaneGitReciprocity(t *testing.T) {
+	requireNativeStationFixture(t)
 	testNativeTopLevelRelativeMetadata(t, true)
 }
 
@@ -1331,6 +1346,7 @@ func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
 }
 
 func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.T) {
+	requireNativeStationFixture(t)
 	base, err := os.MkdirTemp("", "dvr-")
 	if err != nil {
 		t.Fatal(err)
@@ -1399,6 +1415,7 @@ native:
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	bindNativeStationFixture(t, root)
 	if err := os.MkdirAll(filepath.Dir(allowlistPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1635,9 +1652,6 @@ fi
 	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent3"))
 	for _, path := range []string{
 		filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git"),
-		brokerSocket,
-		filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
-		filepath.Join(base, ".devkit", "native-broker", "broker.json"),
 	} {
 		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("failed reset left package lifecycle residue %s: %v", path, statErr)
@@ -2320,9 +2334,6 @@ fi
 			filepath.Join(worktreeRoot, ".devkit", "git", "agent2", "ouroboros-ide.git"),
 			filepath.Join(worktreeRoot, ".devkit", "git", "agent3", "ouroboros-ide.git"),
 			filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json"),
-			brokerSocket,
-			filepath.Join(base, ".devkit", "native-broker", "broker.pid"),
-			filepath.Join(base, ".devkit", "native-broker", "broker.json"),
 		} {
 			if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("%s left package lifecycle residue %s: %v", label, path, statErr)
@@ -3031,6 +3042,7 @@ windows:
 }
 
 func TestNativePrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand(t *testing.T) {
+	requireNativeStationFixture(t)
 	base, err := os.MkdirTemp("", "dvc-ssh-chain-")
 	if err != nil {
 		t.Fatal(err)
@@ -3072,6 +3084,7 @@ native:
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	bindNativeStationFixture(t, root)
 	allowlistPath := filepath.Join(root, "kit", "proxy", "allowlist.txt")
 	if err := os.MkdirAll(filepath.Dir(allowlistPath), 0o755); err != nil {
 		t.Fatal(err)

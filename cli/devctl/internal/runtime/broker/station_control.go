@@ -46,6 +46,11 @@ func requestStationStart(ctx context.Context, c Config, dryRun, explicit bool) (
 			g.Close()
 			return status, err
 		}
+		status, err = reconcileMissingPID(c, g, status, dryRun)
+		if err != nil {
+			g.Close()
+			return status, err
+		}
 		if status.BindingError != "" {
 			g.Close()
 			return status, fmt.Errorf("refusing foreign broker binding: %s", status.BindingError)
@@ -109,34 +114,9 @@ func requestStationStart(ctx context.Context, c Config, dryRun, explicit bool) (
 // Query only the fixed unit's nonsecret runtime identity before authorizing
 // its stop job. An active owner without matching retained metadata is refused.
 func fixedStationStopBinding(c Config, status Status) error {
-	ctx, cancel := context.WithTimeout(context.Background(), c.StartTimeout+5*time.Second)
-	defer cancel()
-	uid := strconv.Itoa(os.Getuid())
-	command := exec.CommandContext(ctx, c.Owner.Systemctl, "--user", "--no-pager", "show", "--property=MainPID", "--property=ActiveState", StationOwnerService)
-	command.Env = []string{"PATH=/no-ambient-path", "LC_ALL=C", "XDG_RUNTIME_DIR=/run/user/" + uid, "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + uid + "/bus"}
-	data, err := command.Output()
+	pid, phase, err := fixedStationIdentity(c)
 	if err != nil {
-		return fmt.Errorf("inspect fixed station owner before stop: %w", err)
-	}
-	var pid int
-	var phase string
-	seenPID := false
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "MainPID=") {
-			pid, err = strconv.Atoi(strings.TrimPrefix(line, "MainPID="))
-			if err != nil || pid < 0 || seenPID {
-				return fmt.Errorf("fixed station MainPID is malformed")
-			}
-			seenPID = true
-		} else if strings.HasPrefix(line, "ActiveState=") {
-			if phase != "" {
-				return fmt.Errorf("fixed station state is ambiguous")
-			}
-			phase = strings.TrimPrefix(line, "ActiveState=")
-		}
-	}
-	if !seenPID || phase == "" {
-		return fmt.Errorf("fixed station stop identity is absent")
+		return err
 	}
 	if pid == 0 && (phase == "inactive" || phase == "failed") {
 		return nil
@@ -145,6 +125,39 @@ func fixedStationStopBinding(c Config, status Status) error {
 		return fmt.Errorf("refusing unrecorded or different active station owner")
 	}
 	return nil
+}
+
+func fixedStationIdentity(c Config) (int, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.StartTimeout+5*time.Second)
+	defer cancel()
+	uid := strconv.Itoa(os.Getuid())
+	command := exec.CommandContext(ctx, c.Owner.Systemctl, "--user", "--no-pager", "show", "--property=MainPID", "--property=ActiveState", StationOwnerService)
+	command.Env = []string{"PATH=/no-ambient-path", "LC_ALL=C", "XDG_RUNTIME_DIR=/run/user/" + uid, "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/" + uid + "/bus"}
+	data, err := command.Output()
+	if err != nil {
+		return 0, "", fmt.Errorf("inspect fixed station owner: %w", err)
+	}
+	var pid int
+	var phase string
+	seenPID := false
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MainPID=") {
+			pid, err = strconv.Atoi(strings.TrimPrefix(line, "MainPID="))
+			if err != nil || pid < 0 || seenPID {
+				return 0, "", fmt.Errorf("fixed station MainPID is malformed")
+			}
+			seenPID = true
+		} else if strings.HasPrefix(line, "ActiveState=") {
+			if phase != "" {
+				return 0, "", fmt.Errorf("fixed station state is ambiguous")
+			}
+			phase = strings.TrimPrefix(line, "ActiveState=")
+		}
+	}
+	if !seenPID || phase == "" {
+		return 0, "", fmt.Errorf("fixed station identity is absent")
+	}
+	return pid, phase, nil
 }
 
 func requestStationStop(c Config, dryRun bool) (Status, error) {
@@ -171,6 +184,10 @@ func requestStationStop(c Config, dryRun bool) (Status, error) {
 		status.State != nil && status.BindingError == "broker PID and state bindings disagree" &&
 		previousIntent.RecordedPID == status.State.PID && previousIntent.StateSHA256 == status.StateDigest && previousIntent.PIDSHA256 != "" {
 		status.PID, status.PIDDigest, status.BindingError = previousIntent.RecordedPID, previousIntent.PIDSHA256, ""
+	}
+	status, err = reconcileMissingPID(c, g, status, dryRun)
+	if err != nil {
+		return status, err
 	}
 	if handled, result, err := stopWitnessedLegacy(c, g, status, dryRun); handled {
 		return result, err

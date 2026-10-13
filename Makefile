@@ -48,14 +48,10 @@ ci-cheap: build-cli
 	@kit/scripts/nix-overlay-runtime-guard
 
 native-reset-custody-gate:
-	@fixture="$$($(NIX) build --no-link --print-out-paths --output-lock-file /dev/null '.#native-reset-test-config')"; \
-	  log="$$(mktemp)"; \
-	  trap 'rm -f "$$log"' EXIT; \
-	  if ! (cd cli/devctl && DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE="$$fixture" go test -count=1 -v ./integration -run '^TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority$$') >"$$log" 2>&1; then \
-	    cat "$$log"; exit 1; \
-	  fi; \
-	  cat "$$log"; \
-	  grep -F -- '--- PASS: TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority' "$$log" >/dev/null
+	@set -eu; system="$$($(NIX) eval --impure --raw --expr builtins.currentSystem)"; \
+	  fixture="$$($(NIX) build --no-link --print-out-paths --output-lock-file /dev/null ".#checks.$$system.native-cli-fixed-owner-consequences")"; \
+	  cat "$$fixture/native-cli-consequences.log"; \
+	  grep -F -- '--- PASS: TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority' "$$fixture/native-cli-consequences.log" >/dev/null
 
 devctl-overlay-runtime-authority:
 	@echo "== Immutable devctl overlay runtime authority =="

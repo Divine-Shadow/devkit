@@ -486,6 +486,10 @@ func startLocal(ctx context.Context, c Config, dryRun, explicit bool) (Status, e
 	if intent != nil && (!explicit || intent.InProgress) {
 		return status, fmt.Errorf("shared broker owner is deliberately stopped; automatic acquisition is inhibited")
 	}
+	status, err = reconcileMissingPID(c, g, status, dryRun)
+	if err != nil {
+		return status, err
+	}
 	if status.BindingError != "" {
 		return status, fmt.Errorf("refusing foreign broker binding: %s", status.BindingError)
 	}
@@ -676,6 +680,10 @@ func stopLocal(c Config, dryRun bool) (Status, error) {
 	}
 	defer g.Close()
 	status, err := inspectLocked(c, g)
+	if err != nil {
+		return status, err
+	}
+	status, err = reconcileMissingPID(c, g, status, dryRun)
 	if err != nil {
 		return status, err
 	}
