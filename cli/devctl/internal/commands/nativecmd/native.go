@@ -2705,31 +2705,7 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	report := runReadinessReportPrepared(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), runtimeChecks, repoChecks, prepare)
 	switch parsed.format {
 	case "", "json":
-		data, err := json.MarshalIndent(struct {
-			PreparationPhase  string            `json:"preparation_phase,omitempty"`
-			ProviderHydration string            `json:"provider_hydration,omitempty"`
-			ProviderReadiness string            `json:"provider_readiness,omitempty"`
-			ReadinessMode     string            `json:"readiness_mode"`
-			Status            string            `json:"status"`
-			RuntimeReady      bool              `json:"runtime_ready"`
-			RepoReady         bool              `json:"repo_ready"`
-			CapacityAvailable bool              `json:"capacity_available"`
-			Action            string            `json:"action,omitempty"`
-			FailedChecks      []readiness.Check `json:"failed_checks,omitempty"`
-			Checks            []readiness.Check `json:"checks"`
-		}{
-			PreparationPhase:  parsed.preparationPhase,
-			ProviderHydration: terraformToolsProviderHydration(parsed.preparationPhase),
-			ProviderReadiness: terraformToolsProviderReadiness(parsed.preparationPhase),
-			ReadinessMode:     parsed.readinessMode,
-			Status:            terraformToolsReadinessStatus(parsed.preparationPhase, report.RuntimeReady(), report.Status()),
-			RuntimeReady:      report.RuntimeReady(),
-			RepoReady:         report.RepoReady() && parsed.preparationPhase == "",
-			CapacityAvailable: report.CapacityAvailable() && parsed.preparationPhase == "",
-			Action:            report.Action(),
-			FailedChecks:      report.FailedChecks(),
-			Checks:            report.Checks,
-		}, "", "  ")
+		data, err := json.MarshalIndent(nativeReadinessEvidenceFor(parsed.preparationPhase, parsed.readinessMode, report), "", "  ")
 		if err != nil {
 			return err
 		}
@@ -2935,9 +2911,17 @@ func runReadinessReport(p nativeplan.Plan, brokerCfg runtimebroker.Config, runti
 	return runReadinessReportPrepared(p, brokerCfg, runtimeChecks, repoChecks, launch.Prepare)
 }
 
-func runReadinessReportPrepared(p nativeplan.Plan, brokerCfg runtimebroker.Config, runtimeChecks []runtimeCheck, repoChecks []repoCheck, prepare func(nativeplan.Plan) error) (report readiness.Report) {
+func runReadinessReportPrepared(p nativeplan.Plan, brokerCfg runtimebroker.Config, runtimeChecks []runtimeCheck, repoChecks []repoCheck, prepare func(nativeplan.Plan) error) readiness.Report {
+	return runReadinessReportPreparedWith(p, brokerCfg, runtimeChecks, repoChecks, prepare, withManagedRuntimeEndpoints, runSandboxReadinessChecks)
+}
+
+// Private function parameters permit non-secret report-path controls; production
+// always supplies the existing namespace/broker/check executors above.
+func runReadinessReportPreparedWith(p nativeplan.Plan, brokerCfg runtimebroker.Config, runtimeChecks []runtimeCheck, repoChecks []repoCheck, prepare func(nativeplan.Plan) error,
+	endpoints func(nativeplan.Plan, runtimebroker.Config, bool, func(nativeplan.Plan) error) error,
+	runChecks func(nativeplan.Plan, []sandboxReadinessCheck) ([]sandboxReadinessResult, error)) (report readiness.Report) {
 	ready := false
-	err := withManagedRuntimeEndpoints(p, brokerCfg, false, func(p nativeplan.Plan) error {
+	err := endpoints(p, brokerCfg, false, func(p nativeplan.Plan) error {
 		if err := prepare(p); err != nil {
 			report.AddRuntime("prepare-state", false, err.Error())
 			return nil
@@ -2982,7 +2966,7 @@ func runReadinessReportPrepared(p nativeplan.Plan, brokerCfg runtimebroker.Confi
 			}
 			checks = append(checks, sandboxReadinessCheck{Phase: readiness.PhaseRepo, Name: check.Name, Command: check.Command})
 		}
-		results, err := runSandboxReadinessChecks(p, checks)
+		results, err := runChecks(p, checks)
 		if err != nil {
 			report.AddRuntime("sandbox-command", false, err.Error())
 			return nil

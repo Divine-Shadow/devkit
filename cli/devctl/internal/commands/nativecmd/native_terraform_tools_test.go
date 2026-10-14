@@ -1,9 +1,12 @@
 package nativecmd
 
 import (
+	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/runtime/agent"
+	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -166,5 +169,47 @@ func TestTerraformToolsTopExecParserPropagation(t *testing.T) {
 	}
 	if err := validateTerraformToolsAppServerCommand(terraformToolsPlan(), parsed.command, parsed.command[2]); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTerraformToolsStartupVerificationReportConsequences(t *testing.T) {
+	// Execute the real report composition with non-secret source-check commands.
+	// Namespace/broker startup and preparation are separate real fixture controls.
+	endpoints := func(p nativeplan.Plan, _ runtimebroker.Config, _ bool, run func(nativeplan.Plan) error) error {
+		return run(p)
+	}
+	prepared := 0
+	prepare := func(nativeplan.Plan) error { prepared++; return nil }
+	runChecks := func(_ nativeplan.Plan, checks []sandboxReadinessCheck) ([]sandboxReadinessResult, error) {
+		results := []sandboxReadinessResult{}
+		for _, check := range checks {
+			ok := true
+			detail := ""
+			if check.Name == "source-fixed-tool" {
+				output, err := exec.Command("sh", "-c", check.Command).CombinedOutput()
+				ok = err == nil
+				detail = string(output)
+			}
+			results = append(results, sandboxReadinessResult{Phase: check.Phase, Name: check.Name, OK: ok, Detail: detail})
+		}
+		return results, nil
+	}
+	for _, command := range []string{"exit 7", "test 1 -eq 1"} {
+		report := runReadinessReportPreparedWith(terraformToolsPlan(), runtimebroker.Config{}, []runtimeCheck{{Name: "source-fixed-tool", Command: command}}, nil, prepare, endpoints, runChecks)
+		evidence := nativeReadinessEvidenceFor(terraformToolsPreparationPhase, config.ReadinessModeRuntimeOnly, report)
+		if evidence.RuntimeReady != (command != "exit 7") || evidence.RepoReady || evidence.CapacityAvailable || evidence.ProviderReadiness != "unassessed" || evidence.ProviderHydration != "deferred" {
+			t.Fatalf("tools verification overstated readiness %#v", evidence)
+		}
+		if evidence.RuntimeReady && evidence.Status != "tools-ready" {
+			t.Fatalf("tools success labelled full-ready %#v", evidence)
+		}
+	}
+	if prepared != 2 {
+		t.Fatalf("phase preparation callback lost or duplicated: %d", prepared)
+	}
+	// Default preparation still refuses this non-existent real host/worktree.
+	report := runReadinessReportPreparedWith(terraformToolsPlan(), runtimebroker.Config{}, nil, nil, launch.Prepare, endpoints, runChecks)
+	if report.RuntimeReady() {
+		t.Fatal("default preparation stopped enforcing custody")
 	}
 }

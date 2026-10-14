@@ -5,6 +5,7 @@ import (
 	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/runtime/readiness"
 	wtx "devkit/cli/devctl/internal/worktrees"
 	"fmt"
 	"os"
@@ -154,4 +155,22 @@ func validateTerraformToolsArguments(args []string) error {
 		return fmt.Errorf("Terraform tools exec requires exact native command separator")
 	}
 	return nil
+}
+
+type nativeReadinessEvidence struct {
+	PreparationPhase  string            `json:"preparation_phase,omitempty"`
+	ProviderHydration string            `json:"provider_hydration,omitempty"`
+	ProviderReadiness string            `json:"provider_readiness,omitempty"`
+	ReadinessMode     string            `json:"readiness_mode"`
+	Status            string            `json:"status"`
+	RuntimeReady      bool              `json:"runtime_ready"`
+	RepoReady         bool              `json:"repo_ready"`
+	CapacityAvailable bool              `json:"capacity_available"`
+	Action            string            `json:"action,omitempty"`
+	FailedChecks      []readiness.Check `json:"failed_checks,omitempty"`
+	Checks            []readiness.Check `json:"checks"`
+}
+
+func nativeReadinessEvidenceFor(phase, mode string, report readiness.Report) nativeReadinessEvidence {
+	return nativeReadinessEvidence{PreparationPhase: phase, ProviderHydration: terraformToolsProviderHydration(phase), ProviderReadiness: terraformToolsProviderReadiness(phase), ReadinessMode: mode, Status: terraformToolsReadinessStatus(phase, report.RuntimeReady(), report.Status()), RuntimeReady: report.RuntimeReady(), RepoReady: phase == "" && report.RepoReady(), CapacityAvailable: phase == "" && report.CapacityAvailable(), Action: report.Action(), FailedChecks: report.FailedChecks(), Checks: report.Checks}
 }
