@@ -2208,6 +2208,9 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 
 func handleShell(ctx *cmdregistry.Context) error {
 	for _, arg := range ctx.Args {
+		if arg == "--" {
+			break
+		}
 		if arg == "--preparation-phase" {
 			return fmt.Errorf("Terraform tools phase is not a shell mode")
 		}
