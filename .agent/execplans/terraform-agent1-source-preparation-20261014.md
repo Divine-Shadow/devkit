@@ -76,3 +76,24 @@ changed-input startup/hydration. The independent597 governance/CI prerequisite
 supply continues separately; this repair imposes no whole-Terraform gate.
 
 Root2874 bounded TF1 tools phase: full provider preparation remains the default. The typed `tf1-tools-provider-deferred` startup retains source-selected Git/Codex/isolation/broker controls, defers AWS/provider projection, and reports provider readiness unassessed. Actual immutable qualification, independent review, publication and Runtime tools startup remain separate acceptance boundaries.
+
+
+## Root2918: exact TF1 required-bind materialization
+
+### problem
+Actual installed235/b3 tools startup op-e2ba4f4ddd07f045ef3a688f2fd246d7 failed native preparation2 on the lane-local public governance env bind; image/reconnection succeeded0. Planning requires three lane bindings, while the existing materializer accepts only Product.
+
+### options and selection_rationale
+Extend the existing materializer to exact TF1 with the native planner's existing isolated-lane validation before mutation. Retain Product behavior and all source/destination/mode/required-binding guards; copy only two public support projections and create private independent state. Reject optional/broad binds, manual Runtime copies, Nix activation expansion and provider/Auth changes. This preserves correctness, measurable consequences, isolation and truthful source/runtime boundaries before delivery speed. Root2918 authenticated dot/current authorizes exactly four existing Devkit and two WSL leaves; no new user approval or Fleet source change.
+
+### safety_checks and verification
+Same final non-secret tests derive bindings from actual BuildDevAll and run preparation: oldb3 must compile and fail on missing required lane env; corrected source must supply exact bytes/modes/private state and retain launcher bindings. Missing source, source/destination/file/state symlink, invalid state and foreign projection controls must fail. Existing full provider, Git/config and required-bind controls remain. Independent final review, complete15 Devkit and53 WSL checks, normal source publication/readback and shadow-throne direct/declared Colmena complete closure equality remain required. GovCI597/SBTFA/TF784/Fleet81c remain unchanged. Coordinate truly heavy work with Product. No Runtime effect by Source.
+
+### rollback_plan and decision_scope
+Ordinary forward source revert/pin and complete canonical supply if the repair fails its gates; Runtime alone owns installed rollback and changed-input selection/startup. Preserve235 complete public originals and actual terminal operation records. This is existing launch-institution composition repair, not a new provider, security or governance capability. Runtime tools startup and authenticated hydration remain acceptance debt.
+
+### progress
+- [x] Actual original Runtime courier independently verified and causal review received.
+- [x] Root2918 actual dot/current verification and exact-message binding; clean fetched b3/235 dedicated writers.
+- [x] Guarded materializer correction and actual-plan non-secret consequence tests written, unaccepted.
+- [ ] Independent final source/test review, old/new actual controls, native15/53, canonical immutable producer/publication and complete receiving courier.

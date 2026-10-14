@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"devkit/cli/devctl/internal/devkitpaths"
 	"devkit/cli/devctl/internal/gitauthority"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
@@ -322,10 +323,60 @@ func prepare(p nativeplan.Plan, softwareOnly, terraformTools bool) error {
 	return nil
 }
 
+// validateTerraformRuntimeSupportPlan reuses the native planner's exact TF1
+// isolated-lane validator before projecting public support. The normal tools
+// entrypoint retains its additional immutable target/config/host admission.
+func validateTerraformRuntimeSupportPlan(p nativeplan.Plan) error {
+	if !filepath.IsAbs(p.HostRuntimeSupportRoot) || filepath.Clean(p.HostRuntimeSupportRoot) != p.HostRuntimeSupportRoot || filepath.Base(p.HostRuntimeSupportRoot) != ".devkit" {
+		return fmt.Errorf("Terraform runtime support requires the declared central support root")
+	}
+	devRoot := filepath.Dir(p.HostRuntimeSupportRoot)
+	expected, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:    devkitpaths.Paths{Root: p.DevkitHostRoot, RuntimeAuthorityRoot: p.RuntimeAuthorityRoot},
+		HostRoot: devRoot, Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 1,
+		WorktreeRoot:  filepath.Join(devRoot, "control-plane-worktrees"),
+		StateRoot:     filepath.Join(devRoot, ".devkit", "native-agents"),
+		WorkspaceRoot: p.HostWorkspaceRoot, IsolationProfile: p.IsolationProfile,
+		EgressAllowlist: p.Proxy.AllowlistPath,
+	})
+	if err != nil {
+		return fmt.Errorf("Terraform runtime support plan: %w", err)
+	}
+	if p.IsolationProfile != nativeplan.IsolationProfileWorkspaceEgress || p.Agent != expected.Agent ||
+		p.HostWorktreeRoot != expected.HostWorktreeRoot || p.HostStateRoot != expected.HostStateRoot ||
+		p.SandboxWorkspaceRoot != expected.SandboxWorkspaceRoot || p.HostRuntimeSupportRoot != expected.HostRuntimeSupportRoot {
+		return fmt.Errorf("Terraform runtime support requires exact declared TF1 projection")
+	}
+	for _, wanted := range expected.Binds {
+		switch wanted.Target {
+		case "/workspaces/dev/.devkit/ouro8-governance-env.sh", "/workspaces/dev/.devkit/ouro8-governance-repo-env.json", "/workspaces/dev/.devkit/governance-control-plane":
+			matches := 0
+			for _, actual := range p.Binds {
+				if actual.Target == wanted.Target {
+					matches++
+					if actual != wanted {
+						return fmt.Errorf("Terraform runtime support requires exact required bind %s", wanted.Target)
+					}
+				}
+			}
+			if matches != 1 {
+				return fmt.Errorf("Terraform runtime support requires one declared bind %s", wanted.Target)
+			}
+		}
+	}
+	return nil
+}
+
 func ensureIsolatedProductRuntimeSupport(p nativeplan.Plan) error {
-	if p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" ||
-		strings.TrimSpace(p.HostWorkspaceRoot) == "" {
+	product := p.Agent.ID.Project == "dev-all" && p.Agent.ID.Repo == "ouroboros-ide"
+	terraform := p.Agent.ID.Project == "ouroboros-terraform" && p.Agent.ID.Repo == "ouroboros-terraform" && p.Agent.ID.Index == 1
+	if (!product && !terraform) || strings.TrimSpace(p.HostWorkspaceRoot) == "" {
 		return nil
+	}
+	if terraform {
+		if err := validateTerraformRuntimeSupportPlan(p); err != nil {
+			return err
+		}
 	}
 	sourceRoot := filepath.Clean(strings.TrimSpace(p.HostRuntimeSupportRoot))
 	workspaceRoot := filepath.Clean(strings.TrimSpace(p.HostWorkspaceRoot))

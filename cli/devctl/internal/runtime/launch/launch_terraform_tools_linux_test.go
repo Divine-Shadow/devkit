@@ -1,6 +1,7 @@
 package launch
 
 import (
+	"devkit/cli/devctl/internal/devkitpaths"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"os"
 	"os/exec"
@@ -89,5 +90,219 @@ func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
 	p.Agent.HostWorktree = filepath.Join(t.TempDir(), "missing")
 	if err := prepare(p, false, true); err == nil {
 		t.Fatal("tools phase bypassed worktree custody")
+	}
+}
+
+// Derive the missing bindings from the actual native TF1 planner, then run the
+// actual preparation primitive in a non-secret temporary namespace. Only the
+// unrelated external service binds are omitted from this fixture; their normal
+// immutable checks and public target/host admission remain separate controls.
+func terraformRuntimeSupportFixture(t *testing.T) nativeplan.Plan {
+	t.Helper()
+	withProductGovernanceEnvironmentFixture(t)
+	store := withManagementSkillsStoreRoot(t)
+	fixture := writeManagementSkillsFixture(t, store, "terraform-runtime-support", strings.Repeat("a", 40), map[string]string{"fleet-health-hypervisor/SKILL.md": "public fixture\n"})
+	devRoot := filepath.Join(t.TempDir(), "dev")
+	prepareManagementSkillsFixture(t, fixture, devRoot, filepath.Join(t.TempDir(), "unused-home"))
+	workspace := filepath.Join(devRoot, "control-plane-worktrees", "terraform-ouro-1")
+	worktree := filepath.Join(workspace, "ouroboros-terraform")
+	initTestGitWorktree(t, worktree)
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime")
+	runtimeHelper := filepath.Join(runtimeRoot, "kit", "bin", "devctl")
+	writeTestFile(t, runtimeHelper, "#!/bin/sh\nexit 99\n")
+	if err := os.Chmod(runtimeHelper, 0700); err != nil {
+		t.Fatal(err)
+	}
+	p, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{
+		Paths:    devkitpaths.Paths{Root: filepath.Join(devRoot, "devkit"), RuntimeAuthorityRoot: runtimeRoot},
+		HostRoot: devRoot, Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 1,
+		WorktreeRoot: filepath.Join(devRoot, "control-plane-worktrees"), WorkspaceRoot: workspace,
+		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(runtimeRoot, "allowlist.txt"),
+		RuntimeLauncher:  runtimeLauncherFixture(t), BubblewrapBinary: runtimeLauncherFixture(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binds := []nativeplan.Bind{}
+	for _, bind := range p.Binds {
+		if strings.HasPrefix(bind.Target, "/workspaces/dev/.devkit/") || bind.Target == nativeplan.WorkspaceProductGovernanceEnvTarget {
+			binds = append(binds, bind)
+		}
+	}
+	p.Binds = binds
+	if len(binds) != 4 {
+		t.Fatalf("actual TF1 governance bind count = %d", len(binds))
+	}
+	for name, content := range map[string]string{
+		"ouro8-governance-env.sh":        "export DEVKIT_GOVERNANCE_REPO_PATHS='ouroboros-terraform=/workspaces/dev/ouroboros-terraform'\n",
+		"ouro8-governance-repo-env.json": "{\"repository\":\"ouroboros-terraform\"}\n",
+	} {
+		writeTestFile(t, filepath.Join(p.HostRuntimeSupportRoot, name), content)
+	}
+	writeTestFile(t, filepath.Join(p.HostRuntimeSupportRoot, "governance-control-plane", "central-state"), "must not project mutable state\n")
+	return p
+}
+
+func TestTerraformActualPlanPreparationMaterializesRequiredSupport(t *testing.T) {
+	p := terraformRuntimeSupportFixture(t)
+	centralBefore := map[string]string{}
+	for _, name := range []string{"ouro8-governance-env.sh", "ouro8-governance-repo-env.json"} {
+		centralBefore[name] = readTestFile(t, filepath.Join(p.HostRuntimeSupportRoot, name))
+	}
+	sibling := filepath.Join(filepath.Dir(p.HostWorkspaceRoot), "agent2", ".devkit", "sibling-marker")
+	writeTestFile(t, sibling, "preserved sibling\n")
+	before, err := os.Stat(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepare(p, false, true); err != nil {
+		t.Fatalf("actual TF1 plan preparation must materialize required lane binds: %v", err)
+	}
+	for _, bind := range p.Binds {
+		if strings.HasPrefix(bind.Target, "/workspaces/dev/.devkit/") {
+			if !bind.Required || bind.Source != filepath.Join(p.HostWorkspaceRoot, ".devkit", filepath.Base(bind.Target)) {
+				t.Fatalf("foreign/optional TF1 bind %#v", bind)
+			}
+			info, err := os.Stat(bind.Source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.IsDir() {
+				if info.Mode().Perm() != 0700 || bind.Mode != "rw" {
+					t.Fatalf("state bind %#v mode %v", bind, info.Mode())
+				}
+				if entries, err := os.ReadDir(bind.Source); err != nil || len(entries) != 0 {
+					t.Fatalf("shared mutable state copied: %v %v", entries, err)
+				}
+			} else {
+				name := filepath.Base(bind.Source)
+				if info.Mode().Perm() != 0644 || bind.Mode != "ro" || readTestFile(t, bind.Source) != centralBefore[name] {
+					t.Fatalf("public projection mismatch: %#v %v", bind, info.Mode())
+				}
+				if readTestFile(t, filepath.Join(p.HostRuntimeSupportRoot, name)) != centralBefore[name] {
+					t.Fatal("central support changed")
+				}
+			}
+		}
+	}
+	if info, err := os.Stat(filepath.Join(p.HostWorkspaceRoot, ".devkit")); err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("lane support mode: %v %v", info, err)
+	}
+	after, err := os.Stat(sibling)
+	if err != nil || !os.SameFile(before, after) || readTestFile(t, sibling) != "preserved sibling\n" {
+		t.Fatal("sibling custody changed")
+	}
+	command, err := BuildBubblewrap(p, []string{"codex", "app-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Join(command.Args, " ")
+	for _, bind := range p.Binds {
+		flag := "--ro-bind"
+		if bind.Mode == "rw" {
+			flag = "--bind"
+		}
+		if !strings.Contains(argv, flag+" "+bind.Source+" "+bind.Target) {
+			t.Fatalf("launcher omitted actual required bind %#v: %s", bind, argv)
+		}
+	}
+	if strings.Contains(argv, p.HostRuntimeSupportRoot+" /workspaces/dev/.devkit") {
+		t.Fatal("launcher broadened shared support bind")
+	}
+	missing := p
+	missing.Binds = append(append([]nativeplan.Bind{}, p.Binds...), nativeplan.Bind{Source: filepath.Join(p.HostWorkspaceRoot, "missing-mandatory"), Target: "/required-test", Mode: "ro", Required: true})
+	if err := prepare(missing, false, true); err == nil || !strings.Contains(err.Error(), "required bind source") {
+		t.Fatalf("mandatory bind relaxed: %v", err)
+	}
+}
+
+func TestTerraformSupportMaterializationRetainsSourceAndDestinationGuards(t *testing.T) {
+	for _, kind := range []string{"missing-source", "source-symlink", "destination-symlink", "file-symlink", "state-symlink", "state-file"} {
+		t.Run(kind, func(t *testing.T) {
+			p := terraformRuntimeSupportFixture(t)
+			target := filepath.Join(p.HostWorkspaceRoot, ".devkit")
+			source := filepath.Join(p.HostRuntimeSupportRoot, "ouro8-governance-env.sh")
+			switch kind {
+			case "missing-source":
+				if err := os.Remove(source); err != nil {
+					t.Fatal(err)
+				}
+			case "source-symlink":
+				if err := os.Remove(source); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(p.HostRuntimeSupportRoot, "ouro8-governance-repo-env.json"), source); err != nil {
+					t.Fatal(err)
+				}
+			case "destination-symlink":
+				if err := os.Symlink(t.TempDir(), target); err != nil {
+					t.Fatal(err)
+				}
+			case "file-symlink":
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(source, filepath.Join(target, "ouro8-governance-env.sh")); err != nil {
+					t.Fatal(err)
+				}
+			case "state-symlink":
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(t.TempDir(), filepath.Join(target, "governance-control-plane")); err != nil {
+					t.Fatal(err)
+				}
+			case "state-file":
+				writeTestFile(t, filepath.Join(target, "governance-control-plane"), "not a directory\n")
+			}
+			if err := prepare(p, false, true); err == nil {
+				t.Fatalf("%s accepted", kind)
+			}
+		})
+	}
+}
+
+func TestTerraformSupportMaterializationRejectsForeignProjectionBeforeMutation(t *testing.T) {
+	for _, kind := range []string{"project", "repo", "index", "lane", "home", "state", "sandbox", "isolation", "source-root", "optional-bind", "foreign-bind", "duplicate-bind"} {
+		t.Run(kind, func(t *testing.T) {
+			p := terraformRuntimeSupportFixture(t)
+			target := filepath.Join(p.HostWorkspaceRoot, ".devkit")
+			switch kind {
+			case "project":
+				p.Agent.ID.Project = "foreign"
+			case "repo":
+				p.Agent.ID.Repo = "foreign"
+			case "index":
+				p.Agent.ID.Index = 2
+			case "lane":
+				p.HostWorkspaceRoot = filepath.Join(filepath.Dir(p.HostWorkspaceRoot), "terraform-ouro-2")
+			case "home":
+				p.Agent.HostHome = t.TempDir()
+			case "state":
+				p.Agent.StateRoot = t.TempDir()
+			case "sandbox":
+				p.Agent.SandboxWorktree = "/foreign"
+			case "isolation":
+				p.IsolationProfile = ""
+			case "source-root":
+				p.HostRuntimeSupportRoot = t.TempDir()
+			case "optional-bind":
+				p.Binds[0].Required = false
+			case "foreign-bind":
+				p.Binds[0].Source = filepath.Join(t.TempDir(), "foreign")
+			case "duplicate-bind":
+				p.Binds = append(p.Binds, p.Binds[0])
+			}
+			err := ensureIsolatedProductRuntimeSupport(p)
+			if kind != "project" && kind != "repo" && kind != "index" && err == nil {
+				t.Fatalf("foreign %s accepted", kind)
+			}
+			for _, root := range []string{target, filepath.Join(p.HostWorkspaceRoot, ".devkit")} {
+				if _, err := os.Lstat(root); !os.IsNotExist(err) {
+					t.Fatalf("%s materialized before rejection: %s %v", kind, root, err)
+				}
+			}
+		})
 	}
 }
