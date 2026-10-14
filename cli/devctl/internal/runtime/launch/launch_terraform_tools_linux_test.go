@@ -1,6 +1,7 @@
 package launch
 
 import (
+	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer syscall.Close(fd)
-	for _, path := range paths {
+	for _, path := range append(append([]string{}, paths...), aws, target, terraformProviderCredentialRoot) {
 		if _, err := syscall.InotifyAddWatch(fd, path, syscall.IN_OPEN|syscall.IN_ACCESS|syscall.IN_MODIFY|syscall.IN_ATTRIB|syscall.IN_DELETE_SELF|syscall.IN_MOVE_SELF); err != nil {
 			t.Fatal(err)
 		}
@@ -74,6 +75,16 @@ func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
 		if err != nil || string(b) != "SYNTHETIC_PRESERVED_PROVIDER_FIXTURE\n" {
 			t.Fatalf("preserved provider fixture changed %s: %v", path, err)
 		}
+	}
+	required := p
+	required.Binds = append(append([]nativeplan.Bind{}, p.Binds...), nativeplan.Bind{Source: filepath.Join(t.TempDir(), "missing-bind"), Required: true})
+	if err := prepare(required, false, true); err == nil || !strings.Contains(err.Error(), "required bind source") {
+		t.Fatalf("tools preparation bypassed required bind: %v", err)
+	}
+	configured := p
+	configured.GUITargetConfig = &nativeplan.GUITargetConfigProjection{TargetID: "terraform-ouro-1", Source: filepath.Join(t.TempDir(), "missing-immutable-config"), SourceSHA256: strings.Repeat("0", 64)}
+	if err := prepare(configured, false, true); err == nil {
+		t.Fatal("tools preparation bypassed immutable Codex configuration")
 	}
 	p.Agent.HostWorktree = filepath.Join(t.TempDir(), "missing")
 	if err := prepare(p, false, true); err == nil {
