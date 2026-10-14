@@ -111,3 +111,9 @@ The readiness contract is covered by:
 - `kit/scripts/devkit --dry-run -p <flake-overlay> ensure-ready --repo-readiness`
 - `kit/scripts/devkit runtime-matrix --all --check`
 - `make overlay-runtime-smoke`
+
+## Declared Terraform Agent1 startup geometry
+
+Fleet's existing `terraform-ouro-1` startup holds the normal socket lease and invokes `native prepare` with exact project/repository `ouroboros-terraform`, explicit index 1, canonical source-declared SSH origin, standard `main`/`agent1` and `/home/bayesartre/dev/control-plane-worktrees/terraform-ouro-1` workspace. No count, target, origin, branch or arbitrary geometry override is accepted. The package's native Git/SSH bootstrap materializes an absent lane-owned linked checkout. Existing checkout reuse validates lane common ownership, marker/origin, clean worktree and branch before returning without fetching, pruning, resetting or rewriting Git metadata. Foreign, partial, dirty, symlinked and branch-conflicting custody is preserved and refused; failure does not bulk-delete the TF1 workspace.
+
+Preparation and execution project only this workspace to `/workspaces/dev`, with the unchanged `ouroboros-terraform-agent1` persistent home. Generic native prefix geometry, Shared Power and Terraform Agent2 are unchanged. Ordinary runtime/Auth preparation remains institution-owned through the normal entry and is not proven by source or launch-construction fixtures.

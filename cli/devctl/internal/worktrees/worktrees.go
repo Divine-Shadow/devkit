@@ -2448,12 +2448,18 @@ func nativePreparationRoot(opts NativeOptions, fallback string) (string, bool, e
 	if opts.WorkspaceRoot == "" {
 		return root, false, nil
 	}
-	if opts.Repo != "pokeemerald-expansion-shared-power" || (opts.Index != 1 && opts.Index != 2) || opts.ReconstructSelected {
+	terraLane := opts.Repo == "ouroboros-terraform" && opts.Index == 1 && opts.Count == 1 && opts.BaseBranch == "main" && opts.BranchPrefix == "agent"
+	sharedPowerLane := opts.Repo == "pokeemerald-expansion-shared-power" && (opts.Index == 1 || opts.Index == 2)
+	if (!terraLane && !sharedPowerLane) || opts.ReconstructSelected {
 		return "", false, fmt.Errorf("isolated native preparation requires a selected Shared Power lane without destructive reconstruction")
 	}
 	selected := opts.WorkspaceRoot
+	laneName := fmt.Sprintf("pokeemerald-agent%d", opts.Index)
+	if terraLane {
+		laneName = "terraform-ouro-1"
+	}
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || !filepath.IsAbs(selected) ||
-		filepath.Clean(selected) != selected || selected != filepath.Join(root, fmt.Sprintf("pokeemerald-agent%d", opts.Index)) {
+		filepath.Clean(selected) != selected || selected != filepath.Join(root, laneName) {
 		return "", false, fmt.Errorf("isolated native preparation requires the exact selected workspace root")
 	}
 	if root == "/mnt" || strings.HasPrefix(root, "/mnt/") {
@@ -2510,6 +2516,10 @@ func PreflightNative(opts NativeOptions) error {
 		}
 		first, last = opts.Index, opts.Index
 	}
+	if isolatedWorkspace && repo == "ouroboros-terraform" {
+		_, err := ValidateTerraformNativeCheckout(opts)
+		return err
+	}
 	return preflightNativeOwnedWorktreeTargetsAt(worktreesRoot, repo, first, last, isolatedWorkspace)
 }
 
@@ -2548,6 +2558,12 @@ func SetupNative(opts NativeOptions) error {
 	worktreesRoot, isolatedWorkspace, err := nativePreparationRoot(opts, filepath.Join(devRoot, paths.AgentWorktreesDir))
 	if err != nil {
 		return err
+	}
+	if isolatedWorkspace && repo == "ouroboros-terraform" && !opts.DryRun {
+		exists, err := ValidateTerraformNativeCheckout(opts)
+		if err != nil || exists {
+			return err
+		}
 	}
 	validationIndex := 1
 	if opts.Index > 0 {
@@ -2730,9 +2746,15 @@ func SetupNative(opts NativeOptions) error {
 				return err
 			}
 		}
-		_ = run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "prune")...)
-		if err := run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "add", wt, "-B", branch, "origin/"+baseBranch)...); err != nil {
-			if opts.DryRun {
+		if !(isolatedWorkspace && repo == "ouroboros-terraform") {
+			_ = run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "prune")...)
+		}
+		branchFlag := "-B"
+		if isolatedWorkspace && repo == "ouroboros-terraform" {
+			branchFlag = "-b"
+		}
+		if err := run(opts.DryRun, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "add", wt, branchFlag, branch, "origin/"+baseBranch)...); err != nil {
+			if opts.DryRun || (isolatedWorkspace && repo == "ouroboros-terraform") {
 				return err
 			}
 			_ = run(false, envExecutable, envLocalGit("--git-dir", repoCommonDir, "worktree", "remove", "-f", wt)...)
@@ -2774,4 +2796,105 @@ func gitRemoteRequiresSSH(remoteURL string) bool {
 	return strings.HasPrefix(remoteURL, "ssh://") ||
 		(strings.Contains(remoteURL, "@") && strings.Contains(remoteURL, ":") &&
 			!strings.Contains(remoteURL, "://"))
+}
+
+// ValidateTerraformNativeCheckout is a read-only preflight for the declared
+// isolated Agent1 lane. Reuse must not fetch, rewrite metadata, or reset refs.
+func ValidateTerraformNativeCheckout(opts NativeOptions) (bool, error) {
+	root, isolated, err := nativePreparationRoot(opts, "")
+	if err != nil {
+		return false, err
+	}
+	if !isolated || opts.Repo != "ouroboros-terraform" {
+		return false, fmt.Errorf("Terraform preflight requires the exact selected Agent1 lane")
+	}
+	wt := filepath.Join(root, opts.Repo)
+	common, err := nativeOwnedCommonRepositoryPath(root, opts.Repo, 1)
+	if err != nil {
+		return false, err
+	}
+	envExecutable, gitExecutable, err := nativeSourceExecutables(opts.RequireSSHOrigin)
+	if err != nil {
+		return false, err
+	}
+	localGit := func(args ...string) []string {
+		return append([]string{"-u", "GIT_SSH_COMMAND", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0", gitExecutable, "-c", "core.fsmonitor=false"}, args...)
+	}
+	if _, err := os.Lstat(common); err == nil {
+		for _, path := range []string{common, filepath.Join(common, "config"), filepath.Join(common, "devkit-owned-common")} {
+			if err := terraformNoRedirectedMetadata(path); err != nil {
+				return false, err
+			}
+		}
+		if err := validateNativeOwnedCommonRepository(root, common, opts.Repo, opts.Origin, 1, envExecutable, localGit); err != nil {
+			return false, err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if _, err := os.Lstat(wt); errors.Is(err, os.ErrNotExist) {
+		// An old agent1 branch is custody, never permission to reset it.
+		if _, err := os.Lstat(common); err == nil {
+			branch, result := execx.Capture(context.Background(), envExecutable, localGit("--git-dir", common, "show-ref", "--verify", "--quiet", "refs/heads/agent1")...)
+			if result.Code != 1 {
+				return false, fmt.Errorf("Terraform absent checkout has conflicting agent1 branch (exit %d): %s", result.Code, strings.TrimSpace(branch))
+			}
+		}
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if err := terraformNoRedirectedMetadata(filepath.Join(wt, ".git")); err != nil {
+		return false, err
+	}
+	gitdirValue, err := readGitdirPointer(filepath.Join(wt, ".git"))
+	if err != nil {
+		return false, err
+	}
+	gitdir := gitdirValue
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(wt, gitdir)
+	}
+	gitdir = filepath.Clean(gitdir)
+	for _, name := range []string{"", "HEAD", "commondir", "index"} {
+		if err := terraformNoRedirectedMetadata(filepath.Join(gitdir, name)); err != nil {
+			return false, err
+		}
+	}
+	if err := preflightNativeOwnedWorktreeTargetsAt(root, opts.Repo, 1, 1, true); err != nil {
+		return false, err
+	}
+	actual, err := nativeWorktreeCommonDirectory(wt)
+	if err != nil {
+		return false, err
+	}
+	if actual != canonicalOrClean(common) {
+		return false, fmt.Errorf("Terraform checkout must use its exact lane-owned common repository")
+	}
+	if err := validateNativeOwnedCommonRepository(root, common, opts.Repo, opts.Origin, 1, envExecutable, localGit); err != nil {
+		return false, err
+	}
+	branch, result := execx.Capture(context.Background(), envExecutable, localGit("-C", wt, "symbolic-ref", "--quiet", "--short", "HEAD")...)
+	if result.Code != 0 || strings.TrimSpace(branch) != "agent1" {
+		return false, fmt.Errorf("Terraform checkout must retain declared agent1 branch")
+	}
+	status, result := execx.Capture(context.Background(), envExecutable, localGit("-C", wt, "status", "--porcelain=v1", "--untracked-files=all")...)
+	if result.Code != 0 || strings.TrimSpace(status) != "" {
+		return false, fmt.Errorf("Terraform checkout is dirty or its status is unavailable; preserve custody")
+	}
+	return true, nil
+}
+
+// No Git pointer, metadata file, or ancestor can borrow custody through a symlink.
+func terraformNoRedirectedMetadata(path string) error {
+	for p := path; p != filepath.Dir(p); p = filepath.Dir(p) {
+		info, err := os.Lstat(p)
+		if err != nil {
+			return fmt.Errorf("inspect Terraform custody %s: %w", p, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || (p != path && !info.IsDir()) || (p == path && !info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("Terraform custody rejects redirected metadata %s", p)
+		}
+	}
+	return nil
 }

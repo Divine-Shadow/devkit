@@ -2079,6 +2079,9 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
+	if ctx.Project == "ouroboros-terraform" && (parsed.opts.WorkspaceRoot != "" || parsed.opts.GUITargetID != "") {
+		return handleSelectedTerraformPrepare(ctx, cfg, parsed)
+	}
 	if parsed.opts.WorkspaceRoot != "" && ctx.Project == "pokeemerald-expansion-shared-power" {
 		return handleSelectedSharedPowerPrepare(ctx, cfg, parsed)
 	}
@@ -2495,6 +2498,10 @@ func prepareNativeGitBootstrapAndWorktrees(
 		opts.DryRun = dryRun
 		setupErr := wtx.SetupNative(opts)
 		if setupErr == nil {
+			return setupErr
+		}
+		// TF1 retains failed acquisition custody; absence alone never owns an entire root.
+		if opts.Repo == "ouroboros-terraform" && opts.WorkspaceRoot != "" {
 			return setupErr
 		}
 		var cleanupErr error

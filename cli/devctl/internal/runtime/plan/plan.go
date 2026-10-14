@@ -190,6 +190,9 @@ func Build(opts BuildOptions) (Plan, error) {
 	if strings.TrimSpace(opts.WorkspaceRoot) != "" && isSharedPowerWorkspaceLane(project, repo, index) {
 		paths.HostWorktree = filepath.Join(paths.HostWorktreeRoot, fmt.Sprintf("pokeemerald-agent%d", index), repo)
 	}
+	if strings.TrimSpace(opts.WorkspaceRoot) != "" && isTerraformWorkspaceLane(project, repo, index) {
+		paths.HostWorktree = filepath.Join(paths.HostWorktreeRoot, "terraform-ouro-1", repo)
+	}
 	workspaceRoot, err := validateIsolatedWorkspaceRoot(opts.WorkspaceRoot, project, repo, index, paths)
 	if err != nil {
 		return Plan{}, err
@@ -809,6 +812,10 @@ func isSharedPowerWorkspaceLane(project, repo string, index int) bool {
 		repo == "pokeemerald-expansion-shared-power" && (index == 1 || index == 2)
 }
 
+func isTerraformWorkspaceLane(project, repo string, index int) bool {
+	return project == "ouroboros-terraform" && repo == "ouroboros-terraform" && index == 1
+}
+
 func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths agent.Paths) (string, error) {
 	workspaceRoot := strings.TrimSpace(value)
 	if workspaceRoot == "" {
@@ -823,12 +830,19 @@ func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths
 	managementLane := project == "dev-workspace" && repo == "shadow-throne-management" && (index == 1 || index == 2)
 	productLane := project == "dev-all" && repo == "ouroboros-ide"
 	sharedPowerLane := isSharedPowerWorkspaceLane(project, repo, index)
-	if !managementLane && !productLane && !sharedPowerLane {
-		return "", fmt.Errorf("workspace root is restricted to declared Management controller, dev-all Product, or Shared Power lanes")
+	terraLane := isTerraformWorkspaceLane(project, repo, index)
+	if !managementLane && !productLane && !sharedPowerLane && !terraLane {
+		return "", fmt.Errorf("workspace root is restricted to declared Management controller, dev-all Product, Shared Power, or Terraform Agent1 lanes")
 	}
 	laneName := fmt.Sprintf("agent%d", index)
 	if sharedPowerLane {
 		laneName = fmt.Sprintf("pokeemerald-agent%d", index)
+	}
+	if terraLane {
+		if filepath.Clean(paths.HostWorktreeRoot) != filepath.Join(paths.DevRoot, "control-plane-worktrees") {
+			return "", fmt.Errorf("Terraform workspace requires declared control-plane worktree root")
+		}
+		laneName = "terraform-ouro-1"
 	}
 	expected := filepath.Join(filepath.Clean(paths.HostWorktreeRoot), laneName)
 	if workspaceRoot == filepath.Clean(paths.DevRoot) || workspaceRoot == filepath.Clean(paths.HostWorktreeRoot) || workspaceRoot != expected {

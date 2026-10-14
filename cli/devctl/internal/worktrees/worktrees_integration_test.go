@@ -2856,3 +2856,222 @@ func TestRunNativeSourceGitFetchUsesManagedIdleTimeoutAndKillsDescendants(t *tes
 		t.Fatalf("managed source fetch descendant %d survived cleanup: %v", pid, killErr)
 	}
 }
+
+func terraformFixture(t *testing.T) NativeOptions {
+	t.Helper()
+	root := t.TempDir()
+	devRoot := filepath.Join(root, "dev")
+	makeRepoWithBare(t, root, devRoot, "ouroboros-terraform")
+	return NativeOptions{DevkitRoot: filepath.Join(devRoot, "devkit"), Repo: "ouroboros-terraform",
+		Origin: filepath.Join(root, "remotes", "ouroboros-terraform.git"), Index: 1, Count: 1,
+		BaseBranch: "main", BranchPrefix: "agent", WorktreeRoot: filepath.Join(devRoot, "control-plane-worktrees"),
+		WorkspaceRoot: filepath.Join(devRoot, "control-plane-worktrees", "terraform-ouro-1")}
+}
+
+// This unchanged-input real Git oracle also compiles against the old producer.
+// The old producer refuses isolated TF1 before creating the declared checkout.
+func TestTerraformDeclaredCheckoutAcquisitionAndPreservingReuse(t *testing.T) {
+	opts := terraformFixture(t)
+	home := filepath.Join(filepath.Dir(opts.DevkitRoot), ".devkit", "native-agents", "ouroboros-terraform-agent1", "home")
+	if err := os.MkdirAll(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(home, "history.txt")
+	if err := os.WriteFile(marker, []byte("opaque preserved history\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetupNative(opts); err != nil {
+		t.Fatalf("declared TF1 acquisition unavailable: %v", err)
+	}
+	wt := filepath.Join(opts.WorkspaceRoot, opts.Repo)
+	checkBranchAndUpstream(t, wt, "agent1")
+	if got := readTrim(t, "git", "-C", wt, "show", "HEAD:README.md"); got != "# ouroboros-terraform" {
+		t.Fatalf("wrong acquired source: %s", got)
+	}
+	gitfile, err := os.ReadFile(filepath.Join(wt, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	common, err := nativeOwnedCommonRepositoryPath(opts.WorkspaceRoot, opts.Repo, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeHead := readTrim(t, "git", "--git-dir", common, "rev-parse", "refs/heads/agent1")
+	sibling := filepath.Join(opts.WorktreeRoot, "terraform-ouro-2", "history.bin")
+	if err := os.MkdirAll(filepath.Dir(sibling), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sibling, []byte("opaque sibling custody"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	siblingInfo, err := os.Stat(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonBefore := terraformMetadataSnapshot(t, common)
+
+	gitdirValue, err := readGitdirPointer(filepath.Join(wt, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitdir := gitdirValue
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(wt, gitdir)
+	}
+	indexPath := filepath.Join(gitdir, "index")
+	indexBytes, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force status to see changed tracked-file stat metadata without a content edit.
+	touch := time.Now().Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(wt, "README.md"), touch, touch); err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(filepath.Join(common, "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Move the remote and make transport unreachable: routine reuse must remain
+	// a read-only custody check and must not fetch/reset/rewrite shared metadata.
+	primary := filepath.Join(filepath.Dir(opts.DevkitRoot), opts.Repo)
+	if err := os.WriteFile(filepath.Join(primary, "later.txt"), []byte("new remote revision\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, "git", "-C", primary, "add", "later.txt")
+	mustRun(t, "git", "-C", primary, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "later")
+	mustRun(t, "git", "-C", primary, "push", "origin", "main")
+	if err := os.Rename(opts.Origin, opts.Origin+".offline"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetupNative(opts); err != nil {
+		t.Fatalf("read-only reuse fetched or failed: %v", err)
+	}
+	commonAfter := terraformMetadataSnapshot(t, common)
+	if commonBefore != commonAfter {
+		t.Fatal("reuse changed common Git metadata or objects")
+	}
+	siblingAfter, err := os.Stat(sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	siblingBytes, err := os.ReadFile(sibling)
+	if err != nil || string(siblingBytes) != "opaque sibling custody" || !os.SameFile(siblingInfo, siblingAfter) || !siblingInfo.ModTime().Equal(siblingAfter.ModTime()) {
+		t.Fatal("reuse changed sibling custody")
+	}
+	afterIndex, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterIndexInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(indexBytes) != string(afterIndex) || !indexInfo.ModTime().Equal(afterIndexInfo.ModTime()) {
+		t.Fatal("reuse refreshed the protected linked-worktree index")
+	}
+	afterGitfile, _ := os.ReadFile(filepath.Join(wt, ".git"))
+	afterConfig, _ := os.ReadFile(filepath.Join(common, "config"))
+	history, _ := os.ReadFile(marker)
+	if string(gitfile) != string(afterGitfile) || string(beforeConfig) != string(afterConfig) || beforeHead != readTrim(t, "git", "--git-dir", common, "rev-parse", "refs/heads/agent1") || string(history) != "opaque preserved history\n" {
+		t.Fatal("reuse mutated checkout/common metadata/history")
+	}
+}
+
+func TestTerraformAcquisitionRefusesCustodyWithoutMutation(t *testing.T) {
+	for _, kind := range []string{"dirty", "foreign origin", "wrong branch", "symlink", "partial", "metadata symlink", "conflicting branch"} {
+		t.Run(kind, func(t *testing.T) {
+			opts := terraformFixture(t)
+			wt := filepath.Join(opts.WorkspaceRoot, opts.Repo)
+			if kind == "symlink" || kind == "partial" {
+				if err := os.MkdirAll(opts.WorkspaceRoot, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "symlink" {
+					if err := os.Symlink(filepath.Join(filepath.Dir(opts.DevkitRoot), opts.Repo), wt); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					if err := os.MkdirAll(wt, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(wt, "user.txt"), []byte("preserve"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			} else {
+				if err := SetupNative(opts); err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "dirty":
+					if err := os.WriteFile(filepath.Join(wt, "user.txt"), []byte("preserve"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "foreign origin":
+					mustRun(t, "git", "-C", wt, "remote", "set-url", "origin", opts.Origin+".foreign")
+				case "wrong branch":
+					mustRun(t, "git", "-C", wt, "checkout", "-b", "user-branch")
+				case "metadata symlink":
+					pointer := filepath.Join(wt, ".git")
+					external := filepath.Join(filepath.Dir(opts.DevkitRoot), "preserved-pointer")
+					if err := os.Rename(pointer, external); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(external, pointer); err != nil {
+						t.Fatal(err)
+					}
+				case "conflicting branch":
+					mustRun(t, "git", "-C", wt, "worktree", "remove", wt)
+				}
+			}
+			var before string
+			if kind != "symlink" && kind != "partial" && kind != "conflicting branch" {
+				before = readTrim(t, "git", "-C", wt, "rev-parse", "HEAD")
+			}
+			if err := SetupNative(opts); err == nil {
+				t.Fatalf("accepted %s custody", kind)
+			}
+			if before != "" && before != readTrim(t, "git", "-C", wt, "rev-parse", "HEAD") {
+				t.Fatal("refusal changed HEAD")
+			}
+			if kind == "dirty" || kind == "partial" {
+				b, err := os.ReadFile(filepath.Join(wt, "user.txt"))
+				if err != nil || string(b) != "preserve" {
+					t.Fatal("refusal lost user work")
+				}
+			}
+			if kind == "symlink" {
+				if _, err := os.Readlink(wt); err != nil {
+					t.Fatal("refusal removed symlink")
+				}
+			}
+		})
+	}
+}
+
+func terraformMetadataSnapshot(t *testing.T, root string) string {
+	t.Helper()
+	var snapshot strings.Builder
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(&snapshot, "%s:%o:%d:%x\n", path, info.Mode(), info.ModTime().UnixNano(), b)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot.String()
+}
