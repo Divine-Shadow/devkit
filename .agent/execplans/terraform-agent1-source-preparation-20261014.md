@@ -33,3 +33,44 @@ Root2839 independently authenticated one additional test-only Devkit leaf `cli/d
 Devkit520d1d7c completed all15 declared x86_64-linux native checks, including full Go and both VM gates, exit0/reaped2026-10-14T14:09:55Z. Fleet175713f native full Go check passed0/reaped13:52:37Z; final27 checks are progressing for Fleet2661a7cd. All failed dependency/export/fixture/import attempts remain public evidence; no failed result is promoted. The old final launch control initially failed in overlay vet, then compiled with diagnostic-only `-vet=off` and reached the expected TF1 acquisition refusal (PID364113 terminal1/reaped14:04:10Z); identical final test bytes passed candidate520 with normal vet (PID346774 terminal0/reaped14:01:57Z). Production/test review binds these results. The earlier broker socket failure remains unexplained and unreproduced by one clean published5ec selected control; full corrected native gate passed without broker changes.
 
 Remaining acceptance is source-only: after this documentation update rebind the final source identities through declared native checks, publish reviewed commits without force after fetched-current integration, pin only Management/Fleet and Devkit in WSL, prove all53 checks and direct/Colmena closure equality, and deliver complete public originals. Runtime alone owns controlled adoption, normal startup and actual readiness/Auth handoff; none has occurred under this Source change. Source/publication acceptance does not complete the overall workspace programme.
+
+
+## Follow-on runtime-only broker requester correction (Root2857)
+
+Runtime installed21df and reconnected its owning controller successfully. Normal
+TF1 startupop2d7cbd00b71a9400d24761da4803895b acquired the canonical agent1
+worktree at784d33c9ea365f4a485bf77270aec3a10c3ce9ac, then failed before Auth
+preparation: the Terraform overlay requested an unsupported SAM image in
+addition to the two images authorized by the source-selected station owner.
+Preserve that acquired worktree, history, accepted image and exact refusal.
+
+Root2857 was independently authenticated against Source's enrolled immutable
+dot verifier: dot/current/authority-message-v1, exit0, authenticated bytes equal
+the unchanged delivered message. It authorizes this bounded existing caller
+correction and actual-selected Shadow test coverage, not an owner-policy waiver.
+
+The current commission promises runtime-only tool readiness and normal user
+credential-hydration handoff. The actual784 tracked source and installeda84
+runtime contract contain no SAM invocation or SAM readiness requirement; that
+does not establish universal obsolescence or support all future Docker work.
+Remove only the SAM entry from the shared Terraform overlay's broker request.
+This shared overlay change applies to every consumer selecting the overlay;
+it is not a TF1-only image policy. Station owner images, admission equality,
+upstream, aliases, geometry, pull/logging policy and Auth remain unchanged.
+The prepared environment earns no SAM-container grant. Preserve the original
+0d956afa0dd767ec95e1501abaf5ce1ba5b88804 declaration as historical evidence;
+a future concrete SAM workload needs its own canonical capability judgment.
+
+Verification uses identical probes loading the actual oldC5 and corrected
+overlays through the normal config loader and actual Shadow-selected Devctl
+linker/owner policy. Old3 must compile and reach the genuine owner refusal;
+new2 must be admitted, while existing2 callers reuse one owner endpoint/PID/
+state and foreign images, malformed binding and other policy changes stay
+denied. Preserve existing Davidlich, proxy, functional Postgres, inhibition
+and custody controls. No live station or actor binding override is a test.
+
+The complete native Devkit/WSL gates, independent exact-source/test-meaning
+review, normal publication, direct/Colmena full-closure equality and public
+Runtime delivery remain acceptance debt. Runtime alone performs adoption and
+changed-input startup/hydration. The independent597 governance/CI prerequisite
+supply continues separately; this repair imposes no whole-Terraform gate.

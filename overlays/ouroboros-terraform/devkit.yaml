@@ -101,10 +101,11 @@ readiness:
 broker:
   socket: .devkit/native-broker/broker.sock
   upstream: unix:///var/run/docker.sock
+  # Native runtime-only preparation uses the unchanged shared station policy.
+  # SAM container builds require a separate canonical capability judgment.
   allowed_images:
     - postgres:latest
     - testcontainers/ryuk:0.7.0
-    - public.ecr.aws/sam/build-python3.12@sha256:e1c008f2626266024c538c9c31cbeb122e9c1c42e1a3ccd4e7b1380f6e9b7497
   allow_pulls: true
   log_level: info
 env:

@@ -109,3 +109,11 @@ not the lifetime of a particular execution.
 - [Standard native GitHub SSH projection](execplans/managed-native-git-home-projection-20261008.md): immutable trust/current-home managed policy without shared SSH mutation; coordinated adoption pending.
 
 - [Terraform Agent1 source preparation](execplans/terraform-agent1-source-preparation-20261014.md): exact existing startup acquisition/geometry compatibility; Root 2831 scope, source review/native gates before Runtime adoption.
+
+
+Runtime-only TF broker follow-on: Root2857 authenticated source judgment limits
+this repair to the Terraform overlay request and existing source plan. Preserve
+owner2 and all guards; no SAM grant or wider Docker-workload acceptance follows.
+See `execplans/terraform-agent1-source-preparation-20261014.md`. Native checks,
+old3 refusal/new2 actual-selected-owner consequence proof, independent review,
+publication and canonical Runtime supply remain required.
