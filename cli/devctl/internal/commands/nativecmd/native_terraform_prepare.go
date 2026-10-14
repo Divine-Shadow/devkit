@@ -3,7 +3,6 @@ package nativecmd
 import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
-	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	wtx "devkit/cli/devctl/internal/worktrees"
 	"encoding/json"
@@ -34,6 +33,9 @@ func selectedTerraformWorktreeOptions(ctx *cmdregistry.Context, cfg config.Overl
 }
 
 func handleSelectedTerraformPrepare(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed planArgs) error {
+	if err := validateTerraformPreparationPhase(parsed.preparationPhase); err != nil {
+		return err
+	}
 	opts, err := selectedTerraformWorktreeOptions(ctx, cfg, parsed)
 	if err != nil {
 		return err
@@ -59,14 +61,29 @@ func handleSelectedTerraformPrepare(ctx *cmdregistry.Context, cfg config.Overlay
 	if err != nil {
 		return err
 	}
-	if err := prepareWithManagedEgressProxy(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), dryRun, launch.Prepare); err != nil {
+	if err := prepareWithManagedEgressProxy(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), dryRun, terraformPreparationCallback(parsed.preparationPhase)); err != nil {
 		return err
 	}
+	if parsed.preparationPhase != "" && !dryRun {
+		// Only immutable overlay runtime checks; repo/provider readiness is not earned.
+		runtimeChecks, err := runtimeChecksFor(ctx)
+		if err != nil {
+			return err
+		}
+		report := runReadinessReportPrepared(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), runtimeChecks, nil, terraformPreparationCallback(parsed.preparationPhase))
+		if !report.RuntimeReady() {
+			return fmt.Errorf("Terraform tools startup verification failed: %v", report.FailedChecks())
+		}
+	}
 	out := struct {
-		Repo   string                             `json:"repo"`
-		Count  int                                `json:"count"`
-		Agents []selectedSharedPowerPreparedAgent `json:"agents"`
+		PreparationPhase  string                             `json:"preparation_phase,omitempty"`
+		ProviderHydration string                             `json:"provider_hydration,omitempty"`
+		ProviderReadiness string                             `json:"provider_readiness,omitempty"`
+		Repo              string                             `json:"repo"`
+		Count             int                                `json:"count"`
+		Agents            []selectedSharedPowerPreparedAgent `json:"agents"`
 	}{
+		PreparationPhase: parsed.preparationPhase, ProviderHydration: terraformToolsProviderHydration(parsed.preparationPhase), ProviderReadiness: terraformToolsProviderReadiness(parsed.preparationPhase),
 		Repo: opts.Repo, Count: 1, Agents: []selectedSharedPowerPreparedAgent{{Index: 1,
 			HostWorktree: p.Agent.HostWorktree, SandboxWorktree: p.Agent.SandboxWorktree,
 			HostHome: p.Agent.HostHome, SandboxHome: p.Agent.SandboxHome,

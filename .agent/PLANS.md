@@ -117,3 +117,5 @@ owner2 and all guards; no SAM grant or wider Docker-workload acceptance follows.
 See `execplans/terraform-agent1-source-preparation-20261014.md`. Native checks,
 old3 refusal/new2 actual-selected-owner consequence proof, independent review,
 publication and canonical Runtime supply remain required.
+
+Root2874 bounded TF1 tools phase: full provider preparation remains the default. The typed `tf1-tools-provider-deferred` startup retains source-selected Git/Codex/isolation/broker controls, defers AWS/provider projection, and reports provider readiness unassessed. Actual immutable qualification, independent review, publication and Runtime tools startup remain separate acceptance boundaries.

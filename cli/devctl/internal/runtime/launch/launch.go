@@ -162,7 +162,7 @@ var (
 )
 
 func Prepare(p nativeplan.Plan) error {
-	return prepare(p, false)
+	return prepare(p, false, false)
 }
 
 // PrepareSoftwareOnly converges public software/configuration for an existing
@@ -175,10 +175,36 @@ func PrepareSoftwareOnly(p nativeplan.Plan) error {
 			return fmt.Errorf("software-only preparation requires an existing real native home: %s", dir)
 		}
 	}
-	return prepare(p, true)
+	return prepare(p, true, false)
 }
 
-func prepare(p nativeplan.Plan, softwareOnly bool) error {
+// ValidateTerraformToolsPlan admits only the immutable, isolated TF1 projection.
+// This phase preserves provider material; it does not assess provider readiness.
+func ValidateTerraformToolsPlan(p nativeplan.Plan, hostname string) error {
+	const root = "/home/bayesartre/dev"
+	const repo = "ouroboros-terraform"
+	home := root + "/.devkit/native-agents/" + repo + "-agent1/home"
+	selected := p.GUITargetConfig
+	if selected == nil || selected.TargetID != "terraform-ouro-1" || selected.Kind != "devkit-agent" || selected.ExpectedExecutionHost != "shadow-throne" || hostname != selected.ExpectedExecutionHost ||
+		p.Agent.ID.Project != repo || p.Agent.ID.Repo != repo || p.Agent.ID.Index != 1 || p.HostWorkspaceRoot != root+"/control-plane-worktrees/terraform-ouro-1" || p.SandboxWorkspaceRoot != "/workspaces/dev" ||
+		p.Agent.HostWorktree != p.HostWorkspaceRoot+"/"+repo || p.Agent.SandboxWorktree != "/workspaces/dev/"+repo || p.Agent.HostHome != home || p.Agent.SandboxHome != "/agent-state/"+repo+"-agent1/home" || p.Agent.StateRoot != root+"/.devkit/native-agents/"+repo+"-agent1" || p.IsolationProfile != "workspace-egress" {
+		return fmt.Errorf("Terraform tools preparation requires exact source-selected TF1 host, config and geometry")
+	}
+	return nil
+}
+
+func PrepareTerraformTools(p nativeplan.Plan) error {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return err
+	}
+	if err := ValidateTerraformToolsPlan(p, hostname); err != nil {
+		return err
+	}
+	return prepare(p, false, true)
+}
+
+func prepare(p nativeplan.Plan, softwareOnly, terraformTools bool) error {
 	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
 		return err
 	}
@@ -270,11 +296,13 @@ func prepare(p nativeplan.Plan, softwareOnly bool) error {
 		if err := SeedSSH(p.Agent.HostHome, false); err != nil {
 			return err
 		}
-		if err := SeedAWS(p.Agent.HostHome, false); err != nil {
-			return err
-		}
-		if err := SeedTerraformProviderCredentials(p); err != nil {
-			return err
+		if !terraformTools {
+			if err := SeedAWS(p.Agent.HostHome, false); err != nil {
+				return err
+			}
+			if err := SeedTerraformProviderCredentials(p); err != nil {
+				return err
+			}
 		}
 		if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
 			return err

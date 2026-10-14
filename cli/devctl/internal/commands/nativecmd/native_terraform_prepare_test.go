@@ -64,3 +64,26 @@ func TestTerraformSelectedPrepareAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestTerraformPreparationPhaseParser(t *testing.T) {
+	ctx, cfg, _ := terraformSelection(t)
+	ctx.Args = append(ctx.Args, "--preparation-phase", terraformToolsPreparationPhase)
+	p, err := parsePlanArgs(ctx, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.opts.BaseBranch = "main"
+	p.opts.BranchPrefix = "agent"
+	if _, err := selectedTerraformWorktreeOptions(ctx, cfg, p); err != nil {
+		t.Fatal(err)
+	}
+	if p.preparationPhase != terraformToolsPreparationPhase {
+		t.Fatal("phase lost")
+	}
+	for _, args := range [][]string{{"prepare", "--preparation-phase", "skip-auth"}, {"capacity", "--preparation-phase", terraformToolsPreparationPhase}, {"plan", "--preparation-phase", terraformToolsPreparationPhase}, {"shell", "--preparation-phase", terraformToolsPreparationPhase}, {"prepare", "--preparation-phase", terraformToolsPreparationPhase, "--preparation-phase", terraformToolsPreparationPhase}} {
+		ctx.Args = args
+		if _, err := parsePlanArgs(ctx, false, false); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+}

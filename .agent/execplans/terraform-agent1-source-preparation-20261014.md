@@ -74,3 +74,5 @@ review, normal publication, direct/Colmena full-closure equality and public
 Runtime delivery remain acceptance debt. Runtime alone performs adoption and
 changed-input startup/hydration. The independent597 governance/CI prerequisite
 supply continues separately; this repair imposes no whole-Terraform gate.
+
+Root2874 bounded TF1 tools phase: full provider preparation remains the default. The typed `tf1-tools-provider-deferred` startup retains source-selected Git/Codex/isolation/broker controls, defers AWS/provider projection, and reports provider readiness unassessed. Actual immutable qualification, independent review, publication and Runtime tools startup remain separate acceptance boundaries.
