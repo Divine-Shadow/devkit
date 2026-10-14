@@ -64,7 +64,9 @@ func TestTerraformAcquisitionPlanLaunchConsequences(t *testing.T) {
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 99\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{Paths: devkitpaths.Paths{Root: opts.DevkitRoot, RuntimeAuthorityRoot: runtimeRoot}, Project: repo, Repo: repo, Index: 1, WorktreeRoot: wr, WorkspaceRoot: workspace, IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress, EgressAllowlist: filepath.Join(root, "allowlist.txt")})
+	runtimeLauncher := runtimeLauncherFixture(t)
+	bubblewrap := runtimeLauncherFixture(t)
+	plan, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{Paths: devkitpaths.Paths{Root: opts.DevkitRoot, RuntimeAuthorityRoot: runtimeRoot}, Project: repo, Repo: repo, Index: 1, RuntimeLauncher: runtimeLauncher, BubblewrapBinary: bubblewrap, WorktreeRoot: wr, WorkspaceRoot: workspace, IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress, EgressAllowlist: filepath.Join(root, "allowlist.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +75,7 @@ func TestTerraformAcquisitionPlanLaunchConsequences(t *testing.T) {
 		t.Fatal(err)
 	}
 	argv := strings.Join(command.Args, " ")
-	if plan.Agent.HostWorktree != filepath.Join(workspace, repo) || plan.Agent.SandboxWorktree != "/workspaces/dev/"+repo || !strings.Contains(argv, workspace+" /workspaces/dev") || !strings.Contains(argv, "codex app-server") {
+	if plan.Agent.HostWorktree != filepath.Join(workspace, repo) || plan.Agent.SandboxWorktree != "/workspaces/dev/"+repo || !strings.Contains(argv, workspace+" /workspaces/dev") || command.Path != bubblewrap || !strings.Contains(argv, runtimeLauncher) || !strings.Contains(argv, "codex") || !strings.Contains(argv, "app-server") {
 		t.Fatalf("wrong acquisition/launch geometry: %#v %s", plan.Agent, argv)
 	}
 	if strings.Contains(argv, wr+" /workspaces/dev") || strings.Contains(argv, "terraform-ouro-2") {
