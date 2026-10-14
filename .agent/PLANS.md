@@ -121,3 +121,5 @@ publication and canonical Runtime supply remain required.
 Root2874 bounded TF1 tools phase: full provider preparation remains the default. The typed `tf1-tools-provider-deferred` startup retains source-selected Git/Codex/isolation/broker controls, defers AWS/provider projection, and reports provider readiness unassessed. Actual immutable qualification, independent review, publication and Runtime tools startup remain separate acceptance boundaries.
 
 - TF1 required-bind materialization repair (Root2918): extend existing launch projector only after exact native-plan geometry validation; retain Required bindings and full defaults. See [execution plan](execplans/terraform-agent1-source-preparation-20261014.md).
+
+- TF1 immutable tool/profile readiness (Root2941): preserve generic GUI0.160, enter only the fixed Terraform child for pure tool identity checks, and compare the existing declared Terraform profile source/projected bytes. Four existing Devkit leaves only; [plan](execplans/terraform-agent1-source-preparation-20261014.md) records actual failure, old/new consequences and separately owned Runtime acceptance.

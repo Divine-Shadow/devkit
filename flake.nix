@@ -148,6 +148,8 @@
             pkgs.openssh
             pkgs.sqlite
             pkgs.util-linux
+            pkgs.python3
+            pkgs.jq
           ];
           doCheck = true;
           checkPhase = ''

@@ -31,41 +31,135 @@ readiness:
   runtime_checks:
     - name: required-tools
       command: |
-        for tool in git ssh curl docker terraform packer aws codex; do
+        for tool in git ssh curl docker codex; do
           command -v "$tool" >/dev/null || { echo "missing required runtime tool: $tool" >&2; exit 127; }
         done
     - name: docker-client
       command: docker --version >/dev/null
     - name: terraform-packer-aws
-      command: terraform version >/dev/null && packer version >/dev/null && aws --version >/dev/null
+      command: |
+        # Readiness precedes the app-server wrapper. Enter only the declared
+        # Terraform child environment; keep native GUI Codex checks outside it.
+        python3 - <<'PYTOOLS'
+        import os
+        import pathlib
+        import re
+        import subprocess
+
+        wrapper = pathlib.Path("/run/current-system/sw/bin/ouro-terra-runtime")
+        source = wrapper.resolve(strict=True)
+        if not str(source).startswith("/nix/store/") or not source.is_file():
+            raise SystemExit("Terraform readiness requires the immutable selected runtime")
+        declarations = re.findall(r'^export PATH="([^"\n]+)"$', source.read_text(), re.M)
+        if len(declarations) != 1:
+            raise SystemExit("Terraform runtime must declare one closed immutable tool path")
+        directories = declarations[0].split(":")
+        if not directories or any(not d.startswith("/nix/store/") or d != os.path.normpath(d) for d in directories):
+            raise SystemExit("Terraform runtime contains a noncanonical tool path")
+        tools = []
+        for name in ("terraform", "packer", "aws"):
+            matches = [pathlib.Path(d) / name for d in directories if os.access(pathlib.Path(d) / name, os.X_OK)]
+            if len(matches) != 1:
+                raise SystemExit("Terraform runtime requires one immutable executable for " + name)
+            tool = matches[0].resolve(strict=True)
+            if not str(tool).startswith("/nix/store/"):
+                raise SystemExit("Terraform runtime tool escaped immutable storage")
+            tools.append(str(tool))
+        # No provider request or credential/bootstrap command occurs here.
+        script = r'''
+        set -euo pipefail
+        export CHECKPOINT_DISABLE=1
+        for tool in terraform packer aws; do command -v "$tool" >/dev/null; done
+        test "$(readlink -f "$(command -v terraform)")" = "$1"
+        test "$(readlink -f "$(command -v packer)")" = "$2"
+        test "$(readlink -f "$(command -v aws)")" = "$3"
+        test "$(readlink -f "$OURO_TERRAFORM_BIN")" = "$1"
+        version_json="$(terraform version -json)"
+        test "$(printf "%s" "$version_json" | jq -er .terraform_version)" = "$OURO_TERRAFORM_VERSION"
+        test "$(printf "%s" "$version_json" | jq -er .platform)" = "$OURO_TERRAFORM_PLATFORM"
+        test "$(sha256sum "$OURO_TERRAFORM_BIN" | cut -d " " -f1)" = "$OURO_TERRAFORM_SHA256"
+        test "$(packer version)" = "Packer v1.11.2"
+        aws --version | grep -E '^aws-cli/2[.]27[.]2 ' >/dev/null
+        '''
+        result = subprocess.run([str(wrapper), "--", "bash", "-c", script, "terraform-readiness", *tools], check=False)
+        raise SystemExit(result.returncode)
+        PYTOOLS
     - name: codex-version
       command: codex --version | grep -q '0.160.0'
-    - name: governance-mcp-config
+    - name: terraform-config-profile
       command: |
-        set -euo pipefail
-        config="${CODEX_HOME:-$HOME/.codex}/config.toml"
-        expected_cwd="$(pwd -P)"
-        require_config() {
-          if ! grep -Fq "$1" "$config"; then
-            echo "ouroboros-terraform readiness: Codex governance config missing $1 in $config" >&2
-            exit 1
-          fi
+        # Preparation already verifies and projects the fixed GUI record. This
+        # check consumes that same public selection, not a Product MCP template.
+        python3 - <<'PYPROFILE'
+        import hashlib
+        import json
+        import os
+        import pathlib
+        import re
+        import stat
+
+        def refuse(message):
+            raise SystemExit("Terraform profile readiness: " + message)
+
+        manifest = pathlib.Path("/run/current-system/etc/fleet/source/codex-config-projections.json")
+        data = json.loads(manifest.read_bytes())
+        if data.get("schemaVersion") != "devkit/gui-codex-config-projections/v1":
+            refuse("wrong immutable projection schema")
+        records = [r for r in data.get("projections", []) if r.get("targetId") == "terraform-ouro-1"]
+        if len(records) != 1:
+            refuse("missing or duplicate TF1 projection")
+        selected = records[0]
+        expected = {
+            "targetId": "terraform-ouro-1", "configProfile": "terraform",
+            "kind": "devkit-agent", "expectedExecutionHost": "shadow-throne",
+            "project": "ouroboros-terraform", "repo": "ouroboros-terraform", "agentIndex": 1,
+            "workspaceRoot": "/home/bayesartre/dev/control-plane-worktrees/terraform-ouro-1",
+            "hostWorktree": "/home/bayesartre/dev/control-plane-worktrees/terraform-ouro-1/ouroboros-terraform",
+            "hostHome": "/home/bayesartre/dev/.devkit/native-agents/ouroboros-terraform-agent1/home",
         }
-        test -r "$config" || {
-          echo "ouroboros-terraform readiness: missing Codex config at $config" >&2
-          exit 1
-        }
-        require_config '# source = nixos-wsl codex config'
-        require_config '[profiles.openai]'
-        require_config 'model_provider = "openai"'
-        require_config '# BEGIN DEVKIT NATIVE GOVERNANCE MCP'
-        require_config '[mcp_servers.governance]'
-        require_config 'command = "/run/current-system/sw/bin/bash"'
-        require_config "cwd = \"$expected_cwd\""
-        require_config 'DEVKIT_GOVERNANCE_MCP_ENTRYPOINT_SHA256='
-        require_config 'governance.workspace_topology'
-        test -r /workspaces/dev/.devkit/ouro8-governance-env.sh
-        grep -Fq 'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' /workspaces/dev/.devkit/ouro8-governance-env.sh
+        if any(selected.get(key) != value for key, value in expected.items()):
+            refuse("foreign Terraform profile or target geometry")
+        if os.getcwd() != "/workspaces/dev/ouroboros-terraform":
+            refuse("foreign sandbox worktree")
+        raw_source = selected.get("source", "")
+        source = pathlib.Path(raw_source)
+        digest = selected.get("sourceSha256", "")
+        if not raw_source.startswith("/nix/store/") or raw_source != os.path.normpath(raw_source) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            refuse("noncanonical immutable source binding")
+        config = pathlib.Path(os.environ["CODEX_HOME"]) / "config.toml"
+        if source.resolve(strict=True) != source:
+            refuse("redirected immutable source")
+
+        def read_regular(path, immutable_source=False):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    refuse("special source or projected file")
+                if info.st_uid != os.geteuid() and not (immutable_source and info.st_uid == 0):
+                    refuse("foreign source or projected file owner")
+                if not immutable_source and stat.S_IMODE(info.st_mode) != 0o600:
+                    refuse("unsafe projected config mode")
+                return stream.read()
+
+        source_bytes = read_regular(source, immutable_source=True)
+        if hashlib.sha256(source_bytes).hexdigest() != digest:
+            refuse("immutable source digest mismatch")
+        if read_regular(config) != source_bytes:
+            refuse("projected config differs from declared source")
+        if b'# fleet_config_profile = "terraform"' not in source_bytes or b'[profiles.openai]' not in source_bytes:
+            refuse("source is not the declared Terraform profile")
+        if b'[mcp_servers.governance]' in source_bytes:
+            refuse("Product governance profile substituted for Terraform")
+        # Required support projections remain mandatory even though this profile
+        # correctly contains no Product governance MCP table.
+        support = pathlib.Path("/workspaces/dev/.devkit")
+        for name in ("ouro8-governance-env.sh", "ouro8-governance-repo-env.json"):
+            if not (support / name).is_file():
+                refuse("missing required public lane support")
+        if b'ouroboros-terraform=/workspaces/dev/ouroboros-terraform' not in (support / "ouro8-governance-env.sh").read_bytes():
+            refuse("foreign public lane support")
+        PYPROFILE
     - name: codex-auth-present
       command: |
         set -euo pipefail

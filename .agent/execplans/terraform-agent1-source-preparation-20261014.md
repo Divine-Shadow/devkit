@@ -87,7 +87,7 @@ Actual installed235/b3 tools startup op-e2ba4f4ddd07f045ef3a688f2fd246d7 failed 
 Extend the existing materializer to exact TF1 with the native planner's existing isolated-lane validation before mutation. Retain Product behavior and all source/destination/mode/required-binding guards; copy only two public support projections and create private independent state. Reject optional/broad binds, manual Runtime copies, Nix activation expansion and provider/Auth changes. This preserves correctness, measurable consequences, isolation and truthful source/runtime boundaries before delivery speed. Root2918 authenticated dot/current authorizes exactly four existing Devkit and two WSL leaves; no new user approval or Fleet source change.
 
 ### safety_checks and verification
-Same final non-secret tests derive bindings from actual BuildDevAll and run preparation: oldb3 must compile and fail on missing required lane env; corrected source must supply exact bytes/modes/private state and retain launcher bindings. Missing source, source/destination/file/state symlink, invalid state and foreign projection controls must fail. Existing full provider, Git/config and required-bind controls remain. Independent final review, complete15 Devkit and53 WSL checks, normal source publication/readback and shadow-throne direct/declared Colmena complete closure equality remain required. GovCI597/SBTFA/TF784/Fleet81c remain unchanged. Coordinate truly heavy work with Product. No Runtime effect by Source.
+Same final non-secret tests derive bindings from actual BuildDevAll and run preparation: oldb3 must compile and fail on missing required lane env; corrected source must supply exact bytes/modes/private state and retain launcher bindings. Missing source, source/destination/file/state symlink, invalid state and foreign projection controls must fail. Existing full provider, Git/config and required-bind controls remain. Independent final review, complete15 Devkit and53 WSL checks, normal source publication/readback and shadow-throne direct/declared Colmena complete closure equality remain required. GovCI597/SBTFA/Fleet81c and the WSL Terraform flake input a84 remain unchanged; acquired Terraform business frontier784 is a distinct source identity. Coordinate truly heavy work with Product. No Runtime effect by Source.
 
 ### rollback_plan and decision_scope
 Ordinary forward source revert/pin and complete canonical supply if the repair fails its gates; Runtime alone owns installed rollback and changed-input selection/startup. Preserve235 complete public originals and actual terminal operation records. This is existing launch-institution composition repair, not a new provider, security or governance capability. Runtime tools startup and authenticated hydration remain acceptance debt.
@@ -95,5 +95,33 @@ Ordinary forward source revert/pin and complete canonical supply if the repair f
 ### progress
 - [x] Actual original Runtime courier independently verified and causal review received.
 - [x] Root2918 actual dot/current verification and exact-message binding; clean fetched b3/235 dedicated writers.
-- [x] Guarded materializer correction and actual-plan non-secret consequence tests written, unaccepted.
-- [ ] Independent final source/test review, old/new actual controls, native15/53, canonical immutable producer/publication and complete receiving courier.
+- [x] Guarded materializer accepted at published Devkit177/tree26a909 and WSL021/tree8ab43d after matched old/new controls, native15/53, direct/Colmena2140-entry equal closure and independent review.
+- [x] Complete corrected public courier286449220B SHA57dcf6034cf639ca081b3f637bc6cc1709577d1064733b11941292f016e5a557 consumed by Runtime with132CRC/131hashes plus14/13 final transport/review supplement.
+- [x] Runtime image/reconnection succeeded0; actual TF1 startup passed the repaired binding then failed the new readiness-selection boundary. Installed tools readiness remains unearned.
+
+
+## Root2941: immutable Terraform tool and profile readiness
+
+### Purpose and current consequence
+TF1 must run the already-declared tools-first readiness before separately owned provider hydration. Actual installed021 startup op-c79a70f110df8908f2ea947c013a2744 failed1/nativeprepare2 at2026-10-14T22:43:51.666167676Z: two Terraform lookup127 checks and an inapplicable Product MCP marker1 check. The accepted bind repair, image/reconnection and protected Product parent epochs remain intact. Source independently verified exact Runtime public originals: outer4CRC/3hashes and inner38CRC/37hashes.
+
+### Authority and decision
+Root2941 independently verified dot/current/authority-message-v1, actual receiver exit0 and exact7177 message bytes SHA60866ae6d724ca377366aeb5b0215f474b9f5d4913da253a14aaf1c8ab948909. Its semantic judgment permits only the Terraform overlay YAML, existing native_terraform_tools_test.go, this plan and the PLANS index; WSL may only pin the normally qualified resulting Devkit. No production Go, Fleet, Terraform producer/configuration, generated profile, Auth/security/vendor/model/permission/mount/API or Runtime change.
+
+The existing native readiness batch precedes the later ouro-terra-runtime app-server wrapper. Retain generic Git/SSH/docker and GUI Codex0.160 checks. Enter only the fixed immutable wrapper for closed pure Terraform/Packer/AWS version, executable path and SHA checks. The wrapper Codex0.139 must never become the native GUI result. Verify the existing unique TF1 Terraform profile/geometry through the readonly current-system projection manifest and silent exact source-hash/projected-byte comparison. Existing no-follow seed/source validation remains; no Product MCP table is added. Required public support files and all ordinary provider/Auth/default guards remain.
+
+### Verification and limits
+The existing test leaf loads actual overlay commands through config.ReadAll/runtimeChecksFor, executes the production readiness batch script and result parser, then uses the real report/evidence composition. Namespace preparation/broker are disclosed nonsecret fixture boundaries. Only fixed wrapper/manifest/Nix-prefix/workspace/system-shell spellings map to isolated test-owned files. Generic fixture Codex0.160 is separate from wrapper0.139; fake provider tools refuse all arguments except the closed version reads. Wrong/missing tool, version/platform/path/hash, wrong GUI Codex, missing/duplicate/foreign profile/geometry, noncanonical source/digest, redirected/changed config, missing support and missing auth must keep RuntimeReady false. Identical test bytes against old177 must compile and reproduce its named causal refusal. These tests do not supply installed TF1 acceptance.
+
+After review and the actual shared-slot release, run normal native Devkit15, publish without force/fresh exact readback, minimally pin WSL, run native53 and both declared producers with full closure equality. Preserve all originals, obtain final independent review and deliver the complete public courier through the proven normal immutable-store route. Runtime owns changed-input selection/adoption/impact/rollback/startup; provider readiness stays unassessed/deferred.
+
+### Progress and outcomes
+- [x] Complete actual failure originals acquired and independently reviewed; narrow authenticated semantic scope accepted.
+- [x] Fetched clean published177/021; new dedicated source branch retains accepted bind prefix.
+- [ ] Overlay correction and complete-batch consequences implemented, independently reviewed and compiled old/new qualified.
+- [ ] Native15/53, exact immutable producers/closure, normal publication and complete Runtime receiving handoff.
+- [ ] Separately owned installed tools-first startup; provider hydration and programme obligations remain outside Source acceptance.
+
+Root2941 updates the current trajectory; accepted historical effects and failed original attempts remain immutable public evidence outside the source checkout. Count complete plan Unicode scalars before every write and commit; do not expand this plan into raw invocation logs.
+
+Root narrow amendment 2947 independently verified through the enrolled immutable receiver: dot/current/authority-message-v1, exit0, exact-byte match. Additional leaf flake.nix is limited to mkDevctlGoTests.nativeCheckInputs adding Python3 and jq; identical producer inputs and final test bytes supplied on old177 control, whose production overlay remains unchanged. Static review additionally required named failed rows and corrected the test Paths import and native-toolchain shell shebangs. Actual compilation/gates and actual receiving Runtime Python/jq capability remain unearned; Product still owns the current heavy interval.
