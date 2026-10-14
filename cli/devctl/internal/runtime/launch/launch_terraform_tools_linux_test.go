@@ -131,6 +131,9 @@ func terraformRuntimeSupportFixture(t *testing.T) nativeplan.Plan {
 		}
 	}
 	p.Binds = binds
+	// Nix's test sandbox has no host resolver. Supply the planner's actual
+	// destination as public fixture data; retain normal resolver preparation.
+	writeTestFile(t, p.DNS.ResolvConf, "nameserver 127.0.0.1\n")
 	if len(binds) != 4 {
 		t.Fatalf("actual TF1 governance bind count = %d", len(binds))
 	}
