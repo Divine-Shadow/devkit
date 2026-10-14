@@ -113,7 +113,11 @@ func validateTerraformToolsSource(phase string, ctx *cmdregistry.Context, cfg co
 	if err := validateTerraformPreparationPhase(phase); err != nil {
 		return err
 	}
-	if err := validateTerraformToolsArguments(ctx.Args); err != nil {
+	args := ctx.Args
+	if len(args) > 0 && args[0] == "1" {
+		args = append([]string{"exec"}, args...)
+	}
+	if err := validateTerraformToolsArguments(args); err != nil {
 		return err
 	}
 	root := ctx.Paths.RuntimeAuthorityRoot

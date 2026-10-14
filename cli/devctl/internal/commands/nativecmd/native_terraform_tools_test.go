@@ -142,3 +142,29 @@ func TestTerraformToolsRejectsRuntimeAndLifecycleOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestTerraformToolsTopExecParserPropagation(t *testing.T) {
+	ctx, cfg, _ := terraformSelection(t)
+	root := "/nix/store/selected-devctl"
+	ctx.Paths.Root = root
+	ctx.Paths.RuntimeAuthorityRoot = root
+	ctx.Paths.OverlayPaths = []string{root + "/overlays"}
+	cfg.SourceDir = root + "/overlays/ouroboros-terraform"
+	cfg.Defaults.BaseBranch = "main"
+	cfg.Defaults.BranchPrefix = "agent"
+	ctx.Args = []string{"1", "--repo", "ouroboros-terraform", "--worktree-root", "/home/bayesartre/dev/control-plane-worktrees", "--agent-state-root", "/home/bayesartre/dev/.devkit/native-agents", "--workspace-root", "/home/bayesartre/dev/control-plane-worktrees/terraform-ouro-1", "--gui-target-id", "terraform-ouro-1", "--isolation-profile", "workspace-egress", "--preparation-phase", terraformToolsPreparationPhase, "--"}
+	ctx.Args = append(ctx.Args, terraformToolsCommand()...)
+	parsed, err := parseTopExecArgs(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, parsed.managedAppServer, ctx.Project, parsed.guiTargetID, parsed.command); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTerraformToolsAppServerCommand(terraformToolsPlan(), parsed.command, parsed.command[2]); err != nil {
+		t.Fatal(err)
+	}
+}
