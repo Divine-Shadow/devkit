@@ -94,3 +94,51 @@ func TestTerraformToolsExecPhasesAreClosed(t *testing.T) {
 		t.Fatal("invalid provider assertion")
 	}
 }
+
+func TestTerraformToolsImmutableChecksAdmission(t *testing.T) {
+	ctx, cfg, _ := terraformSelection(t)
+	root := "/nix/store/selected-devctl"
+	ctx.Paths.Root = root
+	ctx.Paths.RuntimeAuthorityRoot = root
+	ctx.Paths.OverlayPaths = []string{root + "/overlays"}
+	cfg.SourceDir = root + "/overlays/ouroboros-terraform"
+	cfg.Defaults.BaseBranch = "main"
+	cfg.Defaults.BranchPrefix = "agent"
+	if err := validateTerraformToolsSource(terraformToolsPreparationPhase, ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"root", "overlays", "extra-overlay", "source", "origin", "branch"} {
+		cc := *ctx
+		cc.Paths = ctx.Paths
+		other := cfg
+		switch kind {
+		case "root":
+			cc.Paths.Root = "/tmp/root"
+		case "overlays":
+			cc.Paths.OverlayPaths = []string{"/tmp/arbitrary-checks"}
+		case "extra-overlay":
+			cc.Paths.OverlayPaths = append([]string{}, ctx.Paths.OverlayPaths...)
+			cc.Paths.OverlayPaths = append(cc.Paths.OverlayPaths, "/tmp/checks")
+		case "source":
+			other.SourceDir = "/tmp/source-fixed-looking-overlay"
+		case "origin":
+			other.Defaults.Origin = "foreign"
+		case "branch":
+			other.Defaults.BranchPrefix = "foreign"
+		}
+		if err := validateTerraformToolsSource(terraformToolsPreparationPhase, &cc, other); err == nil {
+			t.Fatalf("accepted %s", kind)
+		}
+		if err := validateTerraformToolsSource("", &cc, other); err != nil {
+			t.Fatalf("changed default source behavior: %v", err)
+		}
+	}
+}
+
+func TestTerraformToolsRejectsRuntimeAndLifecycleOverrides(t *testing.T) {
+	for _, args := range [][]string{{"exec", "1", "--flake", "foreign", "--", "anything"}, {"prepare", "--proxy", "foreign"}, {"readiness", "--repo-check", "arbitrary"}, {"readiness", "--full"}, {"exec", "1", "--broker-socket", "/tmp/broker", "--", "anything"}, {"prepare", "--dry-run"}, {"shell", "--preparation-phase", terraformToolsPreparationPhase}} {
+		if err := validateTerraformToolsArguments(args); err == nil {
+			t.Fatalf("accepted override %v", args)
+		}
+	}
+}

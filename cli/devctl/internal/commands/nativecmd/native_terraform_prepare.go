@@ -33,7 +33,7 @@ func selectedTerraformWorktreeOptions(ctx *cmdregistry.Context, cfg config.Overl
 }
 
 func handleSelectedTerraformPrepare(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed planArgs) error {
-	if err := validateTerraformPreparationPhase(parsed.preparationPhase); err != nil {
+	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
 		return err
 	}
 	opts, err := selectedTerraformWorktreeOptions(ctx, cfg, parsed)

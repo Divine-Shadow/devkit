@@ -379,8 +379,8 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			}
 			parsed.preparationPhase = ctx.Args[i+1]
 			i++
-			if err := validateTerraformPreparationPhase(parsed.preparationPhase); err != nil {
-				return parsed, err
+			if parsed.preparationPhase != terraformToolsPreparationPhase {
+				return parsed, fmt.Errorf("unknown preparation phase")
 			}
 		case "--software-only":
 			if !allowCommand {
@@ -1006,8 +1006,8 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.preparationPhase = ctx.Args[i+1]
 			i++
-			if err := validateTerraformPreparationPhase(parsed.preparationPhase); err != nil {
-				return parsed, err
+			if parsed.preparationPhase != terraformToolsPreparationPhase {
+				return parsed, fmt.Errorf("unknown preparation phase")
 			}
 		case "--software-only":
 			if attach {
@@ -1058,6 +1058,9 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	}
 	cfg, repo, _, _, _, err := lifecycleDefaults(ctx, lifecycleParsed)
 	if err != nil {
+		return err
+	}
+	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
 		return err
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleParsed)
@@ -2105,7 +2108,7 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
-	if parsed.preparationPhase != "" && ctx.Project != "ouroboros-terraform" {
+	if parsed.preparationPhase != "" && (ctx.Project != "ouroboros-terraform" || parsed.opts.GUITargetID != "terraform-ouro-1") {
 		return fmt.Errorf("Terraform tools preparation requires TF1")
 	}
 	if ctx.Project == "ouroboros-terraform" && (parsed.opts.WorkspaceRoot != "" || parsed.opts.GUITargetID != "") {
@@ -2204,6 +2207,11 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 }
 
 func handleShell(ctx *cmdregistry.Context) error {
+	for _, arg := range ctx.Args {
+		if arg == "--preparation-phase" {
+			return fmt.Errorf("Terraform tools phase is not a shell mode")
+		}
+	}
 	ctx.Args[0] = "exec"
 	return handleExec(ctx)
 }
@@ -2224,6 +2232,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 	if err != nil {
+		return err
+	}
+	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
 		return err
 	}
 	parsed.opts.BaseBranch = parsed.baseBranch
@@ -2658,6 +2669,9 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
+		return err
+	}
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
@@ -2722,7 +2736,7 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 		fmt.Fprintln(os.Stdout, string(data))
 	case "text":
 		fmt.Fprintf(os.Stdout, "readiness_mode: %s\n", parsed.readinessMode)
-		fmt.Fprintf(os.Stdout, "status: %s\n", report.Status())
+		fmt.Fprintf(os.Stdout, "status: %s\n", terraformToolsReadinessStatus(parsed.preparationPhase, report.RuntimeReady(), report.Status()))
 		fmt.Fprintf(os.Stdout, "runtime_ready: %t\n", report.RuntimeReady())
 		fmt.Fprintf(os.Stdout, "repo_ready: %t\n", report.RepoReady() && parsed.preparationPhase == "")
 		fmt.Fprintf(os.Stdout, "capacity_available: %t\n", report.CapacityAvailable() && parsed.preparationPhase == "")

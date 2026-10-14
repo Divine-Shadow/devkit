@@ -2,6 +2,7 @@ package launch
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -23,7 +24,11 @@ func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
 	t.Cleanup(func() { terraformProviderCredentialHydrator = oldHydrator; terraformProviderCredentialRoot = oldRoot })
 	marker := filepath.Join(t.TempDir(), "hydrator-called")
 	terraformProviderCredentialHydrator = filepath.Join(t.TempDir(), "hydrator")
-	writeTestFile(t, terraformProviderCredentialHydrator, "#!/bin/sh\necho called >> '"+marker+"'\necho 'approved DNSimple token source unavailable' >&2\nexit 1\n")
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, terraformProviderCredentialHydrator, "#!"+shell+"\necho called >> '"+marker+"'\necho 'Terraform provider credential hydration failed: approved DNSimple token source is unavailable' >&2\nexit 1\n")
 	if err := os.Chmod(terraformProviderCredentialHydrator, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +40,7 @@ func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
 		writeTestFile(t, path, "SYNTHETIC_PRESERVED_PROVIDER_FIXTURE\n")
 	}
 	t.Setenv("DEVKIT_AWS_HOME", aws)
-	if err := Prepare(p); err == nil || !strings.Contains(err.Error(), "approved DNSimple token source unavailable") {
+	if err := Prepare(p); err == nil || !strings.Contains(err.Error(), "approved DNSimple token source is unavailable") {
 		t.Fatalf("normal preparation did not retain real missing-provider refusal: %v", err)
 	}
 	before, err := os.ReadFile(marker)

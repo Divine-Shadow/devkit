@@ -1,6 +1,8 @@
 package nativecmd
 
 import (
+	"devkit/cli/devctl/internal/cmdregistry"
+	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	wtx "devkit/cli/devctl/internal/worktrees"
@@ -100,4 +102,52 @@ func terraformToolsReadinessStatus(phase string, ready bool, full string) string
 		return "tools-ready"
 	}
 	return full
+}
+
+// Deferred startup may execute only the package's unmodified runtime checks.
+// Ordinary source commands retain their existing source-development behavior.
+func validateTerraformToolsSource(phase string, ctx *cmdregistry.Context, cfg config.OverlayConfig) error {
+	if phase == "" {
+		return nil
+	}
+	if err := validateTerraformPreparationPhase(phase); err != nil {
+		return err
+	}
+	if err := validateTerraformToolsArguments(ctx.Args); err != nil {
+		return err
+	}
+	root := ctx.Paths.RuntimeAuthorityRoot
+	if !strings.HasPrefix(root, "/nix/store/") || filepath.Clean(root) != root || ctx.Paths.Root != root || len(ctx.Paths.OverlayPaths) != 1 || ctx.Paths.OverlayPaths[0] != filepath.Join(root, "overlays") || cfg.SourceDir != filepath.Join(root, "overlays", "ouroboros-terraform") || ctx.Project != "ouroboros-terraform" || cfg.Defaults.Agents != 1 || cfg.Defaults.Origin != terraformDeclaredOrigin || cfg.Defaults.BaseBranch != "main" || cfg.Defaults.BranchPrefix != "agent" {
+		return fmt.Errorf("Terraform tools startup requires the exact immutable package overlay, checks and origin/branch")
+	}
+	return nil
+}
+
+func validateTerraformToolsArguments(args []string) error {
+	if len(args) == 0 || (args[0] != "prepare" && args[0] != "readiness" && args[0] != "exec") {
+		return fmt.Errorf("Terraform tools phase is a selected startup operation")
+	}
+	allowed := map[string]bool{"--preparation-phase": true, "--repo": true, "--index": true, "--worktree-root": true, "--state-root": true, "--agent-state-root": true, "--workspace-root": true, "--gui-target-id": true, "--format": true, "--isolation-profile": true}
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--" {
+			if args[0] != "exec" {
+				return fmt.Errorf("Terraform tools phase forbids custom check commands")
+			}
+			return nil
+		}
+		if args[i] == "--runtime-only" && args[0] == "readiness" {
+			continue
+		}
+		if args[0] == "exec" && i == 1 && args[i] == "1" {
+			continue
+		}
+		if !allowed[args[i]] || i+1 >= len(args) {
+			return fmt.Errorf("Terraform tools startup refuses option %q", args[i])
+		}
+		i++
+	}
+	if args[0] == "exec" {
+		return fmt.Errorf("Terraform tools exec requires exact native command separator")
+	}
+	return nil
 }
