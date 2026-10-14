@@ -114,7 +114,18 @@ func TestTerraformAcquisitionPlanLaunchConsequences(t *testing.T) {
 	if err := wtx.SetupNative(opts); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{Paths: devkitpaths.Paths{Root: opts.DevkitRoot}, Project: repo, Repo: repo, Index: 1, WorktreeRoot: wr, WorkspaceRoot: workspace, IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress, EgressAllowlist: filepath.Join(root, "allowlist.txt")})
+	// The launch builder checks presence of the immutable runtime connector.
+	// This inert, explicitly injected fixture is never executed and proves no
+	// installed runtime/Auth effect; actual package checks supply that warrant.
+	runtimeRoot := filepath.Join(root, "runtime-fixture")
+	helper := filepath.Join(runtimeRoot, "kit", "bin", "devctl")
+	if err := os.MkdirAll(filepath.Dir(helper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 99\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := nativeplan.BuildDevAll(nativeplan.BuildOptions{Paths: devkitpaths.Paths{Root: opts.DevkitRoot, RuntimeAuthorityRoot: runtimeRoot}, Project: repo, Repo: repo, Index: 1, WorktreeRoot: wr, WorkspaceRoot: workspace, IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress, EgressAllowlist: filepath.Join(root, "allowlist.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
