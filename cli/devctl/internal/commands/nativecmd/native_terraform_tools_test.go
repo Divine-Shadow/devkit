@@ -238,6 +238,18 @@ func terraformReadinessWrite(t *testing.T, path, data string, mode os.FileMode) 
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The normal Nix test builder is unprivileged. Adverse fixtures rewrite
+	// their own read-only manifest/source, then restore the requested mode.
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			t.Fatalf("refuse fixture rewrite of nonregular path: %s", path)
+		}
+		if err := os.Chmod(path, 0600); err != nil {
+			t.Fatal(err)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(data), mode); err != nil {
 		t.Fatal(err)
 	}
