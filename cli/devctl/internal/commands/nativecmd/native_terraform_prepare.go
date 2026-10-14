@@ -3,6 +3,7 @@ package nativecmd
 import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	wtx "devkit/cli/devctl/internal/worktrees"
 	"encoding/json"
@@ -43,6 +44,15 @@ func handleSelectedTerraformPrepare(ctx *cmdregistry.Context, cfg config.Overlay
 	p, err := nativeplan.BuildDevAll(parsed.opts)
 	if err != nil {
 		return err
+	}
+	if parsed.preparationPhase != "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			return err
+		}
+		if err := launch.ValidateTerraformToolsPlan(p, hostname); err != nil {
+			return err
+		}
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
 	exists := false
