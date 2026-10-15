@@ -340,28 +340,31 @@ type ControllerProfileAuthRefresh struct {
 }
 
 type ManagementControllerProfile struct {
-	SchemaVersion         string                                 `json:"schemaVersion"`
-	ProfileIdentity       string                                 `json:"profileIdentity"`
-	MountPolicyIdentity   string                                 `json:"mountPolicyIdentity"`
-	OperationHandle       ControllerProfileOperationHandle       `json:"operationHandle"`
-	ProductAgentLifecycle ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
-	ProductStationReset   ControllerProfileProductStationReset   `json:"productStationReset"`
-	FleetRecovery         ControllerProfileFleetRecovery         `json:"fleetRecovery"`
-	GUIThreadControl      *ControllerProfileGUIThreadControl     `json:"guiThreadControl,omitempty"`
-	NixOSDeployment       ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
-	SourceRoots           ControllerProfileSourceRoots           `json:"sourceRoots"`
-	Inventories           ControllerProfileInventories           `json:"inventories"`
-	Targets               ControllerProfileTargets               `json:"targets"`
-	Schemas               ControllerProfileSchemas               `json:"schemas"`
-	Kinds                 []string                               `json:"kinds"`
-	Broker                ControllerProfileBroker                `json:"broker"`
-	SourceAcquisition     ControllerProfileSourceAcquisition     `json:"sourceAcquisition"`
-	SensitiveInputIngress ControllerProfileSensitiveInputIngress `json:"sensitiveInputIngress"`
-	SensitiveOutputEgress ControllerProfileSensitiveOutputEgress `json:"sensitiveOutputEgress"`
-	RemoteProductGUI      ControllerProfileRemoteProductGUI      `json:"remoteProductGUI"`
-	CodexPermissions      ControllerProfileCodexPermissions      `json:"codexPermissions"`
-	LinuxDesktopAuth      ControllerProfileLinuxDesktopAuth      `json:"linuxDesktopAuth"`
-	AuthRefresh           ControllerProfileAuthRefresh           `json:"authRefresh"`
+	// This is a SHA-bound source projection only. Fleet owns record semantics
+	// and every retirement decision; Devkit neither interprets nor executes it.
+	ProductGUIProxyRetirementPolicy *ControllerProfileFileIdentity         `json:"productGUIProxyRetirementPolicy,omitempty"`
+	SchemaVersion                   string                                 `json:"schemaVersion"`
+	ProfileIdentity                 string                                 `json:"profileIdentity"`
+	MountPolicyIdentity             string                                 `json:"mountPolicyIdentity"`
+	OperationHandle                 ControllerProfileOperationHandle       `json:"operationHandle"`
+	ProductAgentLifecycle           ControllerProfileProductAgentLifecycle `json:"productAgentLifecycle"`
+	ProductStationReset             ControllerProfileProductStationReset   `json:"productStationReset"`
+	FleetRecovery                   ControllerProfileFleetRecovery         `json:"fleetRecovery"`
+	GUIThreadControl                *ControllerProfileGUIThreadControl     `json:"guiThreadControl,omitempty"`
+	NixOSDeployment                 ControllerProfileNixOSDeployment       `json:"nixosDeployment"`
+	SourceRoots                     ControllerProfileSourceRoots           `json:"sourceRoots"`
+	Inventories                     ControllerProfileInventories           `json:"inventories"`
+	Targets                         ControllerProfileTargets               `json:"targets"`
+	Schemas                         ControllerProfileSchemas               `json:"schemas"`
+	Kinds                           []string                               `json:"kinds"`
+	Broker                          ControllerProfileBroker                `json:"broker"`
+	SourceAcquisition               ControllerProfileSourceAcquisition     `json:"sourceAcquisition"`
+	SensitiveInputIngress           ControllerProfileSensitiveInputIngress `json:"sensitiveInputIngress"`
+	SensitiveOutputEgress           ControllerProfileSensitiveOutputEgress `json:"sensitiveOutputEgress"`
+	RemoteProductGUI                ControllerProfileRemoteProductGUI      `json:"remoteProductGUI"`
+	CodexPermissions                ControllerProfileCodexPermissions      `json:"codexPermissions"`
+	LinuxDesktopAuth                ControllerProfileLinuxDesktopAuth      `json:"linuxDesktopAuth"`
+	AuthRefresh                     ControllerProfileAuthRefresh           `json:"authRefresh"`
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
@@ -454,6 +457,9 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		return err
 	}
 	if err := validateControllerAuthRefresh(profile.AuthRefresh); err != nil {
+		return err
+	}
+	if err := validateControllerProductGUIProxyRetirementPolicy(profile.ProductGUIProxyRetirementPolicy); err != nil {
 		return err
 	}
 	if profile.Schemas != (ControllerProfileSchemas{
