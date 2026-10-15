@@ -468,7 +468,7 @@ func ProjectPreparationHistory(options SnapshotOptions, binding PreparationProje
 	if err := projectionStrictJSON(mb, &manifest); err != nil {
 		return err
 	}
-	if manifest.SchemaVersion != SnapshotSchema || manifest.Status != "complete" || manifest.Project != options.Project || manifest.ResetKind != options.ResetKind || manifest.AgentIndex != options.AgentIndex || manifest.SourceHostHome != options.HostHome || manifest.QuarantinedGUIRolloutCount != 0 || len(manifest.QuarantinedGUIRollouts) != 0 || manifest.BundleSHA256 != binding.BundleSHA256 || len(manifest.Files) != manifest.FileCount || manifest.FileCount != 3 || aggregateHash(manifest.Files) != binding.BundleSHA256 {
+	if manifest.SchemaVersion != SnapshotSchema || manifest.Status != "complete" || manifest.UnavailableArchivedReferenceCount != 0 || len(manifest.UnavailableArchivedReferences) != 0 || manifest.Project != options.Project || manifest.ResetKind != options.ResetKind || manifest.AgentIndex != options.AgentIndex || manifest.SourceHostHome != options.HostHome || manifest.QuarantinedGUIRolloutCount != 0 || len(manifest.QuarantinedGUIRollouts) != 0 || manifest.BundleSHA256 != binding.BundleSHA256 || len(manifest.Files) != manifest.FileCount || manifest.FileCount != 3 || aggregateHash(manifest.Files) != binding.BundleSHA256 {
 		return errors.New("retained history manifest does not bind one complete nonquarantined native thread")
 	}
 	payload, err := source.child("payload", false)

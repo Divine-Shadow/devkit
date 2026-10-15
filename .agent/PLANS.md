@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active bounded custody refinement: [Unavailable archived references](execplans/unavailable-archived-reference-custody-20261015.md).
+
 Active custody evidence repair: [Content-free GUI-history refusal evidence](execplans/missing-gui-history-observations-20261015.md).
 
 An ExecPlan is a self-contained implementation plan that a future agent or

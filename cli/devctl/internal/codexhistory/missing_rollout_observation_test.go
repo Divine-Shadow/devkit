@@ -77,9 +77,8 @@ func TestMissingRolloutObservationUsesDeclaredMappingWithoutChangingRefusal(t *t
 	}
 }
 
-func TestArchivedMetadataDoesNotMakeMissingHistoryDispensable(t *testing.T) {
+func TestActiveAndUnknownArchiveMetadataStillRefusesMissingHistory(t *testing.T) {
 	for _, tc := range []struct{ name, value, state, observation string }{
-		{"archived", "1", "archived", "captured-row-metadata"},
 		{"unarchived", "0", "unarchived", "captured-row-metadata"},
 		{"unknown-null", "NULL", "unknown", "row-value-unavailable"},
 		{"unknown-text", "'not-a-flag'", "unknown", "row-value-unavailable"},

@@ -24,6 +24,8 @@ import (
 )
 
 const SnapshotSchema = "devkit/codex-gui-history-snapshot/v2"
+const AvailableEvidenceSchema = "devkit/codex-gui-history-snapshot/v3"
+const AvailableEvidenceStatus = "available-evidence-with-unavailable-archived-references"
 
 var sqliteFamilyPattern = regexp.MustCompile(`^(state|goals)_[0-9]+\.sqlite(?:-(?:wal|shm))?$`)
 
@@ -51,14 +53,17 @@ type SnapshotOptions struct {
 }
 
 type Result struct {
-	Status                 string
-	GenerationID           string
-	ManifestPath           string
-	FileCount              int
-	TotalBytes             int64
-	GUIRollouts            int
-	QuarantinedGUIRollouts int
-	BundleSHA256           string
+	ManifestStatus                string
+	SchemaVersion                 string
+	UnavailableArchivedReferences int
+	Status                        string
+	GenerationID                  string
+	ManifestPath                  string
+	FileCount                     int
+	TotalBytes                    int64
+	GUIRollouts                   int
+	QuarantinedGUIRollouts        int
+	BundleSHA256                  string
 }
 
 type manifestFile struct {
@@ -68,21 +73,23 @@ type manifestFile struct {
 }
 
 type snapshotManifest struct {
-	SchemaVersion              string                  `json:"schema_version"`
-	Status                     string                  `json:"status"`
-	Project                    string                  `json:"project"`
-	ResetKind                  string                  `json:"reset_kind"`
-	AgentIndex                 int                     `json:"agent_index"`
-	CreatedAt                  string                  `json:"created_at"`
-	SourceHostHome             string                  `json:"source_host_home"`
-	SourceSandboxHome          string                  `json:"source_sandbox_home"`
-	FileCount                  int                     `json:"file_count"`
-	TotalBytes                 int64                   `json:"total_bytes"`
-	GUIRolloutCount            int                     `json:"gui_rollout_count"`
-	QuarantinedGUIRolloutCount int                     `json:"quarantined_gui_rollout_count"`
-	QuarantinedGUIRollouts     []quarantinedGUIRollout `json:"quarantined_gui_rollouts,omitempty"`
-	BundleSHA256               string                  `json:"bundle_sha256"`
-	Files                      []manifestFile          `json:"files"`
+	UnavailableArchivedReferenceCount int                            `json:"unavailable_archived_reference_count,omitempty"`
+	UnavailableArchivedReferences     []unavailableArchivedReference `json:"unavailable_archived_references,omitempty"`
+	SchemaVersion                     string                         `json:"schema_version"`
+	Status                            string                         `json:"status"`
+	Project                           string                         `json:"project"`
+	ResetKind                         string                         `json:"reset_kind"`
+	AgentIndex                        int                            `json:"agent_index"`
+	CreatedAt                         string                         `json:"created_at"`
+	SourceHostHome                    string                         `json:"source_host_home"`
+	SourceSandboxHome                 string                         `json:"source_sandbox_home"`
+	FileCount                         int                            `json:"file_count"`
+	TotalBytes                        int64                          `json:"total_bytes"`
+	GUIRolloutCount                   int                            `json:"gui_rollout_count"`
+	QuarantinedGUIRolloutCount        int                            `json:"quarantined_gui_rollout_count"`
+	QuarantinedGUIRollouts            []quarantinedGUIRollout        `json:"quarantined_gui_rollouts,omitempty"`
+	BundleSHA256                      string                         `json:"bundle_sha256"`
+	Files                             []manifestFile                 `json:"files"`
 }
 
 type objectiveCustody struct {
@@ -133,6 +140,10 @@ type guiRolloutValidation struct {
 }
 
 var availableSpaceCheck = requireAvailableSpace
+
+// Tests may interrupt this exact cold capture boundary; no runtime setting or
+// command exposes this hook.
+var captureBeforeCommitCheckpoint func() error
 
 func CustodyRoot(stateRoot, project string) (string, error) {
 	stateRoot = strings.TrimSpace(stateRoot)
@@ -193,7 +204,7 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		for _, file := range files {
 			total += file.size
 		}
-		return Result{Status: "planned", FileCount: len(files), TotalBytes: total}, nil
+		return Result{SchemaVersion: SnapshotSchema, Status: "planned", FileCount: len(files), TotalBytes: total}, nil
 	}
 
 	sqliteExecutable, err := sqliteauthority.Package()
@@ -269,7 +280,7 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		return result, err
 	}
 
-	guiRollouts, quarantinedGUIRollouts, err := validateSQLiteAndRollouts(sqliteExecutable, payloadRoot, fileSet, options)
+	guiRollouts, quarantinedGUIRollouts, unavailable, err := validateSQLiteAndRolloutsEvidence(sqliteExecutable, payloadRoot, fileSet, options, true, true)
 	if err != nil {
 		return result, err
 	}
@@ -301,6 +312,12 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		BundleSHA256:               bundleHash,
 		Files:                      manifestFiles,
 	}
+	if len(unavailable) > 0 {
+		manifest.SchemaVersion = AvailableEvidenceSchema
+		manifest.Status = AvailableEvidenceStatus
+		manifest.UnavailableArchivedReferences = unavailable
+		manifest.UnavailableArchivedReferenceCount = len(unavailable)
+	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return result, fmt.Errorf("encode Codex GUI history manifest: %w", err)
@@ -316,9 +333,17 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 	if err := syncDirectory(stagingRoot); err != nil {
 		return result, err
 	}
+	if captureBeforeCommitCheckpoint != nil {
+		if err := captureBeforeCommitCheckpoint(); err != nil {
+			return result, err
+		}
+	}
 	// Close the full staging/validation/manifest window against direct source
 	// mutation before the generation becomes visible to the reset boundary.
 	if err := verifySourceSetStable(hostCodex, files, directories, exists, fileSet); err != nil {
+		return result, err
+	}
+	if err := verifyUnavailableSourceAbsence(hostCodex, unavailable); err != nil {
 		return result, err
 	}
 	if err := os.Rename(stagingRoot, finalRoot); err != nil {
@@ -333,14 +358,17 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		status = "empty"
 	}
 	return Result{
-		Status:                 status,
-		GenerationID:           generationID,
-		ManifestPath:           filepath.Join(finalRoot, "manifest.json"),
-		FileCount:              len(manifestFiles),
-		TotalBytes:             totalBytes,
-		GUIRollouts:            guiRollouts,
-		QuarantinedGUIRollouts: len(quarantinedGUIRollouts),
-		BundleSHA256:           bundleHash,
+		SchemaVersion:                 manifest.SchemaVersion,
+		ManifestStatus:                manifest.Status,
+		UnavailableArchivedReferences: len(unavailable),
+		Status:                        status,
+		GenerationID:                  generationID,
+		ManifestPath:                  filepath.Join(finalRoot, "manifest.json"),
+		FileCount:                     len(manifestFiles),
+		TotalBytes:                    totalBytes,
+		GUIRollouts:                   guiRollouts,
+		QuarantinedGUIRollouts:        len(quarantinedGUIRollouts),
+		BundleSHA256:                  bundleHash,
 	}, nil
 }
 
@@ -589,14 +617,19 @@ func verifySourceSetStable(codexRoot string, before []sourceFile, beforeDirector
 	return nil
 }
 
-func validateSQLiteAndRollouts(
+func validateSQLiteAndRollouts(sqliteExecutable, payloadRoot string, files map[string]manifestFile, options SnapshotOptions) (int, []quarantinedGUIRollout, error) {
+	count, quarantine, _, err := validateSQLiteAndRolloutsEvidence(sqliteExecutable, payloadRoot, files, options, false, true)
+	return count, quarantine, err
+}
+
+func validateSQLiteAndRolloutsEvidence(
 	sqliteExecutable, payloadRoot string,
 	files map[string]manifestFile,
-	options SnapshotOptions,
-) (int, []quarantinedGUIRollout, error) {
-	validationRoot := filepath.Join(filepath.Dir(payloadRoot), ".sqlite-validation")
-	if err := os.Mkdir(validationRoot, 0o700); err != nil {
-		return 0, nil, fmt.Errorf("create private SQLite validation directory: %w", err)
+	options SnapshotOptions, allowUnavailable, checkSource bool,
+) (int, []quarantinedGUIRollout, []unavailableArchivedReference, error) {
+	validationRoot, err := os.MkdirTemp("", "codex-gui-history-sqlite-validation-")
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("create private SQLite validation directory: %w", err)
 	}
 	removeValidation := func() error {
 		if err := os.RemoveAll(validationRoot); err != nil {
@@ -617,10 +650,10 @@ func validateSQLiteAndRollouts(
 		sourcePath := filepath.Join(payloadRoot, filepath.FromSlash(rel))
 		source, err := inspectSourceFile(sourcePath, rel)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, nil, err
 		}
 		if _, err := copyStableFile(source, filepath.Join(validationRoot, filepath.Base(rel))); err != nil {
-			return 0, nil, fmt.Errorf("copy private SQLite validation file %s: %w", rel, err)
+			return 0, nil, nil, fmt.Errorf("copy private SQLite validation file %s: %w", rel, err)
 		}
 	}
 	var stateDatabases []string
@@ -630,43 +663,58 @@ func validateSQLiteAndRollouts(
 		}
 		if (strings.HasPrefix(rel, "state_") || strings.HasPrefix(rel, "goals_")) && strings.HasSuffix(rel, ".sqlite") {
 			if err := sqliteQuickCheck(sqliteExecutable, filepath.Join(validationRoot, filepath.Base(rel))); err != nil {
-				return 0, nil, fmt.Errorf("validate captured SQLite database %s: %w", rel, err)
+				return 0, nil, nil, fmt.Errorf("validate captured SQLite database %s: %w", rel, err)
 			}
 		}
 	}
 	sort.Strings(stateDatabases)
 	guiRollouts := 0
 	var quarantinedGUIRollouts []quarantinedGUIRollout
+	var unavailable []unavailableArchivedReference
+	identities := make(map[string]int)
+	members := make(map[string]int)
 	for _, rel := range stateDatabases {
 		database := filepath.Join(validationRoot, filepath.Base(rel))
 		rollouts, err := sqliteGUIRollouts(sqliteExecutable, database)
 		if err != nil {
-			return 0, nil, fmt.Errorf("enumerate GUI rollout references from %s: %w", rel, err)
+			return 0, nil, nil, fmt.Errorf("enumerate GUI rollout references from %s: %w", rel, err)
 		}
 		var objectives map[string]string
 		for _, rollout := range rollouts {
+			identities[rollout.ThreadID]++
 			historyRel, err := rolloutRelativePath(rollout.RolloutPath, options)
 			if err != nil {
-				return 0, nil, err
+				return 0, nil, nil, err
 			}
+			members[historyRel]++
 			fileRecord, ok := files[historyRel]
 			if !ok {
-				return 0, nil, missingGUIRolloutRefusal(sqliteExecutable, database, rel, rollout, historyRel, options)
+				if allowUnavailable {
+					record, err := classifyUnavailableArchivedReference(sqliteExecutable, database, rel, rollout, historyRel, options, checkSource)
+					if err == nil {
+						unavailable = append(unavailable, record)
+						continue
+					}
+				}
+				if !checkSource {
+					return 0, nil, nil, fmt.Errorf("retained captured GUI reference is missing or lacks unavailable-archive evidence")
+				}
+				return 0, nil, nil, missingGUIRolloutRefusal(sqliteExecutable, database, rel, rollout, historyRel, options)
 			}
 			validation, err := validateGUIRolloutJSONL(payloadRoot, historyRel, rollout.ThreadID)
 			if err != nil {
-				return 0, nil, err
+				return 0, nil, nil, err
 			}
 			if validation.InvalidRecordCount > 0 {
 				if objectives == nil {
 					objectives, err = sqliteGUIObjectives(sqliteExecutable, database)
 					if err != nil {
-						return 0, nil, fmt.Errorf("enumerate GUI objective custody from %s: %w", rel, err)
+						return 0, nil, nil, fmt.Errorf("enumerate GUI objective custody from %s: %w", rel, err)
 					}
 				}
 				objective, ok := objectives[rollout.ThreadID]
 				if !ok || strings.TrimSpace(objective) == "" {
-					return 0, nil, fmt.Errorf("malformed GUI rollout has no durable objective custody in %s for thread %s", rel, rollout.ThreadID)
+					return 0, nil, nil, fmt.Errorf("malformed GUI rollout has no durable objective custody in %s for thread %s", rel, rollout.ThreadID)
 				}
 				objectiveHash := sha256.Sum256([]byte(objective))
 				quarantinedGUIRollouts = append(quarantinedGUIRollouts, quarantinedGUIRollout{
@@ -693,11 +741,17 @@ func validateSQLiteAndRollouts(
 			guiRollouts++
 		}
 	}
+	for _, record := range unavailable {
+		if identities[record.ThreadID] != 1 || members[record.MappedHistoryMember] != 1 {
+			return 0, nil, nil, fmt.Errorf("unavailable archived reference has ambiguous captured identity")
+		}
+	}
+	sortUnavailableReferences(unavailable)
 	if err := removeValidation(); err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	validationCleaned = true
-	return guiRollouts, quarantinedGUIRollouts, nil
+	return guiRollouts, quarantinedGUIRollouts, unavailable, nil
 }
 
 func captureRequiredBytes(files []sourceFile) (int64, error) {
@@ -1115,7 +1169,7 @@ func readFixedSnapshot(options SnapshotOptions, manifestPath string) (snapshotMa
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return snapshotManifest{}, nil, fmt.Errorf("history manifest must contain one object")
 	}
-	if manifest.SchemaVersion != SnapshotSchema || manifest.Status != "complete" || manifest.Project != options.Project || manifest.ResetKind != options.ResetKind || manifest.AgentIndex != options.AgentIndex || manifest.SourceHostHome != filepath.Clean(options.HostHome) || manifest.SourceSandboxHome != filepath.Clean(options.SandboxHome) || len(manifest.Files) != manifest.FileCount || aggregateHash(manifest.Files) != manifest.BundleSHA256 {
+	if !validSnapshotClass(manifest) || manifest.Project != options.Project || manifest.ResetKind != options.ResetKind || manifest.AgentIndex != options.AgentIndex || manifest.SourceHostHome != filepath.Clean(options.HostHome) || manifest.SourceSandboxHome != filepath.Clean(options.SandboxHome) || len(manifest.Files) != manifest.FileCount || aggregateHash(manifest.Files) != manifest.BundleSHA256 {
 		return snapshotManifest{}, nil, fmt.Errorf("history manifest does not bind the captured fixed-slot source")
 	}
 	fileSet := make(map[string]manifestFile, len(manifest.Files))
@@ -1135,7 +1189,7 @@ func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
 	if err := VerifyCapturedBundle(options, manifestPath); err != nil {
 		return err
 	}
-	_, fileSet, err := readFixedSnapshot(options, manifestPath)
+	manifest, fileSet, err := readFixedSnapshot(options, manifestPath)
 	if err != nil {
 		return err
 	}
@@ -1153,7 +1207,10 @@ func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
 			return fmt.Errorf("captured fixed-slot history source member changed")
 		}
 	}
-	return verifySourceSetStable(hostCodex, files, directories, exists, fileSet)
+	if err := verifySourceSetStable(hostCodex, files, directories, exists, fileSet); err != nil {
+		return err
+	}
+	return verifyUnavailableSourceAbsence(hostCodex, manifest.UnavailableArchivedReferences)
 }
 
 // VerifyCapturedBundle proves every retained payload member still has the exact
@@ -1209,6 +1266,14 @@ func VerifyCapturedBundle(options SnapshotOptions, manifestPath string) error {
 	}
 	if len(seen) != len(fileSet) {
 		return fmt.Errorf("retained history payload has missing members")
+	}
+	if err := verifySourceSetStable(payload, files, directories, exists, fileSet); err != nil {
+		return err
+	}
+	// Validate both classes: deleting v3 metadata must not turn an incomplete
+	// reference closure into a supposedly complete v2 generation.
+	if err := verifyCapturedReferenceEvidence(options, manifest, payload, fileSet); err != nil {
+		return err
 	}
 	return verifySourceSetStable(payload, files, directories, exists, fileSet)
 }

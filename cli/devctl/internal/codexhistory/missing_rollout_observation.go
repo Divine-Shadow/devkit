@@ -108,8 +108,9 @@ func sourceMemberObservation(info fs.FileInfo, err error) string {
 }
 
 func observeGUIArchiveState(executable, database, threadID string) (string, string) {
-	// Diagnostics run only after capture already refused. A missing legacy
-	// column, failed query or timeout remains unknown, never a new precondition.
+	// Read the exact captured SQLite row. Diagnostic callers retain unknown;
+	// unavailable-archive classification admits only the strict integer-1 result.
+	// Legacy columns, errors and timeouts never establish archived state.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	query := func(sql string) (string, error) {
