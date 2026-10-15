@@ -552,3 +552,91 @@ func TestTerraformReadinessFixtureUsesExactUnchangedGenericAndAuthChecks(t *test
 		}
 	}
 }
+
+func TestTerraformOwnershipRefusalReportsPublicMetadataAndStaysFailed(t *testing.T) {
+	// Fault injection exercises diagnostic emission through the real parsed batch
+	// and report. It does not claim a foreign/mapped UID or namespace acceptance.
+	const ownerPredicate = "if info.st_uid != os.geteuid() and not (immutable_source and info.st_uid == 0):"
+	for _, fileClass := range []string{"immutable-source", "projected-config"} {
+		t.Run(fileClass, func(t *testing.T) {
+			f := terraformReadinessNewFixture(t)
+			const privateMarker = "diagnostic-must-not-read-config-or-auth-content-93d25e"
+			b, err := os.ReadFile(f.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b = append(b, []byte("# "+privateMarker+"\n")...)
+			terraformReadinessWrite(t, f.source, string(b), 0444)
+			terraformReadinessWrite(t, f.config, string(b), 0600)
+			terraformReadinessWrite(t, filepath.Join(f.home, ".codex", "auth.json"), `{"OPENAI_API_KEY":"`+privateMarker+`"}`, 0600)
+			f.records[0]["sourceSha256"] = fmt.Sprintf("%x", sha256.Sum256(b))
+			f.writeManifest(t)
+			checks := terraformReadinessActualOverlayChecks(t)
+			injected := false
+			for i := range checks {
+				if checks[i].Name != "terraform-config-profile" {
+					continue
+				}
+				if strings.Count(checks[i].Command, ownerPredicate) != 1 {
+					t.Fatal("production ownership predicate changed")
+				}
+				condition := "if immutable_source:"
+				if fileClass == "projected-config" {
+					condition = "if not immutable_source:"
+				}
+				checks[i].Command = strings.Replace(checks[i].Command, ownerPredicate, condition, 1)
+				injected = true
+			}
+			if !injected {
+				t.Fatal("actual profile check absent")
+			}
+			e := f.report(t, checks)
+			if e.RuntimeReady || e.Status == "tools-ready" || e.RepoReady || e.CapacityAvailable {
+				t.Fatalf("owner refusal earned readiness: %#v", e)
+			}
+			if len(e.FailedChecks) != 1 || e.FailedChecks[0].Name != "terraform-config-profile" {
+				t.Fatalf("unrelated failure: %#v", e.FailedChecks)
+			}
+			detail := e.FailedChecks[0].Detail
+			if !strings.Contains(detail, "exit status 1: Terraform profile readiness: foreign source or projected file owner;") {
+				t.Fatalf("nonzero owner refusal lost: %s", detail)
+			}
+			_, raw, ok := strings.Cut(detail, "ownership_readback=")
+			if !ok {
+				t.Fatal("public ownership evidence absent")
+			}
+			var evidence struct {
+				Schema    string `json:"schema"`
+				FileClass string `json:"failedFileClass"`
+				Opened    struct {
+					Path string `json:"path"`
+					UID  int    `json:"uid"`
+				} `json:"failedOpenedFile"`
+				Checker struct {
+					EUID   int    `json:"euid"`
+					UIDMap string `json:"uidMap"`
+					GIDMap string `json:"gidMap"`
+				} `json:"checker"`
+				Home         string `json:"home"`
+				CodexHome    string `json:"codexHome"`
+				ContentsRead bool   `json:"fileContentsReadForDiagnostic"`
+			}
+			if err := json.Unmarshal([]byte(raw), &evidence); err != nil {
+				t.Fatalf("invalid diagnostic JSON: %v: %s", err, raw)
+			}
+			wantPath := f.source
+			if fileClass == "projected-config" {
+				wantPath = f.config
+			}
+			if evidence.Schema != "devkit/tf-profile-ownership-refusal/v1" || evidence.FileClass != fileClass || evidence.Opened.Path != wantPath || evidence.Opened.UID != os.Geteuid() || evidence.Checker.EUID != os.Geteuid() || evidence.Home != f.home || evidence.CodexHome != filepath.Dir(f.config) || evidence.ContentsRead {
+				t.Fatalf("wrong actual diagnostic fields: %s", raw)
+			}
+			if len(evidence.Checker.UIDMap) == 0 || len(evidence.Checker.GIDMap) == 0 || len(evidence.Checker.UIDMap) > 8192 || len(evidence.Checker.GIDMap) > 8192 {
+				t.Fatal("namespace maps absent or unbounded")
+			}
+			if strings.Contains(raw, privateMarker) || strings.Contains(raw, "OPENAI_API_KEY") || strings.Contains(raw, "[profiles.openai]") {
+				t.Fatal("diagnostic disclosed source/config/auth content")
+			}
+		})
+	}
+}

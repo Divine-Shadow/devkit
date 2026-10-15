@@ -123,3 +123,5 @@ Root2874 bounded TF1 tools phase: full provider preparation remains the default.
 - TF1 required-bind materialization repair (Root2918): extend existing launch projector only after exact native-plan geometry validation; retain Required bindings and full defaults. See [execution plan](execplans/terraform-agent1-source-preparation-20261014.md).
 
 - TF1 immutable tool/profile readiness (Root2941): preserve generic GUI0.160, enter only the fixed Terraform child for pure tool identity checks, and compare the existing declared Terraform profile source/projected bytes. Four existing Devkit leaves only; [plan](execplans/terraform-agent1-source-preparation-20261014.md) records actual failure, old/new consequences and separately owned Runtime acceptance.
+
+- TF1 native ownership refusal observation (Root2956): retain every d819 owner/hash/mode/byte guard and nonzero result; emit only bounded public metadata from the existing failed checker. Actual TF namespace ownership remains a receiving observation; no UID65534 allowance or installed-readiness claim. See the existing TF1 execution plan.
