@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active custody evidence repair: [Content-free GUI-history refusal evidence](execplans/missing-gui-history-observations-20261015.md).
+
 An ExecPlan is a self-contained implementation plan that a future agent or
 human can use without relying on chat history. Keep each plan as a living
 document: update `Progress`, `Surprises & Discoveries`, `Decision Log`, and

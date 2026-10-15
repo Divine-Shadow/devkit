@@ -651,7 +651,7 @@ func validateSQLiteAndRollouts(
 			}
 			fileRecord, ok := files[historyRel]
 			if !ok {
-				return 0, nil, fmt.Errorf("GUI rollout reference is missing from resumable history: %s", rollout.RolloutPath)
+				return 0, nil, missingGUIRolloutRefusal(sqliteExecutable, database, rel, rollout, historyRel, options)
 			}
 			validation, err := validateGUIRolloutJSONL(payloadRoot, historyRel, rollout.ThreadID)
 			if err != nil {
@@ -872,29 +872,33 @@ func sqliteGUIObjectives(executable, database string) (map[string]string, error)
 }
 
 func rolloutRelativePath(raw string, options SnapshotOptions) (string, error) {
+	rel, _, err := rolloutReferenceMapping(raw, options)
+	return rel, err
+}
+
+func rolloutReferenceMapping(raw string, options SnapshotOptions) (string, string, error) {
 	path := filepath.Clean(strings.TrimSpace(raw))
 	if path == "." || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("GUI rollout reference is not absolute: %s", raw)
+		return "", "", fmt.Errorf("GUI rollout reference is not absolute: %s", raw)
 	}
-	roots := []string{
-		filepath.Join(options.SandboxHome, ".codex"),
-		filepath.Join(options.HostHome, ".codex"),
+	roots := []struct{ path, class string }{
+		{filepath.Join(options.SandboxHome, ".codex"), "sandbox-home"},
+		{filepath.Join(options.HostHome, ".codex"), "host-home"},
 	}
 	projectedRoot, err := workspaceProjectedCodexRoot(options)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if projectedRoot != "" {
-		roots = append(roots, projectedRoot)
+		roots = append(roots, struct{ path, class string }{projectedRoot, "workspace-projection"})
 	}
 	for _, root := range roots {
-		root = filepath.Clean(root)
-		rel, err := filepath.Rel(root, path)
+		rel, err := filepath.Rel(filepath.Clean(root.path), path)
 		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return filepath.ToSlash(rel), nil
+			return filepath.ToSlash(rel), root.class, nil
 		}
 	}
-	return "", fmt.Errorf("GUI rollout reference escapes the source-derived Codex home: %s", raw)
+	return "", "", fmt.Errorf("GUI rollout reference escapes the source-derived Codex home: %s", raw)
 }
 
 func workspaceProjectedCodexRoot(options SnapshotOptions) (string, error) {
