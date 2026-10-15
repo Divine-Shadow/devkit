@@ -134,3 +134,5 @@ Root2874 bounded TF1 tools phase: full provider preparation remains the default.
 - TF1 namespace ownership correction: actual checker evidence now binds immutable source/store ownership in the selected namespace. Anchor only the foreign immutable-source alternative to the fixed read-only store descriptor; retain mutable EUID/0600 and every independent source check. See [plan](execplans/terraform-agent1-source-preparation-20261014.md) and [decision](../docs/decision-framework/governance_decisions/20261015_terraform_namespace_immutable_store_owner.md). Source qualification and actual installed acceptance remain separate obligations.
 
 - [Proxy-only managed endpoint lifecycle](execplans/proxy-only-managed-endpoints-20261015.md): repair normal preparation/execution isolation without reusing or touching an unverified existing listener; actual Auth consumer remains Runtime-owned.
+
+- 2026-10-15: [Existing Terraform provider failure diagnostic](execplans/terraform-provider-failure-diagnostic-20261015.md): Source-owned narrow typed nonsecret receipt; normal gates/publication/immutable supply and actual Auth consumer required.

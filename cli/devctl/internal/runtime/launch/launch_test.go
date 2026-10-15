@@ -2074,3 +2074,30 @@ func runTestCommand(t *testing.T, dir string, args ...string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+func TestSeedTerraformProviderFailureEmitsOnlyFiniteDiagnosticAndNeverProjects(t *testing.T) {
+	root := t.TempDir()
+	hydrator := filepath.Join(root, "hydrate")
+	diagnostic := terraformProviderAWSDiagnostic{SchemaVersion: "terraform-provider-aws-diagnostic/v1", Stage: "token", ErrorCode: "ExpiredToken", FailureClass: "expired_token"}
+	script := "#!/bin/sh\nprintf '%s\\n' 'PRIVATE_STDOUT'\nprintf '%s\\n' 'PRIVATE_STDERR' '" + diagnostic.wireLine() + "' 'Terraform provider credential hydration failed: approved DNSimple token source is unavailable' >&2\nexit 1\n"
+	if err := os.WriteFile(hydrator, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	previousHydrator, previousRoot := terraformProviderCredentialHydrator, terraformProviderCredentialRoot
+	terraformProviderCredentialHydrator, terraformProviderCredentialRoot = hydrator, filepath.Join(root, "absent-source")
+	t.Cleanup(func() {
+		terraformProviderCredentialHydrator, terraformProviderCredentialRoot = previousHydrator, previousRoot
+	})
+	home := filepath.Join(root, "consumer")
+	p := nativeplan.Plan{Agent: agent.Spec{ID: agent.ID{Project: "ouroboros-terraform", Repo: "ouroboros-terraform", Index: 1}, HostHome: home}}
+	err := SeedTerraformProviderCredentials(p)
+	if err == nil || strings.Contains(err.Error(), "PRIVATE") || !strings.Contains(err.Error(), "approved DNSimple token source is unavailable") {
+		t.Fatalf("unsafe or missing failure evidence: %v", err)
+	}
+	if got := parseTerraformProviderAWSDiagnostic([]byte(err.Error())); got == nil || got.ErrorCode != "ExpiredToken" {
+		t.Fatalf("diagnostic lost: %v", err)
+	}
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatal("failed source read created consumer projection")
+	}
+}

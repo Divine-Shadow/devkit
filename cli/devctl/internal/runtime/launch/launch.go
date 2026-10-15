@@ -493,6 +493,16 @@ func SeedTerraformProviderCredentials(p nativeplan.Plan) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// Only the finite canonical helper record crosses this boundary. Raw
+		// stderr remains private, including on malformed or unknown output.
+		if diagnostic := parseTerraformProviderAWSDiagnostic(stderr.Bytes()); diagnostic != nil {
+			reason := terraformProviderCredentialHydrationFailureReason(stderr.String())
+			message := "source-derived Terraform provider credential hydration failed"
+			if reason != "" {
+				message += ": " + reason
+			}
+			return fmt.Errorf("%s\n%s", message, diagnostic.wireLine())
+		}
 		if reason := terraformProviderCredentialHydrationFailureReason(stderr.String()); reason != "" {
 			return fmt.Errorf("source-derived Terraform provider credential hydration failed: %s", reason)
 		}
