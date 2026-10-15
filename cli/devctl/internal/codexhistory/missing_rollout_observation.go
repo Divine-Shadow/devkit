@@ -71,6 +71,11 @@ func missingGUIRolloutRefusal(executable, database, databaseRel string, rollout 
 }
 
 func observeDeclaredSourceMember(root, rel string) string {
+	// A hostile or stale database reference must not turn this diagnostic into
+	// an existence oracle for credentials or other non-history members.
+	if !isGUIRolloutMember(rel) {
+		return "unknown"
+	}
 	// Reuse the provider's held-directory/no-follow traversal. Observe only the
 	// final member's metadata; never follow an alias or open its body.
 	dir, err := openProjectionDir(root)

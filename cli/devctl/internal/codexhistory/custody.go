@@ -761,8 +761,7 @@ func sqliteQuickCheck(executable, database string) error {
 }
 
 func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) (guiRolloutValidation, error) {
-	parts := strings.Split(rel, "/")
-	if len(parts) < 2 || (parts[0] != "sessions" && parts[0] != "archived_sessions" && parts[0] != "rollouts") || filepath.Ext(rel) != ".jsonl" {
+	if !isGUIRolloutMember(rel) {
 		return guiRolloutValidation{}, fmt.Errorf("GUI rollout reference is not a resumable JSONL history file: %s", rel)
 	}
 	if strings.TrimSpace(threadID) == "" {
@@ -824,6 +823,11 @@ func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) (guiRolloutValid
 		return guiRolloutValidation{}, fmt.Errorf("captured GUI rollout has no matching session_meta identity: %s", rel)
 	}
 	return validation, nil
+}
+
+func isGUIRolloutMember(rel string) bool {
+	parts := strings.Split(rel, "/")
+	return len(parts) >= 2 && (parts[0] == "sessions" || parts[0] == "archived_sessions" || parts[0] == "rollouts") && filepath.Ext(rel) == ".jsonl"
 }
 
 func sqliteGUIRollouts(executable, database string) ([]sqliteRollout, error) {

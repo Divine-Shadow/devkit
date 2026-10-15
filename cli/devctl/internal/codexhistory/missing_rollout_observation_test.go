@@ -158,13 +158,20 @@ func TestDiagnosticSourceObservationDoesNotFollowAliases(t *testing.T) {
 	if got := observeDeclaredSourceMember(f.codexRoot, "archived_sessions/private.jsonl"); got != "unknown" {
 		t.Fatalf("parent alias supplied a source observation: %s", got)
 	}
-	if err := os.Symlink(filepath.Join(outside, "private.jsonl"), filepath.Join(f.codexRoot, "link.jsonl")); err != nil {
+	if err := os.MkdirAll(filepath.Join(f.codexRoot, "sessions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got := observeDeclaredSourceMember(f.codexRoot, "link.jsonl"); got != "present-symlink" {
+	if err := os.Symlink(filepath.Join(outside, "private.jsonl"), filepath.Join(f.codexRoot, "sessions/link.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if got := observeDeclaredSourceMember(f.codexRoot, "sessions/link.jsonl"); got != "present-symlink" {
 		t.Fatalf("final alias followed or hidden: %s", got)
 	}
 	if got := observeDeclaredSourceMember(f.codexRoot, "../private.jsonl"); got != "unknown" {
 		t.Fatalf("escaping diagnostic member admitted: %s", got)
+	}
+	writeTestFile(t, filepath.Join(f.codexRoot, "auth.json"), "excluded-private-credential")
+	if got := observeDeclaredSourceMember(f.codexRoot, "auth.json"); got != "unknown" {
+		t.Fatalf("non-history member supplied metadata: %s", got)
 	}
 }

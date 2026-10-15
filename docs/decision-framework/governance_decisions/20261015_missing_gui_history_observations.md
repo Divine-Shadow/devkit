@@ -35,6 +35,8 @@ missing rollout, print title/objective/session content, select a cold provider,
 restore data or create a successful snapshot. Legacy databases without an
 archived column remain supported and explicitly report unavailable metadata.
 Diagnostic observation failure never replaces the original preservation refusal.
+Metadata observation is restricted to the same GUI JSONL namespace predicate as
+body validation, so a non-history reference cannot inspect credential metadata.
 
 Meaningful tests cover all mapping classes, archived/unarchived/legacy rows,
 captured-set absence with a present original, metadata failures, private-content
