@@ -164,13 +164,30 @@ readiness:
             }
             refuse("foreign source or projected file owner; ownership_readback=" + json.dumps(evidence, sort_keys=True))
 
+        def owned_by_immutable_store(info, source_fd):
+            # UIDs are interpreted in this checker namespace. The fixed store
+            # directory, not a host-root/overflow number, anchors foreign source
+            # ownership. Both opened filesystems must actually be read-only.
+            anchor_fd = -1
+            try:
+                anchor_fd = os.open("/nix/store", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                anchor = os.fstat(anchor_fd)
+                return (stat.S_ISDIR(anchor.st_mode) and info.st_uid == anchor.st_uid
+                        and bool(os.fstatvfs(anchor_fd).f_flag & os.ST_RDONLY)
+                        and bool(os.fstatvfs(source_fd).f_flag & os.ST_RDONLY))
+            except OSError:
+                return False
+            finally:
+                if anchor_fd >= 0:
+                    os.close(anchor_fd)
+
         def read_regular(path, immutable_source=False):
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(fd, "rb") as stream:
                 info = os.fstat(stream.fileno())
                 if not stat.S_ISREG(info.st_mode):
                     refuse("special source or projected file")
-                if info.st_uid != os.geteuid() and not (immutable_source and info.st_uid == 0):
+                if info.st_uid != os.geteuid() and not (immutable_source and owned_by_immutable_store(info, stream.fileno())):
                     refuse_owner(path, info, immutable_source)
                 if not immutable_source and stat.S_IMODE(info.st_mode) != 0o600:
                     refuse("unsafe projected config mode")

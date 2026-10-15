@@ -231,6 +231,7 @@ type terraformReadinessFixture struct {
 	source, config, support, calls                                   string
 	records                                                          []map[string]any
 	wholeBatch                                                       bool
+	profileMetadataControl                                           string
 }
 
 func terraformReadinessWrite(t *testing.T, path, data string, mode os.FileMode) {
@@ -360,7 +361,7 @@ func terraformReadinessActualOverlayChecks(t *testing.T) []runtimeCheck {
 
 func (f *terraformReadinessFixture) mapFixedPaths(command string) string {
 	// Exact fixture substitutions only; production exposes no override interface.
-	return strings.NewReplacer("/run/current-system/sw/bin/ouro-terra-runtime", f.wrapper, "/run/current-system/etc/fleet/source/codex-config-projections.json", f.manifest, "/nix/store/", f.store+"/", "/workspaces/dev", filepath.Dir(f.worktree), "/usr/bin/env", filepath.Join(f.baseBin, "env"), "/bin/sh", filepath.Join(f.baseBin, "sh")).Replace(command)
+	return strings.NewReplacer("/run/current-system/sw/bin/ouro-terra-runtime", f.wrapper, "/run/current-system/etc/fleet/source/codex-config-projections.json", f.manifest, "/nix/store/", f.store+"/", `"/nix/store"`, fmt.Sprintf("%q", f.store), "/workspaces/dev", filepath.Dir(f.worktree), "/usr/bin/env", filepath.Join(f.baseBin, "env"), "/bin/sh", filepath.Join(f.baseBin, "sh")).Replace(command)
 }
 
 func (f *terraformReadinessFixture) report(t *testing.T, checks []runtimeCheck) nativeReadinessEvidence {
@@ -374,6 +375,10 @@ func (f *terraformReadinessFixture) report(t *testing.T, checks []runtimeCheck) 
 	executor := func(_ nativeplan.Plan, batch []sandboxReadinessCheck) ([]sandboxReadinessResult, error) {
 		for i := range batch {
 			batch[i].Command = f.mapFixedPaths(batch[i].Command)
+			if batch[i].Name == "terraform-config-profile" && f.profileMetadataControl != "" {
+				// Insert fixture-local paths after fixed production path mapping.
+				batch[i].Command = strings.Replace(batch[i].Command, "import stat\n", "import stat\n"+f.profileMetadataControl, 1)
+			}
 		}
 		argv := sandboxReadinessCommand(batch)
 		cmd := exec.Command(argv[0], argv[1:]...)
@@ -556,7 +561,7 @@ func TestTerraformReadinessFixtureUsesExactUnchangedGenericAndAuthChecks(t *test
 func TestTerraformOwnershipRefusalReportsPublicMetadataAndStaysFailed(t *testing.T) {
 	// Fault injection exercises diagnostic emission through the real parsed batch
 	// and report. It does not claim a foreign/mapped UID or namespace acceptance.
-	const ownerPredicate = "if info.st_uid != os.geteuid() and not (immutable_source and info.st_uid == 0):"
+	const ownerPredicate = "if info.st_uid != os.geteuid() and not (immutable_source and owned_by_immutable_store(info, stream.fileno())):"
 	for _, fileClass := range []string{"immutable-source", "projected-config"} {
 		t.Run(fileClass, func(t *testing.T) {
 			f := terraformReadinessNewFixture(t)
@@ -636,6 +641,167 @@ func TestTerraformOwnershipRefusalReportsPublicMetadataAndStaysFailed(t *testing
 			}
 			if strings.Contains(raw, privateMarker) || strings.Contains(raw, "OPENAI_API_KEY") || strings.Contains(raw, "[profiles.openai]") {
 				t.Fatal("diagnostic disclosed source/config/auth content")
+			}
+		})
+	}
+}
+
+type terraformNamespaceOwnerObservation struct {
+	sourceUID, storeUID, projectionUID int
+	sourceReadOnly, storeReadOnly      bool
+	anchorPath                         string
+}
+
+func terraformObservedNamespaceChecks(t *testing.T, f *terraformReadinessFixture, observed terraformNamespaceOwnerObservation, variant string) []runtimeCheck {
+	t.Helper()
+	checks := terraformReadinessActualOverlayChecks(t)
+	// Disclosed syscall metadata controls reproduce observed namespace inputs.
+	// The real production predicate, fd opens, byte reads/hash checks, whole
+	// batch/result parser and report all execute. No consumer or kernel mapping
+	// is changed; installed namespace acceptance remains Runtime-owned.
+	shim := fmt.Sprintf(`
+_fixture_fstat = os.fstat
+_fixture_fstatvfs = os.fstatvfs
+_fixture_readlink = os.readlink
+def _fixture_path(fd):
+    return _fixture_readlink("/proc/self/fd/" + str(fd))
+def _fixture_observed_fstat(fd):
+    values = list(_fixture_fstat(fd))
+    path = _fixture_path(fd)
+    if path == %q:
+        values[4], values[5] = %d, 65534
+    elif path == %q:
+        values[4], values[5] = %d, 65534
+    elif path == %q:
+        values[4], values[5] = %d, 100
+    return os.stat_result(values)
+def _fixture_observed_fstatvfs(fd):
+    values = list(_fixture_fstatvfs(fd))
+    path = _fixture_path(fd)
+    if path == %q:
+        readonly = %s
+    elif path == %q:
+        readonly = %s
+    else:
+        return os.statvfs_result(values)
+    values[8] = (values[8] | os.ST_RDONLY) if readonly else (values[8] & ~os.ST_RDONLY)
+    return os.statvfs_result(values)
+os.fstat = _fixture_observed_fstat
+os.fstatvfs = _fixture_observed_fstatvfs
+os.geteuid = lambda: 1000
+os.getegid = lambda: 100
+`, f.source, observed.sourceUID, f.store, observed.storeUID, f.config, observed.projectionUID, f.source, map[bool]string{true: "True", false: "False"}[observed.sourceReadOnly], f.store, map[bool]string{true: "True", false: "False"}[observed.storeReadOnly])
+	found := false
+	for i := range checks {
+		if checks[i].Name != "terraform-config-profile" {
+			continue
+		}
+		found = true
+		command := checks[i].Command
+		if strings.Count(command, "import stat\n") != 1 {
+			t.Fatal("production profile imports changed")
+		}
+		f.profileMetadataControl = shim
+		if observed.anchorPath != "" {
+			const anchorOpen = `os.open("/nix/store", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)`
+			if strings.Count(command, anchorOpen) != 1 {
+				t.Fatal("production fixed anchor open changed")
+			}
+			command = strings.Replace(command, anchorOpen, fmt.Sprintf("os.open(%q, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)", observed.anchorPath), 1)
+		}
+		switch variant {
+		case "production":
+		case "old-numeric-root":
+			const predicate = "if info.st_uid != os.geteuid() and not (immutable_source and owned_by_immutable_store(info, stream.fileno())):"
+			if strings.Count(command, predicate) != 1 {
+				t.Fatal("production ownership predicate changed")
+			}
+			command = strings.Replace(command, predicate, "if info.st_uid != os.geteuid() and not (immutable_source and info.st_uid == 0):", 1)
+		case "corrupt-anchor-owner":
+			const comparison = "info.st_uid == anchor.st_uid"
+			if strings.Count(command, comparison) != 1 {
+				t.Fatal("production anchor comparison changed")
+			}
+			command = strings.Replace(command, comparison, "True", 1)
+		default:
+			t.Fatal("unknown fixture control")
+		}
+		checks[i].Command = command
+	}
+	if !found {
+		t.Fatal("actual profile check absent")
+	}
+	return checks
+}
+
+func TestTerraformImmutableSourceOwnershipUsesObservedReadonlyStoreAnchor(t *testing.T) {
+	for _, kind := range []string{"mapped-overflow-owner", "different-mapped-owner", "ordinary-root-owner", "existing-euid-owner", "foreign-source", "literal-root-is-foreign", "overflow-is-foreign", "writable-store", "writable-source", "anchor-file", "anchor-symlink", "foreign-projection", "source-digest", "changed-projection", "projection-mode"} {
+		t.Run(kind, func(t *testing.T) {
+			f := terraformReadinessNewFixture(t)
+			observed := terraformNamespaceOwnerObservation{sourceUID: 65534, storeUID: 65534, projectionUID: 1000, sourceReadOnly: true, storeReadOnly: true}
+			wantReady := false
+			switch kind {
+			case "mapped-overflow-owner":
+				wantReady = true
+			case "different-mapped-owner":
+				observed.sourceUID, observed.storeUID, wantReady = 4242, 4242, true
+			case "ordinary-root-owner":
+				observed.sourceUID, observed.storeUID, wantReady = 0, 0, true
+			case "existing-euid-owner":
+				observed.sourceUID, observed.storeReadOnly, observed.sourceReadOnly, wantReady = 1000, false, false, true
+			case "foreign-source":
+				observed.sourceUID = 4242
+			case "literal-root-is-foreign":
+				observed.sourceUID = 0
+			case "overflow-is-foreign":
+				observed.storeUID = 4242
+			case "writable-store":
+				observed.storeReadOnly = false
+			case "writable-source":
+				observed.sourceReadOnly = false
+			case "anchor-file", "anchor-symlink":
+				observed.anchorPath = filepath.Join(f.root, "invalid-anchor")
+				if kind == "anchor-file" {
+					terraformReadinessWrite(t, observed.anchorPath, "not a directory", 0444)
+				} else if err := os.Symlink(f.store, observed.anchorPath); err != nil {
+					t.Fatal(err)
+				}
+			case "foreign-projection":
+				// Even matching the immutable store owner cannot admit mutable config.
+				observed.projectionUID = 65534
+			case "source-digest":
+				f.records[0]["sourceSha256"] = strings.Repeat("0", 64)
+				f.writeManifest(t)
+			case "changed-projection":
+				terraformReadinessWrite(t, f.config, "changed", 0600)
+			case "projection-mode":
+				if err := os.Chmod(f.config, 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e := f.report(t, terraformObservedNamespaceChecks(t, f, observed, "production"))
+			if e.RuntimeReady != wantReady || e.RepoReady || e.CapacityAvailable || e.ProviderReadiness != "unassessed" || e.ProviderHydration != "deferred" {
+				t.Fatalf("observed namespace %s readiness consequence mismatch: %#v", kind, e)
+			}
+			if !wantReady && (len(e.FailedChecks) != 1 || e.FailedChecks[0].Name != "terraform-config-profile") {
+				t.Fatalf("%s failed unrelated checks: %#v", kind, e)
+			}
+		})
+	}
+}
+
+func TestTerraformImmutableOwnerControlsDiscriminateOldPredicateAndCorruption(t *testing.T) {
+	for _, variant := range []string{"old-numeric-root", "corrupt-anchor-owner"} {
+		t.Run(variant, func(t *testing.T) {
+			f := terraformReadinessNewFixture(t)
+			observed := terraformNamespaceOwnerObservation{sourceUID: 65534, storeUID: 65534, projectionUID: 1000, sourceReadOnly: true, storeReadOnly: true}
+			wantReady := false
+			if variant == "corrupt-anchor-owner" {
+				observed.sourceUID, wantReady = 4242, true
+			}
+			e := f.report(t, terraformObservedNamespaceChecks(t, f, observed, variant))
+			if e.RuntimeReady != wantReady {
+				t.Fatalf("%s did not expose the required before/after or corruption consequence: %#v", variant, e)
 			}
 		})
 	}
