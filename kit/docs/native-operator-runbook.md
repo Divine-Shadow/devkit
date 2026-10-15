@@ -196,6 +196,18 @@ kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'env | gre
 ```
 
 A blocked host should fail through the proxy; an allowed host should connect.
+
+Managed runtime-endpoint preparation/readiness and native execution use
+invocation-owned proxy endpoints even when the plan has no PostgreSQL endpoint.
+This includes normal Terraform preparation after checkout custody validation;
+initial Git bootstrap retains its existing separate endpoint lifecycle. Repeated calls against
+a retained healthy consumer allocate independent endpoints and clean up only
+their own listener. The existing shared listener is neither reused nor stopped
+without ownership authority. Existing-listener refusal, source allowlist and
+required bind validation remain unchanged; a missing or duplicate bind fails
+before the preparation callback. Normal Auth preparation uses this same native
+path; source tests do not establish credential hydration or provider readiness.
+
 `make native-runtime-smoke` exercises both paths.
 
 Nix:

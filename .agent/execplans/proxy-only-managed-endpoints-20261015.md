@@ -1,0 +1,10 @@
+# Proxy-only managed endpoint lifecycle
+
+Existing Source commission01a12d45 under Management01a11f23, continuing Source01a12d56. Actual Auth consumer op-4491b4b9799fd10315943c57f81c618e entered normal native preparation then childexit2 refused an accepting managed-egress endpoint before AWS callback or launcher reuse/restart. Two exact public sanitized originals retained. Kernel executable/socket/namespace reads were denied and ownership stays unverified. No listener stop/unlink, credentials copy or unchanged retry.
+
+- [x] Fresh fetched clean1F writer; exact relevant source predicates show per-run isolation incorrectly gated on PostgreSQL presence in preparation and execution. Existing helper supports proxy-only plans. Independent causal/design review confirms omission, not actual listener ownership/staleness.
+- [ ] Minimal shared isolation trigger through existing helper, normal repeated preparation/execution on retained shared state, overlapping invocation ownership, real policy refusal and callback-error cleanup. Preserve required binds, unknown-listener refusal, PostgreSQL and dry-run contracts.
+- [ ] Full affected native Devkit15, independent source/gate review, normal publication/readback, minimal canonical WSL selection and required affected native/Shadow producer supply. Atomic diagnostic repair proceeds independently, single heavy slot sequentially coordinated.
+- [ ] Runtime normal adoption and same ordinary Auth preparation consumer; predict only disappearance of the exact shared-listener collision. Auth retains substantive decision/receipt assessment. Later AWS/reuse/readiness success remains unearned until observed.
+
+Do not reuse, stop, remove or attest the unknown shared listener. Create a unique invocation-owned endpoint using the existing policy/bind/lifecycle mechanism, remove only that endpoint after its callback. No new API, Desktop relocation, security/credentials/settings change, live Source adoption/restart/provider effect, broad infrastructure requalification or production credential fixture. Original accepted SDK suppliers and canonical custody remain intact.

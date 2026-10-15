@@ -2465,13 +2465,9 @@ func prepareWithManagedEgressProxy(
 }
 
 func withManagedRuntimeEndpoints(p nativeplan.Plan, brokerCfg runtimebroker.Config, dryRun bool, run func(nativeplan.Plan) error) error {
-	runtimePlan := p
-	if !dryRun && runtimePlan.PostgresDockerSocket != "" {
-		var err error
-		runtimePlan, err = isolateManagedRuntimePlan(runtimePlan)
-		if err != nil {
-			return fmt.Errorf("isolate managed runtime endpoints: %w", err)
-		}
+	runtimePlan, err := isolateRuntimeExecutionPlan(p, dryRun)
+	if err != nil {
+		return fmt.Errorf("isolate managed runtime endpoints: %w", err)
 	}
 	var brokerErr error
 	runtimePlan, brokerErr = ensureNativeBrokerEndpoint(runtimePlan, brokerCfg, dryRun)
@@ -3017,7 +3013,9 @@ func isolateManagedRuntimePlan(p nativeplan.Plan) (nativeplan.Plan, error) {
 }
 
 func isolateRuntimeExecutionPlan(p nativeplan.Plan, dryRun bool) (nativeplan.Plan, error) {
-	if dryRun || p.PostgresDockerSocket == "" {
+	// Proxy-only consumers also need their own endpoint. Preparation must not
+	// collide with or assume ownership of a retained consumer's live listener.
+	if dryRun || (p.PostgresDockerSocket == "" && strings.TrimSpace(p.Proxy.AllowlistPath) == "") {
 		return p, nil
 	}
 	return isolateManagedRuntimePlan(p)
