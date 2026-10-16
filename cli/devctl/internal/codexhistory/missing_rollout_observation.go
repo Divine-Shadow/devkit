@@ -16,20 +16,21 @@ import (
 // This observation accompanies an already-required refusal. None of its values
 // changes capture admission, archive eligibility or the preservation warrant.
 type missingRolloutObservation struct {
-	SchemaVersion         string `json:"schema_version"`
-	Invariant             string `json:"invariant"`
-	ObservedAt            string `json:"observed_at"`
-	SourceDatabase        string `json:"source_database"`
-	ThreadID              string `json:"thread_id"`
-	RolloutReference      string `json:"rollout_reference"`
-	MappedHistoryMember   string `json:"mapped_history_member"`
-	ReferenceMapping      string `json:"reference_mapping"`
-	CapturedMemberPresent bool   `json:"captured_member_present"`
-	DeclaredSourceRoot    string `json:"declared_source_root"`
-	DeclaredSourceMember  string `json:"declared_source_member"`
-	RowArchived           string `json:"row_archived"`
-	ArchiveObservation    string `json:"archive_observation"`
-	Resumability          string `json:"resumability"`
+	SchemaVersion         string                   `json:"schema_version"`
+	Invariant             string                   `json:"invariant"`
+	ObservedAt            string                   `json:"observed_at"`
+	SourceDatabase        string                   `json:"source_database"`
+	ThreadID              string                   `json:"thread_id"`
+	RolloutReference      string                   `json:"rollout_reference"`
+	MappedHistoryMember   string                   `json:"mapped_history_member"`
+	ReferenceMapping      string                   `json:"reference_mapping"`
+	CapturedMemberPresent bool                     `json:"captured_member_present"`
+	DeclaredSourceRoot    string                   `json:"declared_source_root"`
+	DeclaredSourceMember  string                   `json:"declared_source_member"`
+	RowArchived           string                   `json:"row_archived"`
+	ArchiveObservation    string                   `json:"archive_observation"`
+	Resumability          string                   `json:"resumability"`
+	RetainedCustody       *retainedMemberInventory `json:"retained_custody,omitempty"`
 }
 
 type missingRolloutError struct {
@@ -67,6 +68,7 @@ func missingGUIRolloutRefusal(executable, database, databaseRel string, rollout 
 		observation.DeclaredSourceMember = observeDeclaredSourceMember(observation.DeclaredSourceRoot, mapped)
 	}
 	observation.RowArchived, observation.ArchiveObservation = observeGUIArchiveState(executable, database, rollout.ThreadID)
+	observation.RetainedCustody = inventoryRetainedMember(options, rollout.ThreadID, historyRel)
 	return &missingRolloutError{observation: observation}
 }
 

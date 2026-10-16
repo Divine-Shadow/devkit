@@ -1316,6 +1316,14 @@ func TestParseNativeSlotResetArgsRequiresExactTypedLaneInterface(t *testing.T) {
 		parsed.workspaceRoot != workspaceRoot || parsed.guiTargetID != "shadow-4" || parsed.format != "json" {
 		t.Fatalf("parsed = %#v", parsed)
 	}
+	preflightArgs := []string{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--preflight-only"}
+	preflight, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: preflightArgs})
+	if err != nil || !preflight.preflightOnly {
+		t.Fatalf("exact source-bound reset preflight rejected: %#v %v", preflight, err)
+	}
+	if _, err := parseNativeSlotResetArgs(&cmdregistry.Context{Args: append(preflightArgs, "--preflight-only")}); err == nil {
+		t.Fatal("duplicate preflight selector admitted")
+	}
 	for _, args := range [][]string{
 		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--worktree-root", "/tmp/escape"},
 		{"reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", workspaceRoot, "--format", "json", "--agent-state-root", "/tmp/escape"},

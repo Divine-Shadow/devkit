@@ -826,14 +826,19 @@ func validateGUIRolloutJSONL(payloadRoot, rel, threadID string) (guiRolloutValid
 		return guiRolloutValidation{}, fmt.Errorf("open captured GUI rollout %s: %w", rel, err)
 	}
 	defer file.Close()
+	return validateGUIRolloutReader(file, rel, threadID)
+}
 
+// Keep the identity/record rules identical for captured files and bounded,
+// privately held custody-member bytes. Neither caller exports history bodies.
+func validateGUIRolloutReader(input io.Reader, rel, threadID string) (guiRolloutValidation, error) {
 	type rolloutEnvelope struct {
 		Type    string `json:"type"`
 		Payload struct {
 			ID string `json:"id"`
 		} `json:"payload"`
 	}
-	reader := bufio.NewReader(file)
+	reader := bufio.NewReader(input)
 	lineNumber := 0
 	matchingSessionMeta := false
 	validation := guiRolloutValidation{}

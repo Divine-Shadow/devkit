@@ -2083,6 +2083,40 @@ fi
 	}
 	_ = foreignProcess.Wait()
 
+	// The real package must discover an already-missing GUI reference before
+	// stopping the selected runtime. The separate preflight mode is the same
+	// source-owned check Fleet invokes before its outer drain.
+	missingDatabase := filepath.Join(selectedProcessHome, ".codex", "state_5.sqlite")
+	missingRollout := filepath.Join(selectedProcessHome, ".codex", "sessions", "missing-preflight.jsonl")
+	runNativeFixtureCommand(t, "sqlite3", missingDatabase,
+		"CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, source TEXT, title TEXT, archived INTEGER); INSERT INTO threads VALUES ('missing-gui-thread', '"+strings.ReplaceAll(missingRollout, "'", "''")+"', 'vscode', 'private-preflight-objective', 0);")
+	for _, preflightOnly := range []bool{true, false} {
+		args := []string{"-p", "dev-all", "native", "reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", filepath.Dir(agent1Worktree), "--format", "json"}
+		if preflightOnly {
+			args = append(args, "--preflight-only")
+		}
+		command := exec.Command(packageDevctl, args...)
+		command.Env = env
+		out, err := command.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "captured-gui-rollout-member-absent") || strings.Contains(string(out), "private-preflight-objective") {
+			t.Fatalf("real pre-stop missing-history refusal invalid (preflight=%v): %v %s", preflightOnly, err, out)
+		}
+		for name, pid := range map[string]int{"selected root": selectedProcess.Process.Pid, "selected descendant": selectedDescendantPID, "sibling": siblingProcess.Process.Pid} {
+			if err := syscall.Kill(pid, 0); err != nil {
+				t.Fatalf("%s stopped before deterministic history refusal: %v", name, err)
+			}
+		}
+		if after, err := os.ReadFile(historyDatabase); err != nil || !bytes.Equal(after, historyBefore) {
+			t.Fatal("preflight changed original goals")
+		}
+	}
+	// Retire only this test-created missing reference; production has no such
+	// bypass. Continue the existing real successful cold-capture/reset proof.
+	if err := os.Remove(missingDatabase); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("real native pre-stop history refusal preserved selected root, descendant, sibling and goals; no reset apply")
+
 	slotOutput, slotErr := runSlotReset()
 	if slotErr != nil {
 		t.Fatalf("per-slot reset failed: %v\n%s", slotErr, slotOutput)

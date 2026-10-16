@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
+	"devkit/cli/devctl/internal/codexhistory"
 	"devkit/cli/devctl/internal/config"
 	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/gitauthority"
@@ -37,6 +38,7 @@ type nativeSlotResetArgs struct {
 	workspaceRoot string
 	guiTargetID   string
 	format        string
+	preflightOnly bool
 }
 
 func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, error) {
@@ -48,6 +50,9 @@ func parseNativeSlotResetArgs(ctx *cmdregistry.Context) (nativeSlotResetArgs, er
 			return parsed, fmt.Errorf("native reset rejects duplicate option %s", option)
 		}
 		switch ctx.Args[i] {
+		case "--preflight-only":
+			seen[option] = true
+			parsed.preflightOnly = true
 		case "--repo":
 			seen[option] = true
 			if i+1 >= len(ctx.Args) || strings.HasPrefix(ctx.Args[i+1], "--") {
@@ -3562,6 +3567,26 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	workspaceRoot, err := validateNativeSlotWorkspaceRoot(parsed.workspaceRoot, selectedPlan)
 	if err != nil {
 		return err
+	}
+	// Resolve only source-selected geometry before this read-only preflight.
+	// In particular, do not reconcile Git, create a proxy, acquire a destructive
+	// reset lock, drain processes or apply a reset to discover a known history hole.
+	if parsed.preflightOnly || !ctx.DryRun {
+		preflight, err := codexhistory.Preflight(codexhistory.SnapshotOptions{
+			Project: ctx.Project, ResetKind: "selected-slot-reset", AgentIndex: parsed.index,
+			HostWorktree: selectedPlan.Agent.HostWorktree, HostHome: selectedPlan.Agent.HostHome,
+			SandboxHome: selectedPlan.Agent.SandboxHome, StateRoot: opts.StateRoot,
+			WorkspaceRoot: workspaceRoot, WorkspaceProjectionRoot: filepath.Dir(filepath.Clean(selectedPlan.Agent.HostWorktree)),
+		})
+		if err != nil {
+			return fmt.Errorf("selected native slot pre-stop history preflight: %w", err)
+		}
+		if parsed.preflightOnly {
+			if err := output.close(); err != nil {
+				return err
+			}
+			return json.NewEncoder(output.receipt).Encode(preflight)
+		}
 	}
 	expectedManifest, err := nativeplan.BuildManifest(opts, count)
 	if err != nil {
