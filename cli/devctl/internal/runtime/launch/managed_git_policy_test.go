@@ -166,7 +166,10 @@ func TestStandardManagedGitRealHostKeyAdmissionAndIdentityExpansion(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	sshd := filepath.Join(filepath.Dir(ssh), "sshd")
+	sshd, err := exec.LookPath("sshd")
+	if err != nil {
+		t.Fatal(err)
+	}
 	keygen := filepath.Join(filepath.Dir(ssh), "ssh-keygen")
 	base := shortSocketTempDir(t)
 	home := filepath.Join(base, "current home with ' quote")
@@ -272,12 +275,16 @@ func TestStandardManagedGitRealHostKeyAdmissionAndIdentityExpansion(t *testing.T
 				var log bytes.Buffer
 				server.Stderr = &log
 				err = server.Run()
+				if server.ProcessState == nil {
+					serverDone <- fmt.Errorf("owned sshd failed to start: %v %s", err, log.String())
+					return
+				}
 				if serverCtx.Err() != nil {
 					serverDone <- serverCtx.Err()
 					return
 				}
-				if server.ProcessState == nil || !server.ProcessState.Exited() {
-					serverDone <- fmt.Errorf("owned sshd not reaped")
+				if !server.ProcessState.Exited() {
+					serverDone <- fmt.Errorf("owned sshd terminated by signal after wait: %v", server.ProcessState)
 					return
 				}
 				if len(log.Bytes()) > 65536 {

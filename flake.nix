@@ -638,6 +638,9 @@
             # Immutable Devkit reset test fixture; never launches Codex.
             model_provider = "reset-fixture"
           '';
+          # Parser/transport integration tests use the same OpenSSH dependency
+          # as Devctl, rather than an unrelated runner-installed version/layout.
+          devctl-test-openssh = pkgs.openssh;
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {
             inherit pkgs runtimeTools;

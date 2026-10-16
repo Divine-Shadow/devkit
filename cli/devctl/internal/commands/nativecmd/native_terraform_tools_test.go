@@ -361,7 +361,20 @@ func terraformReadinessActualOverlayChecks(t *testing.T) []runtimeCheck {
 
 func (f *terraformReadinessFixture) mapFixedPaths(command string) string {
 	// Exact fixture substitutions only; production exposes no override interface.
-	return strings.NewReplacer("/run/current-system/sw/bin/ouro-terra-runtime", f.wrapper, "/run/current-system/etc/fleet/source/codex-config-projections.json", f.manifest, "/nix/store/", f.store+"/", `"/nix/store"`, fmt.Sprintf("%q", f.store), "/workspaces/dev", filepath.Dir(f.worktree), "/usr/bin/env", filepath.Join(f.baseBin, "env"), "/bin/sh", filepath.Join(f.baseBin, "sh")).Replace(command)
+	return strings.NewReplacer("test ! -e /var/run/docker.sock", "test ! -e "+nativeShellQuote(filepath.Join(f.root, "host-docker.sock")), "/run/current-system/sw/bin/ouro-terra-runtime", f.wrapper, "/run/current-system/etc/fleet/source/codex-config-projections.json", f.manifest, "/nix/store/", f.store+"/", `"/nix/store"`, fmt.Sprintf("%q", f.store), "/workspaces/dev", filepath.Dir(f.worktree), "/usr/bin/env", filepath.Join(f.baseBin, "env"), "/bin/sh", filepath.Join(f.baseBin, "sh")).Replace(command)
+}
+
+func TestTerraformReadinessFixturePreservesHostDockerSocketRefusal(t *testing.T) {
+	f := terraformReadinessNewFixture(t)
+	checks := terraformReadinessActualOverlayChecks(t)
+	if e := f.report(t, checks); !e.RuntimeReady {
+		t.Fatalf("isolated fixture did not reach readiness: %#v", e)
+	}
+	terraformReadinessWrite(t, filepath.Join(f.root, "host-docker.sock"), "present host daemon sentinel", 0600)
+	e := f.report(t, checks)
+	if e.RuntimeReady || len(e.FailedChecks) != 1 || e.FailedChecks[0].Name != "sandbox-command" {
+		t.Fatalf("actual generic host Docker visibility guard was weakened: %#v", e)
+	}
 }
 
 func (f *terraformReadinessFixture) report(t *testing.T, checks []runtimeCheck) nativeReadinessEvidence {

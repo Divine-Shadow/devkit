@@ -8,12 +8,13 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
 func ownerClientFixture(t *testing.T) nativeplan.Plan {
 	t.Helper()
-	root := t.TempDir()
+	root := shortSocketTempDir(t)
 	oldConfig, oldStatic, oldSocket, oldStore := nativeplan.ControllerServiceOwnerConfig, nativeplan.ControllerServiceOwnerStaticConfig, nativeplan.ControllerServiceOwnerSocket, nativeplan.ControllerProfileStoreRoot
 	oldUID, oldGroup := controllerServiceOwnerUID, controllerServiceOwnerGroup
 	t.Cleanup(func() {
@@ -59,6 +60,15 @@ func ownerClientFixture(t *testing.T) nativeplan.Plan {
 		{Source: nativeplan.ControllerServiceOwnerSocket, Target: nativeplan.ControllerServiceOwnerSocket, Mode: "ro", Required: true},
 		{Source: nativeplan.ControllerServiceOwnerConfig, Target: nativeplan.ControllerServiceOwnerConfig, Mode: "ro", Required: true},
 	}}
+}
+
+func TestControllerOwnerSocketFixtureWithLongTestName(t *testing.T) {
+	t.Run(strings.Repeat("long-runner-test-name-", 8), func(t *testing.T) {
+		p := ownerClientFixture(t)
+		if err := validateControllerServiceOwnerClientPlan(p); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestControllerOwnerClientRejectsWrongLaneWritableOrForeignBinding(t *testing.T) {

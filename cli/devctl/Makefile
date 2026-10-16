@@ -10,7 +10,9 @@ build:
 
 test:
 	@fixture="$$($(NIX) build --no-link --print-out-paths --output-lock-file /dev/null '../..#native-reset-test-config')" && \
-	  DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE="$$fixture" go test -count=1 ./...
+	  ssh_tools="$$($(NIX) build --no-link --print-out-paths --output-lock-file /dev/null '../..#devctl-test-openssh')" && \
+	  "$$ssh_tools/bin/ssh" -V && \
+	  PATH="$$ssh_tools/bin:$$PATH" DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE="$$fixture" go test -count=1 ./...
 
 clean:
 	rm -f $(BIN)
