@@ -51,7 +51,7 @@ func TestFixedProductRetirementRetainsCorruptAndAmbiguousReferenceRefusals(t *te
 				writeTestFile(t, filepath.Join(f.codexRoot, "state_5.sqlite"), "not a database")
 			} else {
 				db := createStateDatabase(t, f, filepath.Join(f.options.SandboxHome, ".codex/sessions/missing.jsonl"))
-				runSQLite(t, f.sqlite, db, "INSERT INTO threads SELECT 'other-thread',rollout_path,'vscode','other goal' FROM threads;")
+				runSQLite(t, f.sqlite, db, "INSERT INTO threads SELECT 'other-thread',rollout_path,'vscode','other goal' FROM threads WHERE id='gui-thread';")
 			}
 			if _, err := Capture(f.options); err == nil {
 				t.Fatal("invalid fixed-slot history accepted")

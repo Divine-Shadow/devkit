@@ -16,7 +16,8 @@ exit0/reaped and exact authenticated4771 bytes; messageSHA256
 649819b481e20ce3ed70ac13b788aff98bf5b08ac3475a0f1f904b449af5b69e.
 Approved patch2887B SHA25644e9329bf19e0ddc5b139124f5fb0f3a83f7f2f479d59bd5bb3dfadc72fbe841,
 policy26667B SHA256727ef030ceb74e0a2f0f9ecfad3c48a6ddd74b59b2817aac9db575d022e6c05f.
-Exact public decision/verification originals are published by Management; no new
+Exact public decision/verification originals were delivered and retained;
+normal canonical Management policy/decision publication is still owed. No new
 human signature, security/Auth/trust/settings exception or live effect is claimed.
 
 ## options
