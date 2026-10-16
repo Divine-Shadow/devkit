@@ -2083,13 +2083,26 @@ fi
 	}
 	_ = foreignProcess.Wait()
 
-	// The real package must discover an already-missing GUI reference before
-	// stopping the selected runtime. The separate preflight mode is the same
-	// source-owned check Fleet invokes before its outer drain.
+	// The real package admits one unambiguous missing reference as v4 metadata
+	// evidence, without claiming cold capture or stopping the selected runtime.
+	// Ambiguous references must still refuse before either outer or inner drain.
 	missingDatabase := filepath.Join(selectedProcessHome, ".codex", "state_5.sqlite")
 	missingRollout := filepath.Join(selectedProcessHome, ".codex", "sessions", "missing-preflight.jsonl")
 	runNativeFixtureCommand(t, "sqlite3", missingDatabase,
 		"CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, source TEXT, title TEXT, archived INTEGER); INSERT INTO threads VALUES ('missing-gui-thread', '"+strings.ReplaceAll(missingRollout, "'", "''")+"', 'vscode', 'private-preflight-objective', 0);")
+	preflightCommand := exec.Command(packageDevctl, "-p", "dev-all", "native", "reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", filepath.Dir(agent1Worktree), "--format", "json", "--preflight-only")
+	preflightCommand.Env = env
+	preflightOutput, preflightErr := preflightCommand.CombinedOutput()
+	var preflightReceipt codexhistory.PreflightResult
+	if preflightErr != nil || json.Unmarshal(preflightOutput, &preflightReceipt) != nil || preflightReceipt.Status != "metadata-checked" || preflightReceipt.GUIReferences != 1 || preflightReceipt.ColdCapture {
+		t.Fatalf("real v4 metadata preflight invalid: %v %s", preflightErr, preflightOutput)
+	}
+	runNativeFixtureCommand(t, "sqlite3", missingDatabase,
+		"INSERT INTO threads SELECT 'ambiguous-gui-thread', rollout_path, source, title, archived FROM threads WHERE id='missing-gui-thread';")
+	ambiguousHistoryBefore, err := os.ReadFile(missingDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, preflightOnly := range []bool{true, false} {
 		args := []string{"-p", "dev-all", "native", "reset", "--repo", "ouroboros-ide", "--index", "1", "--workspace-root", filepath.Dir(agent1Worktree), "--format", "json"}
 		if preflightOnly {
@@ -2098,8 +2111,8 @@ fi
 		command := exec.Command(packageDevctl, args...)
 		command.Env = env
 		out, err := command.CombinedOutput()
-		if err == nil || !strings.Contains(string(out), "captured-gui-rollout-member-absent") || strings.Contains(string(out), "private-preflight-objective") {
-			t.Fatalf("real pre-stop missing-history refusal invalid (preflight=%v): %v %s", preflightOnly, err, out)
+		if err == nil || !strings.Contains(string(out), "history preflight GUI reference has ambiguous captured identity") || strings.Contains(string(out), "private-preflight-objective") {
+			t.Fatalf("real pre-stop ambiguous-history refusal invalid (preflight=%v): %v %s", preflightOnly, err, out)
 		}
 		for name, pid := range map[string]int{"selected root": selectedProcess.Process.Pid, "selected descendant": selectedDescendantPID, "sibling": siblingProcess.Process.Pid} {
 			if err := syscall.Kill(pid, 0); err != nil {
@@ -2109,13 +2122,16 @@ fi
 		if after, err := os.ReadFile(historyDatabase); err != nil || !bytes.Equal(after, historyBefore) {
 			t.Fatal("preflight changed original goals")
 		}
+		if after, err := os.ReadFile(missingDatabase); err != nil || !bytes.Equal(after, ambiguousHistoryBefore) {
+			t.Fatal("preflight changed ambiguous reference SQLite")
+		}
 	}
-	// Retire only this test-created missing reference; production has no such
+	// Retire only this test-created ambiguous reference fixture; production has no such
 	// bypass. Continue the existing real successful cold-capture/reset proof.
 	if err := os.Remove(missingDatabase); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("real native pre-stop history refusal preserved selected root, descendant, sibling and goals; no reset apply")
+	t.Log("real native v4 metadata preflight and ambiguous-history refusal preserved selected root, descendant, sibling, SQLite and goals; no reset apply")
 
 	slotOutput, slotErr := runSlotReset()
 	if slotErr != nil {
