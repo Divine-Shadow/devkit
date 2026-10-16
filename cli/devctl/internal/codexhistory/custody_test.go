@@ -336,24 +336,16 @@ func TestValidateOptionsSeparatesWholeResetCustodyFromProjectionGeometry(t *test
 	}
 }
 
-func TestCaptureRefusesMissingGUIRolloutWithoutCompletedGeneration(t *testing.T) {
+func TestLegacyV2StillRequiresTheBodyForAMissingGUIReference(t *testing.T) {
 	fixture := newCaptureFixture(t)
-	missing := filepath.ToSlash(filepath.Join(fixture.options.SandboxHome, ".codex", "sessions", "missing.jsonl"))
-	createStateDatabase(t, fixture, missing)
-	_, err := Capture(fixture.options)
-	if err == nil || !strings.Contains(err.Error(), "missing from resumable history") {
-		t.Fatalf("missing rollout error = %v", err)
+	createStateDatabase(t, fixture, filepath.Join(fixture.options.SandboxHome, ".codex/sessions/missing.jsonl"))
+	requireMissingRolloutObservation(t, strictV2FixtureRefusal(t, fixture))
+	root, err := WorkspaceCustodyRoot(fixture.options.WorkspaceRoot, fixture.options.Project)
+	if err != nil {
+		t.Fatal(err)
 	}
-	agentRoot, rootErr := WorkspaceCustodyRoot(fixture.options.WorkspaceRoot, fixture.options.Project)
-	if rootErr != nil {
-		t.Fatal(rootErr)
-	}
-	entries, readErr := os.ReadDir(filepath.Join(agentRoot, "agent1"))
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("failed capture left generation residue: %v", entries)
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatal("strict reader published custody", err)
 	}
 }
 

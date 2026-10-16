@@ -53,6 +53,9 @@ func captureNativeSlotHistory(
 		result.BundleSHA256,
 		result.ManifestPath,
 	)
+	if result.UnavailableGUIReferences > 0 {
+		fmt.Fprintf(os.Stderr, "codex_gui_history_unavailable_gui_references schema=%s references=%d\n", result.SchemaVersion, result.UnavailableGUIReferences)
+	}
 	return nil
 }
 

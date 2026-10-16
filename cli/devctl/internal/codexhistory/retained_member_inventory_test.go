@@ -26,13 +26,13 @@ func retainedFixture(t *testing.T) (captureFixture, Result, string) {
 	return f, captured, member
 }
 
-func TestMissingRolloutRefusalInventoriesExactRetainedMemberWithoutRestoring(t *testing.T) {
+func TestLegacyV2MissingRolloutRefusalInventoriesExactRetainedMemberWithoutRestoring(t *testing.T) {
 	f, captured, member := retainedFixture(t)
 	manifestBefore, err := os.ReadFile(captured.ManifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Capture(f.options)
+	err = strictV2FixtureRefusal(t, f)
 	observation := requireMissingRolloutObservation(t, err)
 	got := observation.RetainedCustody
 	if got == nil || got.Status != "scan-complete" || got.GenerationsChecked != 1 || got.Truncated || len(got.Matches) != 1 {

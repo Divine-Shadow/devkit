@@ -43,14 +43,15 @@ func TestFixedProductRetirementCapturesValidatedHistoryAndDetectsReentryMutation
 	}
 }
 
-func TestFixedProductRetirementRetainsExistingCorruptAndMissingRolloutRefusals(t *testing.T) {
-	for _, kind := range []string{"corrupt", "missing-rollout"} {
+func TestFixedProductRetirementRetainsCorruptAndAmbiguousReferenceRefusals(t *testing.T) {
+	for _, kind := range []string{"corrupt", "ambiguous-missing-reference"} {
 		t.Run(kind, func(t *testing.T) {
 			f := fixedFixture(t)
 			if kind == "corrupt" {
 				writeTestFile(t, filepath.Join(f.codexRoot, "state_5.sqlite"), "not a database")
 			} else {
-				createStateDatabase(t, f, filepath.Join(f.options.SandboxHome, ".codex/sessions/missing.jsonl"))
+				db := createStateDatabase(t, f, filepath.Join(f.options.SandboxHome, ".codex/sessions/missing.jsonl"))
+				runSQLite(t, f.sqlite, db, "INSERT INTO threads SELECT 'other-thread',rollout_path,'vscode','other goal' FROM threads;")
 			}
 			if _, err := Capture(f.options); err == nil {
 				t.Fatal("invalid fixed-slot history accepted")

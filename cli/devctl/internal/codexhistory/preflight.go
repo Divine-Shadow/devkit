@@ -56,6 +56,13 @@ func Preflight(options SnapshotOptions) (PreflightResult, error) {
 			return result, fmt.Errorf("history metadata changed/unavailable before stop: %s", file.relPath)
 		}
 	}
+	type reference struct {
+		database, databaseRel, member string
+		rollout                       sqliteRollout
+	}
+	var references []reference
+	identities := make(map[string]int)
+	members := make(map[string]int)
 	for _, file := range sqliteFiles {
 		if !strings.HasSuffix(file.relPath, ".sqlite") {
 			continue
@@ -77,18 +84,25 @@ func Preflight(options SnapshotOptions) (PreflightResult, error) {
 			if err != nil {
 				return result, err
 			}
-			switch observeDeclaredSourceMember(root, member) {
-			case "present-regular":
-				// JSONL content and stable capture remain the mandatory cold gate.
-				continue
-			case "absent":
-				if _, err := classifyUnavailableArchivedReference(executable, database, file.relPath, rollout, member, options, true); err == nil {
-					continue
-				}
-				return result, missingGUIRolloutRefusal(executable, database, file.relPath, rollout, member, options)
-			default:
-				return result, fmt.Errorf("history metadata preflight member is unavailable or nonregular: %s", member)
+			identities[rollout.ThreadID]++
+			members[member]++
+			references = append(references, reference{database: database, databaseRel: file.relPath, member: member, rollout: rollout})
+		}
+	}
+	for _, ref := range references {
+		switch observeDeclaredSourceMember(root, ref.member) {
+		case "present-regular":
+			// JSONL content and stable capture remain the mandatory cold gate.
+			continue
+		case "absent":
+			if identities[ref.rollout.ThreadID] != 1 || members[ref.member] != 1 {
+				return result, fmt.Errorf("history preflight GUI reference has ambiguous captured identity")
 			}
+			if _, err := classifyUnavailableGUIReference(executable, ref.database, ref.databaseRel, ref.rollout, ref.member, options, true); err != nil {
+				return result, err
+			}
+		default:
+			return result, fmt.Errorf("history metadata preflight member is unavailable or nonregular: %s", ref.member)
 		}
 	}
 	return result, nil

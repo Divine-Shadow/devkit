@@ -165,6 +165,9 @@
             # Emit concrete owned SSH stage/cleanup evidence with the same
             # complete package source; this adds no live/native consumer probe.
             go test -count=1 -v -run '^TestStandardManagedGit' ./internal/runtime/launch
+            # Retain actual v4 preservation/refusal/race/reader case outcomes
+            # from the same full source and native SQLite test closure.
+            go test -count=1 -v -run '^TestV4' ./internal/codexhistory
             go test -run '^$' ./internal/config
             runHook postCheck
           '';

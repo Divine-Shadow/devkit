@@ -117,9 +117,11 @@ func sortUnavailableReferences(records []unavailableArchivedReference) {
 func validSnapshotClass(manifest snapshotManifest) bool {
 	switch manifest.SchemaVersion {
 	case SnapshotSchema:
-		return manifest.Status == "complete" && manifest.UnavailableArchivedReferenceCount == 0 && len(manifest.UnavailableArchivedReferences) == 0
+		return manifest.Status == "complete" && manifest.UnavailableArchivedReferenceCount == 0 && len(manifest.UnavailableArchivedReferences) == 0 && manifest.UnavailableGUIReferenceCount == 0 && len(manifest.UnavailableGUIReferences) == 0
 	case AvailableEvidenceSchema:
-		return manifest.Status == AvailableEvidenceStatus && manifest.UnavailableArchivedReferenceCount > 0 && manifest.UnavailableArchivedReferenceCount == len(manifest.UnavailableArchivedReferences)
+		return manifest.Status == AvailableEvidenceStatus && manifest.UnavailableArchivedReferenceCount > 0 && manifest.UnavailableArchivedReferenceCount == len(manifest.UnavailableArchivedReferences) && manifest.UnavailableGUIReferenceCount == 0 && len(manifest.UnavailableGUIReferences) == 0
+	case GUIAvailableEvidenceSchema:
+		return manifest.Status == GUIAvailableEvidenceStatus && manifest.UnavailableGUIReferenceCount > 0 && manifest.UnavailableGUIReferenceCount == len(manifest.UnavailableGUIReferences) && manifest.UnavailableArchivedReferenceCount == 0 && len(manifest.UnavailableArchivedReferences) == 0
 	default:
 		return false
 	}
@@ -141,7 +143,14 @@ func verifyCapturedReferenceEvidence(options SnapshotOptions, manifest snapshotM
 	}
 	// Bundle verification is source-free: the historical source's absence was
 	// checked at capture. Current-source verification is a separate entrypoint.
-	count, quarantine, unavailable, err := validateSQLiteAndRolloutsEvidence(executable, payload, files, options, manifest.SchemaVersion == AvailableEvidenceSchema, false)
+	mode := requireAllReferenceBodies
+	if manifest.SchemaVersion == AvailableEvidenceSchema {
+		mode = allowArchivedReferenceEvidence
+	}
+	if manifest.SchemaVersion == GUIAvailableEvidenceSchema {
+		mode = allowGUIReferenceEvidence
+	}
+	count, quarantine, unavailable, unavailableGUI, err := validateSQLiteAndRolloutsEvidenceForClass(executable, payload, files, options, mode, false)
 	if err != nil {
 		return err
 	}
@@ -149,7 +158,7 @@ func verifyCapturedReferenceEvidence(options SnapshotOptions, manifest snapshotM
 	for _, file := range files {
 		total += file.Bytes
 	}
-	if count != manifest.GUIRolloutCount || len(quarantine) != manifest.QuarantinedGUIRolloutCount || !reflect.DeepEqual(quarantine, manifest.QuarantinedGUIRollouts) || !reflect.DeepEqual(unavailable, manifest.UnavailableArchivedReferences) || total != manifest.TotalBytes {
+	if count != manifest.GUIRolloutCount || len(quarantine) != manifest.QuarantinedGUIRolloutCount || !reflect.DeepEqual(quarantine, manifest.QuarantinedGUIRollouts) || !reflect.DeepEqual(unavailable, manifest.UnavailableArchivedReferences) || !reflect.DeepEqual(unavailableGUI, manifest.UnavailableGUIReferences) || total != manifest.TotalBytes {
 		return fmt.Errorf("unavailable archived custody does not match captured SQLite/payload evidence")
 	}
 	return nil

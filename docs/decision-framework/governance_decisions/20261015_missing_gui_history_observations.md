@@ -1,5 +1,11 @@
 # Missing GUI-history capture observations
 
+Current status: this historical record describes its original v2/v3 source and
+actual refusals. Management subsequently adjudicated the distinct [v4 available
+GUI-reference class](20261016_available_gui_reference_v4_custody.md). V2/v3 remain
+strict; no old refusal is retconned and no Runtime success follows from the new
+source contract.
+
 ## problem
 
 Installed F6/B954/E7 was successfully adopted by Runtime operation

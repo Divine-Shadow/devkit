@@ -10,6 +10,26 @@ import (
 	"time"
 )
 
+// Exercise the unchanged strict v2 body rule and its content-free refusal.
+// New captures may choose the separately adjudicated v4 class instead.
+func strictV2FixtureRefusal(t *testing.T, f captureFixture) error {
+	t.Helper()
+	files, _, _, err := enumerateHistory(f.codexRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := make(map[string]manifestFile)
+	for _, file := range files {
+		hash, err := hashFile(file.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records[file.relPath] = manifestFile{Path: file.relPath, Bytes: file.size, SHA256: hash}
+	}
+	_, _, err = validateSQLiteAndRollouts(f.sqlite, f.codexRoot, records, f.options)
+	return err
+}
+
 func requireMissingRolloutObservation(t *testing.T, err error) missingRolloutObservation {
 	t.Helper()
 	var refusal *missingRolloutError
@@ -40,7 +60,7 @@ func requireMissingRolloutObservation(t *testing.T, err error) missingRolloutObs
 	return got
 }
 
-func TestMissingRolloutObservationUsesDeclaredMappingWithoutChangingRefusal(t *testing.T) {
+func TestLegacyV2MissingRolloutObservationUsesDeclaredMappingWithoutChangingRefusal(t *testing.T) {
 	for _, mapping := range []string{"sandbox-home", "host-home", "workspace-projection"} {
 		t.Run(mapping, func(t *testing.T) {
 			f := newCaptureFixture(t)
@@ -57,7 +77,7 @@ func TestMissingRolloutObservationUsesDeclaredMappingWithoutChangingRefusal(t *t
 			rel := "archived_sessions/missing.jsonl"
 			createStateDatabase(t, f, filepath.Join(root, filepath.FromSlash(rel)))
 			writeTestFile(t, filepath.Join(f.codexRoot, "auth.json"), "excluded-private-credential")
-			_, err := Capture(f.options)
+			err := strictV2FixtureRefusal(t, f)
 			got := requireMissingRolloutObservation(t, err)
 			if got.SourceDatabase != "state_5.sqlite" || got.ThreadID != "gui-thread" || got.ReferenceMapping != mapping || got.MappedHistoryMember != rel || got.DeclaredSourceRoot != f.codexRoot || got.DeclaredSourceMember != "absent" || got.RowArchived != "unknown" || got.ArchiveObservation != "archived-column-unavailable" {
 				t.Fatalf("wrong single-reference evidence: %+v", got)
@@ -67,7 +87,7 @@ func TestMissingRolloutObservationUsesDeclaredMappingWithoutChangingRefusal(t *t
 				t.Fatal(err)
 			}
 			entries, err := os.ReadDir(filepath.Join(root, "agent1"))
-			if err != nil || len(entries) != 0 {
+			if (err != nil && !os.IsNotExist(err)) || len(entries) != 0 {
 				t.Fatalf("refusal published a generation: %v %v", entries, err)
 			}
 			if b, err := os.ReadFile(filepath.Join(f.codexRoot, "auth.json")); err != nil || string(b) != "excluded-private-credential" {
@@ -77,7 +97,7 @@ func TestMissingRolloutObservationUsesDeclaredMappingWithoutChangingRefusal(t *t
 	}
 }
 
-func TestActiveAndUnknownArchiveMetadataStillRefusesMissingHistory(t *testing.T) {
+func TestLegacyV2ActiveAndUnknownArchiveMetadataStillRefusesMissingHistory(t *testing.T) {
 	for _, tc := range []struct{ name, value, state, observation string }{
 		{"unarchived", "0", "unarchived", "captured-row-metadata"},
 		{"unknown-null", "NULL", "unknown", "row-value-unavailable"},
@@ -87,7 +107,7 @@ func TestActiveAndUnknownArchiveMetadataStillRefusesMissingHistory(t *testing.T)
 			f := newCaptureFixture(t)
 			database := createStateDatabase(t, f, filepath.Join(f.options.SandboxHome, ".codex/archived_sessions/missing.jsonl"))
 			runSQLite(t, f.sqlite, database, "ALTER TABLE threads ADD COLUMN archived; UPDATE threads SET archived = "+tc.value+" WHERE id = 'gui-thread';")
-			_, err := Capture(f.options)
+			err := strictV2FixtureRefusal(t, f)
 			got := requireMissingRolloutObservation(t, err)
 			if got.RowArchived != tc.state || got.ArchiveObservation != tc.observation {
 				t.Fatalf("archive metadata = %+v, want %+v", got, tc)

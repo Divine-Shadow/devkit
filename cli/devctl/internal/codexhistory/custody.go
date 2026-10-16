@@ -56,6 +56,7 @@ type Result struct {
 	ManifestStatus                string
 	SchemaVersion                 string
 	UnavailableArchivedReferences int
+	UnavailableGUIReferences      int `json:"UnavailableGUIReferences,omitempty"`
 	Status                        string
 	GenerationID                  string
 	ManifestPath                  string
@@ -73,6 +74,8 @@ type manifestFile struct {
 }
 
 type snapshotManifest struct {
+	UnavailableGUIReferenceCount      int                            `json:"unavailable_gui_reference_count,omitempty"`
+	UnavailableGUIReferences          []unavailableGUIReference      `json:"unavailable_gui_references,omitempty"`
 	UnavailableArchivedReferenceCount int                            `json:"unavailable_archived_reference_count,omitempty"`
 	UnavailableArchivedReferences     []unavailableArchivedReference `json:"unavailable_archived_references,omitempty"`
 	SchemaVersion                     string                         `json:"schema_version"`
@@ -280,7 +283,7 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		return result, err
 	}
 
-	guiRollouts, quarantinedGUIRollouts, unavailable, err := validateSQLiteAndRolloutsEvidence(sqliteExecutable, payloadRoot, fileSet, options, true, true)
+	guiRollouts, quarantinedGUIRollouts, unavailable, unavailableGUI, err := validateSQLiteAndRolloutsEvidenceForClass(sqliteExecutable, payloadRoot, fileSet, options, captureAvailableReferenceEvidence, true)
 	if err != nil {
 		return result, err
 	}
@@ -318,6 +321,12 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		manifest.UnavailableArchivedReferences = unavailable
 		manifest.UnavailableArchivedReferenceCount = len(unavailable)
 	}
+	if len(unavailableGUI) > 0 {
+		manifest.SchemaVersion = GUIAvailableEvidenceSchema
+		manifest.Status = GUIAvailableEvidenceStatus
+		manifest.UnavailableGUIReferences = unavailableGUI
+		manifest.UnavailableGUIReferenceCount = len(unavailableGUI)
+	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return result, fmt.Errorf("encode Codex GUI history manifest: %w", err)
@@ -346,6 +355,9 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 	if err := verifyUnavailableSourceAbsence(hostCodex, unavailable); err != nil {
 		return result, err
 	}
+	if err := verifyUnavailableGUISourceAbsence(hostCodex, unavailableGUI); err != nil {
+		return result, err
+	}
 	if err := os.Rename(stagingRoot, finalRoot); err != nil {
 		return result, fmt.Errorf("commit Codex GUI history generation: %w", err)
 	}
@@ -361,6 +373,7 @@ func Capture(options SnapshotOptions) (result Result, retErr error) {
 		SchemaVersion:                 manifest.SchemaVersion,
 		ManifestStatus:                manifest.Status,
 		UnavailableArchivedReferences: len(unavailable),
+		UnavailableGUIReferences:      len(unavailableGUI),
 		Status:                        status,
 		GenerationID:                  generationID,
 		ManifestPath:                  filepath.Join(finalRoot, "manifest.json"),
@@ -622,14 +635,23 @@ func validateSQLiteAndRollouts(sqliteExecutable, payloadRoot string, files map[s
 	return count, quarantine, err
 }
 
-func validateSQLiteAndRolloutsEvidence(
+func validateSQLiteAndRolloutsEvidence(sqliteExecutable, payloadRoot string, files map[string]manifestFile, options SnapshotOptions, allowUnavailable, checkSource bool) (int, []quarantinedGUIRollout, []unavailableArchivedReference, error) {
+	mode := requireAllReferenceBodies
+	if allowUnavailable {
+		mode = allowArchivedReferenceEvidence
+	}
+	count, quarantine, unavailable, _, err := validateSQLiteAndRolloutsEvidenceForClass(sqliteExecutable, payloadRoot, files, options, mode, checkSource)
+	return count, quarantine, unavailable, err
+}
+
+func validateSQLiteAndRolloutsEvidenceForClass(
 	sqliteExecutable, payloadRoot string,
 	files map[string]manifestFile,
-	options SnapshotOptions, allowUnavailable, checkSource bool,
-) (int, []quarantinedGUIRollout, []unavailableArchivedReference, error) {
+	options SnapshotOptions, mode referenceEvidenceMode, checkSource bool,
+) (int, []quarantinedGUIRollout, []unavailableArchivedReference, []unavailableGUIReference, error) {
 	validationRoot, err := os.MkdirTemp("", "codex-gui-history-sqlite-validation-")
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("create private SQLite validation directory: %w", err)
+		return 0, nil, nil, nil, fmt.Errorf("create private SQLite validation directory: %w", err)
 	}
 	removeValidation := func() error {
 		if err := os.RemoveAll(validationRoot); err != nil {
@@ -650,10 +672,10 @@ func validateSQLiteAndRolloutsEvidence(
 		sourcePath := filepath.Join(payloadRoot, filepath.FromSlash(rel))
 		source, err := inspectSourceFile(sourcePath, rel)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, nil, err
 		}
 		if _, err := copyStableFile(source, filepath.Join(validationRoot, filepath.Base(rel))); err != nil {
-			return 0, nil, nil, fmt.Errorf("copy private SQLite validation file %s: %w", rel, err)
+			return 0, nil, nil, nil, fmt.Errorf("copy private SQLite validation file %s: %w", rel, err)
 		}
 	}
 	var stateDatabases []string
@@ -663,7 +685,7 @@ func validateSQLiteAndRolloutsEvidence(
 		}
 		if (strings.HasPrefix(rel, "state_") || strings.HasPrefix(rel, "goals_")) && strings.HasSuffix(rel, ".sqlite") {
 			if err := sqliteQuickCheck(sqliteExecutable, filepath.Join(validationRoot, filepath.Base(rel))); err != nil {
-				return 0, nil, nil, fmt.Errorf("validate captured SQLite database %s: %w", rel, err)
+				return 0, nil, nil, nil, fmt.Errorf("validate captured SQLite database %s: %w", rel, err)
 			}
 		}
 	}
@@ -671,50 +693,63 @@ func validateSQLiteAndRolloutsEvidence(
 	guiRollouts := 0
 	var quarantinedGUIRollouts []quarantinedGUIRollout
 	var unavailable []unavailableArchivedReference
+	var unavailableGUI []unavailableGUIReference
 	identities := make(map[string]int)
 	members := make(map[string]int)
 	for _, rel := range stateDatabases {
 		database := filepath.Join(validationRoot, filepath.Base(rel))
 		rollouts, err := sqliteGUIRollouts(sqliteExecutable, database)
 		if err != nil {
-			return 0, nil, nil, fmt.Errorf("enumerate GUI rollout references from %s: %w", rel, err)
+			return 0, nil, nil, nil, fmt.Errorf("enumerate GUI rollout references from %s: %w", rel, err)
 		}
 		var objectives map[string]string
 		for _, rollout := range rollouts {
 			identities[rollout.ThreadID]++
 			historyRel, err := rolloutRelativePath(rollout.RolloutPath, options)
 			if err != nil {
-				return 0, nil, nil, err
+				return 0, nil, nil, nil, err
 			}
 			members[historyRel]++
 			fileRecord, ok := files[historyRel]
 			if !ok {
-				if allowUnavailable {
+				if mode == allowArchivedReferenceEvidence {
 					record, err := classifyUnavailableArchivedReference(sqliteExecutable, database, rel, rollout, historyRel, options, checkSource)
 					if err == nil {
 						unavailable = append(unavailable, record)
 						continue
 					}
 				}
-				if !checkSource {
-					return 0, nil, nil, fmt.Errorf("retained captured GUI reference is missing or lacks unavailable-archive evidence")
+				if mode == allowGUIReferenceEvidence || mode == captureAvailableReferenceEvidence {
+					record, err := classifyUnavailableGUIReference(sqliteExecutable, database, rel, rollout, historyRel, options, checkSource)
+					if err != nil {
+						return 0, nil, nil, nil, err
+					}
+					if mode == captureAvailableReferenceEvidence && record.ArchiveObservation == "integer-1" {
+						unavailable = append(unavailable, archivedReferenceFromGUI(record))
+					} else {
+						unavailableGUI = append(unavailableGUI, record)
+					}
+					continue
 				}
-				return 0, nil, nil, missingGUIRolloutRefusal(sqliteExecutable, database, rel, rollout, historyRel, options)
+				if !checkSource {
+					return 0, nil, nil, nil, fmt.Errorf("retained captured GUI reference is missing or lacks unavailable-archive evidence")
+				}
+				return 0, nil, nil, nil, missingGUIRolloutRefusal(sqliteExecutable, database, rel, rollout, historyRel, options)
 			}
 			validation, err := validateGUIRolloutJSONL(payloadRoot, historyRel, rollout.ThreadID)
 			if err != nil {
-				return 0, nil, nil, err
+				return 0, nil, nil, nil, err
 			}
 			if validation.InvalidRecordCount > 0 {
 				if objectives == nil {
 					objectives, err = sqliteGUIObjectives(sqliteExecutable, database)
 					if err != nil {
-						return 0, nil, nil, fmt.Errorf("enumerate GUI objective custody from %s: %w", rel, err)
+						return 0, nil, nil, nil, fmt.Errorf("enumerate GUI objective custody from %s: %w", rel, err)
 					}
 				}
 				objective, ok := objectives[rollout.ThreadID]
 				if !ok || strings.TrimSpace(objective) == "" {
-					return 0, nil, nil, fmt.Errorf("malformed GUI rollout has no durable objective custody in %s for thread %s", rel, rollout.ThreadID)
+					return 0, nil, nil, nil, fmt.Errorf("malformed GUI rollout has no durable objective custody in %s for thread %s", rel, rollout.ThreadID)
 				}
 				objectiveHash := sha256.Sum256([]byte(objective))
 				quarantinedGUIRollouts = append(quarantinedGUIRollouts, quarantinedGUIRollout{
@@ -743,15 +778,27 @@ func validateSQLiteAndRolloutsEvidence(
 	}
 	for _, record := range unavailable {
 		if identities[record.ThreadID] != 1 || members[record.MappedHistoryMember] != 1 {
-			return 0, nil, nil, fmt.Errorf("unavailable archived reference has ambiguous captured identity")
+			return 0, nil, nil, nil, fmt.Errorf("unavailable archived reference has ambiguous captured identity")
 		}
 	}
+	for _, record := range unavailableGUI {
+		if identities[record.ThreadID] != 1 || members[record.MappedHistoryMember] != 1 {
+			return 0, nil, nil, nil, fmt.Errorf("unavailable GUI reference has ambiguous captured identity")
+		}
+	}
+	if len(unavailableGUI) > 0 && mode == captureAvailableReferenceEvidence {
+		for _, record := range unavailable {
+			unavailableGUI = append(unavailableGUI, guiReferenceFromArchived(record))
+		}
+		unavailable = nil
+	}
+	sortUnavailableGUIReferences(unavailableGUI)
 	sortUnavailableReferences(unavailable)
 	if err := removeValidation(); err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, nil, err
 	}
 	validationCleaned = true
-	return guiRollouts, quarantinedGUIRollouts, unavailable, nil
+	return guiRollouts, quarantinedGUIRollouts, unavailable, unavailableGUI, nil
 }
 
 func captureRequiredBytes(files []sourceFile) (int64, error) {
@@ -1215,7 +1262,10 @@ func VerifyCapturedSource(options SnapshotOptions, manifestPath string) error {
 	if err := verifySourceSetStable(hostCodex, files, directories, exists, fileSet); err != nil {
 		return err
 	}
-	return verifyUnavailableSourceAbsence(hostCodex, manifest.UnavailableArchivedReferences)
+	if err := verifyUnavailableSourceAbsence(hostCodex, manifest.UnavailableArchivedReferences); err != nil {
+		return err
+	}
+	return verifyUnavailableGUISourceAbsence(hostCodex, manifest.UnavailableGUIReferences)
 }
 
 // VerifyCapturedBundle proves every retained payload member still has the exact

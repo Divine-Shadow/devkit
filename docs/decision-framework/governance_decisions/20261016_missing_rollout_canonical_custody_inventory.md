@@ -1,5 +1,11 @@
 # Same-lane custody evidence in a missing-rollout refusal
 
+Current status: this historical record describes its original v2/v3 source and
+actual refusals. Management subsequently adjudicated the distinct [v4 available
+GUI-reference class](20261016_available_gui_reference_v4_custody.md). V2/v3 remain
+strict; no old refusal is retconned and no Runtime success follows from the new
+source contract.
+
 ## problem
 
 Local1 standard reconstruction `op-f9c1877a92c944ea33137c0a79b9eca1`

@@ -25,3 +25,15 @@ Reset capture and retirement never invoke this projection. Cold original bytes
 and inodes stay read-only. Runtime must establish the supported idle and consumer
 handoff before the existing typed software-only forced restart. Source fixtures
 and publication do not authorize activation or prove live model/completion.
+
+## Available evidence is distinct from finite preparation
+
+The current Management custody policy separately admits v4 unavailable GUI
+references when the exact captured SQLite/reference and every available history
+byte are preserved with canonical physical absence and stable source proof.
+Archive status is a bounded observation, never a resumability or reset warrant.
+V4 is explicitly incomplete/unclassified/ineligible for resume; it does not
+restore a missing body. The finite preparation projection on this page remains
+v2-only. Existing v3 archived-reference readers remain strict. Query/integrity,
+physical ambiguity and races still refuse. No row edit, import, bypass or retained
+history pruning is added. See the [source decision](../decision-framework/governance_decisions/20261016_available_gui_reference_v4_custody.md).
