@@ -42,11 +42,17 @@ func missingPIDFixture(t *testing.T) Config {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
-	for processRunning(state.PID) && time.Now().Before(deadline) {
+	// A killed multithreaded helper can expose a retired leader before its
+	// listener descriptors have closed. Admit only the fully retired fixture;
+	// production reconciliation must continue refusing an accepting socket.
+	for (processRunning(state.PID) || socketAcceptsConnections(c.Socket)) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	if processRunning(state.PID) {
 		t.Fatal("fixture process did not retire")
+	}
+	if socketAcceptsConnections(c.Socket) {
+		t.Fatal("fixture listener did not retire")
 	}
 	if err := os.Remove(PIDFile(c)); err != nil {
 		t.Fatal(err)
