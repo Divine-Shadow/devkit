@@ -10,7 +10,7 @@ runtime:
   flake: ./overlays/ouroboros-terraform#default
   flake_input_overrides:
     ouroboros-terraform: ../ouroboros-terraform
-  codex_version: 0.160.0
+  codex_version: 0.163.0
   core_check: terraform fmt -check -recursive
   notes: Thin devkit adapter; canonical tool requirements live in ../ouroboros-terraform/flake.nix and devkit.yaml, and devkit must pass the ouroboros-terraform flake input override explicitly.
 native:
@@ -85,7 +85,7 @@ readiness:
         raise SystemExit(result.returncode)
         PYTOOLS
     - name: codex-version
-      command: codex --version | grep -q '0.160.0'
+      command: codex --version | grep -q '0.163.0'
     - name: terraform-config-profile
       command: |
         # Preparation already verifies and projects the fixed GUI record. This

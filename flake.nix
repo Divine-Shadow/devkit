@@ -45,7 +45,7 @@
           hashicorpArch = "amd64";
           goArch = "amd64";
           codexAsset = "codex-package-x86_64-unknown-linux-musl";
-          codexHash = "sha256-T8xHq1f1L/dTY5Uah2EUbNEMgoi9hv7UVIfbsgSha3E=";
+          codexHash = "sha256-WCZGxr8FYesN5UD3/IW5EhsAkagmvG6Wgwt/FyISIYI=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -56,14 +56,14 @@
           hashicorpArch = "arm64";
           goArch = "arm64";
           codexAsset = "codex-package-aarch64-unknown-linux-musl";
-          codexHash = "sha256-fw/kL/Iuz6Oke8SjT1sixCGLQxpOwKulHH2YKZ8HkAw=";
+          codexHash = "sha256-nY7PLRnT4YSHeYOQLWyF3kiziI3LcsOCqKDJdYRZJ/s=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
-      codexVersion = "0.160.0";
+      codexVersion = "0.163.0";
       codexReleaseTag = "rust-v${codexVersion}";
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
       managedGitSSHConfig = ./nix/managed-git-ssh-config;
@@ -306,7 +306,6 @@
               test -x "$out/bin/codex-code-mode-host"
               test -x "$out/codex-path/rg"
               test -x "$out/codex-resources/bwrap"
-              test -x "$out/codex-resources/zsh/bin/zsh"
               runHook postInstall
             '';
           };
@@ -890,7 +889,7 @@
                 '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-terraform.git' \
                 ${devctl}/overlays/ouroboros-terraform/devkit.yaml
               grep -Fx \
-                "      command: codex --version | grep -q '0.160.0'" \
+                "      command: codex --version | grep -q '0.163.0'" \
                 ${devctl}/overlays/ouroboros-terraform/devkit.yaml
 
               pokeemerald_plan="$TMPDIR/installed-pokeemerald-plan.json"
