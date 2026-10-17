@@ -303,7 +303,7 @@ func terraformReadinessNewFixture(t *testing.T) *terraformReadinessFixture {
 		case "docker":
 			body = shebang + "[ \"$1\" = --version ] || exit 97\nprintf 'Docker fixture\\n'\n"
 		case "codex":
-			body = shebang + "[ \"$1\" = --version ] || exit 97\nprintf 'codex 0.160.0\\n'\n"
+			body = shebang + "[ \"$1\" = --version ] || exit 97\nprintf 'codex 0.163.0\\n'\n"
 		}
 		terraformReadinessWrite(t, filepath.Join(f.baseBin, name), body, 0755)
 	}
