@@ -1202,3 +1202,17 @@ func launcherArgs(p Plan) []string {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
+
+// BuildCustodyObservation derives isolated local Product geometry from the same
+// source path resolver as Build. No caller workspace/root override is admitted.
+func BuildCustodyObservation(opts BuildOptions) (Plan, error) {
+	if opts.Project != "dev-all" || opts.Repo != "ouroboros-ide" || opts.Index < 1 || opts.GUITargetID == "" || opts.WorkspaceRoot != "" {
+		return Plan{}, fmt.Errorf("custody observation requires an exact source-selected Product lane")
+	}
+	paths, err := agent.ResolvePaths(agent.PathConfig{DevkitRoot: opts.Paths.Root, HostRoot: opts.HostRoot, Project: opts.Project, Repo: opts.Repo, Index: opts.Index, WorktreeRoot: opts.WorktreeRoot, StateRoot: opts.StateRoot, WorktreeContainerRoot: opts.WorktreeContainerRoot, StateContainerRoot: opts.StateContainerRoot, AgentStatePrefix: opts.AgentStatePrefix, DedicatedWorktree: true})
+	if err != nil {
+		return Plan{}, err
+	}
+	opts.WorkspaceRoot = filepath.Dir(paths.HostWorktree)
+	return BuildDevAll(opts)
+}

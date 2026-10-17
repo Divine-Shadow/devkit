@@ -13,6 +13,10 @@ import (
 // Consumer path spellings are lookup hints, not custody. A historical alias
 // must resolve to the selected host objects through that process's root.
 func nativeProcHomeMatchesSlot(procPath, home string, identity nativeSlotProcessIdentity) (bool, error) {
+	return nativeProcHomeMatchesSlotObserved(procPath, home, identity, nil)
+}
+
+func nativeProcHomeMatchesSlotObserved(procPath, home string, identity nativeSlotProcessIdentity, observation *nativeCustodyWitness) (bool, error) {
 	if home != strings.TrimSpace(home) || home != filepath.Clean(home) || !filepath.IsAbs(home) || home == "/" {
 		return false, nil
 	}
@@ -28,12 +32,23 @@ func nativeProcHomeMatchesSlot(procPath, home string, identity nativeSlotProcess
 		return false, fmt.Errorf("inspect native process home: %w", homeErr)
 	}
 	homeMatches := homeErr == nil && os.SameFile(hostHome, observedHome)
+	if observation != nil {
+		if errors.Is(homeErr, os.ErrNotExist) {
+			observation.absent = append(observation.absent, procPath+"/root"+home)
+		}
+		observation.HomeMatches = homeMatches
+		observation.capture(identity.hostHome, hostHome)
+		observation.capture(procPath+"/root"+home, observedHome)
+	}
 	relativeWorktree, err := filepath.Rel(identity.hostHome, identity.hostWorktree)
 	if err != nil {
 		return false, fmt.Errorf("derive selected native home/worktree geometry: %w", err)
 	}
 	worktree := filepath.Clean(filepath.Join(home, relativeWorktree))
 	hostWorktree, err := os.Stat(identity.hostWorktree)
+	if observation != nil && errors.Is(err, os.ErrNotExist) {
+		observation.absent = append(observation.absent, identity.hostWorktree)
+	}
 	if err != nil {
 		if !homeMatches && errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -45,6 +60,14 @@ func nativeProcHomeMatchesSlot(procPath, home string, identity nativeSlotProcess
 		return false, fmt.Errorf("inspect native process worktree: %w", worktreeErr)
 	}
 	worktreeMatches := worktreeErr == nil && os.SameFile(hostWorktree, observedWorktree)
+	if observation != nil {
+		if errors.Is(worktreeErr, os.ErrNotExist) {
+			observation.absent = append(observation.absent, procPath+"/root"+worktree)
+		}
+		observation.WorktreeMatches = worktreeMatches
+		observation.capture(identity.hostWorktree, hostWorktree)
+		observation.capture(procPath+"/root"+worktree, observedWorktree)
+	}
 	if homeMatches != worktreeMatches {
 		return false, fmt.Errorf("native process home/worktree geometry has conflicting physical custody")
 	}
@@ -58,15 +81,25 @@ func nativeProcHomeMatchesSlot(procPath, home string, identity nativeSlotProcess
 	// state mapping must never contradict the selected physical slot.
 	if identity.stateRoot != "" {
 		hostState, stateErr := os.Stat(identity.stateRoot)
+		if observation != nil && errors.Is(stateErr, os.ErrNotExist) {
+			observation.absent = append(observation.absent, identity.stateRoot)
+		}
 		if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
 			return false, stateErr
 		}
 		if stateErr == nil {
-			for _, state := range []string{identity.sandboxState, identity.stateRoot} {
+			for aliasIndex, state := range []string{identity.sandboxState, identity.stateRoot} {
 				if !filepath.IsAbs(state) {
 					continue
 				}
 				observed, err := os.Stat(procPath + "/root" + filepath.Clean(state))
+				if observation != nil {
+					kind := "sandboxState"
+					if aliasIndex == 1 {
+						kind = "stateRoot"
+					}
+					observation.state(kind, state, identity.stateRoot, procPath+"/root"+filepath.Clean(state), hostState, observed, err)
+				}
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}

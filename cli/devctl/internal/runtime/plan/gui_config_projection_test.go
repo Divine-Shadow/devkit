@@ -410,3 +410,36 @@ func TestGUITargetProjectionCarriesSourceClassAndHostThroughBothSelectors(t *tes
 		t.Fatal("legacy metadata invented")
 	}
 }
+
+func TestCustodyObservationPlanDerivesActualIsolatedProductProjection(t *testing.T) {
+	opts := BuildOptions{Paths: devkitpaths.Paths{Root: "/repo/devkit"}, HostRoot: "/home/bayesartre/dev", Project: "dev-all", Repo: "ouroboros-ide", Index: 2, IsolationProfile: IsolationProfileWorkspaceEgress, EgressAllowlist: "/fixture/source-selected-allowlist.txt"}
+	baseOpts := opts
+	baseOpts.WorkspaceRoot = "/home/bayesartre/dev/agent-worktrees/agent2"
+	base, err := Build(baseOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := guiConfigRecordForPlan(base, "shadow-throne-local-2", "product-governance", "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config.toml", strings.Repeat("a", 64))
+	manifest := filepath.Join(t.TempDir(), "manifest.json")
+	writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{record})
+	saved := guiCodexConfigProjectionManifestPath
+	guiCodexConfigProjectionManifestPath = manifest
+	t.Cleanup(func() { guiCodexConfigProjectionManifestPath = saved })
+	opts.GUITargetID = record.TargetID
+	p, err := BuildCustodyObservation(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.GUITargetConfig == nil || p.GUITargetConfig.TargetID != record.TargetID || p.Agent.SandboxWorktree != "/workspaces/dev/ouroboros-ide" || p.HostWorkspaceRoot != baseOpts.WorkspaceRoot || p.Agent.HostWorktree != base.Agent.HostWorktree || p.Agent.StateRoot != base.Agent.StateRoot {
+		t.Fatalf("wrong actual selected plan: %+v", p)
+	}
+	opts.GUITargetID = "foreign"
+	if _, err := BuildCustodyObservation(opts); err == nil {
+		t.Fatal("foreign target accepted")
+	}
+	opts.GUITargetID = record.TargetID
+	opts.WorkspaceRoot = "/tmp/caller"
+	if _, err := BuildCustodyObservation(opts); err == nil {
+		t.Fatal("caller workspace accepted")
+	}
+}

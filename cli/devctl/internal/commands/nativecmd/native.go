@@ -75,22 +75,23 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
-	indexSet           bool
-	opts               nativeplan.BuildOptions
-	format             string
-	dryRun             bool
-	count              int
-	baseBranch         string
-	branchPrefix       string
-	dedicatedWorktrees bool
-	skipRepoChecks     bool
-	repoCheck          string
-	readinessMode      string
-	readinessModeSet   bool
-	managedAppServer   bool
-	softwareOnly       bool
-	preparationPhase   string
-	command            []string
+	processCustodyObservation bool
+	indexSet                  bool
+	opts                      nativeplan.BuildOptions
+	format                    string
+	dryRun                    bool
+	count                     int
+	baseBranch                string
+	branchPrefix              string
+	dedicatedWorktrees        bool
+	skipRepoChecks            bool
+	repoCheck                 string
+	readinessMode             string
+	readinessModeSet          bool
+	managedAppServer          bool
+	softwareOnly              bool
+	preparationPhase          string
+	command                   []string
 }
 
 const managedAppServerServiceEnv = "DEVKIT_MANAGED_APP_SERVER_SERVICE"
@@ -337,6 +338,11 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			parsed.opts.Index = idx
 			parsed.indexSet = true
 			i++
+		case "--process-custody-observation":
+			if ctx.Args[0] != "plan" || parsed.processCustodyObservation {
+				return parsed, fmt.Errorf("custody observation requires native plan and one flag")
+			}
+			parsed.processCustodyObservation = true
 		case "--gui-target-id":
 			if ctx.Args[0] != "plan" && ctx.Args[0] != "exec" && ctx.Args[0] != "prepare" {
 				return parsed, fmt.Errorf("--gui-target-id is only valid for native plan, native exec, and selected native prepare")
@@ -2020,6 +2026,9 @@ func tailLines(text string, count int) []string {
 }
 
 func handlePlan(ctx *cmdregistry.Context) error {
+	if err := validateCustodyObservationPlanArgs(ctx.Args); err != nil {
+		return err
+	}
 	parsed, err := parsePlanArgs(ctx, false, false)
 	if err != nil {
 		return err
@@ -2036,9 +2045,18 @@ func handlePlan(ctx *cmdregistry.Context) error {
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
-	p, err := nativeplan.BuildDevAll(parsed.opts)
+	build := nativeplan.BuildDevAll
+	if parsed.processCustodyObservation {
+		build = nativeplan.BuildCustodyObservation
+	}
+	p, err := build(parsed.opts)
 	if err != nil {
 		return err
+	}
+	if parsed.processCustodyObservation {
+		report := observeNativeSlotCustody(p.Agent)
+		report.Target = parsed.opts.GUITargetID
+		return json.NewEncoder(os.Stdout).Encode(report)
 	}
 	if p.Launcher == "bubblewrap" {
 		cmdSpec, err := launch.BuildBubblewrap(p, nil)
