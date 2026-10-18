@@ -1,0 +1,10 @@
+{
+  "upstreamRevision": "7e59872d310a6a1d2383038a5ee0f3027df8d585",
+  "upstreamNarHash": "sha256-OQemk2LMahVBZalN3JEgZToRuF2n3l2b7mQnktf4tfY=",
+  "upstreamVersion": "2.0.0-RC8",
+  "bootstrapVersion": "1.11.6",
+  "diagnosticCandidateRevision": "7fdb55c6e017cd57cb35169a0713ee23934163d9",
+  "patchSHA256": "2af7abf62cd883a34912c9d6faa290cf1da6e54a9fa1dbcb7a4740e27a0ac361",
+  "changedArtifact": "org.scala-sbt:actions_3:2.0.0-RC8",
+  "qualification": "not-run; diagnostic instrumentation preserves existing outcomes"
+}

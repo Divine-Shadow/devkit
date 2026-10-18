@@ -660,6 +660,8 @@
 
           default = self.packages.${pkgs.system}.postgres-broker;
         } // nixpkgs.lib.optionalAttrs (pkgs.system == "x86_64-linux") {
+          sbt-rc8-diagnostic-actions = (import ./nix/sbt-rc8-diagnostics { inherit pkgs; }).package;
+          sbt-rc8-diagnostic-deps-discovery = (import ./nix/sbt-rc8-diagnostics { inherit pkgs; }).deps-discovery;
           codex-native-tool-witness = import ./nix/codex-native-tool-witness {
             inherit pkgs;
             source = codex-native-tool-witness-source;
@@ -1124,6 +1126,9 @@
             mkdir -p "$out"
             bash ${./kit/scripts/retired-runtime-guard} ${./.} > "$out/guard.log"
           '';
+
+          sbt-rc8-diagnostic-dependency-normalization =
+            (import ./nix/sbt-rc8-diagnostics { inherit pkgs; }).dependency-normalization-check;
 
           overlay-nix-runtime-static = pkgs.runCommand "devkit-overlay-nix-runtime-static" {
             nativeBuildInputs = [
