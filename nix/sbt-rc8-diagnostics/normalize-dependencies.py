@@ -8,11 +8,18 @@ import sys
 
 
 def normalize(root):
+    root = root.absolute()
+    # The builder owns a quiescent cache after SBT exits. Validate the WHOLE
+    # tree and root ancestry before any removal, including global/cache.
+    paths = [root, *root.parents, *sorted(root.rglob("*"))]
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError(f"resolver cache symlink is outside this producer contract: {path}")
+    if not root.is_dir():
+        raise ValueError("resolver cache root must be a directory")
     # Same isolated-global cache exclusions as the existing immutable supplier.
     for name in ("cache", "staging"):
         path = root / "global" / name
-        if path.is_symlink():
-            raise ValueError(f"resolver cache symlink is outside this producer contract: {path}")
         if path.exists():
             shutil.rmtree(path)
     for path in sorted(root.rglob("*")):

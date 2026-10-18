@@ -1,0 +1,10 @@
+diff --git a/project/Utils.scala b/project/Utils.scala
+index bb26e03..8f13c0f 100644
+--- a/project/Utils.scala
++++ b/project/Utils.scala
+@@ -87 +87,4 @@ object Utils {
+-    val timestamp = formatter.format(new Date)
++    val buildTime = sys.env.get("SOURCE_DATE_EPOCH").fold(new Date)(seconds =>
++      new Date(Math.multiplyExact(seconds.toLong, 1000L))
++    )
++    val timestamp = formatter.format(buildTime)

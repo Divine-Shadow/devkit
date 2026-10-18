@@ -111,7 +111,7 @@ index 81d5ac6..f6c0fed 100755
 +          record("aggregate.after", s"group=${WorkerTestDiagnostics.hash(info.group)} " + counts(Seq(suiteResult)))
 +          invokeListeners("listener.endGroup")(_.endGroup(info.group, suiteResult.result))
 diff --git a/main-actions/src/main/scala/sbt/internal/WorkerExchange.scala b/main-actions/src/main/scala/sbt/internal/WorkerExchange.scala
-index f4ce25e..770f6d4 100644
+index f4ce25e..8c857be 100644
 --- a/main-actions/src/main/scala/sbt/internal/WorkerExchange.scala
 +++ b/main-actions/src/main/scala/sbt/internal/WorkerExchange.scala
 @@ -24,0 +25,4 @@ import scala.concurrent.duration.*
@@ -139,23 +139,33 @@ index f4ce25e..770f6d4 100644
 +    notifyListeners(line, WorkerTestDiagnostics.unscoped)
 +
 +  private[sbt] def notifyListeners(line: String, diagnostics: WorkerTestDiagnostics.Trace): Unit =
-@@ -96,0 +112 @@ object WorkerExchange:
-+      diagnostics.record("dispatch.begin", s"listeners=${listeners.size}")
-@@ -97,0 +114 @@ object WorkerExchange:
-+        diagnostics.record("dispatch.listener.begin", s"listener=${WorkerTestDiagnostics.identity(wl)}")
-@@ -98,0 +116,2 @@ object WorkerExchange:
-+        diagnostics.record("dispatch.listener.end", s"listener=${WorkerTestDiagnostics.identity(wl)}")
-+      diagnostics.record("dispatch.end")
-@@ -119,0 +139 @@ class WorkerProxy(
+@@ -97,2 +112,14 @@ object WorkerExchange:
+-      listeners.foreach: wl =>
+-        wl(line)
++      dispatch(line, listeners, diagnostics)
++
++  // Same body for the synchronized transport and isolated ordering fixtures.
++  private[sbt] def dispatch(
++      line: String,
++      targets: scala.collection.Iterable[WorkerResponseListener],
++      diagnostics: WorkerTestDiagnostics.Trace,
++  ): Unit =
++    diagnostics.record("dispatch.begin", s"listeners=${targets.size}")
++    targets.foreach: wl =>
++      diagnostics.record("dispatch.listener.begin", s"listener=${WorkerTestDiagnostics.identity(wl)}")
++      wl(line)
++      diagnostics.record("dispatch.listener.end", s"listener=${WorkerTestDiagnostics.identity(wl)}")
++    diagnostics.record("dispatch.end")
+@@ -119,0 +147 @@ class WorkerProxy(
 +  private val diagnostics = new WorkerTestDiagnostics.Trace(line => scala.Console.err.println(line))
-@@ -122 +142,5 @@ class WorkerProxy(
+@@ -122 +150,5 @@ class WorkerProxy(
 -    WorkerExchange.listeners.foreach(_.notifyExit(process))
 +    diagnostics.record("worker.exit", s"process=${WorkerTestDiagnostics.identity(process)}")
 +    WorkerExchange.listeners.foreach: listener =>
 +      diagnostics.record("exit.listener.begin", s"listener=${WorkerTestDiagnostics.identity(listener)}")
 +      listener.notifyExit(process)
 +      diagnostics.record("exit.listener.end", s"listener=${WorkerTestDiagnostics.identity(listener)}")
-@@ -132,0 +157,32 @@ enum WorkerConnection:
+@@ -132,0 +165,32 @@ enum WorkerConnection:
 +
 +// Metadata only. It observes existing ordering and never coordinates test completion.
 +private[sbt] object WorkerTestDiagnostics:
@@ -230,10 +240,10 @@ index 0000000..57f0275
 +}
 diff --git a/main-actions/src/test/scala/sbt/ForkTestsDiagnosticsTest.scala b/main-actions/src/test/scala/sbt/ForkTestsDiagnosticsTest.scala
 new file mode 100644
-index 0000000..e93c16e
+index 0000000..97923f8
 --- /dev/null
 +++ b/main-actions/src/test/scala/sbt/ForkTestsDiagnosticsTest.scala
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,167 @@
 +package sbt
 +
 +import java.util.concurrent.{ CountDownLatch, TimeUnit }
@@ -348,10 +358,9 @@ index 0000000..e93c16e
 +      def apply(line: String): Unit =
 +        entered.countDown()
 +        if !release.await(5, TimeUnit.SECONDS) then throw new IllegalStateException("fixture release timed out")
-+    WorkerExchange.registerListener(blocker)
-+    WorkerExchange.registerListener(react)
++    val dispatchTrace = new WorkerTestDiagnostics.Trace(_ => ())
 +    val reader = new Thread(() => {
-+      try WorkerExchange.notifyListeners(DiagnosticEvents.batch(request, group, 112, 1))
++      try WorkerExchange.dispatch(DiagnosticEvents.batch(request, group, 112, 1), Seq(blocker, react), dispatchTrace)
 +      catch case error: Throwable => failure.set(error)
 +    })
 +    try
@@ -374,8 +383,6 @@ index 0000000..e93c16e
 +    finally
 +      release.countDown()
 +      reader.join(5000)
-+      WorkerExchange.unregisterListener(react)
-+      WorkerExchange.unregisterListener(blocker)
 +  }
 +
 +  test("diagnostics are bounded and a broken observer cannot change aggregation") {

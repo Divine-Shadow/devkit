@@ -1,5 +1,11 @@
 # SBT RC8 diagnostic source supplier
 
+Historical initial design. The actual80336 discovery contradicted its download-only
+description: Test/dependencyClasspath compiled upstream application modules and
+formatters changed temporary files. The [follow-up decision](20261018_sbt_rc8_discovery_followup_source_binding.md)
+corrects the current producer, source binding, timestamp generation and cache
+preflight. The original7fdb candidate and actual discovery evidence stay preserved.
+
 ## problem
 
 The accepted Product provider uses upstream SBT 2.0.0-RC8. Its normal immutable

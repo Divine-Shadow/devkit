@@ -36,5 +36,40 @@ class NormalizationTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(b"resolver cache symlink", result.stderr)
 
+    def test_global_ancestor_symlink_cannot_delete_external_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            root, outside = base / "root", base / "outside"
+            root.mkdir()
+            (outside / "cache").mkdir(parents=True)
+            sentinel = outside / "cache/owned-by-another-context"
+            sentinel.write_bytes(b"must survive")
+            (root / "global").symlink_to(outside, target_is_directory=True)
+            result = subprocess.run([sys.executable, SCRIPT, str(root)], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(sentinel.read_bytes(), b"must survive")
+
+    def test_root_and_root_ancestor_symlinks_are_refused_before_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            (base / "real/cache").mkdir(parents=True)
+            sentinel = base / "real/cache/update.log"
+            sentinel.write_text("preserved by refusal")
+            (base / "alias").symlink_to(base / "real", target_is_directory=True)
+            for root in [base / "alias", base / "alias/cache"]:
+                result = subprocess.run([sys.executable, SCRIPT, str(root)], capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(sentinel.read_text(), "preserved by refusal")
+
+    def test_late_symlink_does_not_allow_partial_marker_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            marker = root / "a.lock"
+            marker.write_bytes(b"must survive the refused normalization")
+            (root / "z.jar").symlink_to("/outside")
+            result = subprocess.run([sys.executable, SCRIPT, directory], capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(marker.read_bytes(), b"must survive the refused normalization")
+
 
 unittest.main()

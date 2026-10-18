@@ -3,8 +3,13 @@
   "upstreamNarHash": "sha256-OQemk2LMahVBZalN3JEgZToRuF2n3l2b7mQnktf4tfY=",
   "upstreamVersion": "2.0.0-RC8",
   "bootstrapVersion": "1.11.6",
-  "diagnosticCandidateRevision": "7fdb55c6e017cd57cb35169a0713ee23934163d9",
-  "patchSHA256": "2af7abf62cd883a34912c9d6faa290cf1da6e54a9fa1dbcb7a4740e27a0ac361",
+  "diagnosticCandidateRevision": "878d5f05dd61cc94494f9d15d9412794fd42133e",
+  "patchSHA256": "7f22e6ec1e84c9eef9e422b43dd68a8fa37259d0e59f746baabda154d4472d04",
   "changedArtifact": "org.scala-sbt:actions_3:2.0.0-RC8",
-  "qualification": "not-run; diagnostic instrumentation preserves existing outcomes"
+  "qualification": "follow-up source candidate; native compile/test not yet run",
+  "diagnosticOriginalCandidateRevision": "7fdb55c6e017cd57cb35169a0713ee23934163d9",
+  "diagnosticCandidateTree": "711aa572601093256b5d2c24afc16a81ce407827",
+  "reproducibleVersionPatchSHA256": "b1ef05c43fa8ede4c4f11cf5d1901af34314a519c0b8ce735733259490a160ff",
+  "sourceEpoch": 1767594037,
+  "formatting": "normal upstream Compile/Test scalafmt and javafmt; effective source manifest checked after tests/publication"
 }
