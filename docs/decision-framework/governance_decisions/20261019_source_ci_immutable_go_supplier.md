@@ -73,3 +73,32 @@ Earlier failed logs remain original evidence. Affected finite controls and
 independent implementation review precede one materially changed full CI.
 Root's latest allocation bars that6GiB CI while BOTH C4 and MCP4GiB controls
 are active; preserve those jobs and dispatch only at the permitted boundary.
+
+## Late overlay authority command consumption
+
+The e20d408 normal CI completed Go39/0, native reset and its16 x86_64 flake
+checks, then terminated2/reaped at the existing overlay authority helper's bare
+`nix` lookup. The controller's absolute authorized Nix had actually executed
+all prior builds; this was source helper command consumption, not a new grant
+or a security denial. Its later jq use was also outside the Go test PATH scope.
+
+The owning helper now accepts the Make-selected Nix executable and options as
+explicit argv after `--`, retaining empty/quoted/resource arguments without
+command-text evaluation. Standalone default invocation remains unchanged;
+explicit executable failure cannot fall back. Its Make target supplies jq from
+the already-declared immutable test-tools package only for the two child
+commands. Actual runtime/publication environment, credentials and profile stay
+unchanged. All package/source/lock/runtime-plan assertions are preserved.
+
+Finite light tests use owned refusing Nix executables to check exact resource,
+empty, literal argument and environment transport, nonzero propagation,
+standalone default, missing explicit command without fallback, and malformed
+package refusal. These witnesses stop at explicit controlled refusal and are
+not successful overlay authority executions. An initial exploratory whole-helper
+fake was rejected by the original immutable runtime-path assertion; no assertion
+was weakened. The successful real Make/tool/authority path remains a focused
+Nix gate after Root releases the C4 slot. No Nix build occurs in light tests.
+Independent review precedes changed normal CI; no prior successful gate is
+silently promoted to the updated source. Root's exclusive C4 packaging
+allocation holds focused Nix builds and that next heavy CI until its actual
+terminal boundary.

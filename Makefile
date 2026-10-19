@@ -62,7 +62,9 @@ native-reset-custody-gate:
 
 devctl-overlay-runtime-authority:
 	@echo "== Immutable devctl overlay runtime authority =="
-	@kit/scripts/devctl-overlay-runtime-authority
+	@set -eu; tools="$$($(NIX) build --no-link --print-out-paths .#devctl-test-tools)"; \
+	  PATH="$$tools/bin:$$PATH" python3 -B nix/test_devctl_overlay_runtime_authority.py; \
+	  PATH="$$tools/bin:$$PATH" kit/scripts/devctl-overlay-runtime-authority -- $(NIX)
 
 native-runtime-smoke: build-cli
 	@echo "== Native runtime smoke (dev-all) =="
