@@ -42,3 +42,34 @@ Revert the named binding, Make orchestration and helper together. Retain the
 original failing receipt and qualified SBT diagnostic artifact; no runtime was
 adopted by this change. Interrupted bindings must be inspected, never silently
 removed by a subsequent invocation.
+
+## Full-suite prerequisite and synthetic-subject correction
+
+The first changed normal CI on990f82d ran naturally to exit2/reaped. Its Go
+package rows were34 passed/five failed/12 without tests; later gates did not
+run. Missing sqlite3/tar/jq/setsid are supplied by a named locked-pkgs test-only
+buildEnv consumed by cli/devctl/Makefile. Existing declarations already supply
+these tools to portable tests or Management inspection. No global PATH or
+runtime bundle is changed, and complete source tests remain mandatory.
+
+Root explicitly adjudicated the additional inherited-selector fixture failures
+as test-subject isolation work. Independent design/security review required
+explicit bindings in managed_git_transport_test.go's ordinary Git control,
+launch_terraform_tools_linux_test.go's provider-preservation fixture, and both
+direct SeedAWS tests in launch_test.go. Git's legacy/current child commands are
+both owned fixtures; an ambient poison connector must never run, and exactly
+two fake SSH calls per nested-home case must occur. The AWS nested fixture
+selects its synthetic credential file, counts exactly one owned refusing
+hydrator call, and retains its original preservation/admission assertions.
+An owned ambient poison-file inotify watch must observe zero access and the
+nested selector must restore automatically. The symlink fixture explicitly
+selects an absent owned credential source and asserts it remains absent.
+
+These tests are nonparallel and use ordinary t.Setenv or owned child Env.
+Production SeedAWS precedence, managed Git transport, parent Make/publication
+selectors and all actual credential files/auth/security settings are unchanged.
+No selector is unset to fall back to a real home, connector or auth service.
+Earlier failed logs remain original evidence. Affected finite controls and
+independent implementation review precede one materially changed full CI.
+Root's latest allocation bars that6GiB CI while BOTH C4 and MCP4GiB controls
+are active; preserve those jobs and dispatch only at the permitted boundary.

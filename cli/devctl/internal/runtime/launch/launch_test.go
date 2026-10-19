@@ -1956,6 +1956,7 @@ func TestSeedAWSSyncsConfigAndCaches(t *testing.T) {
 		}
 	}
 	t.Setenv("DEVKIT_AWS_HOME", srcAWS)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(srcAWS, "credentials"))
 
 	nativeHome := filepath.Join(t.TempDir(), "native-home")
 	if err := SeedAWS(nativeHome, false); err != nil {
@@ -1989,6 +1990,7 @@ func TestSeedAWSMaterializesExistingExternalTargetSymlink(t *testing.T) {
 	writeTestFile(t, filepath.Join(srcAWS, "config"), "[profile ouroboros]\nregion = us-east-2\n")
 	writeTestFile(t, filepath.Join(srcAWS, "sso", "cache", "session.json"), `{"accessToken":"redacted"}`)
 	t.Setenv("DEVKIT_AWS_HOME", srcAWS)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(srcAWS, "credentials"))
 
 	externalAWS := filepath.Join(t.TempDir(), "windows-aws")
 	writeTestFile(t, filepath.Join(externalAWS, "sentinel"), "must-remain")
@@ -2003,6 +2005,9 @@ func TestSeedAWSMaterializesExistingExternalTargetSymlink(t *testing.T) {
 
 	if err := SeedAWS(nativeHome, false); err != nil {
 		t.Fatalf("SeedAWS: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetAWS, "credentials")); !os.IsNotExist(err) {
+		t.Fatalf("owned absent credential source was replaced by an ambient source: %v", err)
 	}
 	info, err := os.Lstat(targetAWS)
 	if err != nil {

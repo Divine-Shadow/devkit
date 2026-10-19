@@ -212,8 +212,22 @@ func TestManagedRuntimeGitUsesCurrentOwnedConnectorForOrdinaryGit(t *testing.T) 
 			if err := os.WriteFile(proxy, []byte("#!"+bash+"\nexec "+shellQuote(testBinary)+" -test.run='^TestManagedRuntimeGitOwnedProxyHelper$' -- \"$@\"\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
+			poison := filepath.Join(short, "ambient-connector")
+			poisonCalls := filepath.Join(short, "ambient-calls")
+			writeTestFile(t, poison, "#!"+bash+"\nprintf 'unexpected\\n' >> "+shellQuote(poisonCalls)+"\nexit 91\n")
+			if err := os.Chmod(poison, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("GIT_SSH_COMMAND", shellQuote(poison))
+			t.Cleanup(func() {
+				if _, err := os.Stat(poisonCalls); !os.IsNotExist(err) {
+					t.Fatalf("synthetic inherited connector was invoked or its marker is unreadable: %v", err)
+				}
+			})
+			sshCalls := filepath.Join(short, "fixture-ssh-calls")
+			t.Setenv("DEVKIT_OWNED_SSH_CALL_LOG", sshCalls)
 			ssh := filepath.Join(short, "fixture-ssh")
-			script := "#!" + bash + "\nproxy=\"$DEVKIT_OWNED_EXPIRED_PROXY\"\nwhile [ \"$#\" -gt 0 ]; do\n if [ \"$1\" = '-o' ]; then shift; case \"$1\" in ProxyCommand=*) proxy=\"${1#ProxyCommand=}\";; esac; fi\n shift\ndone\nproxy=\"${proxy//%h/ssh.github.com}\"\nproxy=\"${proxy//%p/443}\"\nexec " + shellQuote(bash) + " -c \"$proxy\"\n"
+			script := "#!" + bash + "\nprintf 'call\\n' >> \"$DEVKIT_OWNED_SSH_CALL_LOG\"\nproxy=\"$DEVKIT_OWNED_EXPIRED_PROXY\"\nwhile [ \"$#\" -gt 0 ]; do\n if [ \"$1\" = '-o' ]; then shift; case \"$1\" in ProxyCommand=*) proxy=\"${1#ProxyCommand=}\";; esac; fi\n shift\ndone\nproxy=\"${proxy//%h/ssh.github.com}\"\nproxy=\"${proxy//%p/443}\"\nexec " + shellQuote(bash) + " -c \"$proxy\"\n"
 			if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -281,10 +295,18 @@ func TestManagedRuntimeGitUsesCurrentOwnedConnectorForOrdinaryGit(t *testing.T) 
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
 				c := exec.CommandContext(ctx, git, "-C", repo, "ls-remote", "ssh://git@github.com/owned")
-				c.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_SSH_VARIANT=ssh")
-				if useCurrent {
-					c.Env = append(c.Env, "GIT_SSH_COMMAND="+command)
+				// Both subjects use owned fixture commands. Inherited selector
+				// precedence must never select a real controller connector.
+				for _, value := range os.Environ() {
+					if !strings.HasPrefix(value, "GIT_SSH_COMMAND=") {
+						c.Env = append(c.Env, value)
+					}
 				}
+				selected := legacy
+				if useCurrent {
+					selected = command
+				}
+				c.Env = append(c.Env, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_SSH_VARIANT=ssh", "GIT_SSH_COMMAND="+selected)
 				return c.CombinedOutput()
 			}
 			if out, err := run(false); err == nil || !strings.Contains(string(out), expired) {
@@ -293,6 +315,9 @@ func TestManagedRuntimeGitUsesCurrentOwnedConnectorForOrdinaryGit(t *testing.T) 
 			out, err := run(true)
 			if err != nil || !strings.Contains(string(out), strings.TrimSpace(string(oid))+"\trefs/tags/owned") {
 				t.Fatalf("ordinary Git on current connector: %v %s", err, out)
+			}
+			if calls := readTestFile(t, sshCalls); calls != "call\ncall\n" {
+				t.Fatalf("owned SSH fixture call count differs: %q", calls)
 			}
 			select {
 			case err := <-served:

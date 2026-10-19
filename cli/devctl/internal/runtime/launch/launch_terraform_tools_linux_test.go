@@ -15,6 +15,31 @@ import (
 // private preparation primitive uses temporary geometry; public TF1 admission
 // is independently exercised by native command controls.
 func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
+	// Model hostile ambient precedence with public owned data, never a real
+	// inherited credential file. The nested fixture must select its own file.
+	poison := filepath.Join(t.TempDir(), "ambient-credentials")
+	writeTestFile(t, poison, "PUBLIC_POISON_FIXTURE\n")
+	fd, err := syscall.InotifyInit1(syscall.IN_NONBLOCK | syscall.IN_CLOEXEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	if _, err := syscall.InotifyAddWatch(fd, poison, syscall.IN_OPEN|syscall.IN_ACCESS|syscall.IN_MODIFY|syscall.IN_ATTRIB|syscall.IN_DELETE_SELF|syscall.IN_MOVE_SELF); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", poison)
+	t.Run("explicit-owned-file", terraformToolsActualPreparationFixture)
+	buffer := make([]byte, 8192)
+	count, err := syscall.Read(fd, buffer)
+	if count > 0 || (err != nil && err != syscall.EAGAIN) {
+		t.Fatalf("synthetic ambient credential file was accessed or watch failed: %d %v", count, err)
+	}
+	if os.Getenv("AWS_SHARED_CREDENTIALS_FILE") != poison {
+		t.Fatal("nested fixture did not restore its enclosing selector")
+	}
+}
+
+func terraformToolsActualPreparationFixture(t *testing.T) {
 	store := withManagementSkillsStoreRoot(t)
 	fixture := writeManagementSkillsFixture(t, store, "terraform-tools", strings.Repeat("a", 40), map[string]string{"fleet-health-hypervisor/SKILL.md": "public fixture\n"})
 	p := prepareManagementSkillsFixture(t, fixture, filepath.Join(t.TempDir(), "dev"), filepath.Join(t.TempDir(), "home"))
@@ -42,12 +67,16 @@ func TestTerraformToolsActualPreparationDefersOnlyProviders(t *testing.T) {
 		writeTestFile(t, path, "SYNTHETIC_PRESERVED_PROVIDER_FIXTURE\n")
 	}
 	t.Setenv("DEVKIT_AWS_HOME", aws)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(aws, "credentials"))
 	if err := Prepare(p); err == nil || !strings.Contains(err.Error(), "approved DNSimple token source is unavailable") {
 		t.Fatalf("normal preparation did not retain real missing-provider refusal: %v", err)
 	}
 	before, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if string(before) != "called\n" {
+		t.Fatal("normal preparation did not invoke exactly one owned refusing hydrator")
 	}
 	fd, err := syscall.InotifyInit1(syscall.IN_NONBLOCK | syscall.IN_CLOEXEC)
 	if err != nil {

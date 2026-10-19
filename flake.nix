@@ -651,6 +651,13 @@
           # Parser/transport integration tests use the same OpenSSH dependency
           # as Devctl, rather than an unrelated runner-installed version/layout.
           devctl-test-openssh = pkgs.openssh;
+          # Full source tests consume the same locked tool suppliers already
+          # declared by portable tests and Management inspection.
+          devctl-test-tools = pkgs.buildEnv {
+            name = "devkit-devctl-test-tools";
+            paths = with pkgs; [ openssh sqlite gnutar jq util-linux ];
+            pathsToLink = [ "/bin" ];
+          };
           dev-all-runtime-tools = runtimeTools;
           dev-all-runtime-shell = mkDevAllRuntimeShell {
             inherit pkgs runtimeTools;
