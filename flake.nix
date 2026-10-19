@@ -623,6 +623,14 @@
         in
         {
           devctl = mkProductionDevctl pkgs;
+          # Reuse the production fixed-output dependency recipe. Bind its
+          # vendor payload to the exact module declarations of this source.
+          devctl-ci-dependencies = pkgs.runCommand "devkit-devctl-ci-dependencies" { } ''
+            mkdir -p "$out"
+            cp ${./cli/devctl/go.mod} "$out/go.mod"
+            cp ${./cli/devctl/go.sum} "$out/go.sum"
+            ln -s ${(mkProductionDevctl pkgs).goModules} "$out/vendor"
+          '';
           codex-gui-history-custody = (mkProductionDevctl pkgs).overrideAttrs (_: {
             pname = "devkit-codex-gui-history-custody";
             subPackages = [ "cmd/codex-gui-history-custody" ];

@@ -11,7 +11,7 @@ N          ?= 4
 
 NIX       ?= nix --extra-experimental-features 'nix-command flakes'
 
-.PHONY: build-cli health run ci-cheap native-reset-custody-gate devctl-overlay-runtime-authority native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-degraded-guard native-codex-home-preservation-guard native-overlay-matrix overlay-runtime-smoke retired-runtime-guard nix-overlay-runtime-guard postgres-broker-container-smoke
+.PHONY: build-cli health run ci-cheap ci-cheap-run native-reset-custody-gate devctl-overlay-runtime-authority native-e2e-lifecycle native-overlay-e2e-matrix native-runtime-smoke native-readiness-degraded-guard native-codex-home-preservation-guard native-overlay-matrix overlay-runtime-smoke retired-runtime-guard nix-overlay-runtime-guard postgres-broker-container-smoke
 
 build-cli:
 	@echo "== Building Go CLI -> $(CLI) =="
@@ -29,7 +29,14 @@ run: build-cli
 	@echo "== Run: $(REPO) with N=$(N) agents (dev-all overlay) =="
 	@$(CLI) -p dev-all run $(REPO) $(N)
 
-ci-cheap: build-cli
+# The full source suite retains integration/config coverage. Only dependency
+# acquisition is supplied by the same immutable recipe as production Devctl.
+ci-cheap:
+	@python3 -B nix/test_devctl_ci_dependencies.py
+	@set -eu; supplier="$$($(NIX) build --no-link --print-out-paths .#devctl-ci-dependencies)"; \
+	  python3 nix/devctl-ci-dependencies.py "$$supplier" -- $(MAKE) ci-cheap-run
+
+ci-cheap-run: build-cli
 	@echo "== Go tests =="
 	@$(MAKE) -C cli/devctl test
 	@$(MAKE) native-reset-custody-gate
