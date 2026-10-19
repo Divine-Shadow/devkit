@@ -15,13 +15,16 @@ SOURCE_ROOTS = ["main-actions/src/main", "main-actions/src/test"]
 
 def inputs(root):
     paths = [root / name for name in CONTROL_FILES]
-    for name in SOURCE_ROOTS:
-        paths.extend(p for p in (root / name).rglob("*") if p.suffix in {".scala", ".java"})
+    source_roots = [root / name for name in SOURCE_ROOTS]
+    entries = [*source_roots, *(p for source in source_roots for p in source.rglob("*"))]
     # Source is an exact public Git/NAR input; reject links before payload reads.
-    ancestry = {ancestor for path in paths for ancestor in [path, *path.parents]}
+    # Inspect directories too: a suffix-filtered traversal can miss a linked
+    # directory that the compiler's source scanner might follow.
+    ancestry = {ancestor for path in [*paths, *entries] for ancestor in [path, *path.parents]}
     for path in ancestry:
         if path.is_symlink():
             raise ValueError(f"source symlink is outside the producer contract: {path}")
+    paths.extend(p for p in entries if p.is_file() and p.suffix in {".scala", ".java"})
     rows = []
     for path in sorted(paths):
         data = path.read_bytes()

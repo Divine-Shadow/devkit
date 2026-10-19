@@ -52,6 +52,20 @@ class SourceBindingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source symlink"):
                 binding.capture(root, base / "binding")
 
+    def test_source_directory_alias_is_refused_before_payload_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            root = self.fixture(base)
+            binding.capture(root, base / "binding")
+            outside = base / "external"
+            outside.mkdir()
+            sentinel = outside / "Hidden.scala"
+            sentinel.write_bytes(b"external source must stay outside the binding")
+            (root / "main-actions/src/main/scala/extra").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "source symlink"):
+                binding.check(root, base / "binding")
+            self.assertEqual(sentinel.read_bytes(), b"external source must stay outside the binding")
+
     def test_generated_time_requires_the_fixed_epoch(self):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
