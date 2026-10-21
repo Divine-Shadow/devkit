@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Finite ownership and declaration tests; no Nix, Go, network or user cache."""
 import importlib.util
+import errno
 import os
 import signal
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -69,6 +71,127 @@ class BindingTests(unittest.TestCase):
 
     def test_preserves_replacement_after_child(self):
         self.assertEqual(self.run_child("from pathlib import Path; p=Path('cli/devctl/vendor'); p.unlink(); p.mkdir(); (p/'owned-by-other').write_text('keep')"), 0)
+        self.assertEqual((self.vendor / "owned-by-other").read_text(), "keep")
+
+    def test_preserves_replacement_types_and_failed_child_result(self):
+        payload = self.supplier / "vendor"
+        replacements = {
+            "file": "p.write_text('keep')",
+            "same-target-link": f"p.symlink_to({str(payload)!r})",
+            "other-target-link": "p.symlink_to('other-owner')",
+            "dangling-link": "p.symlink_to('absent')",
+            "missing": "pass",
+        }
+        for kind, replacement in replacements.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(self.run_child(
+                    "from pathlib import Path; import sys; "
+                    "p=Path('cli/devctl/vendor'); p.unlink(); "
+                    f"{replacement}; sys.exit(7)"), 7)
+                if kind == "file":
+                    self.assertEqual(self.vendor.read_text(), "keep")
+                elif kind == "missing":
+                    self.assertFalse(os.path.lexists(self.vendor))
+                else:
+                    expected = str(payload) if kind == "same-target-link" else (
+                        "other-owner" if kind == "other-target-link" else "absent")
+                    self.assertEqual(os.readlink(self.vendor), expected)
+                if os.path.lexists(self.vendor):
+                    self.vendor.unlink()
+
+    def test_deleted_original_symlink_stays_pinned_until_cleanup_finishes(self):
+        real_open = os.open
+        real_popen = subprocess.Popen
+        pins = []
+        test = self
+
+        def capture_pin(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            if Path(path) == test.vendor:
+                pins.append(fd)
+            return fd
+
+        def observe_child(*args, **kwargs):
+            # The child must start with a live descriptor to the actual link,
+            # not an unpinned stat snapshot that permits inode reuse.
+            test.assertEqual(len(pins), 1)
+            original = os.fstat(pins[0])
+            test.assertTrue(stat.S_ISLNK(original.st_mode))
+            test.assertTrue(os.path.samestat(original, test.vendor.lstat()))
+            child = real_popen(*args, **kwargs)
+
+            class ObservedChild:
+                pid = child.pid
+
+                def wait(self):
+                    code = child.wait()
+                    held = os.fstat(pins[0])
+                    test.assertTrue(os.path.samestat(original, held))
+                    test.assertEqual(held.st_nlink, 0)
+                    test.assertFalse(os.path.samestat(held, test.vendor.lstat()))
+                    return code
+
+            return ObservedChild()
+
+        with patch.object(binding.os, "open", capture_pin), patch.object(
+                binding.subprocess, "Popen", observe_child):
+            self.assertEqual(self.run_child(
+                "from pathlib import Path; p=Path('cli/devctl/vendor'); "
+                f"p.unlink(); p.symlink_to({str(self.supplier / 'vendor')!r})"), 0)
+        self.assertEqual(self.vendor.readlink(), self.supplier / "vendor")
+        with self.assertRaises(OSError) as closed:
+            os.fstat(pins[0])
+        self.assertEqual(closed.exception.errno, errno.EBADF)
+
+    def test_binding_change_during_pin_capture_refuses_before_child(self):
+        real_open = os.open
+        for when in ("before-open", "after-open"):
+            with self.subTest(when=when):
+                pins = []
+
+                def replace():
+                    self.vendor.unlink()
+                    self.vendor.mkdir()
+                    (self.vendor / "owned-by-other").write_text("keep")
+
+                def changed_open(path, flags, *args, **kwargs):
+                    if Path(path) == self.vendor and when == "before-open":
+                        replace()
+                    fd = real_open(path, flags, *args, **kwargs)
+                    if Path(path) == self.vendor:
+                        pins.append(fd)
+                        if when == "after-open":
+                            replace()
+                    return fd
+
+                with patch.object(binding.os, "open", changed_open), patch.object(
+                        binding.subprocess, "Popen") as child:
+                    with self.assertRaisesRegex(ValueError, "changed before child"):
+                        self.run_child("raise AssertionError('must not start')")
+                    child.assert_not_called()
+                self.assertEqual((self.vendor / "owned-by-other").read_text(), "keep")
+                with self.assertRaises(OSError) as closed:
+                    os.fstat(pins[0])
+                self.assertEqual(closed.exception.errno, errno.EBADF)
+                (self.vendor / "owned-by-other").unlink()
+                self.vendor.rmdir()
+
+    def test_late_unlink_race_preserves_directory_and_reports_failure(self):
+        real_unlink = Path.unlink
+        cleanup_calls = []
+
+        def replaced_unlink(path, *args, **kwargs):
+            if path == self.vendor:
+                cleanup_calls.append(path)
+                real_unlink(path)
+                path.mkdir()
+                (path / "owned-by-other").write_text("keep")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", replaced_unlink):
+            with self.assertRaises(IsADirectoryError):
+                self.run_child("pass")
+        self.assertEqual(len(cleanup_calls), 1)
         self.assertEqual((self.vendor / "owned-by-other").read_text(), "keep")
 
     def test_refuses_alternate_module_file(self):

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 
@@ -25,6 +26,25 @@ def run(supplier, command, root):
     # Atomic exclusive creation refuses files, directories and dangling links.
     vendor.symlink_to(payload, target_is_directory=True)
     owned = vendor.lstat()
+    # Keep the original symlink inode allocated even if the child replaces its
+    # path. Device/inode numbers alone can otherwise identify a reused inode.
+    pin = os.open(vendor, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        held = os.fstat(pin)
+        current = vendor.lstat()
+        if (not stat.S_ISLNK(owned.st_mode)
+                or not stat.S_ISLNK(held.st_mode)
+                or not stat.S_ISLNK(current.st_mode)
+                or not os.path.samestat(owned, held)
+                or not os.path.samestat(held, current)
+                or vendor.readlink() != payload):
+            raise ValueError("dependency binding changed before child dispatch")
+        return _run_bound(command, root, env, vendor, held)
+    finally:
+        os.close(pin)
+
+
+def _run_bound(command, root, env, vendor, owned):
     previous = {}
     child = None
     cancelled = []
@@ -60,7 +80,8 @@ def run(supplier, command, root):
             # Waiting for make alone cannot prove every descendant has exited.
             # Retain the binding after interruption; a later run refuses it.
             print(f"interrupted CI: retained dependency binding for inspection: {vendor}", file=sys.stderr)
-        elif current is not None and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino):
+        elif (current is not None and stat.S_ISLNK(current.st_mode)
+              and os.path.samestat(current, owned)):
             vendor.unlink()
     if cancelled and code == 0:
         return 128 + cancelled[-1]
