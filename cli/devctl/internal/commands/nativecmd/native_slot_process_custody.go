@@ -258,21 +258,28 @@ func nativeProcLinkTouches(procPath, link string, identity nativeSlotProcessIden
 }
 
 func nativeProcTouchesTargets(procPath string, identity nativeSlotProcessIdentity, targets []os.FileInfo) (bool, error) {
+	touches, _, err := nativeProcTouchesTargetsWithKind(procPath, identity, targets)
+	return touches, err
+}
+
+// Only fixed tokens leave this inspection; descriptor names and target paths
+// are not diagnostic payloads.
+func nativeProcTouchesTargetsWithKind(procPath string, identity nativeSlotProcessIdentity, targets []os.FileInfo) (bool, string, error) {
 	for _, name := range []string{"cwd", "root", "exe"} {
 		touches, err := nativeProcLinkTouches(procPath, name, identity, targets)
 		if touches || err != nil {
-			return touches, err
+			return touches, name, err
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(procPath, "fd"))
 	if err != nil {
-		return false, nil
+		return false, "", nil
 	}
 	for _, entry := range entries {
 		touches, err := nativeProcLinkTouches(procPath, filepath.Join("fd", entry.Name()), identity, targets)
 		if touches || err != nil {
-			return touches, err
+			return touches, "fd", err
 		}
 	}
-	return false, nil
+	return false, "", nil
 }
