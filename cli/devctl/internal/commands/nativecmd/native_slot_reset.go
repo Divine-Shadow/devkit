@@ -3565,7 +3565,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleParsed)
 	opts := lifecyclePlanOptions(ctx, cfg, lifecycleParsed, declaredRepo, brokerCfg)
 	opts.Index = parsed.index
-	selectedPlan, err := nativeplan.BuildDevAll(opts)
+	selectedPlan, err := nativeplan.BuildSelectedSlotReset(opts)
 	if err != nil {
 		return err
 	}
@@ -3751,7 +3751,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		brokerCfg = lifecycleBrokerConfigWithStatusSocket(brokerCfg, status)
 		opts = lifecyclePlanOptions(ctx, cfg, lifecycleParsed, declaredRepo, brokerCfg)
 		opts.Index = parsed.index
-		selectedPlan, err = nativeplan.BuildDevAll(opts)
+		selectedPlan, err = nativeplan.BuildSelectedSlotReset(opts)
 		if err != nil {
 			return cleanupFailedSlot(err)
 		}
@@ -3768,7 +3768,7 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	}
 	bootstrapOpts := opts
 	bootstrapOpts.Index = parsed.index
-	bootstrapPlan, err := nativeplan.BuildDevAll(bootstrapOpts)
+	bootstrapPlan, err := nativeplan.BuildSelectedSlotReset(bootstrapOpts)
 	if err != nil {
 		return cleanupFailedSlot(err)
 	}

@@ -136,3 +136,5 @@ Root2874 bounded TF1 tools phase: full provider preparation remains the default.
 - [Proxy-only managed endpoint lifecycle](execplans/proxy-only-managed-endpoints-20261015.md): repair normal preparation/execution isolation without reusing or touching an unverified existing listener; actual Auth consumer remains Runtime-owned.
 
 - 2026-10-15: [Existing Terraform provider failure diagnostic](execplans/terraform-provider-failure-diagnostic-20261015.md): Source-owned narrow typed nonsecret receipt; normal gates/publication/immutable supply and actual Auth consumer required.
+
+- [Selected-slot reset managed Git plan geometry](execplans/native-reset-plan-geometry-20261022.md): source-selected isolated execution, shared manifest preserved; native CI/publication/Runtime supply pending.
