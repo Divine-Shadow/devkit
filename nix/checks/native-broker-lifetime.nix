@@ -214,6 +214,7 @@ let
     "TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata"
     "TestNativeTopLevelSelectedLaneGitReciprocity"
     "TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority"
+    "TestSelectedStandardSlotResetRebuildsGitProjectionAfterBootstrap"
     "TestNativePrepareCarriesDelayedPackThroughActualOpenSSHProxyCommand"
   ];
   consequenceTests = pkgs.buildGoModule {

@@ -3787,6 +3787,24 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if err := prepareNativeGitBootstrapAndWorktrees(bootstrapPlan, worktreeOptions, ctx.DryRun); err != nil {
 		return cleanupFailedSlot(err)
 	}
+	// Bootstrap can create the selected linked worktree after the execution
+	// plan was constructed. Re-derive its exact common bind and read-only
+	// backlink from the now-present, validated Git registration before Prepare.
+	preparedPlan, err := nativeplan.BuildSelectedSlotReset(opts)
+	if err != nil {
+		return cleanupFailedSlot(err)
+	}
+	// The normal source builder and strict validators derive the fresh mount
+	// set. Compare the remaining execution identity: source selection, homes,
+	// state, SSH/proxy and sibling geometry must survive bootstrap unchanged.
+	identity := preparedPlan
+	identity.Binds = selectedPlan.Binds
+	identity.GitBacklink = selectedPlan.GitBacklink
+	identity.LauncherArgs = selectedPlan.LauncherArgs
+	if !reflect.DeepEqual(identity, selectedPlan) {
+		return cleanupFailedSlot(fmt.Errorf("Git bootstrap changed selected-slot execution identity"))
+	}
+	selectedPlan = preparedPlan
 	if err := prepareWithManagedEgressProxy(selectedPlan, brokerCfg, ctx.DryRun, launch.Prepare); err != nil {
 		return cleanupFailedSlot(err)
 	}

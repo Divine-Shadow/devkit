@@ -200,7 +200,7 @@ func snapshotGitFiles(t *testing.T, root string) map[string][32]byte {
 }
 
 func TestProductGitBacklinkRefusesUnownedOrConflictingMetadata(t *testing.T) {
-	cases := []string{"foreign-common", "wrong-backlink", "missing-backlink", "wrong-lane-marker", "duplicate-marker", "malformed-forward", "symlink-forward", "symlink-common", "traversing-commondir", "symlink-backlink", "changed-plan", "missing-plan", "writable-projection", "shadowed-projection", "duplicate-common-bind", "conflicting-common-bind"}
+	cases := []string{"foreign-common", "wrong-backlink", "missing-backlink", "wrong-lane-marker", "duplicate-marker", "malformed-forward", "symlink-forward", "symlink-common", "traversing-commondir", "symlink-backlink", "changed-plan", "missing-plan", "writable-projection", "shadowed-projection", "missing-common-bind", "duplicate-common-bind", "conflicting-common-bind"}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
 			p, wt, sibling := realProductGitPlan(t)
@@ -255,6 +255,14 @@ func TestProductGitBacklinkRefusesUnownedOrConflictingMetadata(t *testing.T) {
 				p.GitBacklink = nil
 			case "writable-projection":
 				p.Binds[len(p.Binds)-1].Mode = "rw"
+			case "missing-common-bind":
+				kept := make([]Bind, 0, len(p.Binds))
+				for _, bind := range p.Binds {
+					if bind.Source != metadata.CommonDir {
+						kept = append(kept, bind)
+					}
+				}
+				p.Binds = kept
 			case "duplicate-common-bind", "conflicting-common-bind":
 				for _, bind := range p.Binds {
 					if bind.Source == metadata.CommonDir {

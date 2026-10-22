@@ -112,7 +112,7 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	return bin
 }
 
-func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count int) []byte {
+func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count int, kinds ...string) []byte {
 	t.Helper()
 	source := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
 	if !strings.HasPrefix(source, "/nix/store/") || filepath.Clean(source) != source {
@@ -137,6 +137,11 @@ func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count i
 			"workspaceRoot": workspace, "hostWorktree": worktree, "hostHome": home,
 			"source": source, "sourceSha256": fmt.Sprintf("%x", digest),
 		})
+	}
+	if len(kinds) == 1 {
+		for _, record := range records {
+			record["kind"], record["expectedExecutionHost"] = kinds[0], "fixture-station"
+		}
 	}
 	manifest := filepath.Join(t.TempDir(), "codex-config-projections.json")
 	payload, err := json.Marshal(map[string]any{"schemaVersion": "devkit/gui-codex-config-projections/v1", "projections": records})
@@ -1346,6 +1351,18 @@ func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
 }
 
 func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.T) {
+	testDevAllResetThroughPackageSSHAuthority(t, false)
+}
+
+// The immutable disposable station fixture owns this canonical lane geometry.
+// This exercises the real CLI bootstrap, managed SSH and subsequent Git
+// projection preparation; only SSH/network and readiness process responses are
+// fixture adapters. No production hook or runtime override is added.
+func TestSelectedStandardSlotResetRebuildsGitProjectionAfterBootstrap(t *testing.T) {
+	testDevAllResetThroughPackageSSHAuthority(t, true)
+}
+
+func testDevAllResetThroughPackageSSHAuthority(t *testing.T, standard bool) {
 	requireNativeStationFixture(t)
 	base, err := os.MkdirTemp("", "dvr-")
 	if err != nil {
@@ -1353,7 +1370,22 @@ func TestDevAllResetReconstructsThreeSlotsThroughPackageSSHAuthority(t *testing.
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
 	worktreeRoot := filepath.Join(base, "agent-worktrees")
-	expectedGUIConfig := writeNativeResetGUIConfigFixture(t, worktreeRoot, 3)
+	var expectedGUIConfig []byte
+	if standard {
+		worktreeRoot = "/home/bayesartre/dev/agent-worktrees"
+		// Refuse existing custody even inside the disposable VM. This test owns
+		// only a newly created exact worktree root, never the fixture's dev root.
+		if _, err := os.Lstat(worktreeRoot); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("standard fixture root already exists: %v", err)
+		}
+		if err := os.Mkdir(worktreeRoot, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(worktreeRoot) })
+		expectedGUIConfig = writeNativeResetGUIConfigFixture(t, worktreeRoot, 3, "local-wsl-devkit-agent")
+	} else {
+		expectedGUIConfig = writeNativeResetGUIConfigFixture(t, worktreeRoot, 3)
+	}
 	governanceSource := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
 	if !strings.HasPrefix(governanceSource, "/nix/store/") || filepath.Clean(governanceSource) != governanceSource {
 		t.Fatal("supply DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE from nix build .#native-reset-test-config (or use make test)")
@@ -1501,6 +1533,9 @@ while [ "$#" -gt 0 ]; do
       source="$2"
       target="$3"
       case "$target" in
+        /workspaces/dev)
+          case "$source" in */agent-worktrees/agent*) host_worktree="$source/ouroboros-ide" ;; esac
+          ;;
         /workspaces/dev/.devkit/ouro8-governance-env.sh) governance_env="$source" ;;
         /workspaces/dev/.devkit/ouro8-governance-repo-env.json) governance_catalog="$source" ;;
         /workspaces/dev/.devkit/governance-control-plane) governance_state="$source" ;;
@@ -1534,7 +1569,7 @@ emit() {
 }
 emit sandbox-command 0 ''
 emit broker-socket 0 ''
-if [ "$mount_policy" = devkit/workspace-egress/v3 ] && [ -n "$host_worktree" ] &&
+if { [ "$mount_policy" = devkit/workspace-egress/v3 ] || [ "$mount_policy" = devkit/workspace-egress/v4 ]; } && [ -n "$host_worktree" ] &&
    command git -C "$host_worktree" diff --quiet &&
    command git -C "$host_worktree" diff --cached --quiet &&
    [ "$(command git -C "$host_worktree" rev-parse HEAD)" = "$(command git -C "$host_worktree" rev-parse refs/remotes/origin/main)" ]; then
@@ -1638,41 +1673,7 @@ fi
 		}
 	}
 
-	output, err := runReset()
-	if err == nil {
-		t.Fatalf("installed top-level reset accepted a failed package SSH fetch:\n%s", output)
-	}
-	if !strings.Contains(string(output), "fetch --all --prune") {
-		t.Fatalf("failed package SSH fetch was not classified at bootstrap: %v\n%s", err, output)
-	}
-	if _, readErr := os.Lstat(staleMarker); !errors.Is(readErr, os.ErrNotExist) {
-		t.Fatalf("failed reset did not dispose stale package-owned payload: %v", readErr)
-	}
-	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent1"))
-	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent3"))
-	for _, path := range []string{
-		filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git"),
-	} {
-		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
-			t.Fatalf("failed reset left package lifecycle residue %s: %v", path, statErr)
-		}
-	}
-	partialBootstrap, err := filepath.Glob(filepath.Join(worktreeRoot, ".devkit", "git", "agent*", ".ouroboros-ide.bootstrap-*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(partialBootstrap) != 0 {
-		t.Fatalf("failed reset left partial bootstrap repositories: %v", partialBootstrap)
-	}
-	assertNoNativeResetProxyResidue(t, base)
-	if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(sshLog, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("fresh bootstrap JSON reserves stdout and preserves sibling state", func(t *testing.T) {
+	freshBootstrap := func(t *testing.T) {
 		worktreesRoot := worktreeRoot
 		siblingHome := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
 		siblingState := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
@@ -1685,8 +1686,13 @@ fi
 			}
 		}
 
-		commonRepo := filepath.Join(worktreesRoot, ".devkit", "git", "agent1", "ouroboros-ide.git")
-		selectedWorktree := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide")
+		selectedIndex := 1
+		if standard {
+			selectedIndex = 3
+		}
+		lane := fmt.Sprintf("agent%d", selectedIndex)
+		commonRepo := filepath.Join(worktreesRoot, ".devkit", "git", lane, "ouroboros-ide.git")
+		selectedWorktree := filepath.Join(worktreesRoot, lane, "ouroboros-ide")
 		for _, absent := range []string{commonRepo, selectedWorktree} {
 			if _, err := os.Lstat(absent); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("fresh JSON reset prerequisite %s is not absent: %v", absent, err)
@@ -1698,7 +1704,7 @@ fi
 
 		command := exec.Command(packageDevctl,
 			"-p", "dev-all", "native", "reset",
-			"--repo", "ouroboros-ide", "--index", "1", "--format", "json",
+			"--repo", "ouroboros-ide", "--index", strconv.Itoa(selectedIndex), "--format", "json",
 			"--workspace-root", filepath.Dir(selectedWorktree),
 		)
 		command.Env = env
@@ -1734,7 +1740,7 @@ fi
 		}
 		freshHead := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", sourceRepo, "rev-parse", "HEAD"))
 		if receipt.Command != "reset" || receipt.Runtime != "native" || receipt.Repo != "ouroboros-ide" ||
-			receipt.Index != 1 || receipt.Status != "ready" || receipt.Head != freshHead ||
+			receipt.Index != selectedIndex || receipt.Status != "ready" || receipt.Head != freshHead ||
 			receipt.ManifestPath == "" || receipt.Capacity.Total != 1 ||
 			receipt.Capacity.RuntimeReady != 1 || receipt.Capacity.RepoReady != 1 {
 			t.Fatalf("unexpected fresh JSON reset receipt: %#v", receipt)
@@ -1751,7 +1757,50 @@ fi
 		if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", selectedWorktree, "status", "--porcelain=v1")); got != "" {
 			t.Fatalf("fresh JSON reset left selected worktree dirty: %s", got)
 		}
-	})
+	}
+	if standard {
+		if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Run("standard slot3 fresh bootstrap and isolated Git projection", freshBootstrap)
+		return
+	}
+
+	output, err := runReset()
+	if err == nil {
+		t.Fatalf("installed top-level reset accepted a failed package SSH fetch:\n%s", output)
+	}
+	if !strings.Contains(string(output), "fetch --all --prune") {
+		t.Fatalf("failed package SSH fetch was not classified at bootstrap: %v\n%s", err, output)
+	}
+	if _, readErr := os.Lstat(staleMarker); !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("failed reset did not dispose stale package-owned payload: %v", readErr)
+	}
+	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent1"))
+	assertDisposedSlotRoot(filepath.Join(worktreeRoot, "agent3"))
+	for _, path := range []string{
+		filepath.Join(worktreeRoot, ".devkit", "git", "agent1", "ouroboros-ide.git"),
+	} {
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("failed reset left package lifecycle residue %s: %v", path, statErr)
+		}
+	}
+	partialBootstrap, err := filepath.Glob(filepath.Join(worktreeRoot, ".devkit", "git", "agent*", ".ouroboros-ide.bootstrap-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(partialBootstrap) != 0 {
+		t.Fatalf("failed reset left partial bootstrap repositories: %v", partialBootstrap)
+	}
+	assertNoNativeResetProxyResidue(t, base)
+	if err := os.WriteFile(sshAllow, []byte("allow fixture fetch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sshLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("fresh bootstrap JSON reserves stdout and preserves sibling state", freshBootstrap)
 	if err := os.WriteFile(sshLog, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

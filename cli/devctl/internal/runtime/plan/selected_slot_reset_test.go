@@ -1,7 +1,9 @@
 package plan
 
 import (
+	"devkit/cli/devctl/internal/worktrees"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -99,4 +101,75 @@ func TestSelectedSlotResetRejectsUnselectedOrForeignGeometryAndPreservesLegacyCl
 	if _, err := BuildSelectedSlotReset(opts); err == nil {
 		t.Fatal("foreign projection geometry admitted")
 	}
+}
+
+// A missing forward pointer is legitimate before source-owned bootstrap. Its
+// arrival changes the required Git mounts; an old plan must still fail closed.
+func TestSelectedSlotResetCapturesNewGitRegistration(t *testing.T) {
+	original, wt, sibling := realProductGitPlan(t)
+	siblingBefore := snapshotGitFiles(t, sibling)
+	metadata, err := worktrees.InspectNativeLaneGitMetadata(wt, original.HostWorktreeRoot, "ouroboros-ide", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(t.TempDir(), "projections.json")
+	saved := guiCodexConfigProjectionManifestPath
+	guiCodexConfigProjectionManifestPath = manifest
+	t.Cleanup(func() { guiCodexConfigProjectionManifestPath = saved })
+	record := guiConfigRecordForPlan(original, "post-bootstrap-fixture", "product-governance", "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config.toml", strings.Repeat("a", 64))
+	record.Kind, record.ExpectedExecutionHost = "local-wsl-devkit-agent", "fixture-host"
+	writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{record})
+	opts := BuildOptions{Paths: devkitpaths.Paths{Root: original.DevkitHostRoot}, Project: "dev-all", Repo: "ouroboros-ide", Index: 1, WorktreeRoot: original.HostWorktreeRoot, GUITargetID: record.TargetID, IsolationProfile: IsolationProfileWorkspaceEgress, EgressAllowlist: original.Proxy.AllowlistPath}
+	forward := filepath.Join(wt, ".git")
+	withheld := filepath.Join(t.TempDir(), "forward-pointer")
+	if err := os.Rename(forward, withheld); err != nil {
+		t.Fatal(err)
+	}
+	beforeManifest, err := BuildManifest(opts, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := BuildSelectedSlotReset(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(withheld, forward); err != nil {
+		t.Fatal(err)
+	}
+	target := "/workspaces/.devkit/git/agent1/ouroboros-ide.git"
+	expected := Bind{Source: metadata.CommonDir, Target: target, Mode: "rw", Required: true}
+	count := func(p Plan) int {
+		n := 0
+		for _, b := range p.Binds {
+			if b == expected {
+				n++
+			}
+		}
+		return n
+	}
+	if count(stale) != 0 || stale.GitBacklink != nil {
+		t.Fatal("pre-bootstrap fixture already contains Git projection")
+	}
+	if err := ValidateGitBacklinkProjection(stale); err == nil || !strings.Contains(err.Error(), "requires one exact common repository bind") {
+		t.Fatalf("stale plan bypassed exact bind guard: %v", err)
+	}
+	beforeCommon := snapshotGitFiles(t, metadata.CommonDir)
+	fresh, err := BuildSelectedSlotReset(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count(fresh) != 1 || fresh.GitBacklink == nil {
+		t.Fatalf("new registration not projected: %#v", fresh.Binds)
+	}
+	if err := ValidateGitBacklinkProjection(fresh); err != nil {
+		t.Fatal(err)
+	}
+	afterManifest, err := BuildManifest(opts, 3)
+	if err != nil || !reflect.DeepEqual(beforeManifest, afterManifest) {
+		t.Fatalf("prefix manifest changed: %v", err)
+	}
+	if !reflect.DeepEqual(beforeCommon, snapshotGitFiles(t, metadata.CommonDir)) || !reflect.DeepEqual(siblingBefore, snapshotGitFiles(t, sibling)) {
+		t.Fatal("planning changed selected or sibling Git custody")
+	}
+	t.Logf("actual fixture expected=%+v pre_bootstrap_exact_bind_count=%d post_bootstrap_exact_bind_count=%d strict_stale_refusal=true selected_and_sibling_common_unchanged=true prefix_manifest_unchanged=true", expected, count(stale), count(fresh))
 }
