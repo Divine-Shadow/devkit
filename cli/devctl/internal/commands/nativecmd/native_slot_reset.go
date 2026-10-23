@@ -238,6 +238,7 @@ type nativeProc struct {
 	environAvailable bool
 	touches          bool
 	refusalWitness   string
+	contact          *nativeProcessContact
 }
 
 var (
@@ -324,12 +325,17 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 		if environErr == nil {
 			environ = parseNativeProcEnviron(environData)
 		}
-		touches, touchKind, touchErr := nativeProcTouchesTargetsInInventory(path, identity, targets, entries)
+		physical := &nativePhysicalContact{}
+		touches, touchKind, touchErr := nativeProcTouchesTargetsObserved(path, identity, targets, entries, physical)
 		selected, ownershipErr := nativeProcHasSlotIdentity(path, environ, identity)
 		refusalWitness := ""
+		var contact *nativeProcessContact
 		if touches && !selected {
 			refusalWitness = observeNativeUnownedProcessWitness(path, ppid, start, touchKind)
+			observed := observeNativeProcessContact(path, ppid, start, touchKind, identity, targets, physical)
+			contact = &observed
 		}
+		physical.close()
 		finalParent, finalStart := readNativeProcIdentity(path)
 		if finalStart == "" {
 			if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -347,7 +353,7 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 				return nil, fmt.Errorf("inspect native process %d physical custody: %w", pid, ownershipErr)
 			}
 		}
-		processes[pid] = nativeProc{pid: pid, ppid: ppid, start: start, environ: environ, environAvailable: environErr == nil, touches: touches, refusalWitness: refusalWitness}
+		processes[pid] = nativeProc{pid: pid, ppid: ppid, start: start, environ: environ, environAvailable: environErr == nil, touches: touches, refusalWitness: refusalWitness, contact: contact}
 		if selected {
 			owned[pid] = true
 			ownedHomes[pid] = environ["HOME"]
@@ -383,6 +389,7 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 			// since exited. Diagnostics never reread /proc or grant custody. The
 			// outer boundary adds post-stop/post-history phase when applicable.
 			// Keep values bounded and omit paths, environment contents and argv.
+			emitNativeProcessContact(process.contact)
 			return nil, nativeUnownedProcessRefusal(pid, identity, process)
 		}
 	}

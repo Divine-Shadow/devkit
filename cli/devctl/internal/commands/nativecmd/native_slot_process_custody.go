@@ -165,6 +165,10 @@ var nativeSlotOpenProcessDirectory = func(path string) (*os.File, error) {
 }
 
 func nativePhysicalDirectoryTouches(path string, targets []os.FileInfo) (bool, error) {
+	return nativePhysicalDirectoryTouchesObserved(path, targets, nil)
+}
+
+func nativePhysicalDirectoryTouchesObserved(path string, targets []os.FileInfo, observation *nativePhysicalContact) (bool, error) {
 	// Pin the observed directory. The target may close/reuse an fd or change
 	// cwd while we inspect it; repeated /proc/PID/fd/N/.. lookups are not one
 	// physical observation and can turn unrelated descriptor churn into a gate.
@@ -183,6 +187,9 @@ func nativePhysicalDirectoryTouches(path string, targets []os.FileInfo) (bool, e
 		}
 		for _, target := range targets {
 			if os.SameFile(info, target) {
+				if observation != nil {
+					observation.capture(current, info)
+				}
 				return true, nil
 			}
 		}
@@ -211,6 +218,10 @@ func nativeProcLinkTouches(procPath, link string, identity nativeSlotProcessIden
 }
 
 func nativeProcLinkTouchesInInventory(procPath, link string, identity nativeSlotProcessIdentity, targets []os.FileInfo, inventory []os.DirEntry) (bool, error) {
+	return nativeProcLinkTouchesObserved(procPath, link, identity, targets, inventory, nil)
+}
+
+func nativeProcLinkTouchesObserved(procPath, link string, identity nativeSlotProcessIdentity, targets []os.FileInfo, inventory []os.DirEntry, observation *nativePhysicalContact) (bool, error) {
 	handle := filepath.Join(procPath, link)
 	visible, err := os.Readlink(handle)
 	if errors.Is(err, os.ErrNotExist) {
@@ -231,13 +242,19 @@ func nativeProcLinkTouchesInInventory(procPath, link string, identity nativeSlot
 		}
 		return false, nil
 	}
+	if observation != nil {
+		observation.linkInfo = info
+	}
 	if info.IsDir() {
-		touches, err := nativePhysicalDirectoryTouches(handle, targets)
+		touches, err := nativePhysicalDirectoryTouchesObserved(handle, targets, observation)
 		if errors.Is(err, syscall.ESRCH) && !lexical {
 			// Spelling cannot exclude a physical alias. Preserve the already
 			// observed inode witness before considering a mount-level proof.
 			for _, target := range targets {
 				if os.SameFile(info, target) {
+					if observation != nil {
+						observation.capturePath(handle, info)
+					}
 					return true, nil
 				}
 			}
@@ -260,7 +277,7 @@ func nativeProcLinkTouchesInInventory(procPath, link string, identity nativeSlot
 		}
 		return false, nil
 	}
-	parentTouches, parentErr := nativePhysicalDirectoryTouches(filepath.Dir(visiblePath), targets)
+	parentTouches, parentErr := nativePhysicalDirectoryTouchesObserved(filepath.Dir(visiblePath), targets, observation)
 	if parentErr != nil {
 		if lexical {
 			return false, fmt.Errorf("cannot establish selected native process link %s ancestry: %w", link, parentErr)
@@ -285,9 +302,16 @@ func nativeProcTouchesTargetsWithKind(procPath string, identity nativeSlotProces
 }
 
 func nativeProcTouchesTargetsInInventory(procPath string, identity nativeSlotProcessIdentity, targets []os.FileInfo, inventory []os.DirEntry) (bool, string, error) {
+	return nativeProcTouchesTargetsObserved(procPath, identity, targets, inventory, nil)
+}
+
+func nativeProcTouchesTargetsObserved(procPath string, identity nativeSlotProcessIdentity, targets []os.FileInfo, inventory []os.DirEntry, observation *nativePhysicalContact) (bool, string, error) {
 	for _, name := range []string{"cwd", "root", "exe"} {
-		touches, err := nativeProcLinkTouchesInInventory(procPath, name, identity, targets, inventory)
+		touches, err := nativeProcLinkTouchesObserved(procPath, name, identity, targets, inventory, observation)
 		if touches || err != nil {
+			if observation != nil {
+				observation.link = name
+			}
 			return touches, name, err
 		}
 	}
@@ -296,8 +320,11 @@ func nativeProcTouchesTargetsInInventory(procPath string, identity nativeSlotPro
 		return false, "", nil
 	}
 	for _, entry := range entries {
-		touches, err := nativeProcLinkTouchesInInventory(procPath, filepath.Join("fd", entry.Name()), identity, targets, inventory)
+		touches, err := nativeProcLinkTouchesObserved(procPath, filepath.Join("fd", entry.Name()), identity, targets, inventory, observation)
 		if touches || err != nil {
+			if observation != nil {
+				observation.link = filepath.Join("fd", entry.Name())
+			}
 			kind := "fd"
 			if descriptor, parseErr := strconv.ParseUint(entry.Name(), 10, 64); err != nil && parseErr == nil {
 				kind += "/" + strconv.FormatUint(descriptor, 10)

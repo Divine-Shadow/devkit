@@ -48,12 +48,16 @@ type nativeCustodyWitness struct {
 	pinFailed          bool
 }
 type nativeCustodyReport struct {
-	Schema       string                 `json:"schemaVersion"`
-	Target       string                 `json:"target"`
-	Index        int                    `json:"index"`
-	Status       string                 `json:"status"`
-	Unavailable  int                    `json:"unavailable"`
-	Observations []nativeCustodyWitness `json:"observations"`
+	Schema                          string                 `json:"schemaVersion"`
+	Target                          string                 `json:"target"`
+	Index                           int                    `json:"index"`
+	Status                          string                 `json:"status"`
+	Unavailable                     int                    `json:"unavailable"`
+	Observations                    []nativeCustodyWitness `json:"observations"`
+	PhysicalContacts                []nativeProcessContact `json:"physicalContacts"`
+	PhysicalContactsStatus          string                 `json:"physicalContactsStatus"`
+	PhysicalContactsUnavailable     int                    `json:"physicalContactsUnavailable"`
+	PhysicalContactsAreAbsenceProof bool                   `json:"physicalContactsAreAbsenceProof"`
 }
 
 func custodyObject(info os.FileInfo) *nativeCustodyObject {
@@ -193,15 +197,21 @@ func custodyUIDs(path string) string {
 	return ""
 }
 func observeNativeSlotCustody(spec nativeagent.Spec) nativeCustodyReport {
-	r := nativeCustodyReport{Schema: "devkit/selected-slot-custody-observation/v1", Index: spec.ID.Index, Status: "observed", Observations: []nativeCustodyWitness{}}
+	r := nativeCustodyReport{Schema: "devkit/selected-slot-custody-observation/v1", Index: spec.ID.Index, Status: "observed", Observations: []nativeCustodyWitness{}, PhysicalContacts: []nativeProcessContact{}, PhysicalContactsStatus: "observed"}
 	identity := nativeSlotProcessIdentity{index: spec.ID.Index, hostHome: spec.HostHome, hostWorktree: spec.HostWorktree, sandboxHome: spec.SandboxHome, sandboxWorktree: spec.SandboxWorktree, stateRoot: spec.StateRoot, sandboxState: spec.SandboxStateRoot}
+	targets, targetsErr := nativeSlotPhysicalTargets(identity)
+	if targetsErr != nil {
+		r.PhysicalContactsStatus = "unavailable"
+	}
 	entries, e := os.ReadDir(nativeSlotProcRoot)
 	if e != nil {
 		r.Status = "unavailable"
+		r.PhysicalContactsStatus = "unavailable"
 		return r
 	}
 	if len(entries) > 65536 {
 		r.Status = "truncated"
+		r.PhysicalContactsStatus = "truncated"
 		return r
 	}
 	budget := 16 * 1024 * 1024
@@ -212,6 +222,26 @@ func observeNativeSlotCustody(spec nativeagent.Spec) nativeCustodyReport {
 		}
 		path := filepath.Join(nativeSlotProcRoot, entry.Name())
 		parent, start := readNativeProcIdentity(path)
+		// Reuse this report's single bounded inventory and the reset guard's
+		// physical routine. No process is selected or acquired by observation.
+		if targetsErr == nil && len(r.PhysicalContacts) < 32 {
+			physical := &nativePhysicalContact{}
+			touches, kind, err := nativeProcTouchesTargetsObserved(path, identity, targets, entries, physical)
+			if err != nil {
+				r.PhysicalContactsUnavailable++
+				r.PhysicalContactsStatus = "incomplete"
+			} else if touches {
+				contact := observeNativeProcessContact(path, parent, start, kind, identity, targets, physical)
+				r.PhysicalContacts = append(r.PhysicalContacts, contact)
+				if contact.Status != "stable" {
+					r.PhysicalContactsStatus = "incomplete"
+				}
+				if len(r.PhysicalContacts) == 32 {
+					r.PhysicalContactsStatus = "truncated"
+				}
+			}
+			physical.close()
+		}
 		boot := nativeCustodyBoot()
 		envData, e := custodyReadBounded(filepath.Join(path, "environ"), 1024*1024)
 		if e != nil {
@@ -221,6 +251,9 @@ func observeNativeSlotCustody(spec nativeagent.Spec) nativeCustodyReport {
 		budget -= len(envData)
 		if budget < 0 {
 			r.Status = "truncated"
+			if r.PhysicalContactsStatus != "unavailable" {
+				r.PhysicalContactsStatus = "truncated"
+			}
 			break
 		}
 		env := parseNativeProcEnviron(envData)
@@ -264,6 +297,9 @@ func observeNativeSlotCustody(spec nativeagent.Spec) nativeCustodyReport {
 		r.Observations = append(r.Observations, w)
 		if len(r.Observations) == 32 {
 			r.Status = "truncated"
+			if r.PhysicalContactsStatus != "unavailable" {
+				r.PhysicalContactsStatus = "truncated"
+			}
 			break
 		}
 	}

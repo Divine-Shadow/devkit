@@ -2089,6 +2089,53 @@ fi
 	if len(foreignFields) < 20 {
 		t.Fatal("fixture process has no start identity")
 	}
+	// Capture expected facts independently from this test-owned live process,
+	// before the CLI observes it. These are kernel identities, not diagnostics
+	// decoded and then reused as their own expected values.
+	type contactObject struct {
+		Device uint64 `json:"device"`
+		Inode  uint64 `json:"inode"`
+		Mode   uint32 `json:"mode"`
+		UID    uint32 `json:"uid"`
+		GID    uint32 `json:"gid"`
+	}
+	objectAt := func(path string) contactObject {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Fatal("fixture kernel object unavailable")
+		}
+		return contactObject{uint64(value.Dev), value.Ino, value.Mode, value.Uid, value.Gid}
+	}
+	foreignProc := fmt.Sprintf("/proc/%d", foreignProcess.Process.Pid)
+	wantRoot, wantExecutable := objectAt(agent1Worktree), objectAt(foreignProc+"/exe")
+	wantStoreExecutable, err := os.Readlink(foreignProc + "/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentStat, err := os.ReadFile("/proc/" + foreignFields[1] + "/stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentFields := strings.Fields(string(parentStat)[strings.LastIndex(string(parentStat), ")")+1:])
+	if len(parentFields) < 20 {
+		t.Fatal("fixture parent start identity unavailable")
+	}
+	wantNamespaces, wantObserverNamespaces := map[string]string{}, map[string]string{}
+	for _, namespace := range []string{"pid", "mnt", "user"} {
+		wantNamespaces[namespace], err = os.Readlink(foreignProc + "/ns/" + namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantObserverNamespaces[namespace], err = os.Readlink("/proc/self/ns/" + namespace)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	foreignOutput, foreignErr := runSlotReset()
 	if foreignErr == nil || !strings.Contains(string(foreignOutput), fmt.Sprintf("unowned active process %d", foreignProcess.Process.Pid)) {
 		t.Fatalf("selected reset did not reject the wrong-agent toucher: %v\n%s", foreignErr, foreignOutput)
@@ -2107,8 +2154,74 @@ fi
 			t.Fatalf("CLI refusal omitted %q: %s", want, foreignOutput)
 		}
 	}
-	if len(slotStdout) != 0 || len(foreignOutput) > 1024 || strings.Contains(string(foreignOutput), "CODEX_HOME") || strings.Contains(string(foreignOutput), selectedProcessHome) || strings.Contains(string(foreignOutput), "protected-history-sentinel") {
-		t.Fatalf("CLI refusal leaked process content or exceeded its bound: %s", foreignOutput)
+	// One separately bounded metadata record precedes the original bounded
+	// refusal. Reject extra/unparsed lines instead of increasing a blanket cap.
+	const contactPrefix = "codex_native_process_contact="
+	contactText := string(foreignOutput)
+	if !strings.HasSuffix(contactText, "\n") {
+		t.Fatalf("CLI diagnostic newline missing: %q", contactText)
+	}
+	contactLines := strings.Split(strings.TrimSuffix(contactText, "\n"), "\n")
+	if len(contactLines) != 2 || !strings.HasPrefix(contactLines[0], contactPrefix) || !strings.HasPrefix(contactLines[1], "native slot reset found unowned active process ") {
+		t.Fatalf("unexpected CLI diagnostic envelope: %q", contactText)
+	}
+	contactPayload := strings.TrimPrefix(contactLines[0], contactPrefix)
+	if len(contactPayload) > 4096 || len(contactLines[1]) > 512 {
+		t.Fatalf("CLI diagnostic record exceeded its bound: %s", contactText)
+	}
+	var contact struct {
+		Schema           string         `json:"schemaVersion"`
+		PID              int            `json:"pid"`
+		Start            string         `json:"startTicks"`
+		Parent           int            `json:"parent"`
+		ParentStart      string         `json:"parentStartTicks"`
+		ParentStatus     string         `json:"parentStatus"`
+		Status           string         `json:"status"`
+		TouchKind        string         `json:"touchKind"`
+		RootClasses      []string       `json:"rootClasses"`
+		RootClassMeaning string         `json:"rootClassMeaning"`
+		MatchedRoot      *contactObject `json:"matchedRoot"`
+		Executable       struct {
+			Status        string         `json:"status"`
+			Object        *contactObject `json:"object"`
+			StoreIdentity string         `json:"storeIdentity"`
+		} `json:"executable"`
+		Namespaces          map[string]string `json:"namespaces"`
+		ObserverNamespaces  map[string]string `json:"observerNamespaces"`
+		NamespaceComparison map[string]string `json:"namespaceComparison"`
+	}
+	contactDecoder := json.NewDecoder(strings.NewReader(contactPayload))
+	contactDecoder.DisallowUnknownFields()
+	if err := contactDecoder.Decode(&contact); err != nil {
+		t.Fatalf("invalid CLI contact metadata: %v", err)
+	}
+	var extraContactJSON any
+	if err := contactDecoder.Decode(&extraContactJSON); err != io.EOF {
+		t.Fatalf("extra CLI contact JSON: %v", err)
+	}
+	if contact.Schema != "devkit/native-process-contact/v1" || contact.PID != foreignProcess.Process.Pid || contact.Start != foreignFields[19] || strconv.Itoa(contact.Parent) != foreignFields[1] || contact.ParentStart != parentFields[19] || contact.ParentStatus != "stable" || contact.Status != "stable" || contact.TouchKind != "cwd" {
+		t.Fatalf("CLI contact process identity differs from live fixture: %+v", contact)
+	}
+	if len(contact.RootClasses) != 1 || contact.RootClasses[0] != "worktree" || contact.RootClassMeaning != "first-matched-physical-ancestor" || contact.MatchedRoot == nil || *contact.MatchedRoot != wantRoot {
+		t.Fatalf("CLI contact root differs from fixture: %+v", contact)
+	}
+	if contact.Executable.Status != "stable" || contact.Executable.Object == nil || *contact.Executable.Object != wantExecutable || contact.Executable.StoreIdentity != wantStoreExecutable || !strings.HasPrefix(wantStoreExecutable, "/nix/store/") {
+		t.Fatalf("CLI executable differs from immutable fixture: %+v", contact.Executable)
+	}
+	if len(contact.Namespaces) != 3 || len(contact.ObserverNamespaces) != 3 || len(contact.NamespaceComparison) != 3 {
+		t.Fatalf("CLI namespace fields incomplete: %+v", contact)
+	}
+	for _, namespace := range []string{"pid", "mnt", "user"} {
+		comparison := "different"
+		if wantNamespaces[namespace] == wantObserverNamespaces[namespace] {
+			comparison = "same"
+		}
+		if contact.Namespaces[namespace] != wantNamespaces[namespace] || contact.ObserverNamespaces[namespace] != wantObserverNamespaces[namespace] || contact.NamespaceComparison[namespace] != comparison {
+			t.Fatalf("CLI namespace differs from live fixture: %s %+v", namespace, contact)
+		}
+	}
+	if len(slotStdout) != 0 || strings.Contains(contactText, "CODEX_HOME") || strings.Contains(contactText, selectedProcessHome) || strings.Contains(contactText, agent1Worktree) || strings.Contains(contactText, "protected-history-sentinel") {
+		t.Fatalf("CLI refusal leaked process content: %s", foreignOutput)
 	}
 	if after, err := os.ReadFile(historyDatabase); err != nil || !bytes.Equal(after, historyBefore) {
 		t.Fatalf("unowned process refusal changed protected history: %v", err)
