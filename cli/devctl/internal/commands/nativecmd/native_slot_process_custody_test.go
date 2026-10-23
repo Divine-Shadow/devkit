@@ -430,7 +430,7 @@ func TestNativePhysicalTouchDirectoryOpenRejectsNonDirectoriesWithoutBlocking(t 
 	}
 }
 
-func TestNativePhysicalTouchDirectoryTypeChangeKeepsSelectedAmbiguityClosed(t *testing.T) {
+func TestNativePhysicalTouchDirectoryObservationKeepsSelectedAmbiguityClosed(t *testing.T) {
 	selected := physicalSlotFixture(t, 1)
 	anchors, err := nativeSlotPhysicalTargets(selected)
 	if err != nil {
@@ -438,22 +438,128 @@ func TestNativePhysicalTouchDirectoryTypeChangeKeepsSelectedAmbiguityClosed(t *t
 	}
 	saved := nativeSlotOpenProcessDirectory
 	t.Cleanup(func() { nativeSlotOpenProcessDirectory = saved })
-	nativeSlotOpenProcessDirectory = func(string) (*os.File, error) { return nil, syscall.ENOTDIR }
-	for _, tc := range []struct {
-		name, visible string
-		wantError     bool
+	for _, observation := range []struct {
+		name           string
+		err            error
+		unrelatedError bool
 	}{
-		{"unrelated", t.TempDir(), false},
-		{"selected", selected.hostWorktree, true},
+		{"type-change", syscall.ENOTDIR, false},
+		{"namespace-esrch", syscall.ESRCH, true},
+		{"unexpected-io", syscall.EIO, true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			proc := t.TempDir()
-			if err := os.Symlink(tc.visible, filepath.Join(proc, "cwd")); err != nil {
+		t.Run(observation.name, func(t *testing.T) {
+			nativeSlotOpenProcessDirectory = func(string) (*os.File, error) { return nil, observation.err }
+			for _, tc := range []struct {
+				name, visible string
+				wantError     bool
+			}{
+				{"unrelated", t.TempDir(), observation.unrelatedError},
+				{"selected", selected.hostWorktree, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					proc := t.TempDir()
+					if err := os.Symlink(tc.visible, filepath.Join(proc, "cwd")); err != nil {
+						t.Fatal(err)
+					}
+					touches, err := nativeProcLinkTouches(proc, "cwd", selected, anchors)
+					if touches || (err != nil) != tc.wantError {
+						t.Fatalf("touches=%v error=%v", touches, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestNativeSlotPhysicalCustodyESRCHUnavailableAncestryRefuses(t *testing.T) {
+	for _, foreignFD := range []bool{false, true} {
+		t.Run(fmt.Sprintf("foreign-fd-%t", foreignFD), func(t *testing.T) {
+			physicalProcRootFixture(t)
+			selected := physicalSlotFixture(t, 1)
+			view, home := physicalViewFixture(t, selected, "/workspaces/dev/ouroboros-ide")
+			writePhysicalProc(t, 101, 1, view, map[string]string{"DEVKIT_NATIVE_AGENT": "1", "HOME": home}, selected.hostWorktree)
+			unrelatedView := t.TempDir()
+			unrelated := writePhysicalProc(t, 1082, 1, unrelatedView, map[string]string{}, t.TempDir())
+			if foreignFD {
+				mapPhysicalView(t, unrelatedView, selected.hostWorktree, selected.hostWorktree)
+				file := filepath.Join(selected.hostWorktree, "candidate.txt")
+				if err := os.WriteFile(file, []byte("foreign open file"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(file, filepath.Join(unrelated, "fd", "3")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			saved := nativeSlotOpenProcessDirectory
+			t.Cleanup(func() { nativeSlotOpenProcessDirectory = saved })
+			nativeSlotOpenProcessDirectory = func(path string) (*os.File, error) {
+				if path == filepath.Join(unrelated, "cwd") || path == filepath.Join(unrelated, "root") {
+					return nil, syscall.ESRCH
+				}
+				return saved(path)
+			}
+			plan, err := planNativeSlotProcesses(selected, true)
+			if plan != nil || err == nil || !strings.Contains(err.Error(), "physical touch") {
+				t.Fatalf("unavailable ancestry plan=%v error=%v", plan, err)
+			}
+			if parent, start := readNativeProcIdentity(unrelated); parent != 1 || start != "101082" {
+				t.Fatalf("unrelated process identity changed: parent=%d start=%q", parent, start)
+			}
+		})
+	}
+}
+
+func TestNativeSlotPhysicalCustodyESRCHNeverHidesPhysicalAlias(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("nested-%t", nested), func(t *testing.T) {
+			physicalProcRootFixture(t)
+			selected := physicalSlotFixture(t, 1)
+			actual := selected.hostWorktree
+			if nested {
+				actual = filepath.Join(actual, "nested", "directory")
+				if err := os.MkdirAll(actual, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			alias := filepath.Join(t.TempDir(), "unrecognized-alias")
+			if err := os.Symlink(actual, alias); err != nil {
 				t.Fatal(err)
 			}
-			touches, err := nativeProcLinkTouches(proc, "cwd", selected, anchors)
-			if touches || (err != nil) != tc.wantError {
-				t.Fatalf("touches=%v error=%v", touches, err)
+			proc := writePhysicalProc(t, 1082, 1, "", map[string]string{}, alias)
+			saved := nativeSlotOpenProcessDirectory
+			t.Cleanup(func() { nativeSlotOpenProcessDirectory = saved })
+			nativeSlotOpenProcessDirectory = func(path string) (*os.File, error) {
+				if path == filepath.Join(proc, "cwd") {
+					return nil, syscall.ESRCH
+				}
+				return saved(path)
+			}
+			if plan, err := planNativeSlotProcesses(selected, true); err == nil || plan != nil {
+				t.Fatalf("physical alias hidden: plan=%v error=%v", plan, err)
+			}
+		})
+	}
+}
+
+func TestNativePhysicalTouchErrorContextKeepsPathsPrivate(t *testing.T) {
+	for _, link := range []string{"cwd", "root", "fd/3"} {
+		t.Run(link, func(t *testing.T) {
+			physicalProcRootFixture(t)
+			selected := physicalSlotFixture(t, 1)
+			proc := writePhysicalProc(t, 801, 1, "", map[string]string{}, "")
+			private := filepath.Join(t.TempDir(), "private-directory-name")
+			if err := os.Mkdir(private, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(private, filepath.Join(proc, link)); err != nil {
+				t.Fatal(err)
+			}
+			saved := nativeSlotOpenProcessDirectory
+			t.Cleanup(func() { nativeSlotOpenProcessDirectory = saved })
+			nativeSlotOpenProcessDirectory = func(string) (*os.File, error) { return nil, syscall.ESRCH }
+			plan, err := planNativeSlotProcesses(selected, true)
+			if plan != nil || !errors.Is(err, syscall.ESRCH) || !strings.Contains(err.Error(), "link="+link) || !strings.Contains(err.Error(), "phase=directory-open") || strings.Contains(err.Error(), private) {
+				t.Fatalf("physical error context plan=%v error=%v", plan, err)
 			}
 		})
 	}

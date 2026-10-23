@@ -170,13 +170,13 @@ func nativePhysicalDirectoryTouches(path string, targets []os.FileInfo) (bool, e
 	// physical observation and can turn unrelated descriptor churn into a gate.
 	current, err := nativeSlotOpenProcessDirectory(path)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("phase=directory-open: %w", err)
 	}
 	defer func() { _ = current.Close() }()
 	for depth := 0; depth < 256; depth++ {
 		info, err := current.Stat()
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("phase=directory-stat: %w", err)
 		}
 		if !info.IsDir() {
 			return false, nil
@@ -188,13 +188,13 @@ func nativePhysicalDirectoryTouches(path string, targets []os.FileInfo) (bool, e
 		}
 		fd, err := syscall.Openat(int(current.Fd()), "..", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("phase=directory-parent-open: %w", err)
 		}
 		parent := os.NewFile(uintptr(fd), "native-process-parent")
 		parentInfo, err := parent.Stat()
 		if err != nil {
 			_ = parent.Close()
-			return false, err
+			return false, fmt.Errorf("phase=directory-parent-stat: %w", err)
 		}
 		if os.SameFile(info, parentInfo) {
 			_ = parent.Close()
@@ -207,6 +207,10 @@ func nativePhysicalDirectoryTouches(path string, targets []os.FileInfo) (bool, e
 }
 
 func nativeProcLinkTouches(procPath, link string, identity nativeSlotProcessIdentity, targets []os.FileInfo) (bool, error) {
+	return nativeProcLinkTouchesInInventory(procPath, link, identity, targets, nil)
+}
+
+func nativeProcLinkTouchesInInventory(procPath, link string, identity nativeSlotProcessIdentity, targets []os.FileInfo, inventory []os.DirEntry) (bool, error) {
 	handle := filepath.Join(procPath, link)
 	visible, err := os.Readlink(handle)
 	if errors.Is(err, os.ErrNotExist) {
@@ -229,6 +233,18 @@ func nativeProcLinkTouches(procPath, link string, identity nativeSlotProcessIden
 	}
 	if info.IsDir() {
 		touches, err := nativePhysicalDirectoryTouches(handle, targets)
+		if errors.Is(err, syscall.ESRCH) && !lexical {
+			// Spelling cannot exclude a physical alias. Preserve the already
+			// observed inode witness before considering a mount-level proof.
+			for _, target := range targets {
+				if os.SameFile(info, target) {
+					return true, nil
+				}
+			}
+			if nativeProcProvesNonselectedProcDirectory(procPath, link, info, identity, targets, inventory) {
+				return false, nil
+			}
+		}
 		if err != nil && !lexical && (errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.ENOTDIR)) {
 			return false, nil
 		}
@@ -262,11 +278,15 @@ func nativeProcTouchesTargets(procPath string, identity nativeSlotProcessIdentit
 	return touches, err
 }
 
-// Only fixed tokens leave this inspection; descriptor names and target paths
-// are not diagnostic payloads.
+// Only fixed tokens and kernel numeric descriptor IDs leave this inspection;
+// target paths and contents are not diagnostic payloads.
 func nativeProcTouchesTargetsWithKind(procPath string, identity nativeSlotProcessIdentity, targets []os.FileInfo) (bool, string, error) {
+	return nativeProcTouchesTargetsInInventory(procPath, identity, targets, nil)
+}
+
+func nativeProcTouchesTargetsInInventory(procPath string, identity nativeSlotProcessIdentity, targets []os.FileInfo, inventory []os.DirEntry) (bool, string, error) {
 	for _, name := range []string{"cwd", "root", "exe"} {
-		touches, err := nativeProcLinkTouches(procPath, name, identity, targets)
+		touches, err := nativeProcLinkTouchesInInventory(procPath, name, identity, targets, inventory)
 		if touches || err != nil {
 			return touches, name, err
 		}
@@ -276,9 +296,13 @@ func nativeProcTouchesTargetsWithKind(procPath string, identity nativeSlotProces
 		return false, "", nil
 	}
 	for _, entry := range entries {
-		touches, err := nativeProcLinkTouches(procPath, filepath.Join("fd", entry.Name()), identity, targets)
+		touches, err := nativeProcLinkTouchesInInventory(procPath, filepath.Join("fd", entry.Name()), identity, targets, inventory)
 		if touches || err != nil {
-			return touches, "fd", err
+			kind := "fd"
+			if descriptor, parseErr := strconv.ParseUint(entry.Name(), 10, 64); err != nil && parseErr == nil {
+				kind += "/" + strconv.FormatUint(descriptor, 10)
+			}
+			return touches, kind, err
 		}
 	}
 	return false, "", nil

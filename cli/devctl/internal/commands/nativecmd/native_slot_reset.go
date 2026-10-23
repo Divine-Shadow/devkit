@@ -324,7 +324,7 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 		if environErr == nil {
 			environ = parseNativeProcEnviron(environData)
 		}
-		touches, touchKind, touchErr := nativeProcTouchesTargetsWithKind(path, identity, targets)
+		touches, touchKind, touchErr := nativeProcTouchesTargetsInInventory(path, identity, targets, entries)
 		selected, ownershipErr := nativeProcHasSlotIdentity(path, environ, identity)
 		refusalWitness := ""
 		if touches && !selected {
@@ -341,7 +341,7 @@ func planNativeSlotProcesses(identity nativeSlotProcessIdentity, dryRun bool) (*
 				return nil, fmt.Errorf("native process %d changed identity during custody observation", pid)
 			}
 			if touchErr != nil {
-				return nil, fmt.Errorf("inspect native process %d physical touch: %w", pid, touchErr)
+				return nil, fmt.Errorf("inspect native process %d physical touch: link=%s phase=custody-observation: %w", pid, touchKind, touchErr)
 			}
 			if ownershipErr != nil {
 				return nil, fmt.Errorf("inspect native process %d physical custody: %w", pid, ownershipErr)
