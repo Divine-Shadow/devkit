@@ -87,7 +87,7 @@ func TestNativeContactPhysicalClassesAndOverlaps(t *testing.T) {
 	}
 }
 func TestNativeContactIdentityNamespaceAndSelectedObjectDrift(t *testing.T) {
-	for _, kind := range []string{"start", "parent", "namespace", "selected-root", "cwd", "exe", "unavailable-namespace"} {
+	for _, kind := range []string{"start", "parent", "comm", "namespace", "selected-root", "cwd", "exe", "unavailable-namespace"} {
 		t.Run(kind, func(t *testing.T) {
 			id, proc := contactFixture(t)
 			if kind == "unavailable-namespace" {
@@ -99,12 +99,15 @@ func TestNativeContactIdentityNamespaceAndSelectedObjectDrift(t *testing.T) {
 			t.Cleanup(func() { nativeContactBeforeRevalidate = saved })
 			nativeContactBeforeRevalidate = func(string) {
 				switch kind {
-				case "start", "parent":
+				case "start", "parent", "comm":
 					p := filepath.Join(proc, "stat")
 					b, _ := os.ReadFile(p)
 					old, new := "100801", "200801"
 					if kind == "parent" {
 						old, new = "S 71", "S 99"
+					}
+					if kind == "comm" {
+						old, new = "physical-fixture", "invalid comm"
 					}
 					if err := os.WriteFile(p, []byte(strings.ReplaceAll(string(b), old, new)), 0600); err != nil {
 						t.Fatal(err)
@@ -203,13 +206,61 @@ func TestNativeContactExactImmutableStoreExecutable(t *testing.T) {
 		t.Skip("requires immutable Nix test toolchain")
 	}
 	id, proc := contactFixture(t)
+	parent := writePhysicalProc(t, 71, 1, "/", nil, t.TempDir())
+	stat, err := os.ReadFile(filepath.Join(proc, "stat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "stat"), []byte(strings.Replace(string(stat), "S 1", "S 71", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	_ = os.Remove(filepath.Join(proc, "exe"))
 	if err := os.Symlink(shell, filepath.Join(proc, "exe")); err != nil {
 		t.Fatal(err)
 	}
+	refusalExecutableFixture(t, parent)
+	_ = os.Remove(filepath.Join(parent, "exe"))
+	if err := os.Symlink(shell, filepath.Join(parent, "exe")); err != nil {
+		t.Fatal(err)
+	}
 	c := contactForFixture(t, id, proc)
-	if c.Status != "stable" || c.Executable.Status != "stable" || c.Executable.StoreIdentity != shell {
+	if c.Status != "stable" || c.Executable.Status != "stable" || c.Executable.StoreIdentity != shell || c.Comm != "physical-fixture" || c.ParentExecutable.Status != "stable" || c.ParentExecutable.StoreIdentity != shell {
 		t.Fatalf("exact store identity missing: %+v", c)
+	}
+}
+
+func TestNativeContactParentExecutableDriftDoesNotRetainIdentity(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell, err = filepath.EvalSymlinks(shell)
+	if err != nil || !nativeSafeStoreExecutable(shell) {
+		t.Skip("requires immutable Nix test toolchain")
+	}
+	id, proc := contactFixture(t)
+	parent := writePhysicalProc(t, 71, 1, "/", nil, t.TempDir())
+	stat, err := os.ReadFile(filepath.Join(proc, "stat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "stat"), []byte(strings.Replace(string(stat), "S 1", "S 71", 1)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	refusalExecutableFixture(t, parent)
+	_ = os.Remove(filepath.Join(parent, "exe"))
+	if err := os.Symlink(shell, filepath.Join(parent, "exe")); err != nil {
+		t.Fatal(err)
+	}
+	saved := nativeContactBeforeRevalidate
+	t.Cleanup(func() { nativeContactBeforeRevalidate = saved })
+	nativeContactBeforeRevalidate = func(string) {
+		_ = os.Remove(filepath.Join(parent, "exe"))
+		_ = os.Symlink(filepath.Join(t.TempDir(), "replacement"), filepath.Join(parent, "exe"))
+	}
+	c := contactForFixture(t, id, proc)
+	if c.Status != "stable" || c.ParentStatus != "unstable" || c.ParentExecutable.Status != "unavailable" || c.ParentExecutable.StoreIdentity != "unknown" {
+		t.Fatalf("stale parent executable retained: %+v", c)
 	}
 }
 
