@@ -17,6 +17,10 @@ type GitBacklinkProjection struct {
 }
 
 func gitBacklinkProjection(p Plan) (*GitBacklinkProjection, error) {
+	return gitBacklinkProjectionObserved(p, false)
+}
+
+func gitBacklinkProjectionObserved(p Plan, construction bool) (*GitBacklinkProjection, error) {
 	if p.HostWorkspaceRoot == "" || p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" {
 		return nil, nil
 	}
@@ -47,17 +51,20 @@ func gitBacklinkProjection(p Plan) (*GitBacklinkProjection, error) {
 	}
 	nativeCommon := filepath.Join("/workspaces", relativeCommon)
 	commonBind := Bind{Source: metadata.CommonDir, Target: nativeCommon, Mode: "rw", Required: true}
+	if construction && p.gitMetadataTrace != nil {
+		p.gitMetadataTrace.Expected, p.gitMetadataTrace.ExpectedBound = commonBind, true
+	}
 	count := 0
 	for _, bind := range p.Binds {
 		if bind.Target == nativeCommon {
 			if bind != commonBind {
-				return nil, fmt.Errorf("native Git projection has conflicting common repository bind")
+				return nil, gitCommonBindError(p, commonBind, true)
 			}
 			count++
 		}
 	}
 	if count != 1 {
-		return nil, fmt.Errorf("native Git projection requires one exact common repository bind")
+		return nil, gitCommonBindError(p, commonBind, false)
 	}
 	relativeGitdir, err := filepath.Rel(metadata.CommonDir, metadata.GitDir)
 	if err != nil {

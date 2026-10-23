@@ -39,6 +39,7 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
+	gitMetadataTrace       *gitMetadataBindTrace
 	GitBacklink            *GitBacklinkProjection     `json:"git_backlink,omitempty"`
 	Agent                  agent.Spec                 `json:"agent"`
 	GUITargetConfig        *GUITargetConfigProjection `json:"gui_target_config,omitempty"`
@@ -385,8 +386,10 @@ func Build(opts BuildOptions) (Plan, error) {
 		"plan only: no sandbox is launched by this command",
 		"standard agents must use brokered OCI access only",
 	}
+	var gitTrace *gitMetadataBindTrace
 	if isolationProfile == IsolationProfileWorkspaceEgress {
-		binds, err = workspaceEgressBinds(
+		gitTrace = &gitMetadataBindTrace{}
+		binds, err = workspaceEgressBindsObserved(
 			paths,
 			project,
 			index,
@@ -398,6 +401,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			broker,
 			resolvConf,
 			controllerProfile,
+			gitTrace,
 		)
 		if err != nil {
 			return Plan{}, err
@@ -529,6 +533,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		},
 		Notes: notes,
 	}
+	p.gitMetadataTrace = gitTrace
 	if opts.GUITargetID != "" && opts.RequireGUIConfig {
 		return Plan{}, fmt.Errorf("GUI target selection cannot combine an explicit target ID with required geometry selection")
 	}
@@ -568,7 +573,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})
 	}
-	projection, err := gitBacklinkProjection(p)
+	projection, err := gitBacklinkProjectionObserved(p, true)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -619,6 +624,10 @@ func usesPostgresEndpointLease(project, repo string) bool {
 }
 
 func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
+	return workspaceEgressBindsObserved(paths, project, index, repo, workspaceRoot, devkitRoot, runtimeAuthorityRoot, postgresDockerSocket, broker, resolvConf, controllerProfile, nil)
+}
+
+func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile, trace *gitMetadataBindTrace) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -705,17 +714,22 @@ func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, wo
 			true,
 		)
 	}
-	for _, bind := range gitMetadataBinds(paths.HostWorktree, paths.SandboxWorktree) {
+	for _, bind := range gitMetadataBindsObserved(paths.HostWorktree, paths.SandboxWorktree, trace) {
 		packageOwnedProductMetadata := isPackageOwnedProductGitMetadataBind(project, repo, paths, bind)
 		if workspaceRoot != "" && !pathWithinRoot(workspaceRoot, bind.Source) && !packageOwnedProductMetadata {
+			recordGitMetadataDisposition(trace, bind, "outside-lane-refused")
 			return nil, fmt.Errorf("Management workspace root rejects Git metadata outside the lane root: %s", bind.Source)
 		}
 		if workspaceRoot != "" {
 			if packageOwnedProductMetadata {
+				recordGitMetadataDisposition(trace, bind, "package-owned-retained")
 				add(bind.Source, bind.Target, bind.Mode, bind.Required)
+			} else {
+				recordGitMetadataDisposition(trace, bind, "in-lane-covered-skipped")
 			}
 			continue
 		}
+		recordGitMetadataDisposition(trace, bind, "unisolated-retained")
 		add(bind.Source, bind.Target, bind.Mode, bind.Required)
 	}
 	add("/nix/store", "/nix/store", "ro", true)
@@ -954,25 +968,37 @@ func isWindowsFilesystemPath(value string) bool {
 }
 
 func gitMetadataBinds(hostWorktree, sandboxWorktree string) []Bind {
+	return gitMetadataBindsObserved(hostWorktree, sandboxWorktree, nil)
+}
+
+func gitMetadataBindsObserved(hostWorktree, sandboxWorktree string, trace *gitMetadataBindTrace) []Bind {
 	gitPath := filepath.Join(hostWorktree, ".git")
 	info, err := os.Stat(gitPath)
 	if err != nil {
+		setGitMetadataDiscovery(trace, "stat-unavailable")
 		return nil
 	}
 	if info.IsDir() {
+		setGitMetadataDiscovery(trace, "standalone-directory")
 		return nil
 	}
 	data, err := os.ReadFile(gitPath)
 	if err != nil {
+		setGitMetadataDiscovery(trace, "read-unavailable")
 		return nil
 	}
 	gitdirValue := parseGitdirValue(string(data))
 	if gitdirValue == "" {
+		setGitMetadataDiscovery(trace, "gitdir-unparsed")
 		return nil
+	}
+	setGitMetadataDiscovery(trace, "absolute-forward")
+	if !filepath.IsAbs(gitdirValue) {
+		setGitMetadataDiscovery(trace, "relative-forward")
 	}
 	gitDir := resolveGitdirValue(gitdirValue, hostWorktree)
 	sandboxGitDir := resolveGitdirValue(gitdirValue, sandboxWorktree)
-	commondirValue := readCommondirValue(gitDir)
+	commondirValue := readCommondirValueObserved(gitDir, trace)
 	commonDir := resolveCommondirValue(commondirValue, gitDir)
 	if !filepath.IsAbs(gitdirValue) {
 		if commonDir != "" {
@@ -1024,13 +1050,26 @@ func resolveGitdirValue(value, worktree string) string {
 }
 
 func readCommondirValue(gitDir string) string {
+	return readCommondirValueObserved(gitDir, nil)
+}
+
+func readCommondirValueObserved(gitDir string, trace *gitMetadataBindTrace) string {
 	data, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
 	if err != nil {
+		if trace != nil {
+			trace.CommonRead = "unavailable"
+		}
 		return ""
 	}
 	value := strings.TrimSpace(string(data))
 	if value == "" {
+		if trace != nil {
+			trace.CommonRead = "empty-unparsed"
+		}
 		return ""
+	}
+	if trace != nil {
+		trace.CommonRead = "parsed"
 	}
 	return filepath.Clean(value)
 }
