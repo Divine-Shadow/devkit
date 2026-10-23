@@ -3808,7 +3808,9 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	identity.Binds = selectedPlan.Binds
 	identity.GitBacklink = selectedPlan.GitBacklink
 	identity.LauncherArgs = selectedPlan.LauncherArgs
-	if !reflect.DeepEqual(identity, selectedPlan) {
+	// Error-only construction evidence may change when Git first appears;
+	// it carries no execution selection. Preserve every other identity field.
+	if !reflect.DeepEqual(identity.WithoutGitMetadataDiagnosticTrace(), selectedPlan.WithoutGitMetadataDiagnosticTrace()) {
 		return cleanupFailedSlot(fmt.Errorf("Git bootstrap changed selected-slot execution identity"))
 	}
 	selectedPlan = preparedPlan

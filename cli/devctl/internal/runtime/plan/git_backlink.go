@@ -53,6 +53,7 @@ func gitBacklinkProjectionObserved(p Plan, construction bool) (*GitBacklinkProje
 	commonBind := Bind{Source: metadata.CommonDir, Target: nativeCommon, Mode: "rw", Required: true}
 	if construction && p.gitMetadataTrace != nil {
 		p.gitMetadataTrace.Expected, p.gitMetadataTrace.ExpectedBound = commonBind, true
+		p.gitMetadataTrace.Geometry = gitMetadataGeometry(p)
 	}
 	count := 0
 	for _, bind := range p.Binds {

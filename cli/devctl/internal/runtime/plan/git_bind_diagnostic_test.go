@@ -2,6 +2,7 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -233,4 +234,105 @@ func TestGitMetadataDiagnosticRecordsInLaneCoveredCandidate(t *testing.T) {
 			t.Fatal("diagnostic changed skip selection")
 		}
 	}
+}
+
+func TestGitCommonBindDiagnosticRejectsOtherLaneTraceWithSameLegacyCommon(t *testing.T) {
+	root := t.TempDir()
+	seed := filepath.Join(root, "seed")
+	gitFixtureCommand(t, "init", "--initial-branch=main", seed)
+	gitFixtureCommand(t, "-C", seed, "commit", "--allow-empty", "-m", "seed")
+	worktreeRoot := filepath.Join(root, "leased-roots")
+	common := filepath.Join(worktreeRoot, ".devkit", "git", "ouroboros-ide.git")
+	gitFixtureCommand(t, "clone", "--bare", seed, common)
+	marker := "schema=devkit/native-owned-common-repository/v1\nrepository=ouroboros-ide\norigin=" + seed + "\n"
+	if err := os.WriteFile(filepath.Join(common, "devkit-owned-common"), []byte(marker), 0600); err != nil {
+		t.Fatal(err)
+	}
+	devkit := filepath.Join(root, "devkit")
+	if err := os.Mkdir(devkit, 0700); err != nil {
+		t.Fatal(err)
+	}
+	var plans []Plan
+	for index := 1; index <= 2; index++ {
+		wt := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index), "ouroboros-ide")
+		gitFixtureCommand(t, "--git-dir", common, "worktree", "add", "-b", fmt.Sprintf("lane%d", index), wt, "main")
+		if err := worktrees.EnsurePortableNativeGitdir(wt, worktreeRoot, "ouroboros-ide", index); err != nil {
+			t.Fatal(err)
+		}
+		p, err := Build(BuildOptions{Paths: devkitpaths.Paths{Root: devkit}, Project: "dev-all", Repo: "ouroboros-ide", Index: index, WorktreeRoot: worktreeRoot, WorkspaceRoot: filepath.Dir(wt), IsolationProfile: IsolationProfileWorkspaceEgress, EgressAllowlist: filepath.Join(devkit, "allowlist")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plans = append(plans, p)
+	}
+	before := snapshotGitFiles(t, worktreeRoot)
+	if plans[0].gitMetadataTrace.Expected != plans[1].gitMetadataTrace.Expected {
+		t.Fatal("fixture does not share exact legacy common tuple")
+	}
+	selected := plans[1]
+	expected := selected.gitMetadataTrace.Expected
+	kept := make([]Bind, 0, len(selected.Binds))
+	for _, bind := range selected.Binds {
+		if bind != expected {
+			kept = append(kept, bind)
+		}
+	}
+	selected.Binds = kept
+	own := decodeGitBindDiagnostic(t, ValidateGitBacklinkProjection(selected))
+	if own.TraceStatus != "construction-time" {
+		t.Fatalf("unchanged own lane lost trace: %+v", own)
+	}
+	selected.gitMetadataTrace = plans[0].gitMetadataTrace
+	d := decodeGitBindDiagnostic(t, ValidateGitBacklinkProjection(selected))
+	if d.TraceStatus != "stale-geometry" || d.Discovery != "" || d.CandidateCount != 0 || len(d.Candidates) != 0 || d.ExactMatchCount != 0 {
+		t.Fatalf("other lane trace attributed to current lane: %+v", d)
+	}
+	if !reflect.DeepEqual(before, snapshotGitFiles(t, worktreeRoot)) {
+		t.Fatal("validation changed shared/selected/sibling Git bytes")
+	}
+	t.Log("same_legacy_expected_tuple=true own_trace=construction-time cross_lane_trace=stale-geometry refusal_preserved=true all_git_bytes_unchanged=true")
+}
+
+func TestGitMetadataDiagnosticTraceDoesNotChangeExecutionIdentity(t *testing.T) {
+	p, _, _ := realProductGitPlan(t)
+	without := p.WithoutGitMetadataDiagnosticTrace()
+	if p.gitMetadataTrace == nil || without.gitMetadataTrace != nil {
+		t.Fatal("value copy changed original or retained diagnostictrace")
+	}
+	if reflect.DeepEqual(p, without) {
+		t.Fatal("fixture did not exercise private diagnostic difference")
+	}
+	if !reflect.DeepEqual(p.WithoutGitMetadataDiagnosticTrace(), without) {
+		t.Fatal("trace participates in execution identity")
+	}
+	for _, name := range []string{"index", "host-worktree", "host-root", "state-root", "proxy", "gui-target", "environment", "bind"} {
+		t.Run(name, func(t *testing.T) {
+			changed := p
+			switch name {
+			case "index":
+				changed.Agent.ID.Index++
+			case "host-worktree":
+				changed.Agent.HostWorktree += "/foreign"
+			case "host-root":
+				changed.HostWorktreeRoot += "/foreign"
+			case "state-root":
+				changed.Agent.StateRoot += "/foreign"
+			case "proxy":
+				changed.Proxy.UnixSocket += "-foreign"
+			case "gui-target":
+				changed.GUITargetConfig = &GUITargetConfigProjection{TargetID: "foreign"}
+			case "environment":
+				changed.Env = map[string]string{"DIFFERENT_EXECUTION": "true"}
+			case "bind":
+				changed.Binds = append(append([]Bind{}, p.Binds...), Bind{Source: "/foreign", Target: "/foreign", Mode: "rw", Required: true})
+			}
+			if reflect.DeepEqual(changed.WithoutGitMetadataDiagnosticTrace(), without) {
+				t.Fatalf("execution identity guard lost %s", name)
+			}
+		})
+	}
+	if err := ValidateGitBacklinkProjection(p); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("error_trace_only_excluded=true original_plan_unchanged=true execution_identity_changes_retained=true original_guard_valid=true")
 }

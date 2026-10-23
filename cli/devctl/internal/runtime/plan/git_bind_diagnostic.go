@@ -13,6 +13,27 @@ type gitMetadataBindTrace struct {
 	Candidates    []gitMetadataBindCandidate
 	Expected      Bind
 	ExpectedBound bool
+	Geometry      gitMetadataConstructionGeometry
+}
+
+// Copy the exact selected construction geometry, including the lane. A legacy
+// common repository can otherwise give two lanes the same expected bind tuple.
+type gitMetadataConstructionGeometry struct {
+	HostWorktree      string
+	SandboxWorktree   string
+	HostWorktreeRoot  string
+	HostWorkspaceRoot string
+	Project           string
+	Repo              string
+	Index             int
+}
+
+func gitMetadataGeometry(p Plan) gitMetadataConstructionGeometry {
+	return gitMetadataConstructionGeometry{
+		HostWorktree: p.Agent.HostWorktree, SandboxWorktree: p.Agent.SandboxWorktree,
+		HostWorktreeRoot: p.HostWorktreeRoot, HostWorkspaceRoot: p.HostWorkspaceRoot,
+		Project: p.Agent.ID.Project, Repo: p.Agent.ID.Repo, Index: p.Agent.ID.Index,
+	}
 }
 
 type gitMetadataBindCandidate struct {
@@ -102,7 +123,9 @@ func gitCommonBindError(p Plan, expected Bind, conflict bool) error {
 		d.TraceStatus = "unavailable-unbound"
 		if trace.ExpectedBound {
 			d.TraceStatus = "stale-expectation"
-			if trace.Expected == expected {
+			if trace.Geometry != gitMetadataGeometry(p) {
+				d.TraceStatus = "stale-geometry"
+			} else if trace.Expected == expected {
 				d.TraceStatus = "construction-time"
 				d.Discovery = trace.Discovery
 				d.CommonRead = trace.CommonRead
@@ -123,4 +146,13 @@ func gitCommonBindError(p Plan, expected Bind, conflict bool) error {
 		return fmt.Errorf("native Git projection has conflicting common repository bind: %s", payload)
 	}
 	return fmt.Errorf("native Git projection requires one exact common repository bind: %s", payload)
+}
+
+// WithoutGitMetadataDiagnosticTrace returns a value copy for strict execution
+// identity comparisons. Construction-time error evidence is not execution
+// identity. Every public and other private field is preserved; callers still
+// validate the original Plan and its complete bind/backlink guards.
+func (p Plan) WithoutGitMetadataDiagnosticTrace() Plan {
+	p.gitMetadataTrace = nil
+	return p
 }
