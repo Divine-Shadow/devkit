@@ -14,24 +14,11 @@ import (
 // handleSelectedDevAllPrepare materializes one source-declared lane without
 // rewriting the shared prefix manifest or iterating over other lanes.
 func handleSelectedDevAllPrepare(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed planArgs) error {
-	for _, arg := range ctx.Args {
-		switch arg {
-		case "--count", "--workspace-root", "--worktree-root", "--state-root", "--host-root":
-			return fmt.Errorf("selected dev-all native prepare derives roots and capacity from source configuration")
-		}
-	}
-	if parsed.count != 0 || parsed.opts.GUITargetID != "" || parsed.opts.Index > cfg.Defaults.Agents {
-		return fmt.Errorf("selected dev-all native prepare requires one declared index without caller target or capacity")
-	}
-	p, err := nativeplan.BuildDevAll(parsed.opts)
+	p, worktreeOpts, err := planSelectedDevAllPrepare(ctx, cfg, parsed)
 	if err != nil {
 		return err
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
-	worktreeOpts := wtx.NativeOptions{DevkitRoot: ctx.Paths.Root, Repo: parsed.opts.Repo, Origin: cfg.Defaults.Origin,
-		Index: parsed.opts.Index, Count: cfg.Defaults.Agents, BaseBranch: parsed.opts.BaseBranch,
-		BranchPrefix: parsed.opts.BranchPrefix, WorktreeRoot: parsed.opts.WorktreeRoot,
-		RequireSSHOrigin: parsed.opts.Repo == "ouroboros-ide"}
 	if err := prepareNativeGitBootstrapAndWorktrees(p, worktreeOpts, dryRun); err != nil {
 		return err
 	}
@@ -44,4 +31,27 @@ func handleSelectedDevAllPrepare(ctx *cmdregistry.Context, cfg config.OverlayCon
 	}
 	fmt.Fprintf(os.Stdout, "repo: %s\ncount: 1\nagent%d: worktree=%s home=%s state=%s\n", parsed.opts.Repo, p.Agent.ID.Index, p.Agent.HostWorktree, p.Agent.HostHome, p.Agent.StateRoot)
 	return nil
+}
+
+// Keep selection and its worktree acquisition bound to the same admitted plan.
+// This phase has no effects; callers cannot supply geometry or capacity.
+func planSelectedDevAllPrepare(ctx *cmdregistry.Context, cfg config.OverlayConfig, parsed planArgs) (nativeplan.Plan, wtx.NativeOptions, error) {
+	for _, arg := range ctx.Args {
+		switch arg {
+		case "--count", "--workspace-root", "--worktree-root", "--state-root", "--host-root", "--worktree-container-root", "--state-container-root":
+			return nativeplan.Plan{}, wtx.NativeOptions{}, fmt.Errorf("selected dev-all native prepare derives roots and capacity from source configuration")
+		}
+	}
+	if parsed.count != 0 || parsed.opts.GUITargetID != "" || parsed.opts.Index > cfg.Defaults.Agents {
+		return nativeplan.Plan{}, wtx.NativeOptions{}, fmt.Errorf("selected dev-all native prepare requires one declared index without caller target or capacity")
+	}
+	p, err := nativeplan.BuildDevAll(parsed.opts)
+	if err != nil {
+		return nativeplan.Plan{}, wtx.NativeOptions{}, err
+	}
+	worktreeOpts := wtx.NativeOptions{DevkitRoot: ctx.Paths.Root, Repo: parsed.opts.Repo, Origin: cfg.Defaults.Origin,
+		Index: parsed.opts.Index, Count: cfg.Defaults.Agents, BaseBranch: parsed.opts.BaseBranch,
+		BranchPrefix: parsed.opts.BranchPrefix, WorktreeRoot: parsed.opts.WorktreeRoot,
+		RequireSSHOrigin: parsed.opts.Repo == "ouroboros-ide"}
+	return p, worktreeOpts, nil
 }

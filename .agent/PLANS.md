@@ -64,6 +64,8 @@ not the lifetime of a particular execution.
 - [Product Retained-Reader Manifest Consumption](execplans/product-retained-reader-manifest-20260907.md): completed 2026-09-07; all 12 checks, publication, integrated WSL gates, deployment, fresh manifest consumption and six actual reads passed their contracts. Missing indexes remain unavailable history.
 
 ## Active ExecPlans
+- [Native fresh selected preparation](execplans/native-fresh-selected-preparation-20261023.md): expose one source-derived fresh dev-all preparation selector while preserving retained lanes; Runtime owns all effects and R4 custody.
+
 - [Optional finite-retirement profile projection](execplans/optional-retirement-profile-projection-20261015.md): repair actual strict-consumer compatibility through typed immutable identity validation; normal source qualification/publication precedes Runtime effects.
 - [Retired station missing-PID reconciliation](execplans/missing-pid-station-reconciliation-20261013.md): bounded broker lifecycle repair; independent review and native CI/publication required, runtime effects held.
 - [Derpinator preserving native history](execplans/derpinator-preserving-history-20261007.md): exact cold-goal and rollout projection during normal preparation; source review/gates before parent-owned runtime judgment.
