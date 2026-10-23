@@ -2135,6 +2135,9 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if parsed.opts.WorkspaceRoot != "" && ctx.Project == "pokeemerald-expansion-shared-power" {
 		return handleSelectedSharedPowerPrepare(ctx, cfg, parsed)
 	}
+	if ctx.Project == "dev-all" && parsed.indexSet {
+		return handleSelectedDevAllPrepare(ctx, cfg, parsed)
+	}
 	if parsed.opts.GUITargetID != "" {
 		return fmt.Errorf("native prepare --gui-target-id requires the selected Shared Power workspace root")
 	}
