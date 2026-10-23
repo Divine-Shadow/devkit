@@ -108,9 +108,10 @@ type ControllerProfileInventories struct {
 }
 
 type ControllerProfileTargets struct {
-	Controller       string `json:"controller"`
-	ControllerGUI    string `json:"controllerGui"`
-	ProductAgentHost string `json:"productAgentHost"`
+	Controller              string `json:"controller"`
+	ControllerGUI           string `json:"controllerGui"`
+	ControllerAdditionalGUI string `json:"controllerAdditionalGui,omitempty"`
+	ProductAgentHost        string `json:"productAgentHost"`
 }
 
 type ControllerProfileSchemas struct {
@@ -444,6 +445,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	}
 	if profile.Targets.Controller != ManagementControllerNode ||
 		!validManagementControllerGUI(profile.Targets.ControllerGUI) ||
+		(profile.Targets.ControllerAdditionalGUI != "" && profile.Targets.ControllerAdditionalGUI != ManagementControllerGUI) ||
 		profile.Targets.ProductAgentHost != ManagementControllerNode {
 		return fmt.Errorf("Management controller targets do not match the compiled inventory identities")
 	}

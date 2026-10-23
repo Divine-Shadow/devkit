@@ -93,9 +93,10 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			GUI:   controllerProfileFileIdentity(t, WorkspaceControllerGUIInventory, "gui\n"),
 		},
 		Targets: ControllerProfileTargets{
-			Controller:       ManagementControllerNode,
-			ControllerGUI:    ManagementControllerGUI,
-			ProductAgentHost: ManagementControllerNode,
+			Controller:              ManagementControllerNode,
+			ControllerGUI:           ManagementControllerGUI,
+			ControllerAdditionalGUI: ManagementControllerGUI,
+			ProductAgentHost:        ManagementControllerNode,
 		},
 		Schemas: ControllerProfileSchemas{
 			Request:  ControllerOperationRequestSchema,
@@ -507,6 +508,12 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 		t.Fatalf("uncompiled Management GUI was not rejected: %v", err)
 	}
 	profile.Targets.ControllerGUI = ManagementControllerGUI
+	profile.Targets.ControllerAdditionalGUI = ManagementControllerPrimaryGUI
+	if err := validateManagementControllerProfile(profile); err == nil ||
+		!strings.Contains(err.Error(), "compiled inventory identities") {
+		t.Fatalf("uncompiled additional Management GUI was not rejected: %v", err)
+	}
+	profile.Targets.ControllerAdditionalGUI = ManagementControllerGUI
 	if profile.FleetRecovery.Target != "manifest-selected-station" {
 		t.Fatalf("generic manifest-selected Fleet recovery target was not preserved: %#v", profile.FleetRecovery)
 	}
