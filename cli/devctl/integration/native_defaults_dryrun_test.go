@@ -2125,6 +2125,13 @@ fi
 	if len(parentFields) < 20 {
 		t.Fatal("fixture parent start identity unavailable")
 	}
+	foreignComm := string(foreignStat)[strings.Index(string(foreignStat), "(")+1 : strings.LastIndex(string(foreignStat), ")")]
+	parentProc := "/proc/" + foreignFields[1]
+	wantParentExecutable := objectAt(parentProc + "/exe")
+	wantParentStoreExecutable, err := os.Readlink(parentProc + "/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantNamespaces, wantObserverNamespaces := map[string]string{}, map[string]string{}
 	for _, namespace := range []string{"pid", "mnt", "user"} {
 		wantNamespaces[namespace], err = os.Readlink(foreignProc + "/ns/" + namespace)
@@ -2170,12 +2177,18 @@ fi
 		t.Fatalf("CLI diagnostic record exceeded its bound: %s", contactText)
 	}
 	var contact struct {
-		Schema           string         `json:"schemaVersion"`
-		PID              int            `json:"pid"`
-		Start            string         `json:"startTicks"`
-		Parent           int            `json:"parent"`
-		ParentStart      string         `json:"parentStartTicks"`
-		ParentStatus     string         `json:"parentStatus"`
+		Schema           string `json:"schemaVersion"`
+		PID              int    `json:"pid"`
+		Start            string `json:"startTicks"`
+		Comm             string `json:"comm"`
+		Parent           int    `json:"parent"`
+		ParentStart      string `json:"parentStartTicks"`
+		ParentStatus     string `json:"parentStatus"`
+		ParentExecutable struct {
+			Status        string         `json:"status"`
+			Object        *contactObject `json:"object"`
+			StoreIdentity string         `json:"storeIdentity"`
+		} `json:"parentExecutable"`
 		Status           string         `json:"status"`
 		TouchKind        string         `json:"touchKind"`
 		RootClasses      []string       `json:"rootClasses"`
@@ -2199,7 +2212,7 @@ fi
 	if err := contactDecoder.Decode(&extraContactJSON); err != io.EOF {
 		t.Fatalf("extra CLI contact JSON: %v", err)
 	}
-	if contact.Schema != "devkit/native-process-contact/v1" || contact.PID != foreignProcess.Process.Pid || contact.Start != foreignFields[19] || strconv.Itoa(contact.Parent) != foreignFields[1] || contact.ParentStart != parentFields[19] || contact.ParentStatus != "stable" || contact.Status != "stable" || contact.TouchKind != "cwd" {
+	if contact.Schema != "devkit/native-process-contact/v1" || contact.PID != foreignProcess.Process.Pid || contact.Start != foreignFields[19] || contact.Comm != foreignComm || strconv.Itoa(contact.Parent) != foreignFields[1] || contact.ParentStart != parentFields[19] || contact.ParentStatus != "stable" || contact.Status != "stable" || contact.TouchKind != "cwd" {
 		t.Fatalf("CLI contact process identity differs from live fixture: %+v", contact)
 	}
 	if len(contact.RootClasses) != 1 || contact.RootClasses[0] != "worktree" || contact.RootClassMeaning != "first-matched-physical-ancestor" || contact.MatchedRoot == nil || *contact.MatchedRoot != wantRoot {
@@ -2207,6 +2220,12 @@ fi
 	}
 	if contact.Executable.Status != "stable" || contact.Executable.Object == nil || *contact.Executable.Object != wantExecutable || contact.Executable.StoreIdentity != wantStoreExecutable || !strings.HasPrefix(wantStoreExecutable, "/nix/store/") {
 		t.Fatalf("CLI executable differs from immutable fixture: %+v", contact.Executable)
+	}
+	if contact.ParentExecutable.Status != "stable" || contact.ParentExecutable.Object == nil || *contact.ParentExecutable.Object != wantParentExecutable {
+		t.Fatalf("CLI parent executable differs from live fixture: %+v", contact.ParentExecutable)
+	}
+	if strings.HasPrefix(wantParentStoreExecutable, "/nix/store/") && contact.ParentExecutable.StoreIdentity != wantParentStoreExecutable {
+		t.Fatalf("CLI parent immutable identity differs from fixture: %+v", contact.ParentExecutable)
 	}
 	if len(contact.Namespaces) != 3 || len(contact.ObserverNamespaces) != 3 || len(contact.NamespaceComparison) != 3 {
 		t.Fatalf("CLI namespace fields incomplete: %+v", contact)
