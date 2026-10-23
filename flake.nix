@@ -3,6 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    codex-source = {
+      url = "github:openai/codex/83086188ae0614bd882818ff1aa23f3194962012";
+      flake = false;
+    };
     codex-native-tool-witness-source = {
       url = "github:openai/codex/a956835d020762cb2b570053af06f643a11c0ecc";
       flake = false;
@@ -17,7 +21,7 @@
   };
 
   outputs =
-    { self, nixpkgs, nixpkgs-playwright, codex-native-tool-witness-source, codex-native-tool-witness-rust-overlay, ... }:
+    { self, nixpkgs, nixpkgs-playwright, codex-source, codex-native-tool-witness-source, codex-native-tool-witness-rust-overlay, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -65,6 +69,27 @@
       };
       codexVersion = "0.163.0";
       codexReleaseTag = "rust-v${codexVersion}";
+      mkOfficialCodex =
+        pkgs:
+        pkgs.stdenvNoCC.mkDerivation {
+          pname = "codex";
+          version = codexReleaseTag;
+          src = pkgs.fetchurl {
+            url = "https://github.com/openai/codex/releases/download/${codexReleaseTag}/${systemDetails.${pkgs.system}.codexAsset}.tar.gz";
+            hash = systemDetails.${pkgs.system}.codexHash;
+          };
+          dontUnpack = true;
+          installPhase = ''
+            runHook preInstall
+            mkdir -p "$out/bin"
+            tar --no-same-owner -xzf "$src" -C "$out"
+            test -x "$out/bin/codex"
+            test -x "$out/bin/codex-code-mode-host"
+            test -x "$out/codex-path/rg"
+            test -x "$out/codex-resources/bwrap"
+            runHook postInstall
+          '';
+        };
       githubSSHKnownHosts = ./nix/github-ssh-known-hosts;
       managedGitSSHConfig = ./nix/managed-git-ssh-config;
       mkDevAllRuntimeBundle =
@@ -290,25 +315,7 @@
         { system, pkgs, pkgsPlaywright, ... }:
         let
           details = systemDetails.${system};
-          pinnedCodex = pkgs.stdenvNoCC.mkDerivation {
-            pname = "codex";
-            version = codexReleaseTag;
-            src = pkgs.fetchurl {
-              url = "https://github.com/openai/codex/releases/download/${codexReleaseTag}/${details.codexAsset}.tar.gz";
-              hash = details.codexHash;
-            };
-            dontUnpack = true;
-            installPhase = ''
-              runHook preInstall
-              mkdir -p "$out/bin"
-              tar --no-same-owner -xzf "$src" -C "$out"
-              test -x "$out/bin/codex"
-              test -x "$out/bin/codex-code-mode-host"
-              test -x "$out/codex-path/rg"
-              test -x "$out/codex-resources/bwrap"
-              runHook postInstall
-            '';
-          };
+          pinnedCodex = self.packages.${system}.codex;
 
           pinnedDockerCli = pkgs.stdenvNoCC.mkDerivation {
             pname = "docker-cli";
@@ -622,6 +629,12 @@
           };
         in
         {
+          codex = import ./nix/codex {
+            inherit pkgs;
+            source = codex-source;
+            rustOverlaySource = codex-native-tool-witness-rust-overlay;
+            officialCodex = mkOfficialCodex pkgs;
+          };
           devctl = mkProductionDevctl pkgs;
           # Reuse the production fixed-output dependency recipe. Bind its
           # vendor payload to the exact module declarations of this source.
@@ -681,11 +694,7 @@
             inherit pkgs;
             source = codex-native-tool-witness-source;
             rustOverlaySource = codex-native-tool-witness-rust-overlay;
-            officialCodex = nixpkgs.lib.findFirst
-              (package: (package.pname or "") == "codex")
-              (throw "dev-all must expose its pinned official Codex bundle")
-              ((self.devShells.${pkgs.system}.dev-all.nativeBuildInputs or [ ])
-                ++ (self.devShells.${pkgs.system}.dev-all.buildInputs or [ ]));
+            officialCodex = mkOfficialCodex pkgs;
           };
         }
       );

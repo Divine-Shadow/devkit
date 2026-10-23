@@ -34,6 +34,23 @@
         "type": "github"
       }
     },
+    "codex-source": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792090627,
+        "narHash": "sha256-Fa9dfiGJy+uqSF4A0EM6AQQhhjQdu+jfhKzqXid9PNA=",
+        "owner": "openai",
+        "repo": "codex",
+        "rev": "83086188ae0614bd882818ff1aa23f3194962012",
+        "type": "github"
+      },
+      "original": {
+        "owner": "openai",
+        "repo": "codex",
+        "rev": "83086188ae0614bd882818ff1aa23f3194962012",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767313136,
@@ -70,6 +87,7 @@
       "inputs": {
         "codex-native-tool-witness-rust-overlay": "codex-native-tool-witness-rust-overlay",
         "codex-native-tool-witness-source": "codex-native-tool-witness-source",
+        "codex-source": "codex-source",
         "nixpkgs": "nixpkgs",
         "nixpkgs-playwright": "nixpkgs-playwright"
       }

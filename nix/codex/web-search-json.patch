@@ -1,0 +1,100 @@
+diff --git a/codex-rs/exec/src/event_processor_with_jsonl_output.rs b/codex-rs/exec/src/event_processor_with_jsonl_output.rs
+index 73e0c9d911..9df92df38a 100644
+--- a/codex-rs/exec/src/event_processor_with_jsonl_output.rs
++++ b/codex-rs/exec/src/event_processor_with_jsonl_output.rs
+@@ -303,7 +303,6 @@ impl EventProcessorWithJsonOutput {
+             ThreadItem::WebSearch(item) => Some(ExecThreadItem {
+                 id: make_id(),
+                 details: ThreadItemDetails::WebSearch(WebSearchItem {
+-                    id: item.id,
+                     query: item.query,
+                     action: match item.action {
+                         Some(ApiWebSearchAction::Search { query, queries }) => {
+diff --git a/codex-rs/exec/src/exec_events.rs b/codex-rs/exec/src/exec_events.rs
+index 06565c097b..3f4fe03a1d 100644
+--- a/codex-rs/exec/src/exec_events.rs
++++ b/codex-rs/exec/src/exec_events.rs
+@@ -296,7 +296,6 @@ pub struct McpToolCallItem {
+ /// A web search request.
+ #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+ pub struct WebSearchItem {
+-    pub id: String,
+     pub query: String,
+     pub action: WebSearchAction,
+     /// Structured results returned by web search, when available.
+diff --git a/codex-rs/exec/tests/event_processor_with_json_output.rs b/codex-rs/exec/tests/event_processor_with_json_output.rs
+index c1cc894749..e955df705d 100644
+--- a/codex-rs/exec/tests/event_processor_with_json_output.rs
++++ b/codex-rs/exec/tests/event_processor_with_json_output.rs
+@@ -395,7 +395,6 @@ fn web_search_completion_preserves_query_and_action() {
+                 item: ExecThreadItem {
+                     id: "item_0".to_string(),
+                     details: ThreadItemDetails::WebSearch(WebSearchItem {
+-                        id: "search-1".to_string(),
+                         query: "rust async await".to_string(),
+                         action: WebSearchAction::Search {
+                             query: Some("rust async await".to_string()),
+@@ -450,7 +449,7 @@ fn web_search_page_actions_and_results_survive_json_output() {
+             ));
+ 
+             let mut expected_item = json!({
+-                "id": "search-1",
++                "id": "item_0",
+                 "type": "web_search",
+                 "query": url,
+                 "action": expected_action,
+@@ -500,6 +499,38 @@ fn web_search_start_and_completion_reuse_item_id() {
+         },
+     ));
+ 
++    // Exercise the raw JSONL serializer: serializing into a Value would hide
++    // duplicate keys introduced by flattened item payloads.
++    let lines = started
++        .events
++        .iter()
++        .chain(&completed.events)
++        .map(serde_json::to_string)
++        .collect::<Result<Vec<_>, _>>()
++        .expect("serialize web search lifecycle");
++    assert_eq!(
++        lines,
++        vec![
++            r#"{"type":"item.started","item":{"id":"item_0","type":"web_search","query":"","action":{"type":"other"}}}"#,
++            r#"{"type":"item.completed","item":{"id":"item_0","type":"web_search","query":"rust async await","action":{"type":"search","query":"rust async await"}}}"#,
++        ],
++    );
++    for (line, event) in lines
++        .iter()
++        .zip(started.events.iter().chain(&completed.events))
++    {
++        assert_eq!(
++            serde_json::from_str::<ThreadEvent>(line).expect("round-trip web search event"),
++            *event,
++        );
++    }
++    assert!(
++        serde_json::from_str::<ThreadEvent>(
++            r#"{"type":"item.started","item":{"id":"item_0","type":"web_search","id":"exec-search","query":"","action":{"type":"other"}}}"#,
++        )
++        .is_err(),
++        "duplicate item identities must remain invalid",
++    );
+     assert_eq!(
+         started,
+         CollectedThreadEvents {
+@@ -507,7 +538,6 @@ fn web_search_start_and_completion_reuse_item_id() {
+                 item: ExecThreadItem {
+                     id: "item_0".to_string(),
+                     details: ThreadItemDetails::WebSearch(WebSearchItem {
+-                        id: "search-1".to_string(),
+                         query: String::new(),
+                         action: WebSearchAction::Other,
+                         results: None,
+@@ -524,7 +554,6 @@ fn web_search_start_and_completion_reuse_item_id() {
+                 item: ExecThreadItem {
+                     id: "item_0".to_string(),
+                     details: ThreadItemDetails::WebSearch(WebSearchItem {
+-                        id: "search-1".to_string(),
+                         query: "rust async await".to_string(),
+                         action: WebSearchAction::Search {
+                             query: Some("rust async await".to_string()),

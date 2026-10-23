@@ -1,0 +1,2 @@
+# Unified patch blank context lines contain one required syntax space.
+nix/codex/web-search-json.patch whitespace=-blank-at-eol
