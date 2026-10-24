@@ -192,6 +192,9 @@ type nativeSlotProcessIdentity struct {
 	sandboxHome     string
 	stateRoot       string
 	sandboxState    string
+	// Retirement supplies only the pinned, source-selected staging root vector.
+	// Ordinary reset callers leave this nil and retain their existing scope.
+	stagingTargets []os.FileInfo
 }
 
 type nativeSlotProcessPlan struct {

@@ -21,7 +21,22 @@ func handleSelectedDevAllPrepare(ctx *cmdregistry.Context, cfg config.OverlayCon
 		return err
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
-	claim, err := claimFreshSelectedPreparation(p, worktreeOpts, dryRun)
+	var lifecycle *selectedControllerLifecycleLease
+	if parsed.controllerLifecycleLeaseFD != 0 {
+		declared := false
+		for _, index := range cfg.Defaults.SelectedAgents {
+			declared = declared || index == p.Agent.ID.Index
+		}
+		if !declared || p.Agent.ID.Index <= cfg.Defaults.Agents || p.Agent.ID.Repo != "ouroboros-ide" || dryRun {
+			return fmt.Errorf("controller staging retirement requires a separately source-declared fresh Product lane")
+		}
+		lifecycle, err = openSelectedControllerLifecycleLease(p, parsed.controllerLifecycleLeaseFD)
+		if err != nil {
+			return err
+		}
+		defer lifecycle.close()
+	}
+	claim, err := claimFreshSelectedPreparationWithLease(p, worktreeOpts, dryRun, lifecycle)
 	if err != nil {
 		return err
 	}

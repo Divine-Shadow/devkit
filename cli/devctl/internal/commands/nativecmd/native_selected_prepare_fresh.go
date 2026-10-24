@@ -33,6 +33,7 @@ type freshSelectedClaim struct {
 	dryRun      bool
 	lock        *nativeSlotResetLock
 	directories []*os.File
+	lifecycle   *selectedControllerLifecycleLease
 }
 
 func freshPreparationPaths(p nativeplan.Plan, opts wtx.NativeOptions) ([]string, error) {
@@ -108,6 +109,10 @@ func requireFreshPreparationAbsent(root string) error {
 }
 
 func claimFreshSelectedPreparation(p nativeplan.Plan, opts wtx.NativeOptions, dryRun bool) (*freshSelectedClaim, error) {
+	return claimFreshSelectedPreparationWithLease(p, opts, dryRun, nil)
+}
+
+func claimFreshSelectedPreparationWithLease(p nativeplan.Plan, opts wtx.NativeOptions, dryRun bool, lifecycle *selectedControllerLifecycleLease) (*freshSelectedClaim, error) {
 	roots, err := freshPreparationPaths(p, opts)
 	if err != nil {
 		return nil, err
@@ -115,15 +120,19 @@ func claimFreshSelectedPreparation(p nativeplan.Plan, opts wtx.NativeOptions, dr
 	if p.GUITargetConfig != nil && p.GUITargetConfig.RetainedHistoryManifest != "" {
 		return nil, fmt.Errorf("fresh selected preparation refuses predecessor history projection")
 	}
-	claim := &freshSelectedClaim{dryRun: dryRun}
+	claim := &freshSelectedClaim{dryRun: dryRun, lifecycle: lifecycle}
 	if dryRun {
 		return claim, nil
 	}
 	// Refuse foreign ancestors before creating even coordination metadata.
-	for _, root := range roots {
-		if err := requireFreshPreparationAbsent(root); err != nil {
-			return nil, err
+	if lifecycle == nil {
+		for _, root := range roots {
+			if err := requireFreshPreparationAbsent(root); err != nil {
+				return nil, err
+			}
 		}
+	} else if err := lifecycle.revalidate(); err != nil {
+		return nil, err
 	}
 	coordination, err := nativeSlotResetCoordinationRoot(opts.WorktreeRoot)
 	if err != nil {
@@ -139,6 +148,13 @@ func claimFreshSelectedPreparation(p nativeplan.Plan, opts wtx.NativeOptions, dr
 		return nil, err
 	}
 	fail := func(err error) (*freshSelectedClaim, error) { claim.close(); return nil, err }
+	if lifecycle != nil {
+		retirement, err := retireSelectedStaging(p, opts, roots, lifecycle)
+		if err != nil {
+			return fail(err)
+		}
+		defer retirement.close()
+	}
 	// Check all roots before reserving any. A later collision keeps only our
 	// partial claim; no conflicting allocation is overwritten or cleaned up.
 	for _, root := range roots {
@@ -162,6 +178,11 @@ func claimFreshSelectedPreparation(p nativeplan.Plan, opts wtx.NativeOptions, dr
 			return fail(err)
 		}
 		claim.directories = append(claim.directories, os.NewFile(uintptr(fd), root))
+	}
+	if lifecycle != nil {
+		if err := lifecycle.revalidate(); err != nil {
+			return fail(err)
+		}
 	}
 	return claim, nil
 }
@@ -239,6 +260,11 @@ func (claim *freshSelectedClaim) complete(p nativeplan.Plan) error {
 func (claim *freshSelectedClaim) verifyNamespace() error {
 	if claim.dryRun {
 		return nil
+	}
+	if claim.lifecycle != nil {
+		if err := claim.lifecycle.revalidate(); err != nil {
+			return err
+		}
 	}
 	for _, held := range claim.directories {
 		expected, err := held.Stat()

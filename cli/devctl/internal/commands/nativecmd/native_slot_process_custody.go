@@ -137,7 +137,7 @@ func nativeProcDescendantConflicts(procPath string, env map[string]string, inher
 }
 
 func nativeSlotPhysicalTargets(identity nativeSlotProcessIdentity) ([]os.FileInfo, error) {
-	var targets []os.FileInfo
+	targets := append([]os.FileInfo(nil), identity.stagingTargets...)
 	for _, path := range []string{identity.hostWorktree, identity.hostHome, identity.stateRoot} {
 		if !filepath.IsAbs(path) {
 			continue

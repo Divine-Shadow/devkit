@@ -75,23 +75,24 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
-	processCustodyObservation bool
-	indexSet                  bool
-	opts                      nativeplan.BuildOptions
-	format                    string
-	dryRun                    bool
-	count                     int
-	baseBranch                string
-	branchPrefix              string
-	dedicatedWorktrees        bool
-	skipRepoChecks            bool
-	repoCheck                 string
-	readinessMode             string
-	readinessModeSet          bool
-	managedAppServer          bool
-	softwareOnly              bool
-	preparationPhase          string
-	command                   []string
+	processCustodyObservation  bool
+	controllerLifecycleLeaseFD int
+	indexSet                   bool
+	opts                       nativeplan.BuildOptions
+	format                     string
+	dryRun                     bool
+	count                      int
+	baseBranch                 string
+	branchPrefix               string
+	dedicatedWorktrees         bool
+	skipRepoChecks             bool
+	repoCheck                  string
+	readinessMode              string
+	readinessModeSet           bool
+	managedAppServer           bool
+	softwareOnly               bool
+	preparationPhase           string
+	command                    []string
 }
 
 const managedAppServerServiceEnv = "DEVKIT_MANAGED_APP_SERVER_SERVICE"
@@ -337,6 +338,13 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			}
 			parsed.opts.Index = idx
 			parsed.indexSet = true
+			i++
+		case "--controller-lifecycle-lease-fd":
+			if ctx.Args[0] != "prepare" || ctx.Project != "dev-all" || parsed.controllerLifecycleLeaseFD != 0 ||
+				i+1 >= len(ctx.Args) || ctx.Args[i+1] != "3" {
+				return parsed, fmt.Errorf("controller lifecycle descriptor requires one selected dev-all prepare handoff on fd 3")
+			}
+			parsed.controllerLifecycleLeaseFD = 3
 			i++
 		case "--process-custody-observation":
 			if ctx.Args[0] != "plan" || parsed.processCustodyObservation {
@@ -2126,6 +2134,9 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	parsed.opts.Repo = repo
 	parsed.opts.BaseBranch = baseBranch
 	parsed.opts.BranchPrefix = branchPrefix
+	if parsed.controllerLifecycleLeaseFD != 0 && (!parsed.indexSet || ctx.Project != "dev-all" || ctx.DryRun || parsed.dryRun) {
+		return fmt.Errorf("controller staging retirement requires ordinary explicitly selected dev-all preparation")
+	}
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
 	}
