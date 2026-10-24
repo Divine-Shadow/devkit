@@ -166,6 +166,15 @@ func Prepare(p nativeplan.Plan) error {
 	return prepare(p, false, false)
 }
 
+// PrepareFresh uses ordinary package-owned config/auth/SSH provisioning, but
+// never imports predecessor history or a legacy runtime context namespace.
+func PrepareFresh(p nativeplan.Plan) error {
+	if p.GUITargetConfig != nil && p.GUITargetConfig.RetainedHistoryManifest != "" {
+		return fmt.Errorf("fresh native preparation refuses a retained history projection")
+	}
+	return prepareWithLegacyState(p, false, false, false)
+}
+
 // PrepareSoftwareOnly converges public software/configuration for an existing
 // native home. Credential hydration remains the operator's separate effect.
 // It never selects alternate credential roots or suppresses hydration errors.
@@ -206,6 +215,10 @@ func PrepareTerraformTools(p nativeplan.Plan) error {
 }
 
 func prepare(p nativeplan.Plan, softwareOnly, terraformTools bool) error {
+	return prepareWithLegacyState(p, softwareOnly, terraformTools, true)
+}
+
+func prepareWithLegacyState(p nativeplan.Plan, softwareOnly, terraformTools, allowLegacyState bool) error {
 	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
 		return err
 	}
@@ -273,7 +286,7 @@ func prepare(p nativeplan.Plan, softwareOnly, terraformTools bool) error {
 			return fmt.Errorf("retained native preparation history: %w", err)
 		}
 	}
-	if !softwareOnly {
+	if !softwareOnly && allowLegacyState {
 		if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
 			return err
 		}

@@ -1271,6 +1271,9 @@ func lifecycleDefaults(ctx *cmdregistry.Context, parsed lifecycleArgs) (config.O
 	if count < 1 {
 		count = 1
 	}
+	if err := validateSelectedConstructionPrefix(ctx.Project, cfg, count); err != nil {
+		return cfg, "", 0, "", "", err
+	}
 	baseBranch := strings.TrimSpace(parsed.baseBranch)
 	if baseBranch == "" {
 		baseBranch = strings.TrimSpace(cfg.Defaults.BaseBranch)
@@ -2141,6 +2144,10 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	if parsed.opts.GUITargetID != "" {
 		return fmt.Errorf("native prepare --gui-target-id requires the selected Shared Power workspace root")
 	}
+	if err := validateSelectedConstructionPrefix(ctx.Project, cfg, count); err != nil {
+		return err
+	}
+
 	bootstrapOpts := parsed.opts
 	bootstrapOpts.Index = 1
 	bootstrapOpts.Repo = repo

@@ -336,3 +336,20 @@ replacement retires its runtime inode: the normal owning controller/profile
 lifecycle must rebind a fresh consumer rather than treating a retained socket
 bind as live or retrying an uncertain restart with a new key. Pending journal
 reconciliation remains with the accepted Product/Runtime contract.
+## Selected fresh construction
+
+Installed Fleet ordinary exact-target GUI start owns production invocation of
+native prepare --repo ouroboros-ide --index N. Explicit selected construction
+uses source defaults.selected_agents when present; defaults.agents remains the
+contiguous prefix capacity for existing lifecycle/reset operations. A sparse
+selection does not prepare its numeric holes or write the shared manifest.
+
+Selected construction requires new absent lane, home, state and lane-Git roots.
+It atomically claims only those roots under existing reset coordination, uses
+normal source-owned Git/SSH and auth/config supply, and never imports a retained
+history projection or legacy context. Partial failures are retained and cannot
+be silently retried as fresh. The private selected-preparation.json completion
+binds the created root identities for ordinary same-target reconnection; CLI
+output is still text and does not establish native topology or useful work.
+Do not execute a development checkout/package as live Fleet authority.
+

@@ -65,13 +65,13 @@ func TestDevAllSelectedPrepareSourceGeometry(t *testing.T) {
 				t.Fatal(err)
 			}
 			host := fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d", index)
-			sandbox := fmt.Sprintf("/workspaces/dev/agent-worktrees/agent%d", index)
+			sandbox := "/workspaces/dev"
 			home := fmt.Sprintf(".devhome-agent%d", index)
 			if index == 1 {
 				host += "/ouroboros-ide"
 				sandbox += "/ouroboros-ide"
 			}
-			want := []string{fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d/ouroboros-ide", index), filepath.Join(host, home), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/dev-all-agent%d", index), fmt.Sprintf("/workspaces/dev/agent-worktrees/agent%d/ouroboros-ide", index), filepath.Join(sandbox, home)}
+			want := []string{fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d/ouroboros-ide", index), filepath.Join(host, home), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/dev-all-agent%d", index), "/workspaces/dev/ouroboros-ide", filepath.Join(sandbox, home)}
 			got := []string{p.Agent.HostWorktree, p.Agent.HostHome, p.Agent.StateRoot, p.Agent.SandboxWorktree, p.Agent.SandboxHome}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("selected geometry=%q want %q", got, want)
@@ -127,7 +127,7 @@ func TestDevAllSelectedPrepareAcquiresOnlyFreshLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Defaults.Repo = "selected-prepare-fixture"
+	cfg.Defaults.Repo = "ouroboros-ide"
 	cfg.Defaults.Origin = origin
 	cfg.Native.HostRoot = fixture
 	cfg.Native.WorktreeRoot = filepath.Join(fixture, "lanes")
@@ -146,6 +146,12 @@ func TestDevAllSelectedPrepareAcquiresOnlyFreshLane(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Production retains required package SSH. This fixture substitutes only
+		// its local Git transport after planning; no credential or live lane is used.
+		if !opts.RequireSSHOrigin {
+			t.Fatal("Product planner dropped SSH authority")
+		}
+		opts.RequireSSHOrigin = false
 		return opts, p.Agent.HostWorktree
 	}
 	// Retain lanes 1 and 3, including a dirty worktree, Git locks and opaque home/state bytes.

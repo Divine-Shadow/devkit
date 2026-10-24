@@ -18,6 +18,9 @@ type Hooks struct {
 type Defaults struct {
 	// Default number of agents to start (for reset/bootstrap flows)
 	Agents int `yaml:"agents"`
+	// SelectedAgents admits explicit selected construction without expanding
+	// the contiguous prefix owned by reset/up/scale.
+	SelectedAgents []int `yaml:"selected_agents"`
 	// Default repo name under the dev root (e.g., ouroboros-ide)
 	Repo string `yaml:"repo"`
 	// Immutable source-declared remote used to bootstrap an absent repository.
