@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -146,8 +148,12 @@ func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.Ma
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, nativeplan.WorkspaceControllerOperationIdentity, string(data)+"\n")
-	if err := os.Chmod(nativeplan.WorkspaceControllerOperationIdentity, 0o400); err != nil {
+	next := nativeplan.WorkspaceControllerOperationIdentity + ".next"
+	writeTestFile(t, next, string(data)+"\n")
+	if err := os.Chmod(next, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, nativeplan.WorkspaceControllerOperationIdentity); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -633,8 +639,146 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	if err := os.Remove(operationSocket); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	listenControllerTestSocket(t, operationSocket)
+	coldListener := listenControllerTestSocket(t, operationSocket).(*net.UnixListener)
 	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil || !strings.Contains(err.Error(), "live socket generation") {
 		t.Fatalf("replaced operation socket error = %v, want generation rejection", err)
 	}
+	assertNoActivation := func(t *testing.T) {
+		t.Helper()
+		if err := coldListener.SetDeadline(time.Now().Add(25 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		connection, err := coldListener.Accept()
+		if err == nil {
+			connection.Close()
+			t.Fatal("unexpected provider activation")
+		}
+		if e, ok := err.(net.Error); !ok || !e.Timeout() {
+			t.Fatalf("accept: %v", err)
+		}
+		if err := coldListener.SetDeadline(time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The pure builder above refused the stale identity without warming it.
+	assertNoActivation(t)
+	acceptActivation := func(t *testing.T) {
+		t.Helper()
+		if err := coldListener.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		connection, err := coldListener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer connection.Close()
+		connection.SetReadDeadline(time.Now().Add(time.Second))
+		payload, err := io.ReadAll(connection)
+		if err != nil || len(payload) != 0 {
+			t.Fatalf("activation sent operation bytes: %q, %v", payload, err)
+		}
+		if err := coldListener.SetDeadline(time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cold issuer missing=%t", missing), func(t *testing.T) {
+			if missing {
+				if err := os.Remove(operationIdentity); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result := make(chan error, 1)
+			go func() { result <- prepareControllerOperationIdentity(profile, 2*time.Second) }()
+			acceptActivation(t)
+			// A completed connection is not a ready identity.
+			select {
+			case err := <-result:
+				t.Fatalf("admitted before issuance: %v", err)
+			default:
+			}
+			writeControllerOperationIdentityFixture(t, profile, operationStoreRoot)
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("issuer readiness did not complete")
+			}
+			if _, err := BuildBubblewrap(p, []string{"true"}); err != nil {
+				t.Fatal(err)
+			}
+			assertNoActivation(t)
+		})
+	}
+	foreignPlan := p
+	foreignPlan.ControllerProfile = "foreign-profile"
+	if err := PrepareManagementControllerLaunch(foreignPlan); err == nil {
+		t.Fatal("foreign source profile activated provider")
+	}
+	assertNoActivation(t)
+	if err := PrepareManagementControllerLaunch(p); err != nil {
+		t.Fatal(err)
+	}
+	assertNoActivation(t) // A healthy warm issuer is reused.
+	validIdentity, err := os.ReadFile(operationIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"malformed", []byte("{invalid"), "decode controller operation identity"},
+		{"forged auth", mismatchedBytes, "live socket generation"},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			data := fixture.data
+			if fixture.name == "forged auth" {
+				var identity controllerOperationIdentity
+				if err := json.Unmarshal(validIdentity, &identity); err != nil {
+					t.Fatal(err)
+				}
+				identity.AuthRefresh.Model = "forged-model"
+				data, err = json.Marshal(identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixture.want = "auth refresh does not match the profile"
+			}
+			writeIdentity(t, data)
+			if err := prepareControllerOperationIdentity(profile, 50*time.Millisecond); err == nil || !strings.Contains(err.Error(), fixture.want) {
+				t.Fatalf("error=%v, want %s", err, fixture.want)
+			}
+			assertNoActivation(t)
+			writeIdentity(t, validIdentity)
+		})
+	}
+	t.Run("active stale issuer never becomes ready", func(t *testing.T) {
+		var stale controllerOperationIdentity
+		if err := json.Unmarshal(validIdentity, &stale); err != nil {
+			t.Fatal(err)
+		}
+		stale.Socket.Inode++
+		data, err := json.Marshal(stale)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeIdentity(t, data)
+		result := make(chan error, 1)
+		go func() { result <- prepareControllerOperationIdentity(profile, 100*time.Millisecond) }()
+		acceptActivation(t)
+		err = <-result
+		if err == nil || !strings.Contains(err.Error(), "did not issue a ready identity") || !strings.Contains(err.Error(), "live socket generation") {
+			t.Fatalf("timeout lost guard: %v", err)
+		}
+		after, err := os.ReadFile(operationIdentity)
+		if err != nil || string(after) != string(data) {
+			t.Fatalf("launcher rewrote issuer identity: %v", err)
+		}
+		assertNoActivation(t) // Exactly one connection, no retry or operation.
+		writeIdentity(t, validIdentity)
+	})
 }

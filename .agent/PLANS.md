@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active controller repair: [Cold controller issuer readiness](execplans/controller-operation-cold-start-20261024.md).
+
 Active bounded custody refinement: [Unavailable archived references](execplans/unavailable-archived-reference-custody-20261015.md).
 
 Active custody evidence repair: [Content-free GUI-history refusal evidence](execplans/missing-gui-history-observations-20261015.md).

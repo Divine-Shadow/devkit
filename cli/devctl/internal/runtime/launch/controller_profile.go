@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -114,11 +115,73 @@ type controllerOperationIdentity struct {
 var controllerOperationStoreRoot = "/nix/store"
 
 func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
-	if err := validateControllerServiceOwnerClientPlan(p); err != nil {
+	profile, err := managementControllerProfileForLaunch(p)
+	if err != nil || strings.TrimSpace(p.ControllerProfile) == "" {
 		return err
 	}
+	return validateControllerOperationIdentity(profile)
+}
+
+// PrepareManagementControllerLaunch belongs only to an actual, service-owned
+// managed app-server launch. Planning and BuildBubblewrap never activate a
+// provider. The existing broker remains the sole issuer of its identity.
+func PrepareManagementControllerLaunch(p nativeplan.Plan) error {
+	profile, err := managementControllerProfileForLaunch(p)
+	if err != nil || strings.TrimSpace(p.ControllerProfile) == "" {
+		return err
+	}
+	return prepareControllerOperationIdentity(profile, 90*time.Second)
+}
+
+var errControllerOperationSocketGeneration = errors.New("controller operation identity does not match the live socket generation")
+
+func controllerOperationIdentityPending(err error) bool {
+	if errors.Is(err, errControllerOperationSocketGeneration) {
+		return true
+	}
+	var pathError *os.PathError
+	return errors.Is(err, os.ErrNotExist) && errors.As(err, &pathError) &&
+		filepath.Clean(pathError.Path) == filepath.Clean(nativeplan.WorkspaceControllerOperationIdentity)
+}
+
+func prepareControllerOperationIdentity(profile nativeplan.ManagementControllerProfile, timeout time.Duration) error {
+	lastError := validateControllerOperationIdentity(profile)
+	if lastError == nil || !controllerOperationIdentityPending(lastError) {
+		return lastError
+	}
+	if _, _, err := controllerOperationSocketForLaunch(profile); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	connection, err := net.DialTimeout("unix", nativeplan.WorkspaceControllerOperationSocket, time.Until(deadline))
+	if err != nil {
+		return fmt.Errorf("activate declared controller operation provider: %w", err)
+	}
+	// A zero-byte connection activates the systemd-owned listener. Closing it
+	// supplies no request: Fleet rejects EOF before operation admission.
+	if err := connection.Close(); err != nil {
+		return fmt.Errorf("close controller operation activation connection: %w", err)
+	}
+	for {
+		lastError = validateControllerOperationIdentity(profile)
+		if lastError == nil || !controllerOperationIdentityPending(lastError) {
+			return lastError
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("controller operation provider did not issue a ready identity within %s: %w", timeout, lastError)
+		}
+		time.Sleep(min(25*time.Millisecond, remaining))
+	}
+}
+
+func managementControllerProfileForLaunch(p nativeplan.Plan) (nativeplan.ManagementControllerProfile, error) {
+	var empty nativeplan.ManagementControllerProfile
+	if err := validateControllerServiceOwnerClientPlan(p); err != nil {
+		return empty, err
+	}
 	if strings.TrimSpace(p.ControllerProfile) == "" {
-		return nil
+		return empty, nil
 	}
 	if p.ControllerProfile != nativeplan.ManagementControllerProfileIdentity ||
 		p.ControllerManifest != nativeplan.ManagementControllerProfileManifestPath ||
@@ -126,11 +189,11 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 		p.Env[nativeplan.ManagementControllerProfileEnvironment] != nativeplan.ManagementControllerProfileIdentity ||
 		p.Env[nativeplan.ControllerOperationHandleEnvironment] != nativeplan.ControllerOperationHandleRequiredValue ||
 		p.Env[nativeplan.WorkspaceControllerWorkLedgerEnvironment] != nativeplan.WorkspaceControllerWorkLedgerPath {
-		return fmt.Errorf("Management controller plan does not match the named v1 capability profile")
+		return empty, fmt.Errorf("Management controller plan does not match the named v1 capability profile")
 	}
 	profile, err := nativeplan.LoadManagementControllerProfile(p.ControllerManifest)
 	if err != nil {
-		return err
+		return empty, err
 	}
 	activeManagementRoot := profile.SourceRoots.Management
 	activeManagementRoot.BackingPath = p.Agent.HostWorktree
@@ -146,19 +209,16 @@ func validateManagementControllerProfilePlan(p nativeplan.Plan) error {
 		{Source: nativeplan.WorkspaceControllerWorkLedgerDirectory, Target: nativeplan.WorkspaceControllerWorkLedgerDirectory, Mode: "rw", Required: true},
 	} {
 		if !planHasExactBind(p.Binds, expected) {
-			return fmt.Errorf("Management controller plan lacks exact required bind %+v", expected)
+			return empty, fmt.Errorf("Management controller plan lacks exact required bind %+v", expected)
 		}
 	}
 	if err := validateControllerSourceWorktree("active Management", activeManagementRoot); err != nil {
-		return err
+		return empty, err
 	}
 	if err := validateControllerSourceWorktree("WSL/Nix", activeWSLNixRoot); err != nil {
-		return err
+		return empty, err
 	}
-	if err := validateControllerOperationIdentity(profile); err != nil {
-		return err
-	}
-	return nil
+	return profile, nil
 }
 
 func planHasExactBind(binds []nativeplan.Bind, expected nativeplan.Bind) bool {
@@ -211,17 +271,46 @@ func validateControllerSourceWorktree(label string, root nativeplan.ControllerPr
 	return nil
 }
 
-func validateControllerOperationIdentity(profile nativeplan.ManagementControllerProfile) error {
+func controllerOperationSocketForLaunch(profile nativeplan.ManagementControllerProfile) (os.FileInfo, *syscall.Stat_t, error) {
 	socketInfo, err := os.Lstat(nativeplan.WorkspaceControllerOperationSocket)
 	if err != nil {
-		return fmt.Errorf("inspect controller operation socket: %w", err)
+		return nil, nil, fmt.Errorf("inspect controller operation socket: %w", err)
 	}
 	if socketInfo.Mode()&os.ModeSymlink != 0 || socketInfo.Mode()&os.ModeSocket == 0 || socketInfo.Mode().Perm() != 0o600 {
-		return fmt.Errorf("controller operation socket must be a non-symlink mode 0600 Unix socket")
+		return nil, nil, fmt.Errorf("controller operation socket must be a non-symlink mode 0600 Unix socket")
 	}
 	socketStat, ok := socketInfo.Sys().(*syscall.Stat_t)
 	if !ok {
-		return fmt.Errorf("controller operation socket lacks stat identity")
+		return nil, nil, fmt.Errorf("controller operation socket lacks stat identity")
+	}
+	current, err := user.Current()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve launching user: %w", err)
+	}
+	expectedGroup, err := user.LookupGroup(profile.OperationHandle.IdentityGroup)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve controller operation identity group %q: %w", profile.OperationHandle.IdentityGroup, err)
+	}
+	expectedUID, err := strconv.ParseUint(current.Uid, 10, 32)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse launching UID: %w", err)
+	}
+	expectedGID, err := strconv.ParseUint(expectedGroup.Gid, 10, 32)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse controller identity GID: %w", err)
+	}
+	if current.Username != profile.OperationHandle.IdentityOwner ||
+		uint64(socketStat.Uid) != expectedUID ||
+		uint64(socketStat.Gid) != expectedGID {
+		return nil, nil, fmt.Errorf("controller operation socket ownership does not match the manifest")
+	}
+	return socketInfo, socketStat, nil
+}
+
+func validateControllerOperationIdentity(profile nativeplan.ManagementControllerProfile) error {
+	socketInfo, socketStat, err := controllerOperationSocketForLaunch(profile)
+	if err != nil {
+		return err
 	}
 	identityInfo, err := os.Lstat(nativeplan.WorkspaceControllerOperationIdentity)
 	if err != nil {
@@ -230,29 +319,8 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 	if identityInfo.Mode()&os.ModeSymlink != 0 || !identityInfo.Mode().IsRegular() || identityInfo.Mode().Perm() != 0o400 {
 		return fmt.Errorf("controller operation identity must be a regular non-symlink mode 0400 file")
 	}
-	current, err := user.Current()
-	if err != nil {
-		return fmt.Errorf("resolve launching user: %w", err)
-	}
-	expectedGroup, err := user.LookupGroup(profile.OperationHandle.IdentityGroup)
-	if err != nil {
-		return fmt.Errorf("resolve controller operation identity group %q: %w", profile.OperationHandle.IdentityGroup, err)
-	}
-	expectedUID, err := strconv.ParseUint(current.Uid, 10, 32)
-	if err != nil {
-		return fmt.Errorf("parse launching UID: %w", err)
-	}
-	expectedGID, err := strconv.ParseUint(expectedGroup.Gid, 10, 32)
-	if err != nil {
-		return fmt.Errorf("parse controller identity GID: %w", err)
-	}
-	if current.Username != profile.OperationHandle.IdentityOwner ||
-		uint64(socketStat.Uid) != expectedUID ||
-		uint64(socketStat.Gid) != expectedGID {
-		return fmt.Errorf("controller operation socket ownership does not match the manifest")
-	}
 	identityStat, ok := identityInfo.Sys().(*syscall.Stat_t)
-	if !ok || uint64(identityStat.Uid) != expectedUID || uint64(identityStat.Gid) != expectedGID {
+	if !ok || identityStat.Uid != socketStat.Uid || identityStat.Gid != socketStat.Gid {
 		return fmt.Errorf("controller operation identity ownership does not match the manifest")
 	}
 	data, err := os.ReadFile(nativeplan.WorkspaceControllerOperationIdentity)
@@ -285,7 +353,7 @@ func validateControllerOperationIdentity(profile nativeplan.ManagementController
 		GID:            uint32(socketStat.Gid),
 		Mode:           uint32(socketInfo.Mode().Perm()),
 	}) {
-		return fmt.Errorf("controller operation identity does not match the live socket generation")
+		return errControllerOperationSocketGeneration
 	}
 	if identity.SourceInventories.Fleet != (controllerOperationFileIdentity{
 		Path: profile.Inventories.Fleet.Path, SHA256: profile.Inventories.Fleet.SHA256,
