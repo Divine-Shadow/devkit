@@ -13,7 +13,7 @@ import (
 )
 
 // These external CLI consequences require the same immutable owner and real
-// private user manager. native-cli-fixed-owner-consequences executes all six;
+// private user manager. native-cli-fixed-owner-consequences executes them;
 // the source-only checkout cannot supply that namespace and never claims it.
 const nativeStationFixtureEnvironment = "DEVKIT_TEST_NATIVE_STATION_OWNER_MANIFEST"
 

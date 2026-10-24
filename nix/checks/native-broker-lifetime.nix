@@ -209,6 +209,7 @@ let
   request = action: (pkgs.lib.optionalString cliConsequences "${pkgs.coreutils}/bin/env DEVKIT_ROOT=${stationConfig} ")
     + "${selectedDevctl}/kit/bin/devctl -p dev-all broker ${action} --upstream ${upstream}";
   consequenceNames = [
+    "TestNativeExecMissingWorktreeRefusesBeforeEndpointEffects"
     "TestNativeTopLevelExecAndAttachPreserveSandboxExitCode"
     "TestNativeTopLevelExecProjectsStdoutAndCleansProxyOnEveryExit"
     "TestNativeTopLevelPrepareAndExecUseIsolatedRelativeMetadata"

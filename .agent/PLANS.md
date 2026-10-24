@@ -1,6 +1,8 @@
 # Devkit ExecPlans
 
-Active controller repair: [Cold controller issuer readiness](execplans/controller-operation-cold-start-20261024.md).
+Active Source repair: [Early native exec admission](execplans/native-exec-early-admission-20261024.md).
+
+Published cold-controller repair: [Cold controller issuer readiness](execplans/controller-operation-cold-start-20261024.md), Devkit ffb1c16 / WSL 5bfcb6d.
 
 Active bounded custody refinement: [Unavailable archived references](execplans/unavailable-archived-reference-custody-20261015.md).
 
@@ -144,3 +146,5 @@ Root2874 bounded TF1 tools phase: full provider preparation remains the default.
 - [Selected-slot reset managed Git plan geometry](execplans/native-reset-plan-geometry-20261022.md): source-selected isolated execution, shared manifest preserved; native CI/publication/Runtime supply pending.
 
 - [Selected-slot Git projection after bootstrap](execplans/native-reset-post-bootstrap-git-projection-20261022.md): continue actual installed bind refusal through phase-correct source planning and complete immutable supply.
+
+- [Early native exec admission](execplans/native-exec-early-admission-20261024.md).

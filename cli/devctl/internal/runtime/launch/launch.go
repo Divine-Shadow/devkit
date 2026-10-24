@@ -166,6 +166,20 @@ func Prepare(p nativeplan.Plan) error {
 	return prepare(p, false, false)
 }
 
+// ValidateNativeExecWorktree is read-only admission before endpoint allocation.
+// Full preparation repeats it before provisioning the selected runtime.
+func ValidateNativeExecWorktree(p nativeplan.Plan) error {
+	if strings.TrimSpace(p.Agent.HostWorktree) == "" {
+		return fmt.Errorf("host worktree is empty")
+	}
+	if st, err := os.Stat(p.Agent.HostWorktree); err != nil {
+		return fmt.Errorf("host worktree %s: %w", p.Agent.HostWorktree, err)
+	} else if !st.IsDir() {
+		return fmt.Errorf("host worktree %s is not a directory", p.Agent.HostWorktree)
+	}
+	return requireGitWorktree(p.Agent.HostWorktree)
+}
+
 // PrepareFresh uses ordinary package-owned config/auth/SSH provisioning, but
 // never imports predecessor history or a legacy runtime context namespace.
 func PrepareFresh(p nativeplan.Plan) error {
@@ -229,15 +243,7 @@ func prepareWithLegacyState(p nativeplan.Plan, softwareOnly, terraformTools, all
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(p.Agent.HostWorktree) == "" {
-		return fmt.Errorf("host worktree is empty")
-	}
-	if st, err := os.Stat(p.Agent.HostWorktree); err != nil {
-		return fmt.Errorf("host worktree %s: %w", p.Agent.HostWorktree, err)
-	} else if !st.IsDir() {
-		return fmt.Errorf("host worktree %s is not a directory", p.Agent.HostWorktree)
-	}
-	if err := requireGitWorktree(p.Agent.HostWorktree); err != nil {
+	if err := ValidateNativeExecWorktree(p); err != nil {
 		return err
 	}
 	if err := ensureIsolatedProductRuntimeSupport(p); err != nil {

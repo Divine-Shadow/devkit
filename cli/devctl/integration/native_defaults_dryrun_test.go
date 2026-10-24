@@ -802,6 +802,51 @@ func TestRetiredRuntimeNamespaceIsRejectedForNonFlakeProjectDryRun(t *testing.T)
 	}
 }
 
+func TestNativeExecMissingWorktreeRefusesBeforeEndpointEffects(t *testing.T) {
+	requireNativeStationFixture(t)
+	bin := buildDevctlForNativeDefaults(t)
+	bwrapDir := fakeBwrapDir(t)
+	testExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The Product selection is essential: only it allocates the per-agent
+	// PostgreSQL endpoint that created the reported failed-entry footprint.
+	for _, route := range []struct {
+		name string
+		args []string
+	}{
+		{"ordinary", []string{"-p", "dev-all", "exec", "1", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent", "--", "true"}},
+		{"native", []string{"-p", "dev-all", "native", "exec", "--index", "1", "--repo", "ouroboros-ide", "--flake", ".#runtime-test-agent", "--", "true"}},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			root := shortNativeDefaultsRoot(t)
+			writeNixCodexConfigSource(t, root)
+			base := filepath.Dir(root)
+			state := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent1")
+			lane := filepath.Join(base, "agent-worktrees", "agent1")
+			cmd := exec.Command(bin, route.args...)
+			cmd.Env = isolatedNativeFixtureEnv(
+				"DEVKIT_ROOT="+root,
+				"CODEX_AUTH_JSON="+filepath.Join(root, "missing-auth.json"),
+				"DEVKIT_RUNTIME_BROKER_BINARY="+testExecutable,
+				"DEVKIT_RUNTIME_BWRAP_BINARY="+filepath.Join(bwrapDir, "bwrap"),
+				"DEVKIT_RUNTIME_SHELL_LAUNCHER=/bin/sh",
+				"PATH="+bwrapDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			)
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "host worktree") || !strings.Contains(string(out), "no such file or directory") {
+				t.Fatalf("unprepared exec did not refuse at its worktree boundary: %v\n%s", err, out)
+			}
+			for _, path := range []string{state, lane} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatalf("unprepared exec allocated a selected namespace at %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestNativeTopLevelExecAndAttachPreserveSandboxExitCode(t *testing.T) {
 	requireNativeStationFixture(t)
 	bin := buildDevctlForNativeDefaults(t)

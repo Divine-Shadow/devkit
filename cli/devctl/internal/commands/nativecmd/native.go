@@ -1096,6 +1096,11 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
 	}
+	if !ctx.DryRun {
+		if err := launch.ValidateNativeExecWorktree(p); err != nil {
+			return err
+		}
+	}
 	p, err = isolateRuntimeExecutionPlan(p, ctx.DryRun)
 	if err != nil {
 		return err
@@ -2311,6 +2316,11 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		return err
 	}
 	dryRun := ctx.DryRun || parsed.dryRun
+	if !dryRun {
+		if err := launch.ValidateNativeExecWorktree(p); err != nil {
+			return err
+		}
+	}
 	p, err = isolateRuntimeExecutionPlan(p, dryRun)
 	if err != nil {
 		return err
