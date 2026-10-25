@@ -116,9 +116,11 @@ func TestManagementCLIEntryWithoutIssuer(t *testing.T) {
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "bash", "-c", string(rendered))
 			cmd.Dir = p.DevkitHostRoot
+			// Descendants must not hold capture open after exit or cancellation.
+			cmd.WaitDelay = 5 * time.Second
 			output, err := cmd.CombinedOutput()
 			if err != nil {
-				t.Fatalf("candidate CLI-rendered entry: %v\n%s", err, output)
+				t.Fatalf("candidate CLI-rendered entry: %v (context: %v)\n%s", err, ctx.Err(), output)
 			}
 			return string(output)
 		}
