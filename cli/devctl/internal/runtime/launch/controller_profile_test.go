@@ -128,6 +128,15 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	guiInventory := filepath.Join(root, "fleet-codex-gui-inventory.json")
 	ti4Source := filepath.Join(root, "ti4-calculator")
 	nscdSource := filepath.Join(root, "run", "nscd.sock")
+	if receive != nil {
+		// Actual Bash/JVM entry needs the declared host NSS service, not a
+		// shape-only listener which accepts connections without replying.
+		nscdSource = previousNSCDSource
+		info, err := os.Stat(nscdSource)
+		if err != nil || info.Mode()&os.ModeSocket == 0 {
+			t.Fatalf("receiving requires the declared NSCD socket %s: %v", nscdSource, err)
+		}
+	}
 	resolvConf := filepath.Join(root, "resolv.conf")
 	currentUser, err := user.Current()
 	if err != nil {
@@ -166,7 +175,9 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	operationListener := listenControllerTestSocket(t, operationSocket)
 	_ = operationListener
 	listenControllerTestSocket(t, execSocket)
-	listenControllerTestSocket(t, nscdSource)
+	if receive == nil {
+		listenControllerTestSocket(t, nscdSource)
+	}
 	writeTestFile(t, fleetInventory, "fleet\n")
 	writeTestFile(t, guiInventory, "gui\n")
 	writeTestFile(t, resolvConf, "nameserver 127.0.0.1\n")
