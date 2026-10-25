@@ -113,6 +113,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	workLedgerDirectory := filepath.Join(root, "fleet-work")
 	execSocket := filepath.Join(root, "run", "exec", "control.sock")
 	previousManifest := nativeplan.ManagementControllerProfileManifestPath
+	previousStaticManifest := nativeplan.ManagementControllerProfileStaticManifestPath
 	previousOperationSocket := nativeplan.WorkspaceControllerOperationSocket
 	previousWorkLedgerDirectory := nativeplan.WorkspaceControllerWorkLedgerDirectory
 	previousWorkLedgerPath := nativeplan.WorkspaceControllerWorkLedgerPath
@@ -137,6 +138,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 		t.Fatal(err)
 	}
 	nativeplan.ManagementControllerProfileManifestPath = manifestPath
+	nativeplan.ManagementControllerProfileStaticManifestPath = manifestPath + ".static"
 	nativeplan.WorkspaceControllerOperationSocket = operationSocket
 	nativeplan.WorkspaceControllerWorkLedgerDirectory = workLedgerDirectory
 	nativeplan.WorkspaceControllerWorkLedgerPath = filepath.Join(workLedgerDirectory, "work.sqlite")
@@ -149,6 +151,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	nativeplan.ManagementControllerSocketExpectedGroup = currentGroup.Name
 	t.Cleanup(func() {
 		nativeplan.ManagementControllerProfileManifestPath = previousManifest
+		nativeplan.ManagementControllerProfileStaticManifestPath = previousStaticManifest
 		nativeplan.WorkspaceControllerOperationSocket = previousOperationSocket
 		nativeplan.WorkspaceControllerWorkLedgerDirectory = previousWorkLedgerDirectory
 		nativeplan.WorkspaceControllerWorkLedgerPath = previousWorkLedgerPath
@@ -351,7 +354,13 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, manifestPath, string(manifestBytes)+"\n")
+	immutableManifest := filepath.Join(operationStoreRoot, "management-controller-convergence-manifest")
+	writeTestFile(t, immutableManifest, string(manifestBytes)+"\n")
+	for _, path := range []string{manifestPath, nativeplan.ManagementControllerProfileStaticManifestPath} {
+		if err := os.Symlink(immutableManifest, path); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// A new consumer reads configuration directly, retaining strict decoding
 	// of the protected host adapters without any issued runtime identity.
@@ -505,6 +514,8 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 		"'--unshare-net'",
 		"'--ro-bind' '/nix/store' '/nix/store'",
 		"'--ro-bind' '/nix/var/nix' '/nix/var/nix'",
+		"'--ro-bind' '" + immutableManifest + "' '" + immutableManifest + "'",
+		"'--symlink' '" + immutableManifest + "' '" + manifestPath + "'",
 		"'--bind' '" + wslRoot + "' '/workspaces/dev/wsl-nix'",
 		"'--ro-bind' '" + operationSocket + "' '" + operationSocket + "'",
 		"'--bind' '" + workLedgerDirectory + "' '" + workLedgerDirectory + "'",
@@ -521,6 +532,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 		}
 	}
 	for _, forbidden := range []string{
+		"'--ro-bind' '" + manifestPath + "' '" + manifestPath + "'",
 		"/home/bayesartre/.ssh",
 		"/home/bayesartre/.codex-identities",
 		"/mnt/",
@@ -595,6 +607,11 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 // supplied entry function. It is available only in the test build.
 func RunControllerCandidateReceiving(t *testing.T, p nativeplan.Plan, root string, run func([]string) string) {
 	t.Helper()
+	resolvedManifest, err := nativeplan.ResolveManagementControllerProfileManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestHash := hashControllerTestFile(t, resolvedManifest)
 	protected := filepath.Join(root, "protected-host-data")
 	writeTestFile(t, protected, "preserve\n")
 	sibling := filepath.Join(p.HostWorktreeRoot, "unbound-sibling", "protected-data")
@@ -619,6 +636,10 @@ func RunControllerCandidateReceiving(t *testing.T, p nativeplan.Plan, root strin
 		t.Fatalf("host canary status: %s", response.Status)
 	}
 	workload := `set -eu
+        test "$(readlink -f ` + shellQuote(nativeplan.ManagementControllerProfileManifestPath) + `)" = ` + shellQuote(resolvedManifest) + `
+        test "$(sha256sum ` + shellQuote(nativeplan.ManagementControllerProfileManifestPath) + ` | cut -d ' ' -f 1)" = ` + shellQuote(manifestHash) + `
+        if test -w ` + shellQuote(nativeplan.ManagementControllerProfileManifestPath) + `; then exit 1; fi
+        printf '%s\n' candidate-immutable-manifest-projection-ok
         test ! -e /run/fleet-controller-operation/identity.json
         test ! -e /mnt/c
         test ! -e /var/run/docker.sock

@@ -2575,6 +2575,23 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 	_ = addBind("ro", "/etc/group", "/etc/group", false)
 
 	for _, bind := range p.Binds {
+		if bind.Target == nativeplan.ManagementControllerProfileManifestPath {
+			if bind.Source != bind.Target || bind.Mode != "ro" || !bind.Required {
+				return Command{}, fmt.Errorf("Management controller manifest requires its exact read-only projection")
+			}
+			resolved, err := nativeplan.ResolveManagementControllerProfileManifest()
+			if err != nil {
+				return Command{}, err
+			}
+			// Bind the actual immutable artifact at its genuine path, then keep
+			// the public locator a symlink. A file bind at the locator would
+			// destroy EvalSymlinks provenance for the ordinary Fleet client.
+			if err := addBind("ro", resolved, resolved, true); err != nil {
+				return Command{}, err
+			}
+			addSymlink(resolved, bind.Target)
+			continue
+		}
 		if bind.Target == nativeplan.ControllerServiceOwnerConfig {
 			// A regular bind would hide the immutable real path required by
 			// the actual Product client. /nix/store is already read-only.

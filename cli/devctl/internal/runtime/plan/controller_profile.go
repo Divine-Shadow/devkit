@@ -58,11 +58,12 @@ const (
 const WorkspaceControllerWorkLedgerEnvironment = "FLEET_WORK_DB"
 
 var (
-	ManagementControllerProfileManifestPath = "/etc/fleet/controller-operation-authority.json"
-	WorkspaceControllerOperationSocket      = "/run/fleet-controller-operation/control.sock"
-	WorkspaceControllerWorkLedgerDirectory  = "/home/bayesartre/dev/.agent/fleet-work"
-	WorkspaceControllerWorkLedgerPath       = "/home/bayesartre/dev/.agent/fleet-work/work.sqlite"
-	ControllerProfileStoreRoot              = "/nix/store"
+	ManagementControllerProfileManifestPath       = "/etc/fleet/controller-operation-authority.json"
+	ManagementControllerProfileStaticManifestPath = "/etc/static/fleet/controller-operation-authority.json"
+	WorkspaceControllerOperationSocket            = "/run/fleet-controller-operation/control.sock"
+	WorkspaceControllerWorkLedgerDirectory        = "/home/bayesartre/dev/.agent/fleet-work"
+	WorkspaceControllerWorkLedgerPath             = "/home/bayesartre/dev/.agent/fleet-work/work.sqlite"
+	ControllerProfileStoreRoot                    = "/nix/store"
 	// These remain compiled defaults. They are variables only so hermetic
 	// cross-package tests can reproduce the same ownership validation under
 	// the isolated Nix build user; no runtime input can change them.
@@ -360,6 +361,30 @@ type ManagementControllerProfile struct {
 	CodexPermissions                ControllerProfileCodexPermissions      `json:"codexPermissions"`
 	LinuxDesktopAuth                ControllerProfileLinuxDesktopAuth      `json:"linuxDesktopAuth"`
 	AuthRefresh                     ControllerProfileAuthRefresh           `json:"authRefresh"`
+}
+
+// Resolve the installed projection without flattening its immutable provenance.
+// These fixed package-owned locators are not caller-selected manifest inputs.
+func ResolveManagementControllerProfileManifest() (string, error) {
+	info, err := os.Lstat(ManagementControllerProfileManifestPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return "", fmt.Errorf("Management controller manifest must be an immutable Source symlink")
+	}
+	resolved, err := filepath.EvalSymlinks(ManagementControllerProfileManifestPath)
+	if err != nil {
+		return "", err
+	}
+	expected, err := filepath.EvalSymlinks(ManagementControllerProfileStaticManifestPath)
+	if err != nil || resolved != expected {
+		return "", fmt.Errorf("Management controller manifest differs from installed immutable Source projection")
+	}
+	if err := validateControllerStoreFile("manifest", resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
 }
 
 func LoadManagementControllerProfile(path string) (ManagementControllerProfile, error) {
