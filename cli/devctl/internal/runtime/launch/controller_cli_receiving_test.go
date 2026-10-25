@@ -59,7 +59,7 @@ func TestManagementCLIEntryWithoutIssuer(t *testing.T) {
 		}
 		registry := cmdregistry.New()
 		nativecmd.Register(registry)
-		handler, ok := registry.Lookup("exec")
+		handler, ok := registry.Lookup("native")
 		if !ok {
 			t.Fatal("public exec command is not registered")
 		}
@@ -93,7 +93,7 @@ func TestManagementCLIEntryWithoutIssuer(t *testing.T) {
 				os.Stdout = capture
 				defer func() { os.Stdout = previous }()
 				invocation := entry
-				invocation.Args = append([]string{strconv.Itoa(p.Agent.ID.Index), "--repo", p.Agent.ID.Repo, "--proxy-socket", p.Proxy.UnixSocket, "--resolv-conf", p.DNS.ResolvConf, "--"}, command...)
+			invocation.Args = append([]string{"exec", "--index", strconv.Itoa(p.Agent.ID.Index), "--repo", p.Agent.ID.Repo, "--proxy-socket", p.Proxy.UnixSocket, "--resolv-conf", p.DNS.ResolvConf, "--"}, command...)
 				err = handler(&invocation)
 			}()
 			capture.Close()
