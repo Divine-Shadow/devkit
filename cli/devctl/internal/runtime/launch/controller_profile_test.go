@@ -72,6 +72,13 @@ func listenControllerTestSocket(t *testing.T, path string) net.Listener {
 }
 
 func TestManagementEntryWithoutIssuerPreservesContainment(t *testing.T) {
+	RunManagementEntryWithoutIssuerFixture(t, nil)
+}
+
+// RunManagementEntryWithoutIssuerFixture is exported only from the test build so
+// the external CLI-dispatch test can share the isolated configuration and paths.
+func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.T, nativeplan.Plan, string)) {
+	t.Helper()
 	withProductGovernanceEnvironmentFixture(t)
 	root, err := os.MkdirTemp("", "devkit-v4-")
 	if err != nil {
@@ -385,6 +392,25 @@ func TestManagementEntryWithoutIssuerPreservesContainment(t *testing.T) {
 	skills := writeManagementSkillsFixture(t, skillsStoreRoot, "aaaaaaaa-management-skills", strings.Repeat("d", 40), map[string]string{
 		"fleet-health-hypervisor/SKILL.md": "immutable\n",
 	})
+	if receive != nil {
+		packagePath := os.Getenv("DEVKIT_TEST_RECEIVING_MANAGEMENT_SKILLS")
+		if !strings.HasPrefix(packagePath, "/nix/store/") {
+			t.Fatal("receiving requires the composed immutable Management skills package")
+		}
+		data, err := os.ReadFile(filepath.Join(packagePath, "share/management-runtime-skills/identity.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var identity managementRuntimeSkillsIdentity
+		if err := json.Unmarshal(data, &identity); err != nil {
+			t.Fatal(err)
+		}
+		if identity.PackagePath != packagePath {
+			t.Fatal("Management skills package identity mismatch")
+		}
+		managementRuntimeSkillsStoreRoot = "/nix/store"
+		skills = managementSkillsFixture{PackagePath: packagePath, SkillsRoot: identity.SkillsRoot, SourceRev: identity.ManagementSourceRev, PrimarySHA: identity.SkillSHA256}
+	}
 	t.Setenv("DEVKIT_MANAGEMENT_SKILLS_ROOT", skills.SkillsRoot)
 	t.Setenv("DEVKIT_MANAGEMENT_SOURCE_REV", skills.SourceRev)
 	t.Setenv("DEVKIT_MANAGEMENT_SKILL_SHA256", skills.PrimarySHA)
@@ -399,7 +425,7 @@ func TestManagementEntryWithoutIssuerPreservesContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxySocket := filepath.Join(root, "proxy.sock")
-	receiving := os.Getenv("DEVKIT_TEST_RECEIVING_DEVCTL") != ""
+	receiving := receive != nil
 	if receiving {
 		_, source, _, _ := runtime.Caller(0)
 		allowlist, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../../../../kit/proxy/allowlist.txt"))
@@ -556,7 +582,7 @@ func TestManagementEntryWithoutIssuerPreservesContainment(t *testing.T) {
 		t.Fatalf("absent optional host adapter blocks work: %v", err)
 	}
 	if receiving {
-		runControllerCandidateReceiving(t, p, root)
+		receive(t, p, root)
 	}
 	// A supplied socket is still a protected host capability.
 	listenControllerTestSocket(t, operationSocket)
@@ -568,9 +594,9 @@ func TestManagementEntryWithoutIssuerPreservesContainment(t *testing.T) {
 	}
 }
 
-// This receiving exercise uses the real source-built Devctl proxy, runtime shell,
-// Bubblewrap and egress server. It does not launch Codex or touch any live lane.
-func runControllerCandidateReceiving(t *testing.T, p nativeplan.Plan, root string) {
+// RunControllerCandidateReceiving checks real work and boundaries using the
+// supplied entry function. It is available only in the test build.
+func RunControllerCandidateReceiving(t *testing.T, p nativeplan.Plan, root string, run func([]string) string) {
 	t.Helper()
 	protected := filepath.Join(root, "protected-host-data")
 	writeTestFile(t, protected, "preserve\n")
@@ -603,6 +629,7 @@ func runControllerCandidateReceiving(t *testing.T, p nativeplan.Plan, root strin
         test ! -e ` + shellQuote(sibling) + `
         test ! -e ` + shellQuote(filepath.Join(p.SandboxWorktreeRoot, "unbound-sibling", "protected-data")) + `
         grep -F 'Entry no longer reads or mounts a broker-issued identity' AGENTS.md
+        grep -F 'sandbox work does not wait for an identity issuer or its repair.' "$CODEX_HOME/skills/devkit-management/SKILL.md"
         cat > /tmp/Arithmetic.java <<'JAVA'
 class Arithmetic {
     public static void main(String[] args) {
@@ -619,22 +646,6 @@ JAVA
         if curl --noproxy '*' -s --connect-timeout 1 --max-time 2 ` + shellQuote(hostURL) + `; then exit 1; fi
         printf '%s\n' candidate-containment-and-egress-ok
     `
-	run := func(args []string) string {
-		t.Helper()
-		command, err := BuildBubblewrap(p, args)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, command.Path, command.Args...)
-		cmd.Dir = command.Dir
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("candidate receiving: %v\n%s", err, output)
-		}
-		return string(output)
-	}
 	output := run([]string{"bash", "-c", workload})
 	if !strings.Contains(output, "candidate-result=1") || !strings.Contains(output, "candidate-containment-and-egress-ok") {
 		t.Fatalf("incomplete receiving result: %s", output)
