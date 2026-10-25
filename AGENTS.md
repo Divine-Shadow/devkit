@@ -1,5 +1,16 @@
 Devkit Agent Notes
 
+Execution posture
+- Authorized agents have broad control inside accepted disposable sandboxes.
+  Preserve host/sibling containment, deny-by-default egress, guarded access,
+  protected history/data and applicable correctness/publication gates.
+- Ordinary sandbox entry must not require management-issued identities or issuer
+  readiness, refresh or recovery. Host adapters remain protected and are used
+  when an authorized operation actually needs them. Operation IDs track results
+  and idempotency; they are not new permission grants.
+- See `kit/docs/execution-posture.md`. This supersedes contradictory historical
+  identity-admission plans and tests; human/dot instruction authentication remains.
+
 Principles
 - Single path: use `kit/scripts/devkit` as the canonical entrypoint. It execs the compiled CLI at `kit/bin/devctl`.
 - No fallbacks: wrappers must not silently fall back to alternative scripts or binaries. If the binary is missing, fail loudly with a clear message and instructions to build it.

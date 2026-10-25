@@ -1130,11 +1130,6 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		if len(command) < 2 || !strings.Contains(command[0], "codex") || command[1] != "app-server" {
 			return fmt.Errorf("--managed-app-server permits only codex app-server")
 		}
-		if !ctx.DryRun {
-			if err := launch.PrepareManagementControllerLaunch(p); err != nil {
-				return err
-			}
-		}
 	}
 	if !ctx.DryRun {
 		if err := prepareSelectedNativeExec(p, parsed.softwareOnly, parsed.preparationPhase); err != nil {
@@ -2349,11 +2344,6 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		}
 		if len(parsed.command) < 2 || !strings.Contains(parsed.command[0], "codex") || parsed.command[1] != "app-server" {
 			return fmt.Errorf("--managed-app-server permits only codex app-server")
-		}
-		if !dryRun {
-			if err := launch.PrepareManagementControllerLaunch(p); err != nil {
-				return err
-			}
 		}
 	}
 	if !dryRun {

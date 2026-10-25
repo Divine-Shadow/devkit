@@ -762,8 +762,7 @@ func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, 
 			}
 			add(activeWSLNixRoot.BackingPath, activeWSLNixRoot.LogicalPath, "rw", true)
 			add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
-			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", true)
-			add(WorkspaceControllerOperationIdentity, WorkspaceControllerOperationIdentity, "ro", true)
+			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", false)
 			// The existing fleet work commands and deployment campaign validator
 			// share this one canonical SQLite ledger. Bind its directory, rather
 			// than only work.sqlite, so SQLite can create its journal/WAL files.

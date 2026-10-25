@@ -64,15 +64,12 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 		ProfileIdentity:     ManagementControllerProfileIdentity,
 		MountPolicyIdentity: ManagementControllerMountPolicyIdentity,
 		OperationHandle: ControllerProfileOperationHandle{
-			Environment:    ControllerOperationHandleEnvironment,
-			RequiredValue:  ControllerOperationHandleRequiredValue,
-			SocketPath:     WorkspaceControllerOperationSocket,
-			IdentityPath:   WorkspaceControllerOperationIdentity,
-			IdentitySchema: ControllerOperationIdentitySchema,
-			IdentityMode:   ManagementControllerIdentityExpectedMode,
-			IdentityOwner:  ManagementControllerIdentityExpectedOwner,
-			IdentityGroup:  ManagementControllerIdentityExpectedGroup,
-			NoFollow:       true,
+			Environment:   ControllerOperationHandleEnvironment,
+			RequiredValue: ControllerOperationHandleRequiredValue,
+			SocketPath:    WorkspaceControllerOperationSocket,
+			SocketOwner:   ManagementControllerSocketExpectedOwner,
+			SocketGroup:   ManagementControllerSocketExpectedGroup,
+			NoFollow:      true,
 		},
 		SourceRoots: ControllerProfileSourceRoots{
 			Management: ControllerProfileSourceRoot{
@@ -133,7 +130,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Operation:     controllerProductStationResetOperation,
 			RequestSchema: controllerProductStationResetRequest,
 			EventSchema:   controllerProductStationResetEvent,
-			ServiceUser:   ManagementControllerIdentityExpectedOwner,
+			ServiceUser:   ManagementControllerSocketExpectedOwner,
 			Mode:          "0660",
 			Owner:         "root",
 			Group:         "product-station-reset-operators",
@@ -157,7 +154,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Operation:     controllerNixOSDeploymentOperation,
 			RequestSchema: controllerNixOSDeploymentRequestSchema,
 			EventSchema:   controllerNixOSDeploymentEventSchema,
-			ServiceUser:   ManagementControllerIdentityExpectedOwner,
+			ServiceUser:   ManagementControllerSocketExpectedOwner,
 			Mode:          "0660",
 			Owner:         "root",
 			Group:         "fleet-deployment-operators",
@@ -173,7 +170,7 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 				Transport: ControllerProfileRemoteProductGUITransport{
 					Address: "100.64.0.1", AddressFamily: "AF_INET", ClientIdentityHandle: "identity-fleet",
 					Connector: "direct", HostKeyAlias: "test", Port: 22, PreferredRoute: "tailnet-direct",
-					ServerHostKeyFingerprint: "SHA256:test", User: ManagementControllerIdentityExpectedOwner,
+					ServerHostKeyFingerprint: "SHA256:test", User: ManagementControllerSocketExpectedOwner,
 					WorkerAlias: "test-nix",
 				},
 				WorkspaceRoot: managementRoot,
@@ -199,8 +196,8 @@ func writeControllerProfileManifest(t *testing.T, path, managementRoot, wslRoot 
 			Mode: "custom", SandboxMode: "danger-full-access", Source: "config.toml",
 			SourcePath: codexConfig.Path, SourceSHA256: codexConfig.SHA256,
 			TargetProjection: ControllerProfileCodexTargetProjection{
-				ByteEqualToSource: true, Group: ManagementControllerIdentityExpectedGroup, Mode: "0600",
-				NoFollow: true, Owner: ManagementControllerIdentityExpectedOwner,
+				ByteEqualToSource: true, Group: ManagementControllerSocketExpectedGroup, Mode: "0600",
+				NoFollow: true, Owner: ManagementControllerSocketExpectedOwner,
 				PathRule: "remoteProductGUI.targets[].configPath", RegularFile: true,
 			},
 		},
@@ -471,18 +468,15 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	}
 	manifestPath := filepath.Join(root, "management-controller-convergence.json")
 	operationSocket := filepath.Join(root, "run", "operation", "control.sock")
-	operationIdentity := filepath.Join(root, "run", "operation", "identity.json")
 	execSocket := filepath.Join(root, "run", "exec", "control.sock")
 	previousManifest := ManagementControllerProfileManifestPath
 	previousOperationSocket := WorkspaceControllerOperationSocket
-	previousOperationIdentity := WorkspaceControllerOperationIdentity
 	previousExecSocket := WorkspaceControllerExecSocket
 	previousFleetInventory := WorkspaceControllerSourceInventory
 	previousGUIInventory := WorkspaceControllerGUIInventory
 	previousStoreRoot := ControllerProfileStoreRoot
 	ManagementControllerProfileManifestPath = manifestPath
 	WorkspaceControllerOperationSocket = operationSocket
-	WorkspaceControllerOperationIdentity = operationIdentity
 	WorkspaceControllerExecSocket = execSocket
 	WorkspaceControllerSourceInventory = filepath.Join(root, "fleet-inventory.json")
 	WorkspaceControllerGUIInventory = filepath.Join(root, "gui-inventory.json")
@@ -490,7 +484,6 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	t.Cleanup(func() {
 		ManagementControllerProfileManifestPath = previousManifest
 		WorkspaceControllerOperationSocket = previousOperationSocket
-		WorkspaceControllerOperationIdentity = previousOperationIdentity
 		WorkspaceControllerExecSocket = previousExecSocket
 		WorkspaceControllerSourceInventory = previousFleetInventory
 		WorkspaceControllerGUIInventory = previousGUIInventory
@@ -654,8 +647,7 @@ func TestManagementControllerProfilePromotesOnlyExactManagementConsumerToV4(t *t
 	for _, want := range []Bind{
 		{Source: profile.SourceRoots.WSLNix.BackingPath, Target: profile.SourceRoots.WSLNix.LogicalPath, Mode: "rw", Required: true},
 		{Source: manifestPath, Target: manifestPath, Mode: "ro", Required: true},
-		{Source: operationSocket, Target: operationSocket, Mode: "ro", Required: true},
-		{Source: operationIdentity, Target: operationIdentity, Mode: "ro", Required: true},
+		{Source: operationSocket, Target: operationSocket, Mode: "ro", Required: false},
 		{Source: WorkspaceControllerWorkLedgerDirectory, Target: WorkspaceControllerWorkLedgerDirectory, Mode: "rw", Required: true},
 	} {
 		if !hasBind(p.Binds, want.Source, want.Target) {
@@ -729,23 +721,19 @@ func TestManagementControllerProfileRejectsManifestMismatchBeforePlan(t *testing
 	root := t.TempDir()
 	manifestPath := filepath.Join(root, "management-controller-convergence.json")
 	operationSocket := filepath.Join(root, "operation.sock")
-	operationIdentity := filepath.Join(root, "identity.json")
 	previousManifest := ManagementControllerProfileManifestPath
 	previousOperationSocket := WorkspaceControllerOperationSocket
-	previousOperationIdentity := WorkspaceControllerOperationIdentity
 	previousFleetInventory := WorkspaceControllerSourceInventory
 	previousGUIInventory := WorkspaceControllerGUIInventory
 	previousStoreRoot := ControllerProfileStoreRoot
 	ManagementControllerProfileManifestPath = manifestPath
 	WorkspaceControllerOperationSocket = operationSocket
-	WorkspaceControllerOperationIdentity = operationIdentity
 	WorkspaceControllerSourceInventory = filepath.Join(root, "fleet-inventory.json")
 	WorkspaceControllerGUIInventory = filepath.Join(root, "gui-inventory.json")
 	ControllerProfileStoreRoot = filepath.Join(root, "nix", "store")
 	t.Cleanup(func() {
 		ManagementControllerProfileManifestPath = previousManifest
 		WorkspaceControllerOperationSocket = previousOperationSocket
-		WorkspaceControllerOperationIdentity = previousOperationIdentity
 		WorkspaceControllerSourceInventory = previousFleetInventory
 		WorkspaceControllerGUIInventory = previousGUIInventory
 		ControllerProfileStoreRoot = previousStoreRoot

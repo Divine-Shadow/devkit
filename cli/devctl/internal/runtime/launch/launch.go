@@ -2539,6 +2539,14 @@ func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (C
 			}
 			return nil
 		}
+		// Optional adapters do not gate entry when absent. If supplied, they
+		// retain exactly the same host-boundary validation as required binds.
+		if !required && isWorkspaceControllerCapabilityTarget(target) {
+			if err := validateWorkspaceControllerCapabilityBinding(source, target, mode); err != nil {
+				return err
+			}
+		}
+
 		addDir(filepath.Dir(target))
 		if mode == "ro" {
 			bindArgs = append(bindArgs, "--ro-bind", source, target)
@@ -2713,7 +2721,6 @@ func isWorkspaceControllerCapabilityTarget(target string) bool {
 	clean := filepath.Clean(strings.TrimSpace(target))
 	if clean == filepath.Clean(nativeplan.WorkspaceControllerExecSocket) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationSocket) ||
-		clean == filepath.Clean(nativeplan.WorkspaceControllerOperationIdentity) ||
 		clean == filepath.Clean(nativeplan.WorkspaceControllerWorkLedgerDirectory) ||
 		clean == filepath.Clean(nativeplan.ManagementControllerProfileManifestPath) {
 		return true
@@ -2734,7 +2741,7 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		return fmt.Errorf("inspect package-owned controller capability %s: %w", target, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		if isControllerSocketTarget(target) || target == nativeplan.WorkspaceControllerOperationIdentity {
+		if isControllerSocketTarget(target) {
 			return fmt.Errorf("controller runtime capability %s must be non-symlink", target)
 		}
 		resolved, resolveErr := filepath.EvalSymlinks(source)
@@ -2764,16 +2771,6 @@ func validateWorkspaceControllerCapability(source, target string) error {
 		parentStat, ok := parentInfo.Sys().(*syscall.Stat_t)
 		if !ok || uint32(parentStat.Uid) != uint32(os.Getuid()) {
 			return fmt.Errorf("controller exec capability parent owner does not match launching user: %s", filepath.Dir(source))
-		}
-		return nil
-	}
-	if target == nativeplan.WorkspaceControllerOperationIdentity {
-		if !info.Mode().IsRegular() || info.Mode().Perm() != 0o400 {
-			return fmt.Errorf("controller operation identity must be a mode 0400 regular file: %s", source)
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || uint32(stat.Uid) != uint32(os.Getuid()) {
-			return fmt.Errorf("controller operation identity owner does not match launching user: %s", source)
 		}
 		return nil
 	}

@@ -1,22 +1,23 @@
 package launch
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"devkit/cli/devctl/internal/devkitpaths"
+	"devkit/cli/devctl/internal/runtime/egressproxy"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
@@ -24,7 +25,13 @@ func initControllerSourceWorktree(t *testing.T, path, origin string) string {
 	t.Helper()
 	initTestGitWorktree(t, path)
 	writeTestFile(t, filepath.Join(path, "README.md"), "source\n")
-	runTestCommand(t, "", "git", "-C", path, "add", "README.md")
+	_, source, _, _ := runtime.Caller(0)
+	posture, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../../../../kit/docs/execution-posture.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(path, "AGENTS.md"), string(posture))
+	runTestCommand(t, "", "git", "-C", path, "add", "README.md", "AGENTS.md")
 	runTestCommand(t, "", "git", "-C", path, "-c", "user.name=Devkit Test", "-c", "user.email=devkit@example.invalid", "commit", "-m", "fixture")
 	runTestCommand(t, "", "git", "-C", path, "remote", "add", "origin", origin)
 	output, err := exec.Command("git", "-C", path, "rev-parse", "HEAD").CombinedOutput()
@@ -64,101 +71,7 @@ func listenControllerTestSocket(t *testing.T, path string) net.Listener {
 	return listener
 }
 
-func writeControllerOperationIdentityFixture(t *testing.T, profile nativeplan.ManagementControllerProfile, storeRoot string) {
-	t.Helper()
-	authorityPath := filepath.Join(storeRoot, "authority", "authority.json")
-	writeTestFile(t, authorityPath, `{"schemaVersion":"fleet-control/controller-operation-authority/v1"}`+"\n")
-	executablePath := profile.Broker.Executable
-	packagePath := filepath.Dir(filepath.Dir(executablePath))
-	socketInfo, err := os.Lstat(nativeplan.WorkspaceControllerOperationSocket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	socketStat := socketInfo.Sys().(*syscall.Stat_t)
-	identity := controllerOperationIdentity{
-		SchemaVersion: nativeplan.ControllerOperationIdentitySchema,
-		State:         "ready",
-		AuthorityManifest: controllerOperationFileIdentity{
-			Path: authorityPath, SHA256: hashControllerTestFile(t, authorityPath),
-		},
-		Package: controllerOperationPackageIdentity{
-			Path: packagePath, ExecutablePath: executablePath,
-		},
-		Socket: controllerOperationSocketIdentity{
-			Path:           nativeplan.WorkspaceControllerOperationSocket,
-			Device:         uint64(socketStat.Dev),
-			Inode:          socketStat.Ino,
-			ChangeTimeSec:  socketStat.Ctim.Sec,
-			ChangeTimeNsec: socketStat.Ctim.Nsec,
-			UID:            uint32(socketStat.Uid),
-			GID:            uint32(socketStat.Gid),
-			Mode:           uint32(socketInfo.Mode().Perm()),
-		},
-		ProductAgentLifecycle: controllerOperationProductAgentLifecycle{
-			SocketPath:         profile.ProductAgentLifecycle.SocketPath,
-			Executable:         profile.ProductAgentLifecycle.Executable,
-			Operation:          profile.ProductAgentLifecycle.Operation,
-			ReconcileOperation: profile.ProductAgentLifecycle.ReconcileOperation,
-			RequestSchema:      profile.ProductAgentLifecycle.RequestSchema,
-			EventSchema:        profile.ProductAgentLifecycle.EventSchema,
-		},
-		ProductStationReset: controllerOperationProductStationReset{
-			SocketPath:    profile.ProductStationReset.SocketPath,
-			Executable:    profile.ProductStationReset.Executable,
-			Operation:     profile.ProductStationReset.Operation,
-			RequestSchema: profile.ProductStationReset.RequestSchema,
-			EventSchema:   profile.ProductStationReset.EventSchema,
-			ServiceUser:   profile.ProductStationReset.ServiceUser,
-		},
-		NixOSDeployment: controllerOperationNixOSDeployment{
-			SocketPath:    profile.NixOSDeployment.SocketPath,
-			Operation:     profile.NixOSDeployment.Operation,
-			RequestSchema: profile.NixOSDeployment.RequestSchema,
-			EventSchema:   profile.NixOSDeployment.EventSchema,
-			ServiceUser:   profile.NixOSDeployment.ServiceUser,
-		},
-		AuthRefresh: profile.AuthRefresh,
-		SourceInventories: controllerOperationInventories{
-			Fleet: controllerOperationFileIdentity{
-				Path: profile.Inventories.Fleet.Path, SHA256: profile.Inventories.Fleet.SHA256,
-			},
-			GUI: controllerOperationFileIdentity{
-				Path: profile.Inventories.GUI.Path, SHA256: profile.Inventories.GUI.SHA256,
-			},
-		},
-		SourceRoots: controllerOperationSourceRoots{
-			ManagementHostPath:     profile.SourceRoots.Management.BackingPath,
-			ManagementConsumerPath: profile.SourceRoots.Management.LogicalPath,
-			WSLHostPath:            profile.SourceRoots.WSLNix.BackingPath,
-			WSLConsumerPath:        profile.SourceRoots.WSLNix.LogicalPath,
-			WSLOrigin:              profile.SourceRoots.WSLNix.Origin,
-			WSLRevision:            profile.SourceRoots.WSLNix.Revision,
-		},
-		Targets: controllerOperationTargets{
-			ControllerNode:   profile.Targets.Controller,
-			ControllerGUI:    profile.Targets.ControllerGUI,
-			ProductAgentHost: profile.Targets.ProductAgentHost,
-		},
-		Schemas:   profile.Schemas,
-		Kinds:     append([]string(nil), profile.Kinds...),
-		ServerPID: os.Getpid(),
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-	data, err := json.MarshalIndent(identity, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	next := nativeplan.WorkspaceControllerOperationIdentity + ".next"
-	writeTestFile(t, next, string(data)+"\n")
-	if err := os.Chmod(next, 0o400); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(next, nativeplan.WorkspaceControllerOperationIdentity); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T) {
+func TestManagementEntryWithoutIssuerPreservesContainment(t *testing.T) {
 	withProductGovernanceEnvironmentFixture(t)
 	root, err := os.MkdirTemp("", "devkit-v4-")
 	if err != nil {
@@ -192,12 +105,10 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 
 	manifestPath := filepath.Join(root, "management-controller-convergence.json")
 	operationSocket := filepath.Join(root, "run", "operation", "control.sock")
-	operationIdentity := filepath.Join(root, "run", "operation", "identity.json")
 	workLedgerDirectory := filepath.Join(root, "fleet-work")
 	execSocket := filepath.Join(root, "run", "exec", "control.sock")
 	previousManifest := nativeplan.ManagementControllerProfileManifestPath
 	previousOperationSocket := nativeplan.WorkspaceControllerOperationSocket
-	previousOperationIdentity := nativeplan.WorkspaceControllerOperationIdentity
 	previousWorkLedgerDirectory := nativeplan.WorkspaceControllerWorkLedgerDirectory
 	previousWorkLedgerPath := nativeplan.WorkspaceControllerWorkLedgerPath
 	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
@@ -205,9 +116,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	previousGUIInventory := nativeplan.WorkspaceControllerGUIInventory
 	previousTI4Source := nativeplan.WorkspaceEgressCanonicalTI4Source
 	previousNSCDSource := nativeplan.WorkspaceEgressNSCDSource
-	previousIdentityMode := nativeplan.ManagementControllerIdentityExpectedMode
-	previousIdentityOwner := nativeplan.ManagementControllerIdentityExpectedOwner
-	previousIdentityGroup := nativeplan.ManagementControllerIdentityExpectedGroup
+	previousIdentityOwner := nativeplan.ManagementControllerSocketExpectedOwner
+	previousIdentityGroup := nativeplan.ManagementControllerSocketExpectedGroup
 	fleetInventory := filepath.Join(root, "fleet-inventory.json")
 	guiInventory := filepath.Join(root, "fleet-codex-gui-inventory.json")
 	ti4Source := filepath.Join(root, "ti4-calculator")
@@ -223,7 +133,6 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	}
 	nativeplan.ManagementControllerProfileManifestPath = manifestPath
 	nativeplan.WorkspaceControllerOperationSocket = operationSocket
-	nativeplan.WorkspaceControllerOperationIdentity = operationIdentity
 	nativeplan.WorkspaceControllerWorkLedgerDirectory = workLedgerDirectory
 	nativeplan.WorkspaceControllerWorkLedgerPath = filepath.Join(workLedgerDirectory, "work.sqlite")
 	nativeplan.WorkspaceControllerExecSocket = execSocket
@@ -231,13 +140,11 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	nativeplan.WorkspaceControllerGUIInventory = guiInventory
 	nativeplan.WorkspaceEgressCanonicalTI4Source = ti4Source
 	nativeplan.WorkspaceEgressNSCDSource = nscdSource
-	nativeplan.ManagementControllerIdentityExpectedMode = "0400"
-	nativeplan.ManagementControllerIdentityExpectedOwner = currentUser.Username
-	nativeplan.ManagementControllerIdentityExpectedGroup = currentGroup.Name
+	nativeplan.ManagementControllerSocketExpectedOwner = currentUser.Username
+	nativeplan.ManagementControllerSocketExpectedGroup = currentGroup.Name
 	t.Cleanup(func() {
 		nativeplan.ManagementControllerProfileManifestPath = previousManifest
 		nativeplan.WorkspaceControllerOperationSocket = previousOperationSocket
-		nativeplan.WorkspaceControllerOperationIdentity = previousOperationIdentity
 		nativeplan.WorkspaceControllerWorkLedgerDirectory = previousWorkLedgerDirectory
 		nativeplan.WorkspaceControllerWorkLedgerPath = previousWorkLedgerPath
 		nativeplan.WorkspaceControllerExecSocket = previousExecSocket
@@ -245,9 +152,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		nativeplan.WorkspaceControllerGUIInventory = previousGUIInventory
 		nativeplan.WorkspaceEgressCanonicalTI4Source = previousTI4Source
 		nativeplan.WorkspaceEgressNSCDSource = previousNSCDSource
-		nativeplan.ManagementControllerIdentityExpectedMode = previousIdentityMode
-		nativeplan.ManagementControllerIdentityExpectedOwner = previousIdentityOwner
-		nativeplan.ManagementControllerIdentityExpectedGroup = previousIdentityGroup
+		nativeplan.ManagementControllerSocketExpectedOwner = previousIdentityOwner
+		nativeplan.ManagementControllerSocketExpectedGroup = previousIdentityGroup
 	})
 	operationListener := listenControllerTestSocket(t, operationSocket)
 	_ = operationListener
@@ -271,15 +177,12 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		ProfileIdentity:     nativeplan.ManagementControllerProfileIdentity,
 		MountPolicyIdentity: nativeplan.ManagementControllerMountPolicyIdentity,
 		OperationHandle: nativeplan.ControllerProfileOperationHandle{
-			Environment:    nativeplan.ControllerOperationHandleEnvironment,
-			RequiredValue:  nativeplan.ControllerOperationHandleRequiredValue,
-			SocketPath:     operationSocket,
-			IdentityPath:   operationIdentity,
-			IdentitySchema: nativeplan.ControllerOperationIdentitySchema,
-			IdentityMode:   nativeplan.ManagementControllerIdentityExpectedMode,
-			IdentityOwner:  nativeplan.ManagementControllerIdentityExpectedOwner,
-			IdentityGroup:  nativeplan.ManagementControllerIdentityExpectedGroup,
-			NoFollow:       true,
+			Environment:   nativeplan.ControllerOperationHandleEnvironment,
+			RequiredValue: nativeplan.ControllerOperationHandleRequiredValue,
+			SocketPath:    operationSocket,
+			SocketOwner:   nativeplan.ManagementControllerSocketExpectedOwner,
+			SocketGroup:   nativeplan.ManagementControllerSocketExpectedGroup,
+			NoFollow:      true,
 		},
 		SourceRoots: nativeplan.ControllerProfileSourceRoots{
 			Management: nativeplan.ControllerProfileSourceRoot{
@@ -319,12 +222,9 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		Kinds: []string{"app-rpc.exec", "auth.exec", "fleet.exec", "nixos.deploy-closure", "nixos.wsl-sentinel", "gui.replace-controller", "gui.start-app-server", "product-agent.reconcile-absence"},
 	}
 	operationStoreRoot := filepath.Join(root, "nix", "store")
-	previousOperationStoreRoot := controllerOperationStoreRoot
 	previousProfileStoreRoot := nativeplan.ControllerProfileStoreRoot
-	controllerOperationStoreRoot = operationStoreRoot
 	nativeplan.ControllerProfileStoreRoot = operationStoreRoot
 	t.Cleanup(func() {
-		controllerOperationStoreRoot = previousOperationStoreRoot
 		nativeplan.ControllerProfileStoreRoot = previousProfileStoreRoot
 	})
 	writeExecutable := func(path string) string {
@@ -364,7 +264,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		Operation:     "product.station-reset",
 		RequestSchema: "fleet-control/controller-local-product-station-reset-request/v1",
 		EventSchema:   "fleet-control/controller-local-product-station-reset-event/v1",
-		ServiceUser:   nativeplan.ManagementControllerIdentityExpectedOwner,
+		ServiceUser:   nativeplan.ManagementControllerSocketExpectedOwner,
 		Mode:          "0660",
 		Owner:         "root",
 		Group:         "product-station-reset-operators",
@@ -382,7 +282,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		Operation:     "nixos.deploy-closure",
 		RequestSchema: "fleet-control/nixos-deploy-local-request/v1",
 		EventSchema:   "fleet-control/nixos-deploy-local-event/v1",
-		ServiceUser:   nativeplan.ManagementControllerIdentityExpectedOwner,
+		ServiceUser:   nativeplan.ManagementControllerSocketExpectedOwner,
 		Mode:          "0660",
 		Owner:         "root",
 		Group:         "fleet-deployment-operators",
@@ -409,7 +309,7 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 			Transport: nativeplan.ControllerProfileRemoteProductGUITransport{
 				Address: "100.64.0.2", AddressFamily: "AF_INET", ClientIdentityHandle: "identity-fleet",
 				Connector: "direct", HostKeyAlias: "test", Port: 22, PreferredRoute: "tailnet-direct",
-				ServerHostKeyFingerprint: "SHA256:test", User: nativeplan.ManagementControllerIdentityExpectedOwner,
+				ServerHostKeyFingerprint: "SHA256:test", User: nativeplan.ManagementControllerSocketExpectedOwner,
 				WorkerAlias: "test-nix",
 			},
 			WorkspaceRoot: remoteWorkspaceRoot,
@@ -437,8 +337,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		Mode: "custom", SandboxMode: "danger-full-access", Source: "config.toml",
 		SourcePath: codexConfigPath, SourceSHA256: hashControllerTestFile(t, codexConfigPath),
 		TargetProjection: nativeplan.ControllerProfileCodexTargetProjection{
-			ByteEqualToSource: true, Group: nativeplan.ManagementControllerIdentityExpectedGroup, Mode: "0600",
-			NoFollow: true, Owner: nativeplan.ManagementControllerIdentityExpectedOwner,
+			ByteEqualToSource: true, Group: nativeplan.ManagementControllerSocketExpectedGroup, Mode: "0600",
+			NoFollow: true, Owner: nativeplan.ManagementControllerSocketExpectedOwner,
 			PathRule: "remoteProductGUI.targets[].configPath", RegularFile: true,
 		},
 	}
@@ -448,10 +348,8 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 	}
 	writeTestFile(t, manifestPath, string(manifestBytes)+"\n")
 
-	writeControllerOperationIdentityFixture(t, profile, operationStoreRoot)
-	// A new consumer first reads the manifest profile, then validates the
-	// broker identity it was handed. Exercise both strict decoders against the
-	// same published authRefresh contract before continuing with launch setup.
+	// A new consumer reads configuration directly, retaining strict decoding
+	// of the protected host adapters without any issued runtime identity.
 	if decoded, err := nativeplan.LoadManagementControllerProfile(manifestPath); err != nil {
 		t.Fatalf("fresh consumer plan decoder rejected authRefresh: %v", err)
 	} else if decoded.AuthRefresh != profile.AuthRefresh {
@@ -482,58 +380,6 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		})
 	}
 	writeManifest(t, append(manifestBytes, '\n'))
-	if err := validateControllerOperationIdentity(profile); err != nil {
-		t.Fatalf("fresh consumer launch decoder rejected authRefresh identity: %v", err)
-	}
-	identityBytes, err := os.ReadFile(operationIdentity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeIdentity := func(t *testing.T, data []byte) {
-		t.Helper()
-		if err := os.Chmod(operationIdentity, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(operationIdentity, data, 0o400); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(operationIdentity, 0o400); err != nil {
-			t.Fatal(err)
-		}
-	}
-	identityObject := strings.TrimSpace(string(identityBytes))
-	for _, testCase := range []struct {
-		name string
-		data []byte
-		want string
-	}{
-		{name: "unknown field", data: append(append([]byte{}, identityObject[:len(identityObject)-1]...), []byte(`,"unexpected":true}`)...), want: "unknown field"},
-		{name: "trailing JSON", data: append(append([]byte{}, identityBytes...), []byte(`{}`)...), want: "trailing JSON value"},
-		{name: "malformed JSON", data: []byte(`{"authRefresh":`), want: "unexpected EOF"},
-	} {
-		t.Run("fresh consumer launch decoder rejects "+testCase.name, func(t *testing.T) {
-			writeIdentity(t, testCase.data)
-			t.Cleanup(func() { writeIdentity(t, identityBytes) })
-			if err := validateControllerOperationIdentity(profile); err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("identity error = %v, want %q", err, testCase.want)
-			}
-		})
-	}
-	writeIdentity(t, identityBytes)
-	var mismatchedIdentity controllerOperationIdentity
-	if err := json.Unmarshal(identityBytes, &mismatchedIdentity); err != nil {
-		t.Fatal(err)
-	}
-	mismatchedIdentity.AuthRefresh.Model = "gpt-6-astra"
-	mismatchedBytes, err := json.Marshal(mismatchedIdentity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeIdentity(t, mismatchedBytes)
-	if err := validateControllerOperationIdentity(profile); err == nil || !strings.Contains(err.Error(), "auth refresh does not match the profile") {
-		t.Fatalf("mismatched authRefresh identity error = %v, want profile mismatch", err)
-	}
-	writeIdentity(t, identityBytes)
 
 	skillsStoreRoot := withManagementSkillsStoreRoot(t)
 	skills := writeManagementSkillsFixture(t, skillsStoreRoot, "aaaaaaaa-management-skills", strings.Repeat("d", 40), map[string]string{
@@ -553,20 +399,69 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		t.Fatal(err)
 	}
 	proxySocket := filepath.Join(root, "proxy.sock")
-	listenControllerTestSocket(t, proxySocket)
+	receiving := os.Getenv("DEVKIT_TEST_RECEIVING_DEVCTL") != ""
+	if receiving {
+		_, source, _, _ := runtime.Caller(0)
+		allowlist, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../../../../kit/proxy/allowlist.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, filepath.Join(root, "allowlist.txt"), string(allowlist))
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- egressproxy.Serve(ctx, egressproxy.Config{SocketPath: proxySocket, AllowlistPath: filepath.Join(root, "allowlist.txt")})
+		}()
+		t.Cleanup(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		})
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if info, err := os.Stat(proxySocket); err == nil && info.Mode()&os.ModeSocket != 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("candidate egress proxy did not start")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	} else {
+		listenControllerTestSocket(t, proxySocket)
+	}
 	// The runtime plan now also consumes the package-owned Git connector.
 	connector := filepath.Join(devkitRoot, "kit", "bin", "devctl")
-	writeTestFile(t, connector, "#!/bin/sh\nexit 0\n")
-	if err := os.Chmod(connector, 0o755); err != nil {
-		t.Fatal(err)
+	launcher, bwrap := runtimeLauncherFixture(t), runtimeLauncherFixture(t)
+	if receiving {
+		candidate := os.Getenv("DEVKIT_TEST_RECEIVING_DEVCTL")
+		launcher = os.Getenv("DEVKIT_TEST_RECEIVING_RUNTIME")
+		bwrap = os.Getenv("DEVKIT_TEST_RECEIVING_BWRAP")
+		for _, path := range []string{candidate, launcher, bwrap} {
+			if !strings.HasPrefix(path, "/nix/store/") || !isExecutable(path) {
+				t.Fatalf("receiving requires built immutable tool: %q", path)
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(connector), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(candidate, connector); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		writeTestFile(t, connector, "#!/bin/sh\nexit 0\n")
+		if err := os.Chmod(connector, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p, err := nativeplan.Build(nativeplan.BuildOptions{
 		Paths:            devkitpaths.Paths{Root: devkitRoot, RuntimeAuthorityRoot: devkitRoot},
 		Project:          "dev-workspace",
 		Index:            2,
 		Repo:             "shadow-throne-management",
-		RuntimeLauncher:  runtimeLauncherFixture(t),
-		BubblewrapBinary: runtimeLauncherFixture(t),
+		RuntimeLauncher:  launcher,
+		BubblewrapBinary: bwrap,
 		IsolationProfile: nativeplan.IsolationProfileWorkspaceEgress,
 		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
 		ProxySocket:      proxySocket,
@@ -589,7 +484,6 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		"'--ro-bind' '/nix/var/nix' '/nix/var/nix'",
 		"'--bind' '" + wslRoot + "' '/workspaces/dev/wsl-nix'",
 		"'--ro-bind' '" + operationSocket + "' '" + operationSocket + "'",
-		"'--ro-bind' '" + operationIdentity + "' '" + operationIdentity + "'",
 		"'--bind' '" + workLedgerDirectory + "' '" + workLedgerDirectory + "'",
 		"'--ro-bind' '" + fleetInventory + "' '" + fleetInventory + "'",
 		"'--ro-bind' '" + guiInventory + "' '" + guiInventory + "'",
@@ -640,145 +534,120 @@ func TestPrepareAndBubblewrapUseExactManagementControllerV8Profile(t *testing.T)
 		t.Fatal(err)
 	}
 	coldListener := listenControllerTestSocket(t, operationSocket).(*net.UnixListener)
-	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil || !strings.Contains(err.Error(), "live socket generation") {
-		t.Fatalf("replaced operation socket error = %v, want generation rejection", err)
-	}
-	assertNoActivation := func(t *testing.T) {
-		t.Helper()
-		if err := coldListener.SetDeadline(time.Now().Add(25 * time.Millisecond)); err != nil {
-			t.Fatal(err)
-		}
-		connection, err := coldListener.Accept()
-		if err == nil {
-			connection.Close()
-			t.Fatal("unexpected provider activation")
-		}
-		if e, ok := err.(net.Error); !ok || !e.Timeout() {
-			t.Fatalf("accept: %v", err)
-		}
-		if err := coldListener.SetDeadline(time.Time{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The pure builder above refused the stale identity without warming it.
-	assertNoActivation(t)
-	acceptActivation := func(t *testing.T) {
-		t.Helper()
-		if err := coldListener.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-			t.Fatal(err)
-		}
-		connection, err := coldListener.Accept()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer connection.Close()
-		connection.SetReadDeadline(time.Now().Add(time.Second))
-		payload, err := io.ReadAll(connection)
-		if err != nil || len(payload) != 0 {
-			t.Fatalf("activation sent operation bytes: %q, %v", payload, err)
-		}
-		if err := coldListener.SetDeadline(time.Time{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, missing := range []bool{false, true} {
-		t.Run(fmt.Sprintf("cold issuer missing=%t", missing), func(t *testing.T) {
-			if missing {
-				if err := os.Remove(operationIdentity); err != nil {
-					t.Fatal(err)
-				}
-			}
-			result := make(chan error, 1)
-			go func() { result <- prepareControllerOperationIdentity(profile, 2*time.Second) }()
-			acceptActivation(t)
-			// A completed connection is not a ready identity.
-			select {
-			case err := <-result:
-				t.Fatalf("admitted before issuance: %v", err)
-			default:
-			}
-			writeControllerOperationIdentityFixture(t, profile, operationStoreRoot)
-			select {
-			case err := <-result:
-				if err != nil {
-					t.Fatal(err)
-				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("issuer readiness did not complete")
-			}
-			if _, err := BuildBubblewrap(p, []string{"true"}); err != nil {
-				t.Fatal(err)
-			}
-			assertNoActivation(t)
-		})
-	}
-	foreignPlan := p
-	foreignPlan.ControllerProfile = "foreign-profile"
-	if err := PrepareManagementControllerLaunch(foreignPlan); err == nil {
-		t.Fatal("foreign source profile activated provider")
-	}
-	assertNoActivation(t)
-	if err := PrepareManagementControllerLaunch(p); err != nil {
+	// A replaced socket and absent issuer identity no longer block entry.
+	if _, err := BuildBubblewrap(p, []string{"true"}); err != nil {
 		t.Fatal(err)
 	}
-	assertNoActivation(t) // A healthy warm issuer is reused.
-	validIdentity, err := os.ReadFile(operationIdentity)
+	if err := coldListener.SetDeadline(time.Now().Add(25 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := coldListener.Accept()
+	if err == nil {
+		connection.Close()
+		t.Fatal("sandbox entry activated a host provider")
+	}
+	if e, ok := err.(net.Error); !ok || !e.Timeout() {
+		t.Fatalf("accept: %v", err)
+	}
+	if err := coldListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildBubblewrap(p, []string{"true"}); err != nil {
+		t.Fatalf("absent optional host adapter blocks work: %v", err)
+	}
+	if receiving {
+		runControllerCandidateReceiving(t, p, root)
+	}
+	// A supplied socket is still a protected host capability.
+	listenControllerTestSocket(t, operationSocket)
+	if err := os.Chmod(operationSocket, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildBubblewrap(p, []string{"true"}); err == nil {
+		t.Fatal("unprotected host socket admitted")
+	}
+}
+
+// This receiving exercise uses the real source-built Devctl proxy, runtime shell,
+// Bubblewrap and egress server. It does not launch Codex or touch any live lane.
+func runControllerCandidateReceiving(t *testing.T, p nativeplan.Plan, root string) {
+	t.Helper()
+	protected := filepath.Join(root, "protected-host-data")
+	writeTestFile(t, protected, "preserve\n")
+	sibling := filepath.Join(p.HostWorktreeRoot, "unbound-sibling", "protected-data")
+	writeTestFile(t, sibling, "preserve sibling\n")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fixture := range []struct {
-		name string
-		data []byte
-		want string
-	}{
-		{"malformed", []byte("{invalid"), "decode controller operation identity"},
-		{"forged auth", mismatchedBytes, "live socket generation"},
-	} {
-		t.Run(fixture.name, func(t *testing.T) {
-			data := fixture.data
-			if fixture.name == "forged auth" {
-				var identity controllerOperationIdentity
-				if err := json.Unmarshal(validIdentity, &identity); err != nil {
-					t.Fatal(err)
-				}
-				identity.AuthRefresh.Model = "forged-model"
-				data, err = json.Marshal(identity)
-				if err != nil {
-					t.Fatal(err)
-				}
-				fixture.want = "auth refresh does not match the profile"
-			}
-			writeIdentity(t, data)
-			if err := prepareControllerOperationIdentity(profile, 50*time.Millisecond); err == nil || !strings.Contains(err.Error(), fixture.want) {
-				t.Fatalf("error=%v, want %s", err, fixture.want)
-			}
-			assertNoActivation(t)
-			writeIdentity(t, validIdentity)
-		})
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("host-only\n"))
+	})}
+	go server.Serve(listener)
+	t.Cleanup(func() { _ = server.Close() })
+	hostURL := "http://" + listener.Addr().String()
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: time.Second}
+	response, err := client.Get(hostURL)
+	if err != nil {
+		t.Fatalf("host canary must be reachable before entry: %v", err)
 	}
-	t.Run("active stale issuer never becomes ready", func(t *testing.T) {
-		var stale controllerOperationIdentity
-		if err := json.Unmarshal(validIdentity, &stale); err != nil {
-			t.Fatal(err)
-		}
-		stale.Socket.Inode++
-		data, err := json.Marshal(stale)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("host canary status: %s", response.Status)
+	}
+	workload := `set -eu
+        test ! -e /run/fleet-controller-operation/identity.json
+        test ! -e /mnt/c
+        test ! -e /var/run/docker.sock
+        test ! -e ` + shellQuote(protected) + `
+        test ! -e ` + shellQuote(sibling) + `
+        test ! -e ` + shellQuote(filepath.Join(p.SandboxWorktreeRoot, "unbound-sibling", "protected-data")) + `
+        grep -F 'Entry no longer reads or mounts a broker-issued identity' AGENTS.md
+        cat > /tmp/Arithmetic.java <<'JAVA'
+class Arithmetic {
+    public static void main(String[] args) {
+        int result = Math.addExact(-2, 3);
+        if (result != 1) throw new AssertionError(result);
+        System.out.println("candidate-result=" + result);
+    }
+}
+JAVA
+        javac -d /tmp /tmp/Arithmetic.java
+        java -cp /tmp Arithmetic | tee "$HOME/receiving-result"
+        code=$(curl -s --max-time 5 -o /tmp/denied-response -w '%{http_code}' http://denied.invalid)
+        test "$code" = 403
+        if curl --noproxy '*' -s --connect-timeout 1 --max-time 2 ` + shellQuote(hostURL) + `; then exit 1; fi
+        printf '%s\n' candidate-containment-and-egress-ok
+    `
+	run := func(args []string) string {
+		t.Helper()
+		command, err := BuildBubblewrap(p, args)
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeIdentity(t, data)
-		result := make(chan error, 1)
-		go func() { result <- prepareControllerOperationIdentity(profile, 100*time.Millisecond) }()
-		acceptActivation(t)
-		err = <-result
-		if err == nil || !strings.Contains(err.Error(), "did not issue a ready identity") || !strings.Contains(err.Error(), "live socket generation") {
-			t.Fatalf("timeout lost guard: %v", err)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, command.Path, command.Args...)
+		cmd.Dir = command.Dir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("candidate receiving: %v\n%s", err, output)
 		}
-		after, err := os.ReadFile(operationIdentity)
-		if err != nil || string(after) != string(data) {
-			t.Fatalf("launcher rewrote issuer identity: %v", err)
-		}
-		assertNoActivation(t) // Exactly one connection, no retry or operation.
-		writeIdentity(t, validIdentity)
-	})
+		return string(output)
+	}
+	output := run([]string{"bash", "-c", workload})
+	if !strings.Contains(output, "candidate-result=1") || !strings.Contains(output, "candidate-containment-and-egress-ok") {
+		t.Fatalf("incomplete receiving result: %s", output)
+	}
+	next := run([]string{"bash", "-c", "cat \"$HOME/receiving-result\""})
+	if !strings.Contains(next, "candidate-result=1") {
+		t.Fatalf("subsequent invocation lost result: %s", next)
+	}
+	if data, err := os.ReadFile(protected); err != nil || string(data) != "preserve\n" {
+		t.Fatalf("protected host data changed: %v", err)
+	}
+	if data, err := os.ReadFile(sibling); err != nil || string(data) != "preserve sibling\n" {
+		t.Fatalf("protected sibling data changed: %v", err)
+	}
+	t.Logf("actual candidate receiving and subsequent invocation:\n%s%s", output, next)
 }

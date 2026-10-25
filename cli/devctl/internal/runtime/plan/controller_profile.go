@@ -16,8 +16,7 @@ import (
 const (
 	ManagementControllerProfileIdentity     = "management-controller-convergence/v1"
 	ManagementControllerMountPolicyIdentity = "devkit/workspace-egress/v4"
-	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v8"
-	ControllerOperationIdentitySchema       = "fleet-control/controller-operation-identity/v8"
+	ManagementControllerProfileSchema       = "wsl-nix-management-controller-convergence/v9"
 	ControllerOperationRequestSchema        = "fleet-control/controller-operation-request/v1"
 	ControllerOperationAcceptedSchema       = "fleet-control/controller-operation-accepted/v1"
 	ControllerOperationEventSchema          = "fleet-control/controller-operation-event/v1"
@@ -61,16 +60,14 @@ const WorkspaceControllerWorkLedgerEnvironment = "FLEET_WORK_DB"
 var (
 	ManagementControllerProfileManifestPath = "/etc/fleet/controller-operation-authority.json"
 	WorkspaceControllerOperationSocket      = "/run/fleet-controller-operation/control.sock"
-	WorkspaceControllerOperationIdentity    = "/run/fleet-controller-operation/identity.json"
 	WorkspaceControllerWorkLedgerDirectory  = "/home/bayesartre/dev/.agent/fleet-work"
 	WorkspaceControllerWorkLedgerPath       = "/home/bayesartre/dev/.agent/fleet-work/work.sqlite"
 	ControllerProfileStoreRoot              = "/nix/store"
 	// These remain compiled defaults. They are variables only so hermetic
 	// cross-package tests can reproduce the same ownership validation under
 	// the isolated Nix build user; no runtime input can change them.
-	ManagementControllerIdentityExpectedMode  = "0400"
-	ManagementControllerIdentityExpectedOwner = "bayesartre"
-	ManagementControllerIdentityExpectedGroup = "users"
+	ManagementControllerSocketExpectedOwner = "bayesartre"
+	ManagementControllerSocketExpectedGroup = "users"
 )
 
 type ControllerProfileSourceRoot struct {
@@ -86,15 +83,12 @@ type ControllerProfileSourceRoots struct {
 }
 
 type ControllerProfileOperationHandle struct {
-	Environment    string `json:"environment"`
-	RequiredValue  string `json:"requiredValue"`
-	SocketPath     string `json:"socketPath"`
-	IdentityPath   string `json:"identityPath"`
-	IdentitySchema string `json:"identitySchema"`
-	IdentityMode   string `json:"identityMode"`
-	IdentityOwner  string `json:"identityOwner"`
-	IdentityGroup  string `json:"identityGroup"`
-	NoFollow       bool   `json:"noFollow"`
+	Environment   string `json:"environment"`
+	RequiredValue string `json:"requiredValue"`
+	SocketPath    string `json:"socketPath"`
+	SocketOwner   string `json:"socketOwner"`
+	SocketGroup   string `json:"socketGroup"`
+	NoFollow      bool   `json:"noFollow"`
 }
 
 type ControllerProfileFileIdentity struct {
@@ -410,11 +404,8 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 	if handle.Environment != ControllerOperationHandleEnvironment ||
 		handle.RequiredValue != ControllerOperationHandleRequiredValue ||
 		filepath.Clean(handle.SocketPath) != filepath.Clean(WorkspaceControllerOperationSocket) ||
-		filepath.Clean(handle.IdentityPath) != filepath.Clean(WorkspaceControllerOperationIdentity) ||
-		handle.IdentitySchema != ControllerOperationIdentitySchema ||
-		handle.IdentityMode != ManagementControllerIdentityExpectedMode ||
-		handle.IdentityOwner != ManagementControllerIdentityExpectedOwner ||
-		handle.IdentityGroup != ManagementControllerIdentityExpectedGroup ||
+		handle.SocketOwner != ManagementControllerSocketExpectedOwner ||
+		handle.SocketGroup != ManagementControllerSocketExpectedGroup ||
 		!handle.NoFollow {
 		return fmt.Errorf("Management controller operation handle does not match the compiled fail-closed contract")
 	}
@@ -498,7 +489,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		stationReset.Operation != controllerProductStationResetOperation ||
 		stationReset.RequestSchema != controllerProductStationResetRequest ||
 		stationReset.EventSchema != controllerProductStationResetEvent ||
-		stationReset.ServiceUser != ManagementControllerIdentityExpectedOwner ||
+		stationReset.ServiceUser != ManagementControllerSocketExpectedOwner ||
 		stationReset.Mode != "0660" ||
 		stationReset.Owner != "root" ||
 		stationReset.Group != "product-station-reset-operators" ||
@@ -519,7 +510,7 @@ func validateManagementControllerProfile(profile ManagementControllerProfile) er
 		deployment.Operation != controllerNixOSDeploymentOperation ||
 		deployment.RequestSchema != controllerNixOSDeploymentRequestSchema ||
 		deployment.EventSchema != controllerNixOSDeploymentEventSchema ||
-		deployment.ServiceUser != ManagementControllerIdentityExpectedOwner ||
+		deployment.ServiceUser != ManagementControllerSocketExpectedOwner ||
 		deployment.Mode != "0660" ||
 		deployment.Owner != "root" ||
 		deployment.Group != "fleet-deployment-operators" ||
@@ -675,7 +666,7 @@ func validateControllerRemoteProductGUI(remote ControllerProfileRemoteProductGUI
 			!strings.HasPrefix(transport.ClientIdentityHandle, "identity-") ||
 			!validControllerAuthorityToken(transport.ClientIdentityHandle) ||
 			(transport.PreferredRoute != "tailnet-direct" && transport.PreferredRoute != "wireguard-direct") ||
-			transport.User != ManagementControllerIdentityExpectedOwner ||
+			transport.User != ManagementControllerSocketExpectedOwner ||
 			strings.TrimSpace(transport.WorkerAlias) == "" {
 			return fmt.Errorf("Management controller remote Product GUI target %q transport is invalid", target.ID)
 		}
@@ -747,10 +738,10 @@ func validateControllerCodexPermissions(permissions ControllerProfileCodexPermis
 		permissions.ApprovalPolicy.Granular != (ControllerProfileCodexGranularPolicy{}) ||
 		projection != (ControllerProfileCodexTargetProjection{
 			ByteEqualToSource: true,
-			Group:             ManagementControllerIdentityExpectedGroup,
+			Group:             ManagementControllerSocketExpectedGroup,
 			Mode:              "0600",
 			NoFollow:          true,
-			Owner:             ManagementControllerIdentityExpectedOwner,
+			Owner:             ManagementControllerSocketExpectedOwner,
 			PathRule:          "remoteProductGUI.targets[].configPath",
 			RegularFile:       true,
 		}) || !validControllerSHA256(permissions.SourceSHA256) {

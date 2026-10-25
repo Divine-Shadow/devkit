@@ -1,5 +1,8 @@
 # Native Operator Runbook
 
+Follow [execution posture](execution-posture.md): ordinary sandbox work has no
+management identity-issuer prerequisite; containment and guarded access remain.
+
 Devkit's supported runtime is Nix flakes plus the native sandbox. Use
 `kit/scripts/devkit` as the operator entrypoint. It execs `kit/bin/devctl` and
 fails loudly if the compiled binary is missing.
