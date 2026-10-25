@@ -35,16 +35,29 @@ binding and writable, source-override, directory and non-static-link refusals.
 - Run the affected Go suites and normal Devkit source/package gates, followed
   by independent review, ordinary publication and matching WSL composition.
 - Run the actual packaged `devctl -p dev-all native plan --repo ouroboros-ide
-  --index 2 --gui-target-id shadow-throne-local-2 --format json` in the intended
-  isolated controller, without a config/path/ENV override. Preserve full outputs
-  and actual target/geometry/config/hash identities; test a mismatched index.
+  --index 2 --workspace-root /home/bayesartre/dev/agent-worktrees/agent2
+  --worktree-root /home/bayesartre/dev/agent-worktrees
+  --gui-target-id shadow-throne-local-2 --format json` in the intended isolated
+  controller. These are the existing source-selected standard constructor's
+  geometry arguments, checked against the immutable target record; no config,
+  manifest or ENV override is supplied. Preserve full outputs and actual
+  target/geometry/config/hash identities; test a mismatched index. Omitting the
+  workspace geometry reaches the existing managed-Git geometry refusal, which
+  remains intact.
+- Supply the additional required public manifest in the existing package-layout
+  test's compiled fixture and assert its exact read-only bind. The production
+  package retains its fixed paths; no runtime fixture selector is exposed.
 - Preserve every saved model/security/approval setting, NNP/UID/GID/groups,
   egress/isolation, protected handle and accepted c72/19f/d874 result.
 - A successful plan is not complete construction or same-parent receiving.
   Management contains its own lane/home, not Local2's private home/worktree.
-  The existing protected software-only GUI entry accepts fixed app-server argv,
-  not CLI resume or a parent ID. Source retains that separate supplying boundary
-  and returns any exact protected action/target before enablement.
+  The existing protected software-only GUI entry supplies fixed app-server argv;
+  Runtime can use its normal task/goal continuation on the retained parent.
+  A nested CLI in Management is not required. That route must actually select
+  the qualified coherent app-server/MCP/ENV and target config tuple: the current
+  static manifest proves the installed tuple, not selection of unactivated c72.
+  Source retains this supplying boundary and returns the exact failed predicate
+  and owning correction before any protected enablement that it requires.
 
 ## rollback_plan
 

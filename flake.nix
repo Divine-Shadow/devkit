@@ -108,6 +108,7 @@
           tags ? [ ],
           controllerSourceInventory ? null,
           controllerGUIInventory ? null,
+          controllerCodexConfigProjections ? null,
           controllerExecSocket ? null,
         }:
         pkgs.buildGoModule {
@@ -134,6 +135,9 @@
           ]
           ++ pkgs.lib.optionals (controllerGUIInventory != null) [
             "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerGUIInventory=${controllerGUIInventory}"
+          ]
+          ++ pkgs.lib.optionals (controllerCodexConfigProjections != null) [
+            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerCodexConfigProjections=${controllerCodexConfigProjections}"
           ]
           ++ pkgs.lib.optionals (controllerExecSocket != null) [
             "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerExecSocket=${controllerExecSocket}"
@@ -809,6 +813,7 @@
               controllerFixtureRoot = "/tmp/devkit-overlay-runtime-authority-layout";
               controllerFixtureSource = "${controllerFixtureRoot}/fleet-inventory.json";
               controllerFixtureGUI = "${controllerFixtureRoot}/fleet-codex-gui-inventory.json";
+              controllerFixtureConfig = "${controllerFixtureRoot}/codex-config-projections.json";
               controllerFixtureSocket = "${controllerFixtureRoot}/fleet-controller-exec/control.sock";
               fixtureDevctl = mkDevctl {
                 inherit pkgs;
@@ -817,6 +822,7 @@
                 sqliteExecutable = "${pkgs.sqlite}/bin/sqlite3";
                 controllerSourceInventory = controllerFixtureSource;
                 controllerGUIInventory = controllerFixtureGUI;
+                controllerCodexConfigProjections = controllerFixtureConfig;
                 controllerExecSocket = controllerFixtureSocket;
               };
               broker = self.packages.${pkgs.system}.postgres-broker;
@@ -994,16 +1000,18 @@
                 "$shared_power_plan_a2"
 
               # Exercise the same planner in a test-only compiled package
-              # whose three protected controller paths are fixed fixture
+              # whose four required controller paths are fixed fixture
               # values. This avoids a nested bwrap user namespace, which
               # GitHub's Nix sandbox denies; mkProductionDevctl and its
               # production --unshare-net profile remain unmodified.
               controller_source='${controllerFixtureSource}'
               controller_gui='${controllerFixtureGUI}'
+              controller_config='${controllerFixtureConfig}'
               controller_exec='${controllerFixtureSocket}'
               ${pkgs.coreutils}/bin/install -d -m 0700 "$(dirname "$controller_exec")"
               printf '%s\n' '{}' > "$controller_source"
               printf '%s\n' '{}' > "$controller_gui"
+              printf '%s\n' '{"schemaVersion":"devkit/gui-codex-config-projections/v1","projections":[]}' > "$controller_config"
               ${pkgs.socat}/bin/socat \
                 UNIX-LISTEN:"$controller_exec",fork,mode=0600 \
                 EXEC:${pkgs.coreutils}/bin/true &
@@ -1055,6 +1063,9 @@
                                .mode == "ro" and .required == true) and
                  any(.binds[]; .source == "${controllerFixtureGUI}" and
                                .target == "${controllerFixtureGUI}" and
+                               .mode == "ro" and .required == true) and
+                 any(.binds[]; .source == "${controllerFixtureConfig}" and
+                               .target == "${controllerFixtureConfig}" and
                                .mode == "ro" and .required == true) and
                  all(.binds[]; .source != "/home/bayesartre/dev" and
                                .source != "/home/bayesartre/dev/control-plane-worktrees" and
