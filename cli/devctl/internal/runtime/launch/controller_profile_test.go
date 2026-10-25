@@ -434,6 +434,9 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	proxySocket := filepath.Join(root, "proxy.sock")
 	receiving := receive != nil
 	if receiving {
+		previousResolverSource := nativeResolvConfSource
+		nativeResolvConfSource = filepath.Join(root, "absent-host-resolver")
+		t.Cleanup(func() { nativeResolvConfSource = previousResolverSource })
 		allowlist, err := os.ReadFile(filepath.Join(devkitRootFromPackage(t), "kit/proxy/allowlist.txt"))
 		if err != nil {
 			t.Fatal(err)

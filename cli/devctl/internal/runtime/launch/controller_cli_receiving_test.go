@@ -75,6 +75,9 @@ func TestManagementCLIEntryWithoutIssuer(t *testing.T) {
 		if cliPlan.Agent.HostWorktree != p.Agent.HostWorktree || cliPlan.Agent.HostHome != p.Agent.HostHome || cliPlan.ControllerProfile != p.ControllerProfile || cliPlan.Proxy != p.Proxy {
 			t.Fatal("public CLI selected different fixture geometry, profile or proxy")
 		}
+		// The renderer receives this same fixture through --resolv-conf below.
+		// Preparation must not depend on the build host's /etc/resolv.conf.
+		cliPlan.DNS = p.DNS
 		if err := launch.Prepare(cliPlan); err != nil {
 			t.Fatal(err)
 		}
@@ -90,7 +93,7 @@ func TestManagementCLIEntryWithoutIssuer(t *testing.T) {
 				os.Stdout = capture
 				defer func() { os.Stdout = previous }()
 				invocation := entry
-				invocation.Args = append([]string{strconv.Itoa(p.Agent.ID.Index), "--repo", p.Agent.ID.Repo, "--proxy-socket", p.Proxy.UnixSocket, "--"}, command...)
+				invocation.Args = append([]string{strconv.Itoa(p.Agent.ID.Index), "--repo", p.Agent.ID.Repo, "--proxy-socket", p.Proxy.UnixSocket, "--resolv-conf", p.DNS.ResolvConf, "--"}, command...)
 				err = handler(&invocation)
 			}()
 			capture.Close()
