@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,8 +24,7 @@ func initControllerSourceWorktree(t *testing.T, path, origin string) string {
 	t.Helper()
 	initTestGitWorktree(t, path)
 	writeTestFile(t, filepath.Join(path, "README.md"), "source\n")
-	_, source, _, _ := runtime.Caller(0)
-	posture, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../../../../kit/docs/execution-posture.md"))
+	posture, err := os.ReadFile(filepath.Join(devkitRootFromPackage(t), "kit/docs/execution-posture.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,8 +425,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	proxySocket := filepath.Join(root, "proxy.sock")
 	receiving := receive != nil
 	if receiving {
-		_, source, _, _ := runtime.Caller(0)
-		allowlist, err := os.ReadFile(filepath.Join(filepath.Dir(source), "../../../../../kit/proxy/allowlist.txt"))
+		allowlist, err := os.ReadFile(filepath.Join(devkitRootFromPackage(t), "kit/proxy/allowlist.txt"))
 		if err != nil {
 			t.Fatal(err)
 		}
