@@ -120,12 +120,14 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	previousExecSocket := nativeplan.WorkspaceControllerExecSocket
 	previousFleetInventory := nativeplan.WorkspaceControllerSourceInventory
 	previousGUIInventory := nativeplan.WorkspaceControllerGUIInventory
+	previousConfigProjections := nativeplan.WorkspaceControllerCodexConfigProjections
 	previousTI4Source := nativeplan.WorkspaceEgressCanonicalTI4Source
 	previousNSCDSource := nativeplan.WorkspaceEgressNSCDSource
 	previousIdentityOwner := nativeplan.ManagementControllerSocketExpectedOwner
 	previousIdentityGroup := nativeplan.ManagementControllerSocketExpectedGroup
 	fleetInventory := filepath.Join(root, "fleet-inventory.json")
 	guiInventory := filepath.Join(root, "fleet-codex-gui-inventory.json")
+	configProjections := filepath.Join(root, "codex-config-projections.json")
 	ti4Source := filepath.Join(root, "ti4-calculator")
 	nscdSource := filepath.Join(root, "run", "nscd.sock")
 	if receive != nil {
@@ -154,6 +156,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	nativeplan.WorkspaceControllerExecSocket = execSocket
 	nativeplan.WorkspaceControllerSourceInventory = fleetInventory
 	nativeplan.WorkspaceControllerGUIInventory = guiInventory
+	nativeplan.WorkspaceControllerCodexConfigProjections = configProjections
 	nativeplan.WorkspaceEgressCanonicalTI4Source = ti4Source
 	nativeplan.WorkspaceEgressNSCDSource = nscdSource
 	nativeplan.ManagementControllerSocketExpectedOwner = currentUser.Username
@@ -167,6 +170,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 		nativeplan.WorkspaceControllerExecSocket = previousExecSocket
 		nativeplan.WorkspaceControllerSourceInventory = previousFleetInventory
 		nativeplan.WorkspaceControllerGUIInventory = previousGUIInventory
+		nativeplan.WorkspaceControllerCodexConfigProjections = previousConfigProjections
 		nativeplan.WorkspaceEgressCanonicalTI4Source = previousTI4Source
 		nativeplan.WorkspaceEgressNSCDSource = previousNSCDSource
 		nativeplan.ManagementControllerSocketExpectedOwner = previousIdentityOwner
@@ -180,6 +184,7 @@ func RunManagementEntryWithoutIssuerFixture(t *testing.T, receive func(*testing.
 	}
 	writeTestFile(t, fleetInventory, "fleet\n")
 	writeTestFile(t, guiInventory, "gui\n")
+	writeTestFile(t, configProjections, "{\"schemaVersion\":\"devkit/gui-codex-config-projections/v1\",\"projections\":[]}\n")
 	writeTestFile(t, resolvConf, "nameserver 127.0.0.1\n")
 	if err := os.MkdirAll(workLedgerDirectory, 0o700); err != nil {
 		t.Fatal(err)

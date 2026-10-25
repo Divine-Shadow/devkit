@@ -428,6 +428,34 @@ func TestWorkspaceControllerCapabilityBindingRejectsOverridesAndWritableMode(t *
 	}
 }
 
+func TestWorkspaceControllerConfigProjectionIsAnExactReadOnlyCapability(t *testing.T) {
+	if !isWorkspaceControllerCapabilityTarget(nativeplan.WorkspaceControllerCodexConfigProjections) {
+		t.Fatal("public config manifest omitted from controller capability validation")
+	}
+	root := t.TempDir()
+	manifest := filepath.Join(root, "codex-config-projections.json")
+	writeTestFile(t, manifest, "{\"schemaVersion\":\"devkit/gui-codex-config-projections/v1\",\"projections\":[]}\n")
+	if err := validateWorkspaceControllerCapabilityBinding(manifest, manifest, "ro"); err != nil {
+		t.Fatalf("owned regular read-only fixture: %v", err)
+	}
+	if err := validateWorkspaceControllerCapabilityBinding(manifest, manifest, "rw"); err == nil {
+		t.Fatal("writable config manifest accepted")
+	}
+	if err := validateWorkspaceControllerCapabilityBinding(manifest, nativeplan.WorkspaceControllerCodexConfigProjections, "ro"); err == nil {
+		t.Fatal("caller-selected config manifest source accepted")
+	}
+	link := filepath.Join(root, "config-link")
+	if err := os.Symlink(manifest, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspaceControllerCapabilityBinding(link, link, "ro"); err == nil {
+		t.Fatal("config symlink outside the immutable static projection accepted")
+	}
+	if err := validateWorkspaceControllerCapabilityBinding(root, root, "ro"); err == nil {
+		t.Fatal("config parent-directory capability accepted")
+	}
+}
+
 func TestProductGovernanceEnvironmentProjectionAcceptsOnlyImmutableCompiledSource(t *testing.T) {
 	root := t.TempDir()
 	storeRoot := filepath.Join(root, "nix", "store")

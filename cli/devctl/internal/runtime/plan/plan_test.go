@@ -600,7 +600,7 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	for _, path := range []string{WorkspaceControllerSourceInventory, WorkspaceControllerGUIInventory, execSocket} {
+	for _, path := range []string{WorkspaceControllerSourceInventory, WorkspaceControllerGUIInventory, WorkspaceControllerCodexConfigProjections, execSocket} {
 		if !hasBind(p.Binds, path, path) {
 			t.Fatalf("controller capability %s not projected: %#v", path, p.Binds)
 		}
@@ -635,7 +635,7 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 	if err != nil {
 		t.Fatalf("Build dev-all: %v", err)
 	}
-	for _, path := range []string{WorkspaceControllerSourceInventory, WorkspaceControllerGUIInventory, execSocket} {
+	for _, path := range []string{WorkspaceControllerSourceInventory, WorkspaceControllerGUIInventory, WorkspaceControllerCodexConfigProjections, execSocket} {
 		if hasBind(devAll.Binds, path, path) {
 			t.Fatalf("non-controller workspace must not receive %s", path)
 		}

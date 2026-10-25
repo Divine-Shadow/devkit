@@ -2743,8 +2743,9 @@ func isWorkspaceControllerCapabilityTarget(target string) bool {
 		return true
 	}
 	switch clean {
-	case "/etc/fleet/source/fleet-inventory.json",
-		"/etc/fleet/source/fleet-codex-gui-inventory.json":
+	case nativeplan.WorkspaceControllerSourceInventory,
+		nativeplan.WorkspaceControllerGUIInventory,
+		nativeplan.WorkspaceControllerCodexConfigProjections:
 		return true
 	default:
 		return false

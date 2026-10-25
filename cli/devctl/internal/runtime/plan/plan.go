@@ -121,8 +121,9 @@ var (
 	// These fixed projection points are package-owned controller capabilities
 	// for the Management dev-workspace. Callers cannot select inventories,
 	// routes, credentials, or source paths through native arguments or env.
-	WorkspaceControllerSourceInventory = "/etc/fleet/source/fleet-inventory.json"
-	WorkspaceControllerGUIInventory    = "/etc/fleet/source/fleet-codex-gui-inventory.json"
+	WorkspaceControllerSourceInventory        = "/etc/fleet/source/fleet-inventory.json"
+	WorkspaceControllerGUIInventory           = "/etc/fleet/source/fleet-codex-gui-inventory.json"
+	WorkspaceControllerCodexConfigProjections = "/etc/fleet/source/codex-config-projections.json"
 	// WorkspaceProductGovernanceEnvSource is the sole source-derived Product
 	// governance environment projected into governed consumers. The path is
 	// compiled into Devkit; callers cannot select a file or provide a mutable
@@ -754,6 +755,7 @@ func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, 
 		if strings.TrimSpace(repo) == "shadow-throne-management" {
 			add(WorkspaceControllerSourceInventory, WorkspaceControllerSourceInventory, "ro", true)
 			add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
+			add(WorkspaceControllerCodexConfigProjections, WorkspaceControllerCodexConfigProjections, "ro", true)
 		}
 		if controllerProfile != nil {
 			activeWSLNixRoot := controllerProfile.SourceRoots.WSLNix
