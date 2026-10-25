@@ -34,6 +34,11 @@ func softwareOnlyNativeHomes(index int) (string, string) {
 // cannot substitute it through an argument, environment variable or PATH.
 var softwareOnlySelectedCodexExecutable = "/run/current-system/sw/bin/codex"
 
+// Nix may bind a consumer to one exact startup composition. These are package
+// constants at runtime, never caller arguments, environment or PATH selectors.
+var softwareOnlyGovernedAppServerExecutable = "/run/current-system/sw/bin/fleet-governed-app-server"
+var softwareOnlySelectedTargetID = ""
+
 // Reject other executable effects before constructing a plan. Target class,
 // execution host and complete argv are proved from the immutable selected plan.
 func validateSoftwareOnlyNativeAppServer(enabled bool, targetID, project string, managed bool, command []string) error {
@@ -43,7 +48,10 @@ func validateSoftwareOnlyNativeAppServer(enabled bool, targetID, project string,
 	if targetID == "" || targetID != strings.TrimSpace(targetID) || project != "dev-all" || managed {
 		return fmt.Errorf("software-only startup requires a source-selected native dev-all app-server")
 	}
-	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" || command[3] != "app-server" {
+	if softwareOnlySelectedTargetID != "" && targetID != softwareOnlySelectedTargetID {
+		return fmt.Errorf("software-only startup target differs from the selected package profile")
+	}
+	if len(command) < 4 || command[0] != softwareOnlyGovernedAppServerExecutable || command[1] != "--" || command[3] != "app-server" {
 		return fmt.Errorf("software-only startup permits only the selected governed Codex app-server command")
 	}
 	return nil
@@ -78,7 +86,10 @@ func validateSoftwareOnlyNativeAppServerCommand(command []string, selected strin
 	if p.GUITargetConfig == nil || (p.GUITargetConfig.Kind != "local-wsl-devkit-agent" && p.GUITargetConfig.Kind != "devkit-agent") {
 		return fmt.Errorf("software-only startup lacks the source-selected standard native target class")
 	}
-	if len(command) < 4 || command[0] != "/run/current-system/sw/bin/fleet-governed-app-server" || command[1] != "--" {
+	if softwareOnlySelectedTargetID != "" && p.GUITargetConfig.TargetID != softwareOnlySelectedTargetID {
+		return fmt.Errorf("software-only startup target differs from the selected package profile")
+	}
+	if len(command) < 4 || command[0] != softwareOnlyGovernedAppServerExecutable || command[1] != "--" {
 		return fmt.Errorf("software-only startup permits only the selected governed Codex app-server command")
 	}
 	runtimeExecutable := selected
