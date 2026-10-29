@@ -419,6 +419,7 @@ Commands:
   native reset --repo REPO --index N --workspace-root ABSOLUTE_LANE_ROOT --format json
   native exec --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--managed-app-server] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
+  native readiness --current-worktree --repo ouroboros-ide --repo-check-name NAME [--format text|json]
   native capacity --repo REPO [--count N] [--flake REF] [--runtime-only|--repo-readiness] [--format text|json]
   native egress-proxy [--socket SOCK] [--allowlist FILE]
   layout-apply --file <layout.yaml> [--attach] [--skip-broker --skip-ready] [--runtime-only|--repo-readiness]

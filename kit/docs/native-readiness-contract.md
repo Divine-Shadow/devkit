@@ -61,6 +61,27 @@ remaining compatible with Nix versions that do not support `dir` on `path:`.
 
 ## Repo Checks
 
+An already accepted Product GUI consumer can run one package-owned named repo
+check in its current Git worktree, including a registered nested writer:
+
+```bash
+devctl -p dev-all native readiness --current-worktree --repo ouroboros-ide --repo-check-name frontend-warm --format json
+```
+
+Run it from the exact writer repository root using the manifest-selected
+Devctl package. This form uses the existing v4 consumer and its unchanged
+environment. It derives the lane root and home from the fixed GUI projection,
+verifies that the current canonical Git root belongs to that lane's worktree
+list, and loads only the executable-owned overlay recipe. It accepts no
+command, target, root, flake, profile or index overrides. Global `--dry-run`
+validates and reports the binding with status `planned` without executing it.
+
+Only the selected named command runs; no boundary preparation, hydration,
+listener, broader runtime/repo check, or warm/core hook runs. Its report scope
+is `current-worktree-repo-check`, and a nonzero command remains a failure.
+This does not establish runtime capacity or Product acceptance. Ordinary
+host readiness below retains its full existing preparation and checks.
+
 Overlay `readiness.repo_checks` is now the named repo-readiness surface. Native
 readiness also preserves existing behavior by adding:
 

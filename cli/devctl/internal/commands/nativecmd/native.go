@@ -2713,6 +2713,11 @@ func exitCodeFromError(err error) (int, bool) {
 }
 
 func handleReadiness(ctx *cmdregistry.Context) error {
+	for _, arg := range ctx.Args[1:] {
+		if arg == "--current-worktree" {
+			return handleCurrentWorktreeReadiness(ctx)
+		}
+	}
 	parsed, err := parsePlanArgs(ctx, false, true)
 	if err != nil {
 		return err
