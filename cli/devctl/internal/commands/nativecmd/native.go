@@ -52,6 +52,11 @@ func handle(ctx *cmdregistry.Context) error {
 	case "plan":
 		return handlePlan(ctx)
 	case "prepare":
+		for _, arg := range ctx.Args[1:] {
+			if arg == "--current-worktree" {
+				return handleCurrentWorktreeSourcePreparation(ctx)
+			}
+		}
 		return handlePrepare(ctx)
 	case "reset":
 		return handleNativeSlotReset(ctx)
