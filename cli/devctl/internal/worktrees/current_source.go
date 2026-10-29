@@ -91,7 +91,7 @@ func commitCurrentSourceTracking(s CurrentSource, requirePackage bool, ssh, prev
 		return outcome, err
 	}
 	_, probe := execx.Capture(ctx, probeName, probeArgs...)
-	if probe.Code != 1 {
+	if !confirmedDirectTracking(probe, ctx.Err()) {
 		return outcome, fmt.Errorf("locked tracking ref is symbolic or shape inspection failed; transaction aborted")
 	}
 	// A lost reply after commit begins has unknown disposition, not proof of
@@ -110,6 +110,11 @@ func commitCurrentSourceTracking(s CurrentSource, requirePackage bool, ssh, prev
 }
 
 var sourceCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+func confirmedDirectTracking(probe execx.Result, contextErr error) bool {
+	exit, executed := probe.Err.(*exec.ExitError)
+	return contextErr == nil && executed && exit.ExitCode() == 1 && probe.Code == 1
+}
 
 func currentSourceGit(requirePackage bool, ssh, cwd string, args ...string) (string, error) {
 	name, argv, err := NativeSourceGitInvocation(requirePackage, ssh, append([]string{"--no-replace-objects", "-C", cwd}, args...)...)

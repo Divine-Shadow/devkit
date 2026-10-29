@@ -68,9 +68,10 @@ does not establish actual Runtime delivery or business acceptance.
 
 Real-Git tests cover linked/shared and standalone writers, staged and unstaged
 candidate bytes/modes, HEAD/index/FETCH_HEAD/other-ref preservation, remote
-advance, rewind, divergence and a concurrent tracking transaction. Parser and
-replacement-ancestry, concurrent symbolic replacement, aborted-lock cleanup and
-prepared-lock exclusion are checked using real Git. Parser and
+advance, rewind, divergence and a concurrent tracking transaction. Additional
+real-Git regressions cover replacement ancestry, concurrent symbolic replacement,
+aborted-lock cleanup, prepared-lock exclusion and actual shape-probe exit status.
+Parser and
 transport tests reject alternate selectors and command suffixes. Complete
 normal Devkit CI, independent review and immutable package qualification are
 required before publication and receiving delivery.

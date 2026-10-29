@@ -1,14 +1,43 @@
 package worktrees
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"devkit/cli/devctl/internal/execx"
 	"devkit/cli/devctl/internal/gitauthority"
 )
+
+func TestCurrentSourceRequiresActualNonsymbolicGitExit(t *testing.T) {
+	s, _, _ := sourceFixture(t, false)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, direct := execx.Capture(context.Background(), git, "-C", s.Worktree, "symbolic-ref", "-q", "refs/remotes/origin/main")
+	if !confirmedDirectTracking(direct, nil) {
+		t.Fatalf("real nonsymbolic Git result not recognized: %#v", direct)
+	}
+	_, missing := execx.Capture(context.Background(), filepath.Join(t.TempDir(), "absent"))
+	if missing.Code != 1 || confirmedDirectTracking(missing, nil) {
+		t.Fatal("failed exec classified as nonsymbolic Git")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, cancelled := execx.Capture(ctx, git, "-C", s.Worktree, "symbolic-ref", "-q", "refs/remotes/origin/main")
+	if confirmedDirectTracking(cancelled, ctx.Err()) {
+		t.Fatal("cancelled inspection classified as nonsymbolic")
+	}
+	sourceTestGit(t, s.Worktree, "symbolic-ref", "refs/remotes/origin/main", "refs/heads/main")
+	_, symbolic := execx.Capture(context.Background(), git, "-C", s.Worktree, "symbolic-ref", "-q", "refs/remotes/origin/main")
+	if confirmedDirectTracking(symbolic, nil) {
+		t.Fatal("symbolic target classified as direct")
+	}
+}
 
 func sourceTestGit(t *testing.T, cwd string, args ...string) string {
 	t.Helper()
