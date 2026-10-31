@@ -1,6 +1,7 @@
 package nativecmd
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,13 +10,50 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/execx"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 	"devkit/cli/devctl/internal/worktrees"
 )
+
+// Set only by the source-derived package composition. A caller cannot replace
+// the owning registration producer with an environment variable or CLI path.
+var currentSourceRegistrationExecutable = ""
+
+func readSourceRegistrationProjection(parent context.Context, executable, cwd string) (worktrees.SourceRegistrationBinding, error) {
+	ctx, cancel := context.WithTimeout(parent, worktrees.SourceRegistrationLookupLimit)
+	defer cancel()
+	return captureSourceRegistration(ctx, executable, cwd)
+}
+
+func captureSourceRegistration(ctx context.Context, executable, cwd string) (worktrees.SourceRegistrationBinding, error) {
+	stdout, result := execx.CaptureManagedInDir(ctx, execx.ManagedPolicy{TerminationGrace: time.Second}, 32768, cwd, executable)
+	if result.Err != nil || result.Code != 0 {
+		return worktrees.SourceRegistrationBinding{}, fmt.Errorf("owning registered-source lookup refused (exit %d): %v", result.Code, result.Err)
+	}
+	return worktrees.DecodeSourceRegistration(strings.NewReader(stdout))
+}
+
+func lookupCurrentSourceRegistration(ctx context.Context, cwd string) (worktrees.SourceRegistrationBinding, error) {
+	var empty worktrees.SourceRegistrationBinding
+	path := currentSourceRegistrationExecutable
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || !strings.HasPrefix(path, "/nix/store/") {
+		return empty, fmt.Errorf("the owning runtime's qualified registered-source lookup is unsupplied")
+	}
+	actual, err := filepath.EvalSymlinks(path)
+	if err != nil || !strings.HasPrefix(actual, "/nix/store/") {
+		return empty, fmt.Errorf("registered-source lookup is outside the immutable supplying package")
+	}
+	info, err := os.Stat(actual)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+		return empty, fmt.Errorf("registered-source lookup is not an executable supplied by its package")
+	}
+	return readSourceRegistrationProjection(ctx, actual, cwd)
+}
 
 func validateCurrentSourceTransport(prefix, helper, hostRoot, command string) error {
 	// A current connector has a launcher-owned PID, but no arbitrary command or
@@ -108,7 +146,16 @@ func handleCurrentWorktreeSourcePreparation(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	result, prepErr := worktrees.PrepareCurrentSource(worktrees.CurrentSource{Worktree: cwd, BaseWorktree: consumer.Worktree, Home: consumer.Home, Origin: cfg.Defaults.Origin, Index: index}, true, ssh, ctx.DryRun)
+	source := worktrees.CurrentSource{Worktree: cwd, BaseWorktree: consumer.Worktree, Home: consumer.Home, Origin: cfg.Defaults.Origin, Index: index, TargetID: consumer.TargetID}
+	if cwd != consumer.Worktree && filepath.Dir(cwd) == filepath.Dir(consumer.Worktree) {
+		source.Registration, err = worktrees.BindCurrentSourceRegistration(source, func(ctx context.Context) (worktrees.SourceRegistrationBinding, error) {
+			return lookupCurrentSourceRegistration(ctx, cwd)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	result, prepErr := worktrees.PrepareCurrentSource(source, true, ssh, ctx.DryRun)
 	status := "prepared"
 	if ctx.DryRun {
 		status = "planned"
@@ -117,6 +164,9 @@ func handleCurrentWorktreeSourcePreparation(ctx *cmdregistry.Context) error {
 		status = "failed"
 	}
 	report := map[string]any{"scope": "current-worktree-source-preparation", "status": status, "cwd": cwd, "consumer": consumer, "runtimeAuthorityRoot": authority, "source": result, "requiresCurrentPolicyReevaluation": true}
+	if source.Registration != nil {
+		report["registration"] = source.Registration.Receipt()
+	}
 	if prepErr != nil {
 		report["error"] = prepErr.Error()
 	}

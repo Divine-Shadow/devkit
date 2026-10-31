@@ -309,6 +309,19 @@ func CaptureManaged(
 	name string,
 	args ...string,
 ) (string, Result) {
+	return CaptureManagedInDir(ctx, policy, maxOutputBytes, "", name, args...)
+}
+
+// CaptureManagedInDir preserves CaptureManaged's bounded capture and complete
+// process-group settlement while executing in an explicitly bound directory.
+func CaptureManagedInDir(
+	ctx context.Context,
+	policy ManagedPolicy,
+	maxOutputBytes int,
+	directory string,
+	name string,
+	args ...string,
+) (string, Result) {
 	if maxOutputBytes < 1 {
 		return "", Result{Code: 1, Err: fmt.Errorf("capture output limit must be positive")}
 	}
@@ -333,6 +346,7 @@ func CaptureManaged(
 		exceeded: exceeded,
 	}
 	cmd := exec.Command(name, args...)
+	cmd.Dir = directory
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = grace
 	managedIO, err := startManagedCommand(

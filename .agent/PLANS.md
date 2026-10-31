@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active bounded Source supplier repair: [Registered sibling Source preparation](execplans/registered-sibling-source-preparation-20261031.md).
+
 Active bounded Source supplier repair: [Current GUI worktree preparation](execplans/current-worktree-repo-preparation-20261029.md).
 
 Active Source repair: [Early native exec admission](execplans/native-exec-early-admission-20261024.md).

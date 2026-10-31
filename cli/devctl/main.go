@@ -416,6 +416,7 @@ Commands:
   tmux-bell-show-config [--backend windows-notify|file] [--file PATH] [--debounce-ms N]
   native plan --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--launcher bubblewrap|systemd-run] [--format text|json]
   native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX] [--format text|json]
+  native prepare --current-worktree --source-only --repo ouroboros-ide [--format json]
   native reset --repo REPO --index N --workspace-root ABSOLUTE_LANE_ROOT --format json
   native exec --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--managed-app-server] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
@@ -444,6 +445,14 @@ Commands:
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
   preflight                                  (host checks: nix, bubblewrap, tmux, ssh keys, ~/.codex, broker Docker)
+
+Current-worktree source preparation:
+  Requires a qualified executable and an admitted consumer/root binding.
+  Supports declared GUI-lane worktrees, standalone GUI child clones, and sibling
+  Source roots bound by the owning runtime's package-supplied registration lookup.
+  Discover the executable and root binding from the supplying package and registration
+  contract before invocation. Readiness, count-based preparation and another target's
+  executable do not establish availability. Return a missing package or binding to its supplier.
 
 Flags:
   -p, --project   overlay project name (required for most)

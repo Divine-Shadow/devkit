@@ -90,9 +90,20 @@ func sourceFixture(t *testing.T, shared bool) (CurrentSource, string, string) {
 }
 
 func TestCurrentSourceAcquiresOnlyTrackingAndPreservesBothWriterForms(t *testing.T) {
-	for _, shared := range []bool{false, true} {
-		t.Run(map[bool]string{false: "standalone", true: "shared"}[shared], func(t *testing.T) {
-			s, primary, _ := sourceFixture(t, shared)
+	for _, variant := range []struct{ shared, registered bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		name := map[bool]string{false: "standalone", true: "shared"}[variant.shared]
+		if variant.registered {
+			name += "-registered-sibling"
+		}
+		t.Run(name, func(t *testing.T) {
+			shared := variant.shared
+			var s CurrentSource
+			var primary string
+			if variant.registered {
+				s, primary, _ = registeredSourceFixture(t, shared)
+			} else {
+				s, primary, _ = sourceFixture(t, shared)
+			}
 			common := sourceTestGit(t, s.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
 			gitDir := sourceTestGit(t, s.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
 			file := filepath.Join(s.Worktree, "candidate")

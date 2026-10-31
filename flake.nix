@@ -105,6 +105,7 @@
           sshExecutable,
           knownHostsFile,
           sqliteExecutable,
+          currentSourceRegistrationExecutable ? null,
           tags ? [ ],
           controllerSourceInventory ? null,
           controllerGUIInventory ? null,
@@ -120,6 +121,12 @@
           subPackages = [ "." ];
           inherit tags;
           env.CGO_ENABLED = "0";
+          passthru.withCurrentSourceRegistration = executable: mkDevctl {
+            inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
+              controllerSourceInventory controllerGUIInventory
+              controllerCodexConfigProjections controllerExecSocket;
+            currentSourceRegistrationExecutable = executable;
+          };
           ldflags = [
             "-s"
             "-w"
@@ -129,6 +136,9 @@
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
             "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=${sqliteExecutable}"
+          ]
+          ++ pkgs.lib.optionals (currentSourceRegistrationExecutable != null) [
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceRegistrationExecutable=${currentSourceRegistrationExecutable}"
           ]
           ++ pkgs.lib.optionals (controllerSourceInventory != null) [
             "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerSourceInventory=${controllerSourceInventory}"

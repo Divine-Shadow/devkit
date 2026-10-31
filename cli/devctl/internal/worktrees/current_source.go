@@ -20,6 +20,8 @@ import (
 type CurrentSource struct {
 	Worktree, BaseWorktree, Home, Origin string
 	Index                                int
+	TargetID                             string
+	Registration                         *OwnedSourceRegistration
 }
 
 type SourcePreparation struct {
@@ -38,7 +40,11 @@ func commitCurrentSourceTracking(s CurrentSource, requirePackage bool, ssh, prev
 	if err != nil {
 		return outcome, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), nativeMetadataOperationLimit)
+	limit := nativeMetadataOperationLimit
+	if s.Registration != nil {
+		limit += SourceRegistrationLookupLimit
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	command := exec.CommandContext(ctx, name, argv...)
 	command.Cancel = func() error { return command.Process.Signal(syscall.SIGTERM) }
@@ -94,6 +100,16 @@ func commitCurrentSourceTracking(s CurrentSource, requirePackage bool, ssh, prev
 	if !confirmedDirectTracking(probe, ctx.Err()) {
 		return outcome, fmt.Errorf("locked tracking ref is symbolic or shape inspection failed; transaction aborted")
 	}
+	if s.Registration != nil {
+		common, commonErr := currentSourceGitContext(ctx, requirePackage, ssh, s.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		gitDirectory, gitErr := currentSourceGitContext(ctx, requirePackage, ssh, s.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
+		if commonErr != nil || gitErr != nil {
+			return outcome, fmt.Errorf("locked registered-source metadata inspection failed; transaction aborted")
+		}
+		if err := s.Registration.validate(ctx, s, common, gitDirectory); err != nil {
+			return outcome, fmt.Errorf("locked registered-source binding refused; transaction aborted: %w", err)
+		}
+	}
 	// A lost reply after commit begins has unknown disposition, not proof of
 	// no effect. The caller must read actual tracking before another attempt.
 	outcome = "unknown"
@@ -117,11 +133,19 @@ func confirmedDirectTracking(probe execx.Result, contextErr error) bool {
 }
 
 func currentSourceGit(requirePackage bool, ssh, cwd string, args ...string) (string, error) {
+	return currentSourceGitContext(context.Background(), requirePackage, ssh, cwd, args...)
+}
+
+func currentSourceGitContext(parent context.Context, requirePackage bool, ssh, cwd string, args ...string) (string, error) {
 	name, argv, err := NativeSourceGitInvocation(requirePackage, ssh, append([]string{"--no-replace-objects", "-C", cwd}, args...)...)
 	if err != nil {
 		return "", err
 	}
-	return captureNativeGit(name, argv)
+	output, result := execx.Capture(parent, name, argv...)
+	if result.Code != 0 {
+		return "", fmt.Errorf("env %v: exit %d", argv, result.Code)
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func admitCurrentSource(s CurrentSource, requirePackage bool, ssh string) (string, error) {
@@ -149,11 +173,20 @@ func admitCurrentSource(s CurrentSource, requirePackage bool, ssh string) (strin
 	if err != nil || actual != common {
 		return "", fmt.Errorf("source preparation rejects redirected common metadata")
 	}
+	if s.Registration != nil {
+		gitDirectory, err := git("rev-parse", "--path-format=absolute", "--git-dir")
+		if err != nil {
+			return "", err
+		}
+		if err := s.Registration.validate(context.Background(), s, common, gitDirectory); err != nil {
+			return "", err
+		}
+	}
 	if common == filepath.Join(s.Worktree, ".git") {
 		// A topology child can be a standalone clone. Admit only the fixed GUI
 		// child geometry, not an arbitrary repository under the mounted workspace.
 		parent := filepath.Dir(s.Worktree)
-		if filepath.Base(s.Worktree) != "ouroboros-ide" || filepath.Dir(parent) != filepath.Join(s.Home, ".codex", "worktrees") {
+		if s.Registration == nil && (filepath.Base(s.Worktree) != "ouroboros-ide" || filepath.Dir(parent) != filepath.Join(s.Home, ".codex", "worktrees")) {
 			return "", fmt.Errorf("standalone source preparation requires a GUI child root")
 		}
 		entries, err := git("worktree", "list", "--porcelain", "-z")
@@ -199,7 +232,7 @@ func admitCurrentSource(s CurrentSource, requirePackage bool, ssh string) (strin
 			return "", fmt.Errorf("writer is not registered in the declared GUI lane")
 		}
 		rel, err := filepath.Rel(s.BaseWorktree, s.Worktree)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if err != nil || (s.Registration == nil && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
 			return "", fmt.Errorf("writer is outside its GUI lane")
 		}
 	}
