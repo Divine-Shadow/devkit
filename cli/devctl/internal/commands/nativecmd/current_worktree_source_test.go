@@ -18,7 +18,7 @@ func TestCurrentSourceRejectsCallerSelectors(t *testing.T) {
 	if err := parseCurrentSourceArgs(base); err != nil {
 		t.Fatal(err)
 	}
-	for _, extra := range [][]string{{"--index", "2"}, {"--workspace-root", "/foreign"}, {"--registration", "/caller.json"}, {"--registration-executable", "/caller"}, {"--origin", "foreign"}, {"--base-branch", "other"}, {"--repo-check", "git fetch"}, {"--", "bash"}} {
+	for _, extra := range [][]string{{"--index", "2"}, {"--workspace-root", "/foreign"}, {"--registration", "/caller.json"}, {"--registration-executable", "/caller"}, {"--consumer-runtime", "/nix/store/caller"}, {"--connector-helper", "/nix/store/caller/kit/bin/devctl"}, {"--origin", "foreign"}, {"--base-branch", "other"}, {"--repo-check", "git fetch"}, {"--", "bash"}} {
 		if err := parseCurrentSourceArgs(append(append([]string{}, base...), extra...)); err == nil {
 			t.Fatalf("accepted %v", extra)
 		}

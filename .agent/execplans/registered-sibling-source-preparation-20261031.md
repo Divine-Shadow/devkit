@@ -35,12 +35,29 @@ ref lock, slow valid lookup and enclosing cancellation. Validation resolves
 actual Git top/common/git directories and rechecks canonicality and retained
 directory identity after the owner lookup, within the live transaction budget.
 
-Interim complete normal CI (native1951) finished EXIT0: 39 full source Go
-packages, custody VM gates, all16 flake checks and terminal guards. It predates
-the final corrections and does not qualify the final sealed source. Final
-independent review, complete normal CI, publication and exact package identities
-must be established by the terminal Source receipt in the external evidence
-location below before release to composition.
+The sealed sibling-binding source efcd6087ebcee9bde337999a7ee2124284c5fbbe is
+published after independent review and final normal make ci-cheap native77652
+EXIT0: 39 full source Go packages, custody VM gates, all16 flake checks and
+terminal guards. Its immutable package and publication are recorded in the
+external terminal receipt. The two-file active WSL selector3853 candidate is
+currently in its normal publication pipeline and must remain unchanged.
+
+Runtime subsequently proved a separate retained-consumer helper mismatch. The
+current-system profile is not the live launcher identity. Continue this owned
+Devkit repair with a build-time selected consumer derivation and target, exact
+unchanged transport validation and retained-helper/adverse tests. Native37287
+and34359 targeted tests passed. Independent review of the reconciled retained
+candidate found no actionable findings; production behavior is limited to the
+four Root-scoped operative files. Complete normal CI and publication remain
+required. Do not repeat the refused preparation or change the live consumer.
+See the retained-consumer transport decision.
+
+Different inspected current, frozen and published-parent selectors do not
+reproduce executed helper75nf. No actual consumer binding is claimed. Runtime
+owns its source/construction join and every live binding, lifecycle, deployment,
+receiving and uncertain-effect transition. Preserve the separate Source29 and
+Source17 obligations. The earlier reported overlapping commission refusal is
+not a grant or a waiver; the current subject has an explicit ownership split.
 
 ## Surprises & discoveries
 
@@ -58,6 +75,10 @@ unchanged record under Git's no-deref ref lock before commit. Use the existing
 managed capture implementation; do not add a subprocess lifecycle implementation.
 Keep lookup cancellation subordinate to the live Git transaction, whose registered
 variant includes the existing metadata budget plus the bounded lookup budget.
+For retained launchers bind the actual selected consumer package and target in
+Nix composition; never infer its helper from the mounted current-system profile
+or accept a helper parsed from caller text. An unbound preparer serves its own
+executable-derived package only. Preserve exact SSH/trust/home/socket checks.
 Devkit selects no Product revision. The external Nix composition binds the
 published Product executable through withCurrentSourceRegistration.
 
@@ -65,8 +86,8 @@ published Product executable through withCurrentSourceRegistration.
 
 No current Source17 binding, deployment or SDK admission is claimed. Preserve the
 already qualified acquisition semantics and published README correction. Remaining
-work is source review/CI/publication, supplied Product producer, qualified active
-WSL composition and Runtime's actual receiving evidence. Do not edit Source17 SDK
+work is retained-consumer source review/CI/publication, supplied Product producer,
+qualified active WSL composition and Runtime's actual receiving evidence. Do not edit Source17 SDK
 leaves, Root9 Runtime.scala, or Source29 Main/policy seams from this writer.
 
 Terminal evidence location: `/agent-state/dev-workspace-agent1/home/.codex/task-outputs/source1-registered-source-preparation-20261031`.

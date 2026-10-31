@@ -106,12 +106,19 @@
           knownHostsFile,
           sqliteExecutable,
           currentSourceRegistrationExecutable ? null,
+          currentSourceConsumer ? null,
           tags ? [ ],
           controllerSourceInventory ? null,
           controllerGUIInventory ? null,
           controllerCodexConfigProjections ? null,
           controllerExecSocket ? null,
         }:
+        assert currentSourceConsumer == null || (
+          pkgs.lib.isDerivation currentSourceConsumer.devctl
+          && currentSourceConsumer.devctl.pname == "devkit-devctl"
+          && builtins.isString currentSourceConsumer.targetId
+          && builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" currentSourceConsumer.targetId != null
+        );
         pkgs.buildGoModule {
           pname = "devkit-devctl";
           version = "dev";
@@ -124,8 +131,16 @@
           passthru.withCurrentSourceRegistration = executable: mkDevctl {
             inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
               controllerSourceInventory controllerGUIInventory
-              controllerCodexConfigProjections controllerExecSocket;
+              controllerCodexConfigProjections controllerExecSocket
+              currentSourceConsumer;
             currentSourceRegistrationExecutable = executable;
+          };
+          passthru.withCurrentSourceConsumer = consumer: mkDevctl {
+            inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
+              controllerSourceInventory controllerGUIInventory
+              controllerCodexConfigProjections controllerExecSocket
+              currentSourceRegistrationExecutable;
+            currentSourceConsumer = consumer;
           };
           ldflags = [
             "-s"
@@ -139,6 +154,10 @@
           ]
           ++ pkgs.lib.optionals (currentSourceRegistrationExecutable != null) [
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceRegistrationExecutable=${currentSourceRegistrationExecutable}"
+          ]
+          ++ pkgs.lib.optionals (currentSourceConsumer != null) [
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceConsumerRuntimeRoot=${currentSourceConsumer.devctl}"
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceConsumerTargetID=${currentSourceConsumer.targetId}"
           ]
           ++ pkgs.lib.optionals (controllerSourceInventory != null) [
             "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerSourceInventory=${controllerSourceInventory}"

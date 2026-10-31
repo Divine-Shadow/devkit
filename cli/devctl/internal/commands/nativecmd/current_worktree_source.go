@@ -132,12 +132,11 @@ func handleCurrentWorktreeSourcePreparation(ctx *cmdregistry.Context) error {
 	if os.Getenv("GIT_SSH_VARIANT") != "ssh" {
 		return fmt.Errorf("source preparation requires the existing managed Git transport")
 	}
-	// The live consumer's mounted immutable profile owns its existing connector.
-	// A newly supplied preparation executable must not require restarting that
-	// consumer merely to change the connector's helper path to its own package.
-	helper, err := filepath.EvalSymlinks("/run/current-system/sw/kit/bin/devctl")
-	if err != nil || !strings.HasPrefix(helper, "/nix/store/") || filepath.Clean(helper) != helper {
-		return fmt.Errorf("source preparation requires the current consumer's immutable Devctl helper")
+	// A retained launcher can precede the mounted current-system profile. Only
+	// the source-selected consumer package can bind its existing helper.
+	helper, err := currentSourceConsumerHelper(authority, consumer)
+	if err != nil {
+		return err
 	}
 	if err := validateCurrentSourceTransport(prefix, helper, resolveNativeHostRoot(ctx.Paths.Root, cfg), ssh); err != nil {
 		return err
@@ -163,7 +162,7 @@ func handleCurrentWorktreeSourcePreparation(ctx *cmdregistry.Context) error {
 	if prepErr != nil {
 		status = "failed"
 	}
-	report := map[string]any{"scope": "current-worktree-source-preparation", "status": status, "cwd": cwd, "consumer": consumer, "runtimeAuthorityRoot": authority, "source": result, "requiresCurrentPolicyReevaluation": true}
+	report := map[string]any{"scope": "current-worktree-source-preparation", "status": status, "cwd": cwd, "consumer": consumer, "consumerConnectorHelper": helper, "runtimeAuthorityRoot": authority, "source": result, "requiresCurrentPolicyReevaluation": true}
 	if source.Registration != nil {
 		report["registration"] = source.Registration.Receipt()
 	}
