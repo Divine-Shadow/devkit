@@ -202,7 +202,10 @@
           '';
           installPhase = ''
             mkdir -p "$out"
-            printf '%s\n' 'full Devkit Go suite passed' > "$out/README"
+            printf '%s\n' \
+              'Devkit portable Go unit tests passed.' \
+              'Excluded from test execution: integration and internal/config packages.' \
+              'The internal/config package was compile-checked only.' > "$out/README"
           '';
         };
       mkDevAllRuntimeTools =
