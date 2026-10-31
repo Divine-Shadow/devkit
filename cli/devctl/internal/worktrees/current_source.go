@@ -132,6 +132,11 @@ func currentSourceGit(requirePackage bool, ssh, cwd string, args ...string) (str
 }
 
 func currentSourceGitContext(parent context.Context, requirePackage bool, ssh, cwd string, args ...string) (string, error) {
+	output, err := currentSourceGitRawContext(parent, requirePackage, ssh, cwd, args...)
+	return strings.TrimSpace(output), err
+}
+
+func currentSourceGitRawContext(parent context.Context, requirePackage bool, ssh, cwd string, args ...string) (string, error) {
 	name, argv, err := NativeSourceGitInvocation(requirePackage, ssh, append([]string{"--no-replace-objects", "-C", cwd}, args...)...)
 	if err != nil {
 		return "", err
@@ -140,7 +145,20 @@ func currentSourceGitContext(parent context.Context, requirePackage bool, ssh, c
 	if result.Code != 0 {
 		return "", fmt.Errorf("env %v: exit %d", argv, result.Code)
 	}
-	return strings.TrimSpace(output), nil
+	return output, nil
+}
+
+var currentSourceGitHubDeclaration = regexp.MustCompile(`^ssh://git@ssh\.github\.com:443/([A-Za-z0-9-]{1,255})/ouroboros-ide\.git$`)
+
+func currentSourceOriginMatches(observed, declared string) bool {
+	if observed == declared {
+		return true
+	}
+	// Only current-source admission gains this historical representation. The
+	// immutable declaration still selects acquisition; lane markers, bootstrap
+	// and reuse retain their exact-origin contracts. No caller selects an alias.
+	match := currentSourceGitHubDeclaration.FindStringSubmatch(declared)
+	return match != nil && observed == "git@github.com:"+match[1]+"/ouroboros-ide.git"
 }
 
 func admitCurrentSource(s CurrentSource, requirePackage bool, ssh string) (string, error) {
@@ -227,8 +245,13 @@ func admitCurrentSource(s CurrentSource, requirePackage bool, ssh string) (strin
 			return "", fmt.Errorf("writer is outside its GUI lane")
 		}
 	}
+	raw, err := currentSourceGitRawContext(context.Background(), requirePackage, ssh, s.Worktree, "config", "--null", "--get-all", "remote.origin.url")
+	origins := strings.Split(raw, "\x00")
+	if err != nil || len(origins) != 2 || origins[0] == "" || origins[1] != "" || strings.ContainsAny(origins[0], "\r\n") {
+		return "", fmt.Errorf("source preparation requires one raw origin")
+	}
 	origin, err := git("remote", "get-url", "origin")
-	if err != nil || origin != s.Origin {
+	if err != nil || origin != origins[0] || !currentSourceOriginMatches(origin, s.Origin) {
 		return "", fmt.Errorf("source origin differs from immutable declaration")
 	}
 	if rewrites, _ := git("config", "--name-only", "--get-regexp", `^url\..*\.(insteadof|pushinsteadof)$`); rewrites != "" {

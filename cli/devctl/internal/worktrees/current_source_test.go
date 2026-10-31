@@ -90,19 +90,29 @@ func sourceFixture(t *testing.T, shared bool) (CurrentSource, string, string) {
 }
 
 func TestCurrentSourceAcquiresOnlyTrackingAndPreservesBothWriterForms(t *testing.T) {
-	for _, variant := range []struct{ shared, registered bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+	for _, variant := range []struct{ shared, registered, scp bool }{
+		{false, false, false}, {true, false, false}, {false, true, false}, {true, true, false},
+		{false, false, true}, {true, false, true}, {false, true, true}, {true, true, true},
+	} {
 		name := map[bool]string{false: "standalone", true: "shared"}[variant.shared]
 		if variant.registered {
 			name += "-registered-sibling"
 		}
+		if variant.scp {
+			name += "-historical-scp"
+		}
 		t.Run(name, func(t *testing.T) {
 			shared := variant.shared
 			var s CurrentSource
-			var primary string
+			var primary, remote string
 			if variant.registered {
-				s, primary, _ = registeredSourceFixture(t, shared)
+				s, primary, remote = registeredSourceFixture(t, shared)
 			} else {
-				s, primary, _ = sourceFixture(t, shared)
+				s, primary, remote = sourceFixture(t, shared)
+			}
+			var ssh, sshLog string
+			if variant.scp {
+				s, ssh, sshLog = sourceFixtureHistoricalOrigin(t, s, remote)
 			}
 			common := sourceTestGit(t, s.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
 			gitDir := sourceTestGit(t, s.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
@@ -150,17 +160,26 @@ func TestCurrentSourceAcquiresOnlyTrackingAndPreservesBothWriterForms(t *testing
 				return strings.Join(kept, "\n")
 			}
 			beforeRefs := otherRefs()
+			configPath := filepath.Join(common, "config")
+			config, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			configInfo, err := os.Stat(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(common, "FETCH_HEAD"), []byte("preserve fetch head\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			sourceTestGit(t, primary, "commit", "--allow-empty", "-m", "advance")
 			sourceTestGit(t, primary, "push", "origin", "main")
 			want := sourceTestGit(t, primary, "rev-parse", "HEAD")
-			planned, err := PrepareCurrentSource(s, false, "", true)
+			planned, err := PrepareCurrentSource(s, false, ssh, true)
 			if err != nil || planned.Acquired != "" || planned.Previous != beforeHead {
 				t.Fatalf("plan %#v %v", planned, err)
 			}
-			result, err := PrepareCurrentSource(s, false, "", false)
+			result, err := PrepareCurrentSource(s, false, ssh, false)
 			if err != nil || result.Previous != beforeHead || result.Acquired != want {
 				t.Fatalf("prepare %#v %v", result, err)
 			}
@@ -197,6 +216,17 @@ func TestCurrentSourceAcquiresOnlyTrackingAndPreservesBothWriterForms(t *testing
 			bytes, _ = os.ReadFile(filepath.Join(common, "FETCH_HEAD"))
 			if string(bytes) != "preserve fetch head\n" {
 				t.Fatal("FETCH_HEAD changed")
+			}
+			afterConfig, err := os.ReadFile(configPath)
+			afterInfo, statErr := os.Stat(configPath)
+			if err != nil || statErr != nil || string(afterConfig) != string(config) || afterInfo.Mode() != configInfo.Mode() {
+				t.Fatal("origin configuration bytes/mode changed")
+			}
+			if variant.scp {
+				calls, err := os.ReadFile(sshLog)
+				if err != nil || string(calls) != "canonical\ncanonical\n" {
+					t.Fatalf("expected canonical ls-remote and fetch only: %q %v", calls, err)
+				}
 			}
 		})
 	}

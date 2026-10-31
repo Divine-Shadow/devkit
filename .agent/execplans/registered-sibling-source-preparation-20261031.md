@@ -28,6 +28,29 @@ Product owns registration projection and subsequent policy/SDK admission.
 
 ## Progress
 
+Current accepted frontier: Devkit231 helper binding and WSL3853 are published
+after their complete normal gates. The actual published WSL673/Devkit870
+constructor reproduces retained helper75nf. The resulting immutable g5d
+component is built and handed to Runtime; no registration producer is bound.
+Runtime's first actual guarded Writer preparation recognized that consumer and
+helper, then refused the writer's historical SCP origin before acquisition.
+Root has separately adopted the bounded repository-identity contract extension
+in `20261031_current_source_repository_identity.md`. Implement and qualify it
+from published231 without changing WSL3853 or retrying the live preparation.
+Independent complete-candidate review precedes full normal CI/publication and
+fresh source-derived composition; Runtime retains actual receiving/effects.
+The first focused native68627 run exited 0: worktrees 14.588s and nativecmd
+0.089s. Real Git proves canonical endpoint acquisition and existing candidate,
+ref and configuration preservation for all four admitted writer forms with
+the SCP representation; adversarial origins/rewrites refuse before acquisition.
+Independent read-only review of the complete five-file candidate found no
+actionable findings and confirmed the exact relation, canonical acquisition and
+four-geometry consequence coverage. Full normal CI, publication, new immutable
+composition and actual Runtime receiving remain separately required. Terminal
+receipts under the evidence location below record those later transitions.
+
+The following progress records describe the earlier sibling/helper subjects.
+
 Owned implementation and focused consequence tests pass. They cover standalone
 and lane-linked registered siblings, preservation, stale/foreign bindings,
 root replacement/redirection, actual linked metadata pointer changes under the
