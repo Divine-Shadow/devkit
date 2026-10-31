@@ -101,12 +101,7 @@ func commitCurrentSourceTracking(s CurrentSource, requirePackage bool, ssh, prev
 		return outcome, fmt.Errorf("locked tracking ref is symbolic or shape inspection failed; transaction aborted")
 	}
 	if s.Registration != nil {
-		common, commonErr := currentSourceGitContext(ctx, requirePackage, ssh, s.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
-		gitDirectory, gitErr := currentSourceGitContext(ctx, requirePackage, ssh, s.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
-		if commonErr != nil || gitErr != nil {
-			return outcome, fmt.Errorf("locked registered-source metadata inspection failed; transaction aborted")
-		}
-		if err := s.Registration.validate(ctx, s, common, gitDirectory); err != nil {
+		if err := s.Registration.validate(ctx, s, requirePackage, ssh); err != nil {
 			return outcome, fmt.Errorf("locked registered-source binding refused; transaction aborted: %w", err)
 		}
 	}
@@ -174,11 +169,7 @@ func admitCurrentSource(s CurrentSource, requirePackage bool, ssh string) (strin
 		return "", fmt.Errorf("source preparation rejects redirected common metadata")
 	}
 	if s.Registration != nil {
-		gitDirectory, err := git("rev-parse", "--path-format=absolute", "--git-dir")
-		if err != nil {
-			return "", err
-		}
-		if err := s.Registration.validate(context.Background(), s, common, gitDirectory); err != nil {
+		if err := s.Registration.validate(context.Background(), s, requirePackage, ssh); err != nil {
 			return "", err
 		}
 	}

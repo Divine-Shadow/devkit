@@ -145,12 +145,9 @@ func BindCurrentSourceRegistration(s CurrentSource, lookup func(context.Context)
 	return owned, nil
 }
 
-func (registration *OwnedSourceRegistration) validate(parent context.Context, s CurrentSource, common, gitDirectory string) error {
+func (registration *OwnedSourceRegistration) validateDirectories(s CurrentSource) error {
 	if err := validateSourceRegistration(s, registration.binding); err != nil {
 		return err
-	}
-	if common != registration.binding.CommonDirectory || gitDirectory != registration.binding.GitDirectory {
-		return fmt.Errorf("registered-source Git metadata differs from its owning binding")
 	}
 	for path, previous := range registration.paths {
 		current, err := os.Stat(path)
@@ -158,19 +155,42 @@ func (registration *OwnedSourceRegistration) validate(parent context.Context, s 
 			return fmt.Errorf("registered-source root or metadata identity changed")
 		}
 	}
+	return nil
+}
+
+func (registration *OwnedSourceRegistration) validateRepository(parent context.Context, s CurrentSource, requirePackage bool, ssh string) error {
+	top, topErr := currentSourceGitContext(parent, requirePackage, ssh, s.Worktree, "rev-parse", "--show-toplevel")
+	common, commonErr := currentSourceGitContext(parent, requirePackage, ssh, s.Worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	gitDirectory, gitErr := currentSourceGitContext(parent, requirePackage, ssh, s.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
+	if topErr != nil || commonErr != nil || gitErr != nil || top != s.Worktree || common != registration.binding.CommonDirectory || gitDirectory != registration.binding.GitDirectory {
+		return fmt.Errorf("registered-source Git metadata differs from its owning binding")
+	}
+	return registration.validateDirectories(s)
+}
+
+func (registration *OwnedSourceRegistration) validate(parent context.Context, s CurrentSource, requirePackage bool, ssh string) error {
+	if err := registration.validateRepository(parent, s, requirePackage, ssh); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(parent, SourceRegistrationLookupLimit)
-	defer cancel()
 	current, err := registration.lookup(ctx)
+	lookupErr := ctx.Err()
+	cancel()
 	if err != nil {
 		return err
 	}
 	if current != registration.binding {
 		return fmt.Errorf("registered-source registration changed; preparation must be reevaluated")
 	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("registered-source lookup exceeded the enclosing operation: %w", err)
+	if lookupErr != nil {
+		return fmt.Errorf("registered-source lookup exceeded the enclosing operation: %w", lookupErr)
 	}
-	return nil
+	// The owning lookup may take time. A root replacement or redirection during
+	// that observation window must not acquire the old registration's meaning.
+	if err := registration.validateRepository(parent, s, requirePackage, ssh); err != nil {
+		return err
+	}
+	return parent.Err()
 }
 
 func (registration *OwnedSourceRegistration) Receipt() map[string]string {

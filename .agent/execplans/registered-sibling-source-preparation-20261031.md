@@ -28,16 +28,19 @@ Product owns registration projection and subsequent policy/SDK admission.
 
 ## Progress
 
-Core admission, lookup, composition, help and consequence tests are implemented.
-Focused current-source/registration tests passed through the existing immutable
-Go supplier. Independent review found a deadline composition issue: registered
-transactions now include the bounded lookup budget and pass their context into
-lookup/metadata probes. Slow-valid and enclosing-cancellation regressions are
-added and passing. The reviewer verified the correction and has no remaining
-actionable findings. The first complete CI run covers an earlier source snapshot
-and cannot accept this correction; complete normal CI must run on the corrected
-source. The final Source receipt records complete CI, publication and package
-identities under the external task-output directory named below.
+Owned implementation and focused consequence tests pass. They cover standalone
+and lane-linked registered siblings, preservation, stale/foreign bindings,
+root replacement/redirection, actual linked metadata pointer changes under the
+ref lock, slow valid lookup and enclosing cancellation. Validation resolves
+actual Git top/common/git directories and rechecks canonicality and retained
+directory identity after the owner lookup, within the live transaction budget.
+
+Interim complete normal CI (native1951) finished EXIT0: 39 full source Go
+packages, custody VM gates, all16 flake checks and terminal guards. It predates
+the final corrections and does not qualify the final sealed source. Final
+independent review, complete normal CI, publication and exact package identities
+must be established by the terminal Source receipt in the external evidence
+location below before release to composition.
 
 ## Surprises & discoveries
 

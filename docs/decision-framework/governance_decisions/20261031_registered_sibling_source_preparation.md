@@ -37,6 +37,10 @@ transport, non-rewind, CAS, symbolic-ref and unknown-commit laws remain intact.
 The registered transaction includes the existing metadata budget plus the bounded
 lookup budget. Locked metadata reads and the lookup inherit that transaction's
 context; a late successful response after cancellation cannot authorize commit.
+Canonical paths and retained directory identities are checked again after the
+lookup, along with freshly resolved actual Git top/common/git directories and
+the enclosing deadline. Linked `.git` and `commondir` pointer changes must also
+refuse, even when all retained directory inodes are unchanged.
 
 ## safety_checks
 
@@ -61,6 +65,10 @@ bounded output, nonzero/malformed output and cancellation. Retain the existing
 acquisition adverse-case tests, independent review and complete normal Devkit CI.
 An actual slow-valid lookup exceeding the old metadata-only deadline must retain
 the live ref lock and commit normally; enclosing cancellation must reject success.
+Root replacement and symlink redirection during the lookup itself must also
+refuse, even when the returned registration fields and digest remain unchanged.
+Linked metadata pointer redirection while the actual ref lock is held must abort
+without committing, preserve the original lane tracking and release its lock.
 
 The owning Product producer and actual packaged Darksteel consumer must be
 qualified before claiming receiving. Active WSL composition and lock publication

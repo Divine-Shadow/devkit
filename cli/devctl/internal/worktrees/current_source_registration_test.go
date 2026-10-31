@@ -249,14 +249,111 @@ func TestSourceRegistrationLookupObeysEnclosingCancellation(t *testing.T) {
 	s, _, _ := registeredSourceFixture(t, false)
 	binding := sourceRegistrationFixture(t, s)
 	cancelledLookup := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	s.Registration.lookup = func(ctx context.Context) (SourceRegistrationBinding, error) {
+		cancel()
 		<-ctx.Done()
 		cancelledLookup = true
 		return binding, nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := s.Registration.validate(ctx, s, binding.CommonDirectory, binding.GitDirectory); err == nil || !cancelledLookup {
+	if err := s.Registration.validate(ctx, s, false, ""); err == nil || !cancelledLookup {
 		t.Fatal("lookup accepted after enclosing cancellation")
+	}
+}
+
+func TestSourceRegistrationRechecksIdentityAfterLookup(t *testing.T) {
+	for _, redirect := range []bool{false, true} {
+		t.Run(map[bool]string{false: "replaced", true: "redirected"}[redirect], func(t *testing.T) {
+			s, _, _ := registeredSourceFixture(t, false)
+			binding := sourceRegistrationFixture(t, s)
+			s.Registration.lookup = func(context.Context) (SourceRegistrationBinding, error) {
+				// Simulate an external root change while the owner reads its
+				// unchanged registration. The producer itself remains read-only.
+				retained := s.Worktree + "-retained"
+				if err := os.Rename(s.Worktree, retained); err != nil {
+					return SourceRegistrationBinding{}, err
+				}
+				if redirect {
+					if err := os.Symlink(retained, s.Worktree); err != nil {
+						return SourceRegistrationBinding{}, err
+					}
+				} else if err := os.Mkdir(s.Worktree, 0700); err != nil {
+					return SourceRegistrationBinding{}, err
+				}
+				return binding, nil
+			}
+			if err := s.Registration.validate(context.Background(), s, false, ""); err == nil {
+				t.Fatal("root changed during lookup but binding was accepted")
+			}
+		})
+	}
+}
+
+func TestSourceRegistrationRechecksLinkedMetadataAfterLookup(t *testing.T) {
+	for _, pointer := range []string{"git", "common"} {
+		t.Run(pointer, func(t *testing.T) {
+			s, _, _ := registeredSourceFixture(t, true)
+			binding := sourceRegistrationFixture(t, s)
+			foreign, _, _ := sourceFixture(t, false)
+			foreignGit := sourceTestGit(t, foreign.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
+			s.Registration.lookup = func(context.Context) (SourceRegistrationBinding, error) {
+				path, value := filepath.Join(s.Worktree, ".git"), "gitdir: "+foreignGit+"\n"
+				if pointer == "common" {
+					path, value = filepath.Join(binding.GitDirectory, "commondir"), foreignGit+"\n"
+				}
+				if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+					return SourceRegistrationBinding{}, err
+				}
+				return binding, nil
+			}
+			if err := s.Registration.validate(context.Background(), s, false, ""); err == nil {
+				t.Fatal("linked metadata redirected during lookup but binding accepted")
+			}
+		})
+	}
+}
+
+func TestSourceRegistrationLinkedRedirectUnderRefLockAbortsAndSettles(t *testing.T) {
+	for _, pointer := range []string{"git", "common"} {
+		t.Run(pointer, func(t *testing.T) {
+			s, primary, _ := registeredSourceFixture(t, true)
+			binding := sourceRegistrationFixture(t, s)
+			foreign, _, _ := sourceFixture(t, false)
+			foreignGit := sourceTestGit(t, foreign.Worktree, "rev-parse", "--path-format=absolute", "--git-dir")
+			lock := filepath.Join(binding.CommonDirectory, "refs", "remotes", "origin", "main.lock")
+			observedLock := false
+			var err error
+			s.Registration, err = BindCurrentSourceRegistration(s, func(context.Context) (SourceRegistrationBinding, error) {
+				if _, err := os.Lstat(lock); err == nil {
+					observedLock = true
+					path, value := filepath.Join(s.Worktree, ".git"), "gitdir: "+foreignGit+"\n"
+					if pointer == "common" {
+						path, value = filepath.Join(binding.GitDirectory, "commondir"), foreignGit+"\n"
+					}
+					if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+						return SourceRegistrationBinding{}, err
+					}
+				}
+				return binding, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := sourceTestGit(t, s.BaseWorktree, "rev-parse", "origin/main")
+			sourceTestGit(t, primary, "commit", "--allow-empty", "-m", "advance")
+			sourceTestGit(t, primary, "push", "origin", "main")
+			result, err := PrepareCurrentSource(s, false, "", false)
+			if err == nil || !observedLock || result.TrackingUpdate != "not-committed" {
+				t.Fatalf("redirect result %#v observed lock %v error %v", result, observedLock, err)
+			}
+			if got := sourceTestGit(t, s.BaseWorktree, "rev-parse", "origin/main"); got != previous {
+				t.Fatal("redirect changed original lane tracking")
+			}
+			if _, err := os.Lstat(lock); !os.IsNotExist(err) {
+				t.Fatal("redirect left original ref lock behind")
+			}
+			sourceTestGit(t, s.BaseWorktree, "update-ref", "refs/remotes/origin/main", previous, previous)
+		})
 	}
 }
