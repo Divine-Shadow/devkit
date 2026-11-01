@@ -67,7 +67,7 @@ use the corrected subject, never promote its weaker preservation oracle.
 - [x] Focused002 passed: actual selected SQLite cold capture followed by real selected reset, inaccessible unrelated history and retained suffix/manifest bytes; malformed/geometry/journal and existing history/race refusals. This is lower-level consequence evidence, not complete GUI reconstruction.
 - [x] Independent source review approved after restoring the separate read-only package SSH/known-hosts preflight caught in review.
 - [x] Implement the existing production-path regression and obtain independent static approval (diffe740b47938258c75705f5cdbd4df17da849a3fdea02288bb82334c5fb6bed5c5).
-- [ ] Execute the final production-path regression through the normal native gate.
+- [x] Execute the final82073 production-path regression through the normal native8 gate; selected2 reconstructed twice, exact suffix/manifest/history and active4 original nonterminal process identity preserved; genuine conflicts refused.
 - [ ] Normal complete Devkit checks/publication on final subject and immutable supply.
 - [ ] Receive Runtime's actual caller result separately.
 
@@ -77,8 +77,23 @@ Use declared Go tests and normal Devkit CI/Nix checks. Focused tests localize th
 scope correction; complete qualification and actual receiving remain required.
 Evidence belongs in Source1 task outputs `source1-selected-slot-scope-20261101`.
 Current state: source implementation, focused consequence checks and independent
-review complete; normal full qualification on9ef is active; final production-path regression
-qualification/publication pending. Existing CI client
+review complete. Original9ef complete `ci-cheap` passed, including all16 Nix
+checks. Final82073 passed complete checkout Go tests and the actual native8
+production gate, then its Nix portable Go check failed the existing broker
+test's two-second elapsed assertion with a running nonstale owner. The test and
+broker production bytes are unchanged from b425. This is a failed full gate,
+not a qualified final release; its exact result remains in `ci-cheap-002`.
+
+The Nix portable Go check replaces buildGoModule's normal bounded test phase
+but did not propagate `NIX_BUILD_CORES` to Go package/test concurrency. Its
+evaluated GOFLAGS were only `-mod=vendor -trimpath`, with no GOMAXPROCS. Correct
+that source-owned check to preserve those flags and honor the selected Nix core
+allocation for both Go scheduling and package concurrency. Keep all packages,
+actual package broker fixture and the same two-second assertion; add actual
+elapsed time to its failure diagnostic. This is a discriminating scheduling
+correction, not proof of a host cause, a deadline relaxation or an unchanged
+retry. Review the bounded correction and rerun the full normal gate on its
+committed subject. Existing CI client
 jobs remain healthy and are not replaced to make this change. The first focused
 test incorrectly used a fixed-Product-only bundle verifier for selected reset;
 its test was corrected to verify the actual captured manifest/member digest and

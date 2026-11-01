@@ -212,6 +212,13 @@
           doCheck = true;
           checkPhase = ''
             runHook preCheck
+            # This custom check phase replaces buildGoModule's bounded test
+            # runner. Keep package/test concurrency within the Nix allocation.
+            export GOMAXPROCS="$NIX_BUILD_CORES"
+            devkit_check_go_flags="''${GOFLAGS:+$GOFLAGS }-p=$NIX_BUILD_CORES"
+            export GOFLAGS="$devkit_check_go_flags"
+            printf 'Go check resource settings: NIX_BUILD_CORES=%s GOMAXPROCS=%s GOFLAGS=%s\n' \
+              "$NIX_BUILD_CORES" "$GOMAXPROCS" "$GOFLAGS"
             export DEVKIT_BROKER_PACKAGE_TEST_BINARY=${self.packages.${pkgs.system}.postgres-broker}/bin/postgres-broker
             # The integration package and repository-layout contract tests are
             # exercised from the source checkout, where their real host and

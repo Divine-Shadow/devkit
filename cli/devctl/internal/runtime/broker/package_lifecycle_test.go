@@ -109,8 +109,9 @@ func TestActualPackageDeadStaleLaunchAndHealthyReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ready.Running || ready.PID == state.PID || time.Since(before) > 2*time.Second {
-		t.Fatalf("unbounded or absent owner: %#v", ready)
+	elapsed := time.Since(before)
+	if !ready.Running || ready.PID == state.PID || elapsed > 2*time.Second {
+		t.Fatalf("unbounded or absent owner: elapsed=%s bound=2s status=%#v", elapsed, ready)
 	}
 	_, sibling := packageProxy(t, c, 1)
 	oldState, _ := os.ReadFile(StateFile(c))
