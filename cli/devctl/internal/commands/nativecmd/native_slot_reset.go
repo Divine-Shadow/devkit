@@ -3519,6 +3519,36 @@ func reconcileNativeSlotManifestShrink(
 	return true, nil
 }
 
+// A selected reset consumes shared discovery geometry; it does not acquire
+// custody of a surplus suffix. In particular it must not snapshot/retire other
+// lanes or recover a broad transaction while the global dev root is read-only.
+func validateSelectedNativeSlotManifest(path string, expected nativeagent.Manifest, opts nativeplan.BuildOptions) (bool, error) {
+	pending, _, err := readNativeManifestShrinkTransaction(nativeManifestShrinkTransactionPath(path))
+	if err != nil {
+		return false, err
+	}
+	if pending {
+		return false, fmt.Errorf("selected native slot reset requires separate reconciliation of the pending shared manifest shrink transaction")
+	}
+	existed, actual, err := readNativeSlotManifest(path)
+	if err != nil || !existed {
+		return existed, err
+	}
+	if reflect.DeepEqual(actual, expected) {
+		return true, nil
+	}
+	canonicalActual, err := nativeplan.BuildManifest(opts, actual.Count)
+	if err != nil {
+		return false, fmt.Errorf("derive canonical native manifest for declared count %d: %w", actual.Count, err)
+	}
+	if _, err := classifyNativeSlotManifestShrink(actual, expected, canonicalActual); err != nil {
+		return false, fmt.Errorf("shared native manifest is incompatible with selected reset geometry: %w", err)
+	}
+	// Only metadata was observed. The existing larger manifest, live siblings
+	// and all surplus history/storage remain untouched.
+	return true, nil
+}
+
 func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	if strings.TrimSpace(ctx.Project) != "dev-all" {
 		return fmt.Errorf("native reset requires the exact dev-all project")
@@ -3662,29 +3692,13 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 	defer func() {
 		retErr = errors.Join(retErr, resetLock.release())
 	}()
-	gitSSHCommand, err := launch.GitBootstrapSSHCommand(selectedPlan)
-	if err != nil {
+	// Reconstruction still requires the selected package SSH/known-hosts tuple.
+	// Validate it before disposing the old lane, without starting suffix proof
+	// transport or acquiring unrelated history custody.
+	if _, err := launch.GitBootstrapSSHCommand(selectedPlan); err != nil {
 		return err
 	}
-	manifestExisted, err := reconcileNativeSlotManifestShrink(
-		manifestPath,
-		expectedManifest,
-		opts,
-		resetOptions,
-		ctx.DryRun,
-		nativeSlotManifestShrinkRemoteProofConfig{
-			ScratchParent:                   filepath.Dir(resetOptions.StateRoot),
-			ProtectedRoots:                  append([]string(nil), resetOptions.ProtectedRoots...),
-			GitSSHCommand:                   gitSSHCommand,
-			RequirePackageSourceExecutables: true,
-			StartTransport: func() (func() error, error) {
-				// Current-remote proof is read-only with respect to the leased
-				// slot, but it must use the same managed egress path as native
-				// source acquisition even for a dry-run lifecycle request.
-				return ensureManagedEgressProxy(selectedPlan, false)
-			},
-		},
-	)
+	manifestExisted, err := validateSelectedNativeSlotManifest(manifestPath, expectedManifest, opts)
 	if err != nil {
 		return err
 	}
@@ -3708,6 +3722,13 @@ func handleNativeSlotReset(ctx *cmdregistry.Context) (retErr error) {
 		return err
 	}
 	inspectIdle := func() error {
+		currentExisted, err := validateSelectedNativeSlotManifest(manifestPath, expectedManifest, opts)
+		if err != nil {
+			return err
+		}
+		if currentExisted != manifestExisted {
+			return fmt.Errorf("shared native manifest presence changed during selected reset")
+		}
 		if ctx.DryRun {
 			return nil
 		}

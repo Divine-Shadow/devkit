@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active bounded scope repair: [Selected-slot manifest scope](execplans/selected-slot-manifest-scope-20261101.md).
+
 Active bounded Source supplier repair: [Registered sibling Source preparation](execplans/registered-sibling-source-preparation-20261031.md).
 
 Active bounded Source supplier repair: [Current GUI worktree preparation](execplans/current-worktree-repo-preparation-20261029.md).

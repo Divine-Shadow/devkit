@@ -94,17 +94,25 @@ Repeat only when each remaining lane reaches its own disposable boundary. A
 whole-prefix reset may remove the legacy common repository because that command
 first proves the complete source-declared slot set is idle.
 
-When reducing the declared lane count, let the source-derived manifest-shrink
-transaction retire the old suffix before running another setup or selected-slot
-reset. The shrink transaction deliberately validates indices against the prior
-installed manifest, so it can still retire legacy `agentN` after the new source
-count makes `N` out of range for an ordinary selected reset. For a legacy
-surplus it requires the exact v1 ownership marker and source identity, forward
-`.git` link, reverse worktree registration, branch, and clean/no-ahead custody. It then
-removes only that surplus worktree, home, and state. The shared legacy common
-repository—including the retired lane's stale registration/ref and every
-retained sibling's metadata and lock domain—remains untouched until all legacy
-lanes have migrated or a proven-idle whole-prefix reset owns it.
+A selected-slot reset accepts an exact shared manifest or a canonical larger
+manifest whose current-capacity prefix exactly matches source-derived geometry.
+It preserves the entire existing manifest, unrelated suffix homes, Git metadata,
+processes and GUI history. It does not retire surplus slots merely because a
+source count was reduced. Mandatory selected GUI history is still captured in
+the selected workspace before any selected home deletion. A pending, malformed
+or symlinked global manifest-shrink journal refuses; selected reset does not
+recover an unrelated transaction. No broader writable history mount is needed.
+
+Broad suffix retirement has distinct custody laws. The retained implementation
+validates indices against the prior installed manifest, so any explicit broader
+owner must retain the ability to preserve legacy `agentN` after the new source
+count makes `N` out of range for an ordinary selected reset. There is no standalone
+shrink-recovery command. Do not use selected reset as a global cleanup request.
+For a legacy surplus the broad custody checks require the exact v1 ownership
+marker and source identity, forward `.git` link, reverse worktree registration,
+branch, and clean/no-ahead custody. The shared legacy common repository and
+retained siblings remain protected. The following historical-layout rules
+describe broad retirement custody, not selected reset admission.
 
 The still-older historical layout may register a surplus linked worktree under
 the ordinary source checkout at `<host-root>/<repo>/.git/worktrees/<entry>`.
