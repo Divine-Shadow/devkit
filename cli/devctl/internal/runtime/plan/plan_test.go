@@ -572,7 +572,7 @@ func TestGovernedWorkspaceProjectsImmutableGovernanceEnvelopeAndCarriesBrokerSel
 	}
 }
 
-func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testing.T) {
+func TestOrdinaryManagementEntryDoesNotRequireFleetStateOrAnIncidentalHandle(t *testing.T) {
 	t.Setenv(ManagementControllerProfileEnvironment, "")
 	root := t.TempDir()
 	devRoot := filepath.Join(root, "dev")
@@ -601,13 +601,8 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 		t.Fatalf("Build: %v", err)
 	}
 	for _, path := range []string{WorkspaceControllerSourceInventory, WorkspaceControllerGUIInventory, WorkspaceControllerCodexConfigProjections, execSocket} {
-		if !hasBind(p.Binds, path, path) {
-			t.Fatalf("controller capability %s not projected: %#v", path, p.Binds)
-		}
-		for _, bind := range p.Binds {
-			if bind.Source == path && (bind.Mode != "ro" || !bind.Required) {
-				t.Fatalf("controller capability %s must be required read-only: %#v", path, bind)
-			}
+		if hasBind(p.Binds, path, path) {
+			t.Fatalf("ordinary Management entry acquired Fleet dependency %s: %#v", path, p.Binds)
 		}
 	}
 	for _, bind := range p.Binds {
@@ -615,8 +610,16 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 			t.Fatalf("controller projection must not expose parent directories: %#v", bind)
 		}
 	}
-	if p.Env["FLEET_EXEC_TRANSPORT_HANDLE"] != "required" {
-		t.Fatalf("controller exec handle env = %q", p.Env["FLEET_EXEC_TRANSPORT_HANDLE"])
+	for _, name := range []string{"FLEET_EXEC_TRANSPORT_HANDLE", ControllerOperationHandleEnvironment, WorkspaceControllerWorkLedgerEnvironment, ManagementControllerProfileEnvironment} {
+		if p.Env[name] != "" {
+			t.Fatalf("ordinary Management entry acquired %s=%q", name, p.Env[name])
+		}
+	}
+	if p.ControllerProfile != "" || p.ControllerManifest != "" || p.WindowsMountsVisible || p.Proxy.AllowlistPath != filepath.Join(root, "allowlist.txt") {
+		t.Fatalf("ordinary Management entry lost its scoped environment: %#v", p)
+	}
+	if !hasExactBind(p.Binds, Bind{Source: p.Agent.HostHome, Target: p.Agent.SandboxHome, Mode: "rw", Required: true}) {
+		t.Fatal("ordinary Management entry lost its durable home")
 	}
 	for _, bind := range p.Binds {
 		if strings.Contains(bind.Source, "codex_tailnet_stations_ed25519") ||
@@ -642,7 +645,7 @@ func TestWorkspaceEgressProjectsOnlyPackageOwnedControllerCapabilities(t *testin
 	}
 }
 
-func TestTI4CanonicalWorkspaceProjectsControllerHandleOnly(t *testing.T) {
+func TestTI4CanonicalWorkspaceDoesNotAcquireAnIncidentalControllerHandle(t *testing.T) {
 	root := t.TempDir()
 	execSocket := filepath.Join(root, "run", "fleet-controller-exec", "control.sock")
 	if err := os.MkdirAll(filepath.Dir(execSocket), 0o700); err != nil {
@@ -674,8 +677,8 @@ func TestTI4CanonicalWorkspaceProjectsControllerHandleOnly(t *testing.T) {
 	if !hasBind(p.Binds, hostWorktree, "/workspaces/dev/ti4-calculator") {
 		t.Fatalf("canonical TI4 alias missing: %#v", p.Binds)
 	}
-	if !hasBind(p.Binds, execSocket, execSocket) || p.Env["FLEET_EXEC_TRANSPORT_HANDLE"] != "required" {
-		t.Fatalf("TI4 controller handle missing: binds=%#v env=%#v", p.Binds, p.Env)
+	if hasBind(p.Binds, execSocket, execSocket) || p.Env["FLEET_EXEC_TRANSPORT_HANDLE"] != "" {
+		t.Fatalf("ordinary TI4 entry acquired a controller handle: binds=%#v env=%#v", p.Binds, p.Env)
 	}
 	for _, bind := range p.Binds {
 		if strings.Contains(bind.Source, "fleet-inventory.json") || strings.Contains(bind.Source, "fleet-codex-gui-inventory.json") {

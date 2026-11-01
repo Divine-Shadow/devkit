@@ -744,34 +744,25 @@ func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, 
 		add(broker, broker, "rw", false)
 	}
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
-	controllerConsumer := strings.TrimSpace(project) == "dev-workspace" &&
-		(strings.TrimSpace(repo) == "shadow-throne-management" ||
-			(strings.TrimSpace(repo) == "ti4-calculator" && filepath.Clean(paths.HostWorktree) == filepath.Clean(canonicalTI4)))
-	if controllerConsumer {
-		// Bind individual files only; never expose the parent directory or a
-		// mutable checkout. The protected exec handle keeps Tailnet and SSH
-		// credentials outside the sandbox. Its presence is source-defined by
-		// the Nix controller; when present it is required for this consumer.
-		if strings.TrimSpace(repo) == "shadow-throne-management" {
-			add(WorkspaceControllerSourceInventory, WorkspaceControllerSourceInventory, "ro", true)
-			add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
-			add(WorkspaceControllerCodexConfigProjections, WorkspaceControllerCodexConfigProjections, "ro", true)
+	// Ordinary execution consumes its Devkit environment. Fleet bookkeeping
+	// and a listener merely present on the host do not select host authority.
+	// Keep the explicitly requested legacy profile scoped to its existing
+	// protected operations while ordinary GUI composition sheds that profile.
+	if controllerProfile != nil {
+		add(WorkspaceControllerSourceInventory, WorkspaceControllerSourceInventory, "ro", true)
+		add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
+		add(WorkspaceControllerCodexConfigProjections, WorkspaceControllerCodexConfigProjections, "ro", true)
+		activeWSLNixRoot := controllerProfile.SourceRoots.WSLNix
+		if workspaceRoot != "" {
+			activeWSLNixRoot.BackingPath = filepath.Join(workspaceRoot, "wsl-nix")
 		}
-		if controllerProfile != nil {
-			activeWSLNixRoot := controllerProfile.SourceRoots.WSLNix
-			if workspaceRoot != "" {
-				activeWSLNixRoot.BackingPath = filepath.Join(workspaceRoot, "wsl-nix")
-			}
-			add(activeWSLNixRoot.BackingPath, activeWSLNixRoot.LogicalPath, "rw", true)
-			add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
-			add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", false)
-			// The existing fleet work commands and deployment campaign validator
-			// share this one canonical SQLite ledger. Bind its directory, rather
-			// than only work.sqlite, so SQLite can create its journal/WAL files.
-			add(WorkspaceControllerWorkLedgerDirectory, WorkspaceControllerWorkLedgerDirectory, "rw", true)
-		} else if _, err := os.Lstat(WorkspaceControllerExecSocket); err == nil {
-			add(WorkspaceControllerExecSocket, WorkspaceControllerExecSocket, "ro", true)
-		}
+		add(activeWSLNixRoot.BackingPath, activeWSLNixRoot.LogicalPath, "rw", true)
+		add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
+		add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", false)
+		// The existing fleet work commands and deployment campaign validator
+		// share this one canonical SQLite ledger. Bind its directory, rather
+		// than only work.sqlite, so SQLite can create its journal/WAL files.
+		add(WorkspaceControllerWorkLedgerDirectory, WorkspaceControllerWorkLedgerDirectory, "rw", true)
 	}
 	ownerBinds, err := controllerServiceOwnerClientBinds(project, index, repo, controllerProfile)
 	if err != nil {

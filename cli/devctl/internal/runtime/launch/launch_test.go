@@ -1194,7 +1194,7 @@ func TestBuildBubblewrapProxySocketUnsharesNetworkAndStartsBridge(t *testing.T) 
 	}
 }
 
-func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
+func TestBuildBubblewrapOrdinaryManagementKeepsContainmentWithoutFleet(t *testing.T) {
 	t.Setenv(nativeplan.ManagementControllerProfileEnvironment, "")
 	withProductGovernanceEnvironmentFixture(t)
 	tmp := t.TempDir()
@@ -1255,28 +1255,20 @@ func TestBuildBubblewrapManagementFleetUsesOnlyTypedExecHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	// The test host has no immutable inventory projections. Keep only the
-	// protected exec handle and ordinary workspace capabilities.
-	filtered := p.Binds[:0]
-	for _, bind := range p.Binds {
-		if isWorkspaceControllerCapabilityTarget(bind.Target) && bind.Target != execSocket {
-			continue
-		}
-		filtered = append(filtered, bind)
-	}
-	p.Binds = filtered
-	fleetCommand := []string{"/run/current-system/sw/bin/fleet-control", "pressure", "--inventory", "/etc/fleet/source/fleet-inventory.json", "--json", "derpinator"}
-	cmd, err := BuildBubblewrap(p, fleetCommand)
+	// Use the actual ordinary plan without removing inconvenient binds. The
+	// host has an incidental legacy listener but no Fleet inventory files.
+	cmd, err := BuildBubblewrap(p, []string{"git", "status", "--short"})
 	if err != nil {
-		t.Fatalf("BuildBubblewrap Fleet: %v", err)
+		t.Fatalf("BuildBubblewrap ordinary Management: %v", err)
 	}
 	joined := ShellString(cmd)
 	if !strings.Contains(joined, "'--unshare-net'") || strings.Contains(joined, "'--share-net'") {
-		t.Fatalf("Management Fleet command must remain network-isolated: %s", joined)
+		t.Fatalf("Management command must remain network-isolated: %s", joined)
 	}
-	if !strings.Contains(joined, "'--ro-bind' '"+execSocket+"' '"+execSocket+"'") ||
-		!strings.Contains(joined, "'--setenv' 'FLEET_EXEC_TRANSPORT_HANDLE' 'required'") {
-		t.Fatalf("Management Fleet command lacks the exact typed exec handle: %s", joined)
+	for _, retired := range []string{execSocket, "FLEET_EXEC_TRANSPORT_HANDLE", "FLEET_CONTROLLER_OPERATION_HANDLE", "FLEET_WORK_DB", "/etc/fleet/source/fleet-inventory.json", "/etc/fleet/source/fleet-codex-gui-inventory.json"} {
+		if strings.Contains(joined, retired) {
+			t.Fatalf("ordinary Management command acquired Fleet dependency %q: %s", retired, joined)
+		}
 	}
 	if !strings.Contains(
 		joined,

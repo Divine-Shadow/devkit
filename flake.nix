@@ -1038,19 +1038,19 @@
                  .agent.sandbox_home == "/agent-state/pokeemerald-agent2/home"' \
                 "$shared_power_plan_a2"
 
-              # Exercise the same planner in a test-only compiled package
-              # whose four required controller paths are fixed fixture
-              # values. This avoids a nested bwrap user namespace, which
-              # GitHub's Nix sandbox denies; mkProductionDevctl and its
-              # production --unshare-net profile remain unmodified.
+              # Exercise the installed ordinary planner with Fleet files
+              # absent and a real incidental legacy listener present, then
+              # absent. Their availability must not select host authority.
+              # Compiled fixture paths keep this check independent of host
+              # configuration; production containment remains unmodified.
               controller_source='${controllerFixtureSource}'
               controller_gui='${controllerFixtureGUI}'
               controller_config='${controllerFixtureConfig}'
               controller_exec='${controllerFixtureSocket}'
               ${pkgs.coreutils}/bin/install -d -m 0700 "$(dirname "$controller_exec")"
-              printf '%s\n' '{}' > "$controller_source"
-              printf '%s\n' '{}' > "$controller_gui"
-              printf '%s\n' '{"schemaVersion":"devkit/gui-codex-config-projections/v1","projections":[]}' > "$controller_config"
+              test ! -e "$controller_source"
+              test ! -e "$controller_gui"
+              test ! -e "$controller_config"
               ${pkgs.socat}/bin/socat \
                 UNIX-LISTEN:"$controller_exec",fork,mode=0600 \
                 EXEC:${pkgs.coreutils}/bin/true &
@@ -1090,29 +1090,31 @@
                  .agent.sandbox_home == "/agent-state/dev-workspace-agent2/home" and
                  .mount_policy_identity == "devkit/workspace-egress/v4" and
                  .windows_mounts_visible == false and
-                 .env.FLEET_EXEC_TRANSPORT_HANDLE == "required" and
+                 (.controller_profile // "") == "" and
+                 (.controller_manifest // "") == "" and
+                 all(.env | keys[];
+                   . != "FLEET_EXEC_TRANSPORT_HANDLE" and
+                   . != "FLEET_CONTROLLER_OPERATION_HANDLE" and
+                   . != "FLEET_WORK_DB" and
+                   . != "DEVKIT_MANAGEMENT_CONTROLLER_PROFILE") and
                  any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2" and
                                .target == "/workspaces/dev" and
                                .mode == "rw" and .required == true) and
                  any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2/.devkit/governance-control-plane" and
                                .target == "/workspaces/dev/.devkit/governance-control-plane" and
                                .mode == "rw" and .required == true) and
-                 any(.binds[]; .source == "${controllerFixtureSource}" and
-                               .target == "${controllerFixtureSource}" and
-                               .mode == "ro" and .required == true) and
-                 any(.binds[]; .source == "${controllerFixtureGUI}" and
-                               .target == "${controllerFixtureGUI}" and
-                               .mode == "ro" and .required == true) and
-                 any(.binds[]; .source == "${controllerFixtureConfig}" and
-                               .target == "${controllerFixtureConfig}" and
-                               .mode == "ro" and .required == true) and
+                 all(.binds[]; .source != "${controllerFixtureSource}" and
+                               .target != "${controllerFixtureSource}" and
+                               .source != "${controllerFixtureGUI}" and
+                               .target != "${controllerFixtureGUI}" and
+                               .source != "${controllerFixtureConfig}" and
+                               .target != "${controllerFixtureConfig}" and
+                               .source != "${controllerFixtureSocket}" and
+                               .target != "${controllerFixtureSocket}") and
                  all(.binds[]; .source != "/home/bayesartre/dev" and
                                .source != "/home/bayesartre/dev/control-plane-worktrees" and
                                ((.source | startswith("/mnt")) | not) and
                                ((.target | startswith("/mnt")) | not)) and
-                 any(.binds[]; .source == "${controllerFixtureSocket}" and
-                               .target == "${controllerFixtureSocket}" and
-                               .mode == "ro" and .required == true) and
                  all(.binds[]; (.source | contains("codex_tailnet_stations_ed25519") | not) and
                                (.target | contains("codex_tailnet_stations_ed25519") | not)) and
                  all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
@@ -1121,7 +1123,27 @@
               kill "$controller_exec_pid"
               wait "$controller_exec_pid" 2>/dev/null || true
               trap - EXIT
+              # Removing an unrelated listener also leaves the actual scoped
+              # environment unchanged; no approval/config stubs are supplied.
+              rm -f "$controller_exec"
+              workspace_plan_without_fleet="$TMPDIR/installed-dev-workspace-without-fleet-plan.json"
+              env -i \
+                HOME=/tmp/home \
+                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
+                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
+                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
+                ${fixtureDevctl}/kit/bin/devctl -p dev-workspace native plan \
+                  --repo shadow-throne-management --index 2 \
+                  --workspace-root /home/bayesartre/dev/control-plane-worktrees/agent2 \
+                  --worktree-root /home/bayesartre/dev/control-plane-worktrees \
+                  --format json > "$workspace_plan_without_fleet"
+              jq -S '{agent, binds, env, controller_profile, controller_manifest, proxy, mount_policy_identity, windows_mounts_visible}' \
+                "$workspace_plan" > "$TMPDIR/with-incidental-listener.json"
+              jq -S '{agent, binds, env, controller_profile, controller_manifest, proxy, mount_policy_identity, windows_mounts_visible}' \
+                "$workspace_plan_without_fleet" > "$TMPDIR/without-incidental-listener.json"
+              cmp "$TMPDIR/with-incidental-listener.json" "$TMPDIR/without-incidental-listener.json"
               mkdir -p "$out"
+              cp "$workspace_plan_without_fleet" "$out/installed-dev-workspace-without-fleet-plan.json"
               cp "$plan" "$out/installed-plan.json"
               cp "$pokeemerald_plan" "$out/installed-pokeemerald-plan.json"
               cp "$shared_power_plan" "$out/installed-pokeemerald-shared-power-plan.json"
