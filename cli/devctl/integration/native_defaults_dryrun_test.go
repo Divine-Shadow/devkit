@@ -2662,6 +2662,9 @@ fi
 		t.Fatalf("reset did not recover cleanly after failure cleanup: %v\n%s", err, output)
 	}
 	assertNoNativeResetProxyResidue(t, base)
+	t.Run("slot2 reconstructs beside retained read-only surplus history and active slot4", func(t *testing.T) {
+		testSelectedResetWithRetainedManifestSuffix(t, root, base, worktreeRoot, packageDevctl, env)
+	})
 }
 
 func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *testing.T) {
