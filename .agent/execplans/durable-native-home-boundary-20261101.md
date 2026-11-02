@@ -264,3 +264,36 @@ retain real filesystem empty/populated/sticky/symlink/state-home assertions.
 No privilege request, conditional skip or weaker accepted mode is introduced.
 Required independent review, affected022 and complete CI006 must qualify the
 corrected subject; the CI005 full exit remains2, not an overall pass.
+
+
+## Actual current delegated judgment receiving, 2026-11-02
+
+Original complete CI006 and independent review earned the original 52-file
+2fcd subject only. The retained integrated source is 3ecb068, tree fbec923,
+with full diff c79bc98 against published cf2cb1a. Its five reserved worktrees
+files remain exactly the subject actually judged by Root. Full integrated
+native qualification and canonical publication remain required. The original
+native001 first sensitive-domain refusal ended11 and stays terminal.
+
+Root adopted the exact 5668-byte operative body (SHA2564845215235dfb811d975c826d11cf4e92062f1274dfca19dd4969b8c50f983ba).
+The established issuer signed once at actual Issued-At 2026-11-02T05:50:35Z.
+At 05:52:56UTC Source1 actually invoked the existing independently enrolled
+immutable0qns dot-authmsg verify on the exact5701-byte message (SHA2560b69ff4dd62727b06ae78f0150bdddec6e7a0778144f888da0879841ad7316dc)
+and exact324-byte detached signature (SHA2563a5ddeacd4ae262ce13609e86ce4e00b2b9bd33bc4793ea380c1143da6fd5e08).
+Exit0 authenticated dot, namespace authority-message-v1, current freshness.
+Returned authenticated bytes match the message and adopted body exactly.
+The closed four-field public carrier above is materialized from those returned
+authenticated bytes; no human signature, expanded grant, trust change or CI
+acceptance is claimed. Institution submit_to_ci, the separate reserved domain
+devkit_publication_control_plane, exact five-file scope/exclusions, current
+Product policy/delegation/verifier, actual Devkit/master record provenance,
+revocation and prior refusals remain independent normal receiving checks.
+
+Use only qualified published65ec normal receiver and ONE fresh native002.
+The ordinary provider owns source capture, moving-master integration (including
+separate PostgreSQL work), complete integrated CI, custody and nonforce CAS.
+Do not raw-push, bypass a gate, repeat signing or retry terminal001. Actual
+receiving/full CI/publication, canonical source-derived composition, deployment
+and persistent-home user consequences remain unearned until their own results.
+Full original pair, verifier execution/stdout and bounded receiving receipt are
+retained externally in source1-fleet-purge-original-package-20261101/persistent-home-publication-002.
