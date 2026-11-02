@@ -45,7 +45,11 @@ func (rc *requestContext) handleEndpointLease(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		if _, err := rc.postgresHostPort(rec.ID); err != nil {
-			http.Error(w, "postgres endpoint unavailable", http.StatusConflict)
+			message := "postgres endpoint unavailable"
+			if diagnostic := postgresEndpointDiagnostic(err); diagnostic != "" {
+				message += " [" + diagnostic + "]"
+			}
+			http.Error(w, message, http.StatusConflict)
 			return true
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -65,19 +69,81 @@ func (rc *requestContext) handleEndpointLease(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// Only finite predicate codes cross the lease error boundary. The original
+// cause remains internal: transport/decode errors can contain private data.
+type postgresEndpointFailure struct {
+	reason string
+	number int
+	cause  error
+}
+
+func (failure *postgresEndpointFailure) Error() string { return failure.cause.Error() }
+func (failure *postgresEndpointFailure) Unwrap() error { return failure.cause }
+
+func postgresEndpointDiagnostic(err error) string {
+	var failure *postgresEndpointFailure
+	if !errors.As(err, &failure) {
+		return ""
+	}
+	diagnostic := failure.reason
+	if failure.number >= 0 {
+		diagnostic += ":" + strconv.Itoa(failure.number)
+	}
+	return validatedPostgresEndpointDiagnostic(diagnostic)
+}
+
+func validatedPostgresEndpointDiagnostic(value string) string {
+	switch value {
+	case "inspect-request", "inspect-transport", "inspect-json", "container-not-running", "postgres-port-missing", "postgres-port-invalid":
+		return value
+	}
+	for _, spec := range []struct {
+		prefix   string
+		min, max int
+	}{
+		{"inspect-status:", 100, 599},
+		{"postgres-bindings:", 0, 65535},
+	} {
+		if number, ok := strings.CutPrefix(value, spec.prefix); ok {
+			n, err := strconv.Atoi(number)
+			if err == nil && n >= spec.min && n <= spec.max && strconv.Itoa(n) == number {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func readPostgresEndpointDiagnostic(body io.Reader) string {
+	const maxDiagnosticBytes = 256
+	data, err := io.ReadAll(io.LimitReader(body, maxDiagnosticBytes+1))
+	if err != nil || len(data) > maxDiagnosticBytes {
+		return ""
+	}
+	value, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "postgres endpoint unavailable [")
+	if !ok {
+		return ""
+	}
+	value, ok = strings.CutSuffix(value, "]")
+	if !ok {
+		return ""
+	}
+	return validatedPostgresEndpointDiagnostic(value)
+}
+
 func (rc *requestContext) postgresHostPort(containerID string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, rc.target.ResolveReference(&url.URL{Path: "/containers/" + containerID + "/json"}).String(), nil)
 	if err != nil {
-		return "", err
+		return "", &postgresEndpointFailure{"inspect-request", -1, err}
 	}
 	req.Host = "docker"
 	resp, err := rc.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", &postgresEndpointFailure{"inspect-transport", -1, err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("container inspect status %d", resp.StatusCode)
+		return "", &postgresEndpointFailure{"inspect-status", resp.StatusCode, fmt.Errorf("container inspect status %d", resp.StatusCode)}
 	}
 	var inspected struct {
 		State struct {
@@ -90,17 +156,20 @@ func (rc *requestContext) postgresHostPort(containerID string) (string, error) {
 		} `json:"NetworkSettings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&inspected); err != nil {
-		return "", err
+		return "", &postgresEndpointFailure{"inspect-json", -1, err}
 	}
 	if !inspected.State.Running {
-		return "", fmt.Errorf("container is not running")
+		return "", &postgresEndpointFailure{"container-not-running", -1, fmt.Errorf("container is not running")}
 	}
 	bindings := inspected.NetworkSettings.Ports["5432/tcp"]
-	if len(bindings) != 1 || strings.TrimSpace(bindings[0].HostPort) == "" {
-		return "", fmt.Errorf("container does not expose exactly one postgres 5432 binding")
+	if len(bindings) != 1 {
+		return "", &postgresEndpointFailure{"postgres-bindings", len(bindings), fmt.Errorf("container does not expose exactly one postgres 5432 binding")}
+	}
+	if strings.TrimSpace(bindings[0].HostPort) == "" {
+		return "", &postgresEndpointFailure{"postgres-port-missing", -1, fmt.Errorf("container does not expose exactly one postgres 5432 binding")}
 	}
 	if _, err := strconv.ParseUint(bindings[0].HostPort, 10, 16); err != nil {
-		return "", fmt.Errorf("invalid postgres host port")
+		return "", &postgresEndpointFailure{"postgres-port-invalid", -1, fmt.Errorf("invalid postgres host port")}
 	}
 	return bindings[0].HostPort, nil
 }
@@ -321,6 +390,11 @@ func sandboxLeaseWithin(socket, id string, timeout time.Duration) (string, error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusConflict {
+			if diagnostic := readPostgresEndpointDiagnostic(resp.Body); diagnostic != "" {
+				return "", fmt.Errorf("postgres lease rejected: %s [%s]", resp.Status, diagnostic)
+			}
+		}
 		return "", fmt.Errorf("postgres lease rejected: %s", resp.Status)
 	}
 	var grant struct {
