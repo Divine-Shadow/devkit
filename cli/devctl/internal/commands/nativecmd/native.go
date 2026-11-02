@@ -83,24 +83,23 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
-	executionTimeout           time.Duration
-	processCustodyObservation  bool
-	controllerLifecycleLeaseFD int
-	indexSet                   bool
-	opts                       nativeplan.BuildOptions
-	format                     string
-	dryRun                     bool
-	count                      int
-	baseBranch                 string
-	branchPrefix               string
-	dedicatedWorktrees         bool
-	skipRepoChecks             bool
-	repoCheck                  string
-	readinessMode              string
-	readinessModeSet           bool
-	softwareOnly               bool
-	preparationPhase           string
-	command                    []string
+	executionTimeout          time.Duration
+	processCustodyObservation bool
+
+	indexSet           bool
+	opts               nativeplan.BuildOptions
+	format             string
+	dryRun             bool
+	count              int
+	baseBranch         string
+	branchPrefix       string
+	dedicatedWorktrees bool
+	skipRepoChecks     bool
+	repoCheck          string
+	readinessMode      string
+	readinessModeSet   bool
+
+	command []string
 }
 
 // Immutable standalone suppliers are linked by the Devkit flake package.
@@ -158,9 +157,8 @@ type topExecArgs struct {
 	agentStateRoot          string
 	worktreeContainerRoot   string
 	agentStateContainerRoot string
-	softwareOnly            bool
-	preparationPhase        string
-	command                 []string
+
+	command []string
 }
 
 func handleEgressProxy(ctx *cmdregistry.Context) error {
@@ -322,13 +320,6 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			parsed.opts.Index = idx
 			parsed.indexSet = true
 			i++
-		case "--controller-lifecycle-lease-fd":
-			if ctx.Args[0] != "prepare" || ctx.Project != "dev-all" || parsed.controllerLifecycleLeaseFD != 0 ||
-				i+1 >= len(ctx.Args) || ctx.Args[i+1] != "3" {
-				return parsed, fmt.Errorf("controller lifecycle descriptor requires one selected dev-all prepare handoff on fd 3")
-			}
-			parsed.controllerLifecycleLeaseFD = 3
-			i++
 		case "--process-custody-observation":
 			if ctx.Args[0] != "plan" || parsed.processCustodyObservation {
 				return parsed, fmt.Errorf("custody observation requires native plan and one flag")
@@ -370,20 +361,8 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			i++
 		case "--dry-run":
 			parsed.dryRun = true
-		case "--preparation-phase":
-			if i+1 >= len(ctx.Args) || parsed.preparationPhase != "" || (ctx.Args[0] != "prepare" && ctx.Args[0] != "exec" && ctx.Args[0] != "readiness") {
-				return parsed, fmt.Errorf("invalid preparation phase use")
-			}
-			parsed.preparationPhase = ctx.Args[i+1]
-			i++
-			if parsed.preparationPhase != terraformToolsPreparationPhase {
-				return parsed, fmt.Errorf("unknown preparation phase")
-			}
-		case "--software-only":
-			if !allowCommand {
-				return parsed, fmt.Errorf("--software-only is only valid for native exec")
-			}
-			parsed.softwareOnly = true
+		case "--software-only", "--controller-lifecycle-lease-fd", "--preparation-phase":
+			return parsed, fmt.Errorf("retired Fleet startup selector %s", ctx.Args[i])
 		case "--managed-app-server":
 			return parsed, fmt.Errorf("managed Fleet app-server launch has been retired; use native exec")
 		case "--timeout":
@@ -1012,20 +991,8 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.agentStateRoot = ctx.Args[i+1]
 			i++
-		case "--preparation-phase":
-			if attach || i+1 >= len(ctx.Args) || parsed.preparationPhase != "" {
-				return parsed, fmt.Errorf("invalid preparation phase use")
-			}
-			parsed.preparationPhase = ctx.Args[i+1]
-			i++
-			if parsed.preparationPhase != terraformToolsPreparationPhase {
-				return parsed, fmt.Errorf("unknown preparation phase")
-			}
-		case "--software-only":
-			if attach {
-				return parsed, fmt.Errorf("--software-only is only valid for exec")
-			}
-			parsed.softwareOnly = true
+		case "--software-only", "--controller-lifecycle-lease-fd", "--preparation-phase":
+			return parsed, fmt.Errorf("retired Fleet startup selector %s", ctx.Args[i])
 		case "--managed-app-server":
 			return parsed, fmt.Errorf("managed Fleet app-server launch has been retired; use native exec")
 		case "--timeout":
@@ -1053,12 +1020,6 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 }
 
 func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) (retErr error) {
-	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, false, ctx.Project, parsed.guiTargetID, command); err != nil {
-		return err
-	}
-	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.guiTargetID, ctx.Project, false, command); err != nil {
-		return err
-	}
 	if err := ensureNativeLifecycleProject(ctx); err != nil {
 		return err
 	}
@@ -1082,23 +1043,11 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	if err != nil {
 		return err
 	}
-	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
-		return err
-	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleParsed)
 	opts := lifecyclePlanOptions(ctx, cfg, lifecycleParsed, repo, brokerCfg)
 	opts.Index = parsed.index
 	p, err := buildDevAllForExec(opts)
 	if err != nil {
-		return err
-	}
-	if err := validateTerraformToolsPreparedCommand(parsed.preparationPhase, p, command); err != nil {
-		return err
-	}
-	if err := validateSoftwareOnlyNativePlan(parsed.softwareOnly, p); err != nil {
-		return err
-	}
-	if err := validateSoftwareOnlyNativePreparedCommand(parsed.softwareOnly, p, command); err != nil {
 		return err
 	}
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
@@ -1132,7 +1081,7 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
 	}
 	if !ctx.DryRun {
-		if err := prepareSelectedNativeExec(p, parsed.softwareOnly, parsed.preparationPhase); err != nil {
+		if err := launch.Prepare(p); err != nil {
 			return err
 		}
 	}
@@ -2138,17 +2087,8 @@ func handlePrepare(ctx *cmdregistry.Context) error {
 	parsed.opts.Repo = repo
 	parsed.opts.BaseBranch = baseBranch
 	parsed.opts.BranchPrefix = branchPrefix
-	if parsed.controllerLifecycleLeaseFD != 0 && (!parsed.indexSet || ctx.Project != "dev-all" || ctx.DryRun || parsed.dryRun) {
-		return fmt.Errorf("controller staging retirement requires ordinary explicitly selected dev-all preparation")
-	}
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
 		return err
-	}
-	if parsed.preparationPhase != "" && (ctx.Project != "ouroboros-terraform" || parsed.opts.GUITargetID != "terraform-ouro-1") {
-		return fmt.Errorf("Terraform tools preparation requires TF1")
-	}
-	if ctx.Project == "ouroboros-terraform" && (parsed.opts.WorkspaceRoot != "" || parsed.opts.GUITargetID != "") {
-		return handleSelectedTerraformPrepare(ctx, cfg, parsed)
 	}
 	if parsed.opts.WorkspaceRoot != "" && ctx.Project == "pokeemerald-expansion-shared-power" {
 		return handleSelectedSharedPowerPrepare(ctx, cfg, parsed)
@@ -2255,7 +2195,7 @@ func handleShell(ctx *cmdregistry.Context) error {
 			break
 		}
 		if arg == "--preparation-phase" {
-			return fmt.Errorf("Terraform tools phase is not a shell mode")
+			return fmt.Errorf("retired Fleet startup selector %s", arg)
 		}
 	}
 	ctx.Args[0] = "exec"
@@ -2270,17 +2210,8 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if parsed.repoCheck != "" {
 		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
-	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, false, ctx.Project, parsed.opts.GUITargetID, parsed.command); err != nil {
-		return err
-	}
-	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.opts.GUITargetID, ctx.Project, false, parsed.command); err != nil {
-		return err
-	}
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
 	if err != nil {
-		return err
-	}
-	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
 		return err
 	}
 	parsed.opts.BaseBranch = parsed.baseBranch
@@ -2294,15 +2225,6 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	}
 	if p.Launcher != "bubblewrap" {
 		return fmt.Errorf("native exec currently supports --launcher bubblewrap only")
-	}
-	if err := validateSoftwareOnlyNativePlan(parsed.softwareOnly, p); err != nil {
-		return err
-	}
-	if err := validateTerraformToolsPreparedCommand(parsed.preparationPhase, p, parsed.command); err != nil {
-		return err
-	}
-	if err := validateSoftwareOnlyNativePreparedCommand(parsed.softwareOnly, p, parsed.command); err != nil {
-		return err
 	}
 	if _, err := launch.GitBootstrapSSHCommand(p); err != nil {
 		return err
@@ -2336,7 +2258,7 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
 	}
 	if !dryRun {
-		if err := prepareSelectedNativeExec(p, parsed.softwareOnly, parsed.preparationPhase); err != nil {
+		if err := launch.Prepare(p); err != nil {
 			return err
 		}
 	}
@@ -2760,9 +2682,6 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
-		return err
-	}
 	parsed.opts.BaseBranch = parsed.baseBranch
 	parsed.opts.BranchPrefix = parsed.branchPrefix
 	if err := applyNativeConfigDefaults(ctx, cfg, &parsed.opts); err != nil {
@@ -2777,36 +2696,20 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 		return err
 	}
 	prepare := launch.Prepare
-	if parsed.preparationPhase != "" {
-		if _, err := selectedTerraformWorktreeOptions(ctx, cfg, parsed); err != nil {
-			return err
-		}
-		if parsed.readinessMode != config.ReadinessModeRuntimeOnly || parsed.repoCheck != "" || len(repoChecks) != 0 {
-			return fmt.Errorf("Terraform tools startup verification requires source-fixed runtime-only checks")
-		}
-		hostname, err := os.Hostname()
-		if err != nil {
-			return err
-		}
-		if err := launch.ValidateTerraformToolsPlan(p, hostname); err != nil {
-			return err
-		}
-		prepare = launch.PrepareTerraformTools
-	}
 	report := runReadinessReportPrepared(p, nativePlanBrokerConfig(ctx, cfg, parsed.opts), runtimeChecks, repoChecks, prepare)
 	switch parsed.format {
 	case "", "json":
-		data, err := json.MarshalIndent(nativeReadinessEvidenceFor(parsed.preparationPhase, parsed.readinessMode, report), "", "  ")
+		data, err := json.MarshalIndent(nativeReadinessEvidenceFor(parsed.readinessMode, report), "", "  ")
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, string(data))
 	case "text":
 		fmt.Fprintf(os.Stdout, "readiness_mode: %s\n", parsed.readinessMode)
-		fmt.Fprintf(os.Stdout, "status: %s\n", terraformToolsReadinessStatus(parsed.preparationPhase, report.RuntimeReady(), report.Status()))
+		fmt.Fprintf(os.Stdout, "status: %s\n", report.Status())
 		fmt.Fprintf(os.Stdout, "runtime_ready: %t\n", report.RuntimeReady())
-		fmt.Fprintf(os.Stdout, "repo_ready: %t\n", report.RepoReady() && parsed.preparationPhase == "")
-		fmt.Fprintf(os.Stdout, "capacity_available: %t\n", report.CapacityAvailable() && parsed.preparationPhase == "")
+		fmt.Fprintf(os.Stdout, "repo_ready: %t\n", report.RepoReady())
+		fmt.Fprintf(os.Stdout, "capacity_available: %t\n", report.CapacityAvailable())
 		if action := report.Action(); action != "" {
 			fmt.Fprintf(os.Stdout, "action: %s\n", action)
 		}
@@ -2826,7 +2729,7 @@ func handleReadiness(ctx *cmdregistry.Context) error {
 	if !report.RuntimeReady() {
 		return fmt.Errorf("native runtime is not ready")
 	}
-	if !parsed.skipRepoChecks && !report.RepoReady() && parsed.preparationPhase == "" {
+	if !parsed.skipRepoChecks && !report.RepoReady() {
 		return fmt.Errorf("native repo readiness is not fully available")
 	}
 	return nil

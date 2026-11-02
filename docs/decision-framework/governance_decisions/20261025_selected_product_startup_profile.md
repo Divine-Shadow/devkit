@@ -1,5 +1,8 @@
 # Exact source-selected Product startup profile
 
+Historical decision only. Its Fleet controller and software-only startup integration
+have been retired; this document is not an operational procedure.
+
 The software-only validator currently recognizes only the installed wrapper
 spelling. This prevents the existing Environment constructor from selecting a
 qualified coherent consumer while an older host profile remains installed.

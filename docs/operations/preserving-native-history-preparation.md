@@ -11,8 +11,7 @@ schema/migrations and same-thread rollout. It copies only original goals and
 missing rollout, retaining the previous business-empty goals inode in journal
 custody. Existing current state and independent tables stay intact; normal
 native resume performs indexing. Credentials and public configuration are not
-part of history projection. Software-only preparation still skips credential
-hydration and legacy state migration.
+part of history projection. Ordinary preparation retains credential hydration and legacy state migration.
 
 Prepared journal recovery revalidates sidecars, custody and absence before
 continuing. File/directory syncing and no-overwrite publication protect the
@@ -23,12 +22,12 @@ native owner and suffix appends. It does not restore an altered later goal.
 
 Reset capture and retirement never invoke this projection. Cold original bytes
 and inodes stay read-only. Runtime must establish the supported idle and consumer
-handoff before the existing typed software-only forced restart. Source fixtures
+handoff before restarting a native consumer. Source fixtures
 and publication do not authorize activation or prove live model/completion.
 
 ## Available evidence is distinct from finite preparation
 
-The current Management custody policy separately admits v4 unavailable GUI
+The retained cold-custody policy separately admits v4 unavailable GUI
 references when the exact captured SQLite/reference and every available history
 byte are preserved with canonical physical absence and stable source proof.
 Archive status is a bounded observation, never a resumability or reset warrant.

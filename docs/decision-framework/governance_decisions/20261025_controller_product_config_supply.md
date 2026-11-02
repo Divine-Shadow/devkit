@@ -1,5 +1,8 @@
 # Supply the controller's fixed Product config resource
 
+Historical decision only. Its Fleet controller and software-only startup integration
+have been retired; this document is not an operational procedure.
+
 ## problem
 
 Runtime accepted the qualified c72 tuple, then its normal Local2 target-bound

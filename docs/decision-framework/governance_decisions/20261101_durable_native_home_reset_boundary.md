@@ -67,7 +67,7 @@ Git payload awaiting disposal. Ordinary launch retains all Git bind/backlink
 guards. Active-sibling scans still precede history and reset application, and
 foreign Git data must remain unchanged after source reconstruction.
 
-Managed SSH and software-only startup consume physical retained storage from the
+Managed SSH consumes physical retained storage from the
 admitted source state root and exact matching dev-all slot. Canonical Product
 worktree, immutable GUI class/host, logical home, actual restrictions and SSH
 policy remain required; legacy/sibling/foreign storage still refuses. This avoids

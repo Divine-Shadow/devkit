@@ -162,7 +162,7 @@ var (
 )
 
 func Prepare(p nativeplan.Plan) error {
-	return prepare(p, false, false)
+	return prepare(p)
 }
 
 // ValidateNativeExecWorktree is read-only admission before endpoint allocation.
@@ -185,53 +185,14 @@ func PrepareFresh(p nativeplan.Plan) error {
 	if p.GUITargetConfig != nil && p.GUITargetConfig.RetainedHistoryManifest != "" {
 		return fmt.Errorf("fresh native preparation refuses a retained history projection")
 	}
-	return prepareWithLegacyState(p, false, false, false)
+	return prepareWithLegacyState(p, false)
 }
 
-// PrepareSoftwareOnly converges public software/configuration for an existing
-// native home. Credential hydration remains the operator's separate effect.
-// It never selects alternate credential roots or suppresses hydration errors.
-func PrepareSoftwareOnly(p nativeplan.Plan) error {
-	for _, dir := range []string{p.Agent.HostHome, filepath.Join(p.Agent.HostHome, ".codex")} {
-		info, err := os.Lstat(dir)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("software-only preparation requires an existing real native home: %s", dir)
-		}
-	}
-	return prepare(p, true, false)
+func prepare(p nativeplan.Plan) error {
+	return prepareWithLegacyState(p, true)
 }
 
-// ValidateTerraformToolsPlan admits only the immutable, isolated TF1 projection.
-// This phase preserves provider material; it does not assess provider readiness.
-func ValidateTerraformToolsPlan(p nativeplan.Plan, hostname string) error {
-	const root = "/home/bayesartre/dev"
-	const repo = "ouroboros-terraform"
-	home := root + "/.devkit/native-agents/" + repo + "-agent1/home"
-	selected := p.GUITargetConfig
-	if selected == nil || selected.TargetID != "terraform-ouro-1" || selected.Kind != "devkit-agent" || selected.ExpectedExecutionHost != "shadow-throne" || hostname != selected.ExpectedExecutionHost ||
-		p.Agent.ID.Project != repo || p.Agent.ID.Repo != repo || p.Agent.ID.Index != 1 || p.HostWorkspaceRoot != root+"/control-plane-worktrees/terraform-ouro-1" || p.SandboxWorkspaceRoot != "/workspaces/dev" ||
-		p.Agent.HostWorktree != p.HostWorkspaceRoot+"/"+repo || p.Agent.SandboxWorktree != "/workspaces/dev/"+repo || p.Agent.HostHome != home || p.Agent.SandboxHome != "/agent-state/"+repo+"-agent1/home" || p.Agent.StateRoot != root+"/.devkit/native-agents/"+repo+"-agent1" || p.IsolationProfile != "workspace-egress" {
-		return fmt.Errorf("Terraform tools preparation requires exact source-selected TF1 host, config and geometry")
-	}
-	return nil
-}
-
-func PrepareTerraformTools(p nativeplan.Plan) error {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return err
-	}
-	if err := ValidateTerraformToolsPlan(p, hostname); err != nil {
-		return err
-	}
-	return prepare(p, false, true)
-}
-
-func prepare(p nativeplan.Plan, softwareOnly, terraformTools bool) error {
-	return prepareWithLegacyState(p, softwareOnly, terraformTools, true)
-}
-
-func prepareWithLegacyState(p nativeplan.Plan, softwareOnly, terraformTools, allowLegacyState bool) error {
+func prepareWithLegacyState(p nativeplan.Plan, allowLegacyState bool) error {
 	if err := ValidateNativePersistentHome(p); err != nil {
 		return err
 	}
@@ -288,7 +249,7 @@ func prepareWithLegacyState(p nativeplan.Plan, softwareOnly, terraformTools, all
 			return fmt.Errorf("retained native preparation history: %w", err)
 		}
 	}
-	if !softwareOnly && allowLegacyState {
+	if allowLegacyState {
 		if err := migrateMissingCodexState(p.Agent.HostHome, filepath.Join(p.Agent.StateRoot, "home")); err != nil {
 			return err
 		}
@@ -302,24 +263,20 @@ func prepareWithLegacyState(p nativeplan.Plan, softwareOnly, terraformTools, all
 	if err := capCodexTUILog(p.Agent.HostHome); err != nil {
 		return err
 	}
-	if !softwareOnly {
-		if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
-			return err
-		}
-		if err := SeedSSH(p.Agent.HostHome, false); err != nil {
-			return err
-		}
-		if !terraformTools {
-			if err := SeedAWS(p.Agent.HostHome, false); err != nil {
-				return err
-			}
-			if err := SeedTerraformProviderCredentials(p); err != nil {
-				return err
-			}
-		}
-		if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
-			return err
-		}
+	if err := SeedCodexAuth(p.Agent.HostHome, false); err != nil {
+		return err
+	}
+	if err := SeedSSH(p.Agent.HostHome, false); err != nil {
+		return err
+	}
+	if err := SeedAWS(p.Agent.HostHome, false); err != nil {
+		return err
+	}
+	if err := SeedTerraformProviderCredentials(p); err != nil {
+		return err
+	}
+	if err := ensureGitSSHConfig(p, sshAuthority); err != nil {
+		return err
 	}
 	if err := ensureResolvConf(p.DNS.ResolvConf); err != nil {
 		return err
