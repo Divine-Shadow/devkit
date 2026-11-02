@@ -22,7 +22,7 @@ func missingPIDFixture(t *testing.T) Config {
 		t.Fatal(err)
 	}
 	c := Normalize(Config{StateRoot: root, Socket: filepath.Join(root, "broker.sock"), Binary: executable})
-	child := startBrokerTestHelper(t, "listen", "BROKER_LISTEN=unix://"+c.Socket)
+	child, retired := startBrokerTestHelperWithRetirement(t, "listen", "BROKER_LISTEN=unix://"+c.Socket)
 	waitForBrokerTestSocket(t, c.Socket)
 	ticks, err := processStart(child.Process.Pid)
 	if err != nil {
@@ -40,6 +40,13 @@ func missingPIDFixture(t *testing.T) Config {
 	}
 	if err := child.Process.Kill(); err != nil {
 		t.Fatal(err)
+	}
+	// Wait for the helper's sole Cmd.Wait owner to reap it. A transient /proc
+	// ESRCH while threads retire must not prevent the intended mutation test.
+	select {
+	case <-retired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fixture process was not reaped")
 	}
 	deadline := time.Now().Add(time.Second)
 	// A killed multithreaded helper can expose a retired leader before its

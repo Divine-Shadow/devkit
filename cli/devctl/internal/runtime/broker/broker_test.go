@@ -293,6 +293,13 @@ func stateFixture(cfg Config, pid int, ticks uint64) State {
 
 func startBrokerTestHelper(t *testing.T, mode string, extraEnv ...string) *exec.Cmd {
 	t.Helper()
+	cmd, _ := startBrokerTestHelperWithRetirement(t, mode, extraEnv...)
+	return cmd
+}
+
+// One goroutine owns Cmd.Wait; fixtures and cleanup may await its completion.
+func startBrokerTestHelperWithRetirement(t *testing.T, mode string, extraEnv ...string) (*exec.Cmd, <-chan struct{}) {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
@@ -317,7 +324,7 @@ func startBrokerTestHelper(t *testing.T, mode string, extraEnv ...string) *exec.
 		case <-time.After(2 * time.Second):
 		}
 	})
-	return cmd
+	return cmd, done
 }
 
 func waitForBrokerTestSocket(t *testing.T, path string) {
