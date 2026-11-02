@@ -50,6 +50,8 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            max-jobs = 1
+            cores = 2
       - name: Cheap native runtime gates
         shell: bash
         run: |
