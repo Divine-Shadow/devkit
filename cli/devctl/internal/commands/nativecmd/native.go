@@ -19,6 +19,7 @@ import (
 
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
+	"devkit/cli/devctl/internal/execx"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	runtimebroker "devkit/cli/devctl/internal/runtime/broker"
 	"devkit/cli/devctl/internal/runtime/capacity"
@@ -82,6 +83,7 @@ func handle(ctx *cmdregistry.Context) error {
 }
 
 type planArgs struct {
+	executionTimeout           time.Duration
 	processCustodyObservation  bool
 	controllerLifecycleLeaseFD int
 	indexSet                   bool
@@ -167,6 +169,7 @@ type lifecycleArgs struct {
 }
 
 type topExecArgs struct {
+	executionTimeout        time.Duration
 	index                   int
 	repo                    string
 	guiTargetID             string
@@ -413,6 +416,16 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 				return parsed, fmt.Errorf("--managed-app-server is only valid for native exec")
 			}
 			parsed.managedAppServer = true
+		case "--timeout":
+			if !allowCommand || ctx.Args[0] != "exec" || i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--timeout requires a duration for native exec")
+			}
+			value, err := parseNativeExecTimeout(ctx.Args[i+1], parsed.executionTimeout)
+			if err != nil {
+				return parsed, err
+			}
+			parsed.executionTimeout = value
+			i++
 		case "--count":
 			if i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--count requires a value")
@@ -1037,6 +1050,16 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			parsed.softwareOnly = true
 		case "--managed-app-server":
 			parsed.managedAppServer = true
+		case "--timeout":
+			if attach || i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--timeout requires a duration for exec")
+			}
+			value, err := parseNativeExecTimeout(ctx.Args[i+1], parsed.executionTimeout)
+			if err != nil {
+				return parsed, err
+			}
+			parsed.executionTimeout = value
+			i++
 		case "--":
 			parsed.command = append([]string{}, ctx.Args[i+1:]...)
 			return parsed, nil
@@ -1052,6 +1075,9 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 }
 
 func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) (retErr error) {
+	if parsed.managedAppServer && parsed.executionTimeout > 0 {
+		return fmt.Errorf("--timeout is not valid for a systemd-owned managed app-server")
+	}
 	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, parsed.managedAppServer, ctx.Project, parsed.guiTargetID, command); err != nil {
 		return err
 	}
@@ -1162,7 +1188,10 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return runCommandPreservingExit(cmd)
+	if parsed.managedAppServer {
+		return cmd.Run()
+	}
+	return runNativeCommandWithTimeout(cmd, parsed.executionTimeout)
 }
 
 const maxUnixSocketPathBytes = 107
@@ -2277,6 +2306,9 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
+	if parsed.managedAppServer && parsed.executionTimeout > 0 {
+		return fmt.Errorf("--timeout is not valid for a systemd-owned managed app-server")
+	}
 	if parsed.repoCheck != "" {
 		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
@@ -2377,7 +2409,10 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return runCommandPreservingExit(cmd)
+	if parsed.managedAppServer {
+		return cmd.Run()
+	}
+	return runNativeCommandWithTimeout(cmd, parsed.executionTimeout)
 }
 
 func ensurePortableProductExecGitdir(opts nativeplan.BuildOptions) error {
@@ -2409,7 +2444,55 @@ func buildDevAllForExec(opts nativeplan.BuildOptions) (nativeplan.Plan, error) {
 }
 
 func runCommandPreservingExit(cmd *exec.Cmd) error {
-	return cmd.Run()
+	return runNativeCommandWithTimeout(cmd, 0)
+}
+
+func parseNativeExecTimeout(value string, previous time.Duration) (time.Duration, error) {
+	if previous != 0 {
+		return 0, fmt.Errorf("--timeout may be specified only once")
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("--timeout must be a positive duration")
+	}
+	return duration, nil
+}
+
+type nativeExecError struct {
+	code int
+	err  error
+}
+
+func (e nativeExecError) Error() string {
+	return fmt.Sprintf("native exec (exit %d): %v", e.code, e.err)
+}
+func (e nativeExecError) Unwrap() error { return e.err }
+func (e nativeExecError) ExitCode() int { return e.code }
+
+func runNativeCommandWithTimeout(cmd *exec.Cmd, duration time.Duration) error {
+	// Interactive foreground groups retain their terminal-owned lifecycle.
+	// Moving one into a background group would stop reads with SIGTTIN.
+	if nativeCommandHasTerminalInput(cmd) {
+		if duration > 0 {
+			return fmt.Errorf("--timeout requires non-interactive command input")
+		}
+		return cmd.Run()
+	}
+	ctx := context.Background()
+	if duration > 0 {
+		bounded, cancel := context.WithTimeout(ctx, duration)
+		defer cancel()
+		ctx = bounded
+	}
+	result := execx.RunManagedCommand(ctx, execx.ManagedPolicy{}, cmd)
+	if result.Err == nil && result.Code == 0 {
+		return nil
+	}
+	code := result.Code
+	if execx.IsManagedCleanupError(result.Err) {
+		code = 125
+	}
+	return nativeExecError{code: code, err: result.Err}
 }
 
 func ensureManagedEgressProxy(p nativeplan.Plan, dryRun bool) (func() error, error) {

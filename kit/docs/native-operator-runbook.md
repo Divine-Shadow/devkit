@@ -39,6 +39,17 @@ Run a non-interactive command inside an agent sandbox:
 kit/scripts/devkit -p dev-all exec 1 --repo ouroboros-ide -- bash -lc 'pwd && codex --version'
 ```
 
+For a noninteractive command, `exec` and `native exec` accept a positive duration,
+for example `exec 1 --repo ouroboros-ide --timeout 5m -- COMMAND`. The default has
+no command deadline. Cancellation or a selected deadline terminates and waits for
+the command's process group, with bounded termination and output draining. A
+deadline returns 124, cancellation 130, and cleanup failure 125; ordinary payload
+exit codes remain unchanged. Descendants that create separate process groups
+need their own owner to forward termination and reap them. These exit codes do
+not certify cleanup of a separate redirected group or of an earlier invocation.
+Interactive terminal input retains its existing foreground lifecycle and rejects
+`--timeout`. Systemd-owned managed app-servers also reject this command deadline.
+
 Open an interactive shell:
 
 ```bash

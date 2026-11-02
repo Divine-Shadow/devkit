@@ -114,16 +114,27 @@ func (w activityWriter) Write(payload []byte) (int, error) {
 	return written, err
 }
 
+func sameManagedWriter(left, right io.Writer) (same bool) {
+	// Match os/exec's shared-writer behavior without panicking when a writer's
+	// dynamic type is not comparable.
+	defer func() { _ = recover() }()
+	return left == right
+}
+
 func startManagedCommand(cmd *exec.Cmd, stdout, stderr io.Writer) (*managedCommandIO, error) {
 	stdoutReader, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("create managed command stdout pipe: %w", err)
 	}
-	stderrReader, stderrWriter, err := os.Pipe()
-	if err != nil {
-		_ = stdoutReader.Close()
-		_ = stdoutWriter.Close()
-		return nil, fmt.Errorf("create managed command stderr pipe: %w", err)
+	sharedOutput := sameManagedWriter(stdout, stderr)
+	stderrReader, stderrWriter := stdoutReader, stdoutWriter
+	if !sharedOutput {
+		stderrReader, stderrWriter, err = os.Pipe()
+		if err != nil {
+			_ = stdoutReader.Close()
+			_ = stdoutWriter.Close()
+			return nil, fmt.Errorf("create managed command stderr pipe: %w", err)
+		}
 	}
 	closePipes := func() {
 		_ = stdoutReader.Close()
@@ -145,11 +156,11 @@ func startManagedCommand(cmd *exec.Cmd, stdout, stderr io.Writer) (*managedComma
 	_ = stderrWriter.Close()
 
 	managedIO := &managedCommandIO{
-		readers: []*os.File{stdoutReader, stderrReader},
+		readers: []*os.File{stdoutReader},
 		done:    make(chan struct{}),
 	}
 	var copies sync.WaitGroup
-	copies.Add(2)
+	copies.Add(1)
 	copyOutput := func(label string, destination io.Writer, source *os.File) {
 		defer copies.Done()
 		defer source.Close()
@@ -160,7 +171,11 @@ func startManagedCommand(cmd *exec.Cmd, stdout, stderr io.Writer) (*managedComma
 		}
 	}
 	go copyOutput("stdout", stdout, stdoutReader)
-	go copyOutput("stderr", stderr, stderrReader)
+	if !sharedOutput {
+		managedIO.readers = append(managedIO.readers, stderrReader)
+		copies.Add(1)
+		go copyOutput("stderr", stderr, stderrReader)
+	}
 	go func() {
 		copies.Wait()
 		close(managedIO.done)
@@ -207,11 +222,28 @@ func (managedIO *managedCommandIO) copyError() error {
 }
 
 // RunManaged runs a command in its own process group. Cancellation and idle
-// expiry terminate the complete descendant group, wait for it to unwind, and
-// then force-kill any orphan that outlives the declared grace period.
+// expiry terminate that group, wait for it to unwind, and then force-kill group
+// members that outlive the declared grace period. Descendants that create a
+// separate process group require their own owner's termination and reaping.
 func RunManaged(ctx context.Context, policy ManagedPolicy, name string, args ...string) Result {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return RunManagedCommand(ctx, policy, cmd)
+}
+
+// RunManagedCommand supervises an unstarted command while preserving its
+// directory, environment, arguments and selected streams.
+func RunManagedCommand(ctx context.Context, policy ManagedPolicy, cmd *exec.Cmd) Result {
+	if cmd == nil || cmd.Process != nil {
+		return Result{Code: 1, Err: errors.New("managed execution requires an unstarted command")}
+	}
+	if cmd.SysProcAttr != nil && (cmd.SysProcAttr.Pgid != 0 || cmd.SysProcAttr.Setsid) {
+		return Result{Code: 1, Err: errors.New("managed execution requires its own process group")}
+	}
 	if os.Getenv("DEVKIT_DEBUG") == "1" {
-		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(append([]string{name}, args...), " "))
+		fmt.Fprintf(os.Stderr, "+ %s\n", strings.Join(cmd.Args, " "))
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -224,17 +256,27 @@ func RunManaged(ctx context.Context, policy ManagedPolicy, name string, args ...
 	}
 
 	activity := make(chan struct{}, 1)
-	cmd := exec.Command(name, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdin = os.Stdin
+	attributes := syscall.SysProcAttr{Setpgid: true}
+	if cmd.SysProcAttr != nil {
+		attributes = *cmd.SysProcAttr
+		attributes.Setpgid = true
+	}
+	cmd.SysProcAttr = &attributes
+	stdout, stderr := cmd.Stdout, cmd.Stderr
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
 	// Descendants can escape the managed process group with setsid while still
 	// holding I/O descriptors. Bound any os/exec wait work in addition to the
 	// explicitly owned pipe drains below.
 	cmd.WaitDelay = grace
 	managedIO, err := startManagedCommand(
 		cmd,
-		activityWriter{writer: os.Stdout, activity: activity},
-		activityWriter{writer: os.Stderr, activity: activity},
+		activityWriter{writer: stdout, activity: activity},
+		activityWriter{writer: stderr, activity: activity},
 	)
 	if err != nil {
 		return Result{Code: 1, Err: err}
