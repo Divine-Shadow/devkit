@@ -274,7 +274,5 @@ func TestNativeExecTimeoutParsersAndManagedRefusal(t *testing.T) {
 	if err != nil || native.executionTimeout != 2*time.Second {
 		t.Fatalf("native parser: %+v, %v", native, err)
 	}
-	if err := runTopExec(&cmdregistry.Context{}, topExecArgs{managedAppServer: true, executionTimeout: time.Second}, nil); err == nil || !strings.Contains(err.Error(), "systemd-owned") {
-		t.Fatalf("managed app-server deadline refusal: %v", err)
-	}
+
 }

@@ -14,7 +14,7 @@ import (
 )
 
 func TestBuildSelectsExactGUITargetConfigProjection(t *testing.T) {
-	if guiCodexConfigProjectionManifestPath != "/etc/static/fleet/source/codex-config-projections.json" {
+	if guiCodexConfigProjectionManifestPath != "/etc/devkit/codex-config-projections.json" {
 		t.Fatalf("default GUI config projection manifest = %q", guiCodexConfigProjectionManifestPath)
 	}
 	if guiCodexConfigProjectionSchema != "devkit/gui-codex-config-projections/v1" {

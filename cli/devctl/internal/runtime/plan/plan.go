@@ -43,7 +43,6 @@ type Plan struct {
 	GitBacklink            *GitBacklinkProjection     `json:"git_backlink,omitempty"`
 	Agent                  agent.Spec                 `json:"agent"`
 	GUITargetConfig        *GUITargetConfigProjection `json:"gui_target_config,omitempty"`
-	CallbackReturn         *CallbackReturnProjection  `json:"callback_return,omitempty"`
 	DevkitHostRoot         string                     `json:"devkit_host_root"`
 	RuntimeAuthorityRoot   string                     `json:"runtime_authority_root"`
 	DevkitSandboxRoot      string                     `json:"devkit_sandbox_root"`
@@ -63,8 +62,6 @@ type Plan struct {
 	IsolationProfile       string                     `json:"isolation_profile,omitempty"`
 	MountPolicyIdentity    string                     `json:"mount_policy_identity"`
 	WindowsMountsVisible   bool                       `json:"windows_mounts_visible"`
-	ControllerProfile      string                     `json:"controller_profile,omitempty"`
-	ControllerManifest     string                     `json:"controller_manifest,omitempty"`
 	Binds                  []Bind                     `json:"binds"`
 	Env                    map[string]string          `json:"env"`
 	Proxy                  ProxyConfig                `json:"proxy"`
@@ -77,6 +74,7 @@ type Plan struct {
 }
 
 type BuildOptions struct {
+	ContainersDisabled    bool
 	Paths                 devkitpaths.Paths
 	HostRoot              string
 	Project               string
@@ -118,26 +116,7 @@ var (
 	// cross-package hermetic tests can supply their isolated listener; callers
 	// cannot select it through native arguments.
 	WorkspaceEgressNSCDSource = workspaceEgressNSCDSocket
-	// These fixed projection points are package-owned controller capabilities
-	// for the Management dev-workspace. Callers cannot select inventories,
-	// routes, credentials, or source paths through native arguments or env.
-	WorkspaceControllerSourceInventory        = "/etc/fleet/source/fleet-inventory.json"
-	WorkspaceControllerGUIInventory           = "/etc/fleet/source/fleet-codex-gui-inventory.json"
-	WorkspaceControllerCodexConfigProjections = "/etc/fleet/source/codex-config-projections.json"
-	// WorkspaceProductGovernanceEnvSource is the sole source-derived Product
-	// governance environment projected into governed consumers. The path is
-	// compiled into Devkit; callers cannot select a file or provide a mutable
-	// replacement.
-	WorkspaceProductGovernanceEnvSource = "/run/current-system/etc/fleet/product-governance.env"
-	WorkspaceProductGovernanceStoreRoot = "/nix/store"
 )
-
-const WorkspaceProductGovernanceEnvTarget = "/etc/fleet/product-governance.env"
-
-// WorkspaceControllerExecSocket is the sole typed Fleet exec capability
-// projected into the Management workspace. Nix owns the listener and its
-// protected SSH/Tailnet effects.
-var WorkspaceControllerExecSocket = "/run/fleet-controller-exec/control.sock"
 
 func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 	const rootedPrefix = "path:.?dir="
@@ -186,7 +165,7 @@ func resolvePlanGeometry(opts BuildOptions) (project, repo string, index int, pa
 	if err != nil {
 		return
 	}
-	// Fleet's isolated Shared Power lanes use their project-qualified name.
+	// Isolated Shared Power lanes use their project-qualified name.
 	// Only the explicit workspace root selects this geometry; historical
 	// prefix lifecycle plans retain their existing worktrees and homes.
 	if strings.TrimSpace(opts.WorkspaceRoot) != "" && isSharedPowerWorkspaceLane(project, repo, index) {
@@ -241,13 +220,17 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	flake = resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot)
 	broker := strings.TrimSpace(opts.BrokerEndpoint)
-	if broker == "" {
+	if broker == "" && !opts.ContainersDisabled {
 		broker = "/run/devkit/test-container-broker.sock"
 	}
-	postgresLeasePath := usesPostgresEndpointLease(project, repo)
+	postgresLeasePath := !opts.ContainersDisabled && usesPostgresEndpointLease(project, repo)
 	postgresSocketRoot := filepath.Join(paths.HostAgentStateRoot, "pg")
 	postgresDockerSocket := ""
 	dockerHost := "unix://" + broker
+	if opts.ContainersDisabled {
+		broker = ""
+		dockerHost = "unix:///run/devkit/containers-disabled.sock"
+	}
 	if postgresLeasePath {
 		postgresDockerSocket = filepath.Join(postgresSocketRoot, "docker.sock")
 		dockerHost = "unix://" + postgresDockerSocket
@@ -269,7 +252,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		return Plan{}, fmt.Errorf("egress allowlist requires an isolation profile")
 	}
 	if workspaceRoot != "" && isolationProfile != IsolationProfileWorkspaceEgress {
-		return Plan{}, fmt.Errorf("Management workspace root requires workspace-egress isolation")
+		return Plan{}, fmt.Errorf("Isolated workspace root requires workspace-egress isolation")
 	}
 	if isolationProfile == IsolationProfileWorkspaceEgress {
 		if egressAllowlist == "" {
@@ -289,21 +272,6 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if proxyURL != "" {
 		javaOptions = append(javaOptions, javaProxyOptions(proxyURL)...)
-	}
-	var controllerProfile *ManagementControllerProfile
-	if isolationProfile == IsolationProfileWorkspaceEgress &&
-		project == "dev-workspace" && repo == "shadow-throne-management" {
-		requestedProfile := strings.TrimSpace(os.Getenv(ManagementControllerProfileEnvironment))
-		if requestedProfile != "" {
-			if requestedProfile != ManagementControllerProfileIdentity {
-				return Plan{}, fmt.Errorf("unknown Management controller profile %q", requestedProfile)
-			}
-			loaded, err := LoadManagementControllerProfile(ManagementControllerProfileManifestPath)
-			if err != nil {
-				return Plan{}, err
-			}
-			controllerProfile = &loaded
-		}
 	}
 	javaToolOptions := strings.Join(javaOptions, " ")
 	resolvConf := strings.TrimSpace(opts.DNSResolvConf)
@@ -357,13 +325,10 @@ func Build(opts BuildOptions) (Plan, error) {
 		// Reserve the GUI target claim for every sandbox. Ordinary plans
 		// explicitly erase hostile ambient state; an inventory-validated GUI
 		// selection replaces this sentinel below.
-		GUITargetIDEnvironment:            "",
-		CallbackReturnManifestEnvironment: "",
-		CallbackReturnClientEnvironment:   "",
-		CallbackReturnProfileEnvironment:  "",
-		"AWS_CONFIG_FILE":                 filepath.Join(paths.SandboxHome, ".aws", "config"),
-		"AWS_SHARED_CREDENTIALS_FILE":     filepath.Join(paths.SandboxHome, ".aws", "credentials"),
-		"AWS_SDK_LOAD_CONFIG":             "1",
+		GUITargetIDEnvironment:        "",
+		"AWS_CONFIG_FILE":             filepath.Join(paths.SandboxHome, ".aws", "config"),
+		"AWS_SHARED_CREDENTIALS_FILE": filepath.Join(paths.SandboxHome, ".aws", "credentials"),
+		"AWS_SDK_LOAD_CONFIG":         "1",
 	}
 	if postgresLeasePath && strings.TrimSpace(opts.BrokerBinary) != "" {
 		brokerBinary := strings.TrimSpace(opts.BrokerBinary)
@@ -392,7 +357,7 @@ func Build(opts BuildOptions) (Plan, error) {
 	}
 	if postgresLeasePath {
 		binds = append(binds, Bind{Source: postgresDockerSocket, Target: postgresDockerSocket, Mode: "rw", Required: true})
-	} else {
+	} else if broker != "" {
 		binds = append(binds, Bind{Source: broker, Target: broker, Mode: "rw", Required: false})
 	}
 	notes := []string{
@@ -413,7 +378,7 @@ func Build(opts BuildOptions) (Plan, error) {
 			postgresDockerSocket,
 			broker,
 			resolvConf,
-			controllerProfile,
+			nil,
 			gitTrace,
 		)
 		if err != nil {
@@ -427,18 +392,6 @@ func Build(opts BuildOptions) (Plan, error) {
 				return Plan{}, err
 			}
 		}
-		for _, bind := range binds {
-			if bind.Source == WorkspaceControllerExecSocket &&
-				bind.Target == WorkspaceControllerExecSocket {
-				env["FLEET_EXEC_TRANSPORT_HANDLE"] = "required"
-				break
-			}
-		}
-		if controllerProfile != nil {
-			env[ManagementControllerProfileEnvironment] = ManagementControllerProfileIdentity
-			env[ControllerOperationHandleEnvironment] = ControllerOperationHandleRequiredValue
-			env[WorkspaceControllerWorkLedgerEnvironment] = WorkspaceControllerWorkLedgerPath
-		}
 		notes = append(notes,
 			"isolation profile workspace-egress: network is proxy-only through the configured egress allowlist",
 			"isolation profile workspace-egress: filesystem binds are limited to the worktree, per-agent home, exact Git metadata, runtime support, and capability sockets",
@@ -448,8 +401,8 @@ func Build(opts BuildOptions) (Plan, error) {
 	windowsMountsVisible := true
 	if isolationProfile == IsolationProfileWorkspaceEgress {
 		mountPolicyIdentity = "devkit/workspace-egress/v3"
-		if controllerProfile != nil || workspaceRoot != "" {
-			mountPolicyIdentity = ManagementControllerMountPolicyIdentity
+		if workspaceRoot != "" {
+			mountPolicyIdentity = "devkit/workspace-egress/v4"
 		}
 		windowsMountsVisible = false
 		env["DEVKIT_NATIVE_MOUNT_POLICY_IDENTITY"] = mountPolicyIdentity
@@ -511,20 +464,8 @@ func Build(opts BuildOptions) (Plan, error) {
 		IsolationProfile:     isolationProfile,
 		MountPolicyIdentity:  mountPolicyIdentity,
 		WindowsMountsVisible: windowsMountsVisible,
-		ControllerProfile: func() string {
-			if controllerProfile == nil {
-				return ""
-			}
-			return ManagementControllerProfileIdentity
-		}(),
-		ControllerManifest: func() string {
-			if controllerProfile == nil {
-				return ""
-			}
-			return ManagementControllerProfileManifestPath
-		}(),
-		Binds: binds,
-		Env:   env,
+		Binds:                binds,
+		Env:                  env,
 		Proxy: ProxyConfig{
 			HTTPProxy:     proxyURL,
 			HTTPSProxy:    proxyURL,
@@ -554,20 +495,6 @@ func Build(opts BuildOptions) (Plan, error) {
 	p.GUITargetConfig = projectionConfig
 	if projectionConfig != nil {
 		p.Env[GUITargetIDEnvironment] = projectionConfig.TargetID
-	}
-	callbackReturn, err := loadCallbackReturnProjection(p)
-	if err != nil {
-		return Plan{}, err
-	}
-	if callbackReturn != nil {
-		p.CallbackReturn = callbackReturn
-		p.Binds = append(p.Binds,
-			Bind{Source: CallbackReturnManifestSource, Target: CallbackReturnManifestTarget, Mode: "ro", Required: true},
-			Bind{Source: callbackReturn.HandleParent, Target: callbackReturn.HandleParent, Mode: "ro", Required: true},
-		)
-		p.Env[CallbackReturnManifestEnvironment] = CallbackReturnManifestTarget
-		p.Env[CallbackReturnClientEnvironment] = callbackReturn.FleetExecutable
-		p.Env[CallbackReturnProfileEnvironment] = CallbackReturnProfileIdentity
 	}
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})
@@ -622,11 +549,11 @@ func usesPostgresEndpointLease(project, repo string) bool {
 	return strings.TrimSpace(project) == "dev-all" && strings.TrimSpace(repo) == "ouroboros-ide"
 }
 
-func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile) ([]Bind, error) {
-	return workspaceEgressBindsObserved(paths, project, index, repo, workspaceRoot, devkitRoot, runtimeAuthorityRoot, postgresDockerSocket, broker, resolvConf, controllerProfile, nil)
+func workspaceEgressBinds(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, _ any) ([]Bind, error) {
+	return workspaceEgressBindsObserved(paths, project, index, repo, workspaceRoot, devkitRoot, runtimeAuthorityRoot, postgresDockerSocket, broker, resolvConf, nil, nil)
 }
 
-func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, controllerProfile *ManagementControllerProfile, trace *gitMetadataBindTrace) ([]Bind, error) {
+func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, repo, workspaceRoot, devkitRoot string, runtimeAuthorityRoot string, postgresDockerSocket string, broker string, resolvConf string, _ any, trace *gitMetadataBindTrace) ([]Bind, error) {
 	binds := []Bind{}
 	add := func(source, target, mode string, required bool) {
 		source = filepath.Clean(strings.TrimSpace(source))
@@ -652,72 +579,17 @@ func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, 
 	if repo == "ti4-calculator" && filepath.Clean(paths.HostWorktree) == filepath.Clean(canonicalTI4) {
 		add(paths.HostWorktree, "/workspaces/dev/ti4-calculator", "rw", true)
 	}
-	additionalBinds, err := resolveWorkspaceEgressAdditionalBinds(
-		project,
-		index,
-		repo,
-		binds,
-		workspaceEgressAdditionalBindRegistry,
-	)
-	if err != nil {
-		return nil, err
-	}
-	for _, bind := range additionalBinds {
-		if workspaceRoot != "" {
-			// The lane root already contains every source this Management
-			// consumer may see. Compatibility projections owned by another
-			// lane must not cross that boundary.
-			continue
-		}
-		add(bind.Source, bind.Target, bind.Mode, bind.Required)
-	}
 	add(paths.HostHome, paths.SandboxHome, "rw", true)
 	runtimeRoot := filepath.Clean(strings.TrimSpace(runtimeAuthorityRoot))
 	if runtimeRoot == "" || runtimeRoot == "." {
 		runtimeRoot = devkitRoot
 	}
 	add(runtimeRoot, filepath.Join("/workspaces/dev", filepath.Base(devkitRoot)), "ro", true)
-	if IsGovernedRuntimePlan(project, repo) {
-		// launch.Prepare materializes the immutable runtime identity projection
-		// and governance catalog beneath the controller dev root before every
-		// governed sandbox invocation. Readiness and the governed launcher
-		// consume those exact files; they must not depend on a broad
-		// /workspaces/dev bind or regenerate a second identity in the consumer.
-		hostRuntimeSupportRoot := filepath.Join(paths.DevRoot, ".devkit")
-		if workspaceRoot != "" {
-			hostRuntimeSupportRoot = filepath.Join(workspaceRoot, ".devkit")
-		}
-		sandboxRuntimeSupportRoot := filepath.Join("/workspaces/dev", ".devkit")
-		add(
-			filepath.Join(hostRuntimeSupportRoot, "ouro8-governance-env.sh"),
-			filepath.Join(sandboxRuntimeSupportRoot, "ouro8-governance-env.sh"),
-			"ro",
-			true,
-		)
-		add(
-			filepath.Join(hostRuntimeSupportRoot, "ouro8-governance-repo-env.json"),
-			filepath.Join(sandboxRuntimeSupportRoot, "ouro8-governance-repo-env.json"),
-			"ro",
-			true,
-		)
-		add(
-			filepath.Join(hostRuntimeSupportRoot, "governance-control-plane"),
-			filepath.Join(sandboxRuntimeSupportRoot, "governance-control-plane"),
-			"rw",
-			true,
-		)
-		add(
-			WorkspaceProductGovernanceEnvSource,
-			WorkspaceProductGovernanceEnvTarget,
-			"ro",
-			true,
-		)
-	}
 	for _, bind := range gitMetadataBindsObserved(paths.HostWorktree, paths.SandboxWorktree, trace) {
 		packageOwnedProductMetadata := isPackageOwnedProductGitMetadataBind(project, repo, paths, bind)
 		if workspaceRoot != "" && !pathWithinRoot(workspaceRoot, bind.Source) && !packageOwnedProductMetadata {
 			recordGitMetadataDisposition(trace, bind, "outside-lane-refused")
-			return nil, fmt.Errorf("Management workspace root rejects Git metadata outside the lane root: %s", bind.Source)
+			return nil, fmt.Errorf("Isolated workspace root rejects Git metadata outside the lane root: %s", bind.Source)
 		}
 		if workspaceRoot != "" {
 			if packageOwnedProductMetadata {
@@ -738,49 +610,11 @@ func workspaceEgressBindsObserved(paths agent.Paths, project string, index int, 
 	add(WorkspaceEgressNSCDSource, workspaceEgressNSCDSocket, "ro", true)
 	if postgresDockerSocket != "" {
 		add(postgresDockerSocket, postgresDockerSocket, "rw", true)
-	} else {
+	} else if broker != "" {
 		add(broker, broker, "rw", false)
 	}
 	add(resolvConf, "/etc/resolv.conf", "ro", false)
-	// Ordinary execution consumes its Devkit environment. Fleet bookkeeping
-	// and a listener merely present on the host do not select host authority.
-	// Keep the explicitly requested legacy profile scoped to its existing
-	// protected operations while ordinary GUI composition sheds that profile.
-	if controllerProfile != nil {
-		add(WorkspaceControllerSourceInventory, WorkspaceControllerSourceInventory, "ro", true)
-		add(WorkspaceControllerGUIInventory, WorkspaceControllerGUIInventory, "ro", true)
-		add(WorkspaceControllerCodexConfigProjections, WorkspaceControllerCodexConfigProjections, "ro", true)
-		activeWSLNixRoot := controllerProfile.SourceRoots.WSLNix
-		if workspaceRoot != "" {
-			activeWSLNixRoot.BackingPath = filepath.Join(workspaceRoot, "wsl-nix")
-		}
-		add(activeWSLNixRoot.BackingPath, activeWSLNixRoot.LogicalPath, "rw", true)
-		add(ManagementControllerProfileManifestPath, ManagementControllerProfileManifestPath, "ro", true)
-		add(WorkspaceControllerOperationSocket, WorkspaceControllerOperationSocket, "ro", false)
-		// The existing fleet work commands and deployment campaign validator
-		// share this one canonical SQLite ledger. Bind its directory, rather
-		// than only work.sqlite, so SQLite can create its journal/WAL files.
-		add(WorkspaceControllerWorkLedgerDirectory, WorkspaceControllerWorkLedgerDirectory, "rw", true)
-	}
-	ownerBinds, err := controllerServiceOwnerClientBinds(project, index, repo, controllerProfile)
-	if err != nil {
-		return nil, err
-	}
-	binds = append(binds, ownerBinds...)
 	return binds, nil
-}
-
-func IsGovernedRuntimePlan(project, repo string) bool {
-	switch strings.TrimSpace(repo) {
-	case "ouroboros-ide", "ouroboros-terraform":
-		return true
-	}
-	switch strings.TrimSpace(project) {
-	case "dev-workspace", "ouro-integration", "ouroboros-terraform":
-		return true
-	default:
-		return false
-	}
 }
 
 func validateWorkspaceEgressMountPolicy(binds []Bind, egressAllowlist string) error {
@@ -826,17 +660,16 @@ func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths
 		return "", nil
 	}
 	if !filepath.IsAbs(workspaceRoot) || filepath.Clean(workspaceRoot) != workspaceRoot {
-		return "", fmt.Errorf("Management workspace root must be absolute and canonical: %s", value)
+		return "", fmt.Errorf("Isolated workspace root must be absolute and canonical: %s", value)
 	}
 	if isMntFilesystemPath(workspaceRoot) || isWindowsFilesystemPath(workspaceRoot) {
-		return "", fmt.Errorf("Management workspace root rejects /mnt paths: %s", workspaceRoot)
+		return "", fmt.Errorf("Isolated workspace root rejects /mnt paths: %s", workspaceRoot)
 	}
-	managementLane := project == "dev-workspace" && repo == "shadow-throne-management" && (index == 1 || index == 2)
 	productLane := project == "dev-all" && repo == "ouroboros-ide"
 	sharedPowerLane := isSharedPowerWorkspaceLane(project, repo, index)
 	terraLane := isTerraformWorkspaceLane(project, repo, index)
-	if !managementLane && !productLane && !sharedPowerLane && !terraLane {
-		return "", fmt.Errorf("workspace root is restricted to declared Management controller, dev-all Product, Shared Power, or Terraform Agent1 lanes")
+	if !productLane && !sharedPowerLane && !terraLane {
+		return "", fmt.Errorf("workspace root is restricted to declared dev-all Product, Shared Power, or Terraform Agent1 lanes")
 	}
 	laneName := fmt.Sprintf("agent%d", index)
 	if sharedPowerLane {
@@ -850,10 +683,10 @@ func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths
 	}
 	expected := filepath.Join(filepath.Clean(paths.HostWorktreeRoot), laneName)
 	if workspaceRoot == filepath.Clean(paths.DevRoot) || workspaceRoot == filepath.Clean(paths.HostWorktreeRoot) || workspaceRoot != expected {
-		return "", fmt.Errorf("Management workspace root must be the exact selected lane root %s: %s", expected, workspaceRoot)
+		return "", fmt.Errorf("Isolated workspace root must be the exact selected lane root %s: %s", expected, workspaceRoot)
 	}
 	if filepath.Dir(filepath.Clean(paths.HostWorktree)) != workspaceRoot || filepath.Base(filepath.Clean(paths.HostWorktree)) != repo {
-		return "", fmt.Errorf("Management host worktree must be an immediate child of workspace root %s: %s", workspaceRoot, paths.HostWorktree)
+		return "", fmt.Errorf("Isolated host worktree must be an immediate child of workspace root %s: %s", workspaceRoot, paths.HostWorktree)
 	}
 	sandboxWorktree, ok := projectSandboxPath(paths.HostWorktree, workspaceRoot, "/workspaces/dev")
 	expectedSandboxWorktree := filepath.Join("/workspaces/dev", repo)
@@ -865,14 +698,14 @@ func validateIsolatedWorkspaceRoot(value, project, repo string, index int, paths
 			if os.IsNotExist(err) {
 				continue
 			}
-			return "", fmt.Errorf("inspect Management workspace geometry %s: %w", path, err)
+			return "", fmt.Errorf("inspect Isolated workspace geometry %s: %w", path, err)
 		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			return "", fmt.Errorf("resolve Management workspace geometry %s: %w", path, err)
+			return "", fmt.Errorf("resolve Isolated workspace geometry %s: %w", path, err)
 		}
 		if filepath.Clean(resolved) != filepath.Clean(path) {
-			return "", fmt.Errorf("Management workspace geometry rejects symlinked path %s -> %s", path, resolved)
+			return "", fmt.Errorf("Isolated workspace geometry rejects symlinked path %s -> %s", path, resolved)
 		}
 	}
 	return workspaceRoot, nil
@@ -885,20 +718,20 @@ func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot, project, re
 		if cleanTarget == "/workspaces/dev" {
 			rootBinds++
 			if filepath.Clean(bind.Source) != workspaceRoot || bind.Mode != "rw" || !bind.Required {
-				return fmt.Errorf("Management workspace projection must bind only %s read-write at /workspaces/dev", workspaceRoot)
+				return fmt.Errorf("Isolated workspace projection must bind only %s read-write at /workspaces/dev", workspaceRoot)
 			}
 		}
 		if filepath.Clean(bind.Source) == filepath.Clean(paths.DevRoot) || filepath.Clean(bind.Source) == filepath.Clean(paths.HostWorktreeRoot) {
-			return fmt.Errorf("Management workspace projection rejects wholesale parent bind %s -> %s", bind.Source, bind.Target)
+			return fmt.Errorf("Isolated workspace projection rejects wholesale parent bind %s -> %s", bind.Source, bind.Target)
 		}
 		if bind.Mode == "rw" && pathWithinRoot("/workspaces/dev", cleanTarget) && cleanTarget != "/workspaces/dev" &&
 			!pathWithinRoot(workspaceRoot, bind.Source) && !isPackageOwnedProductGitMetadataBind(project, repo, paths, bind) &&
 			!isPersistentNativeHomeBind(project, repo, paths, bind) {
-			return fmt.Errorf("Management workspace projection rejects writable cross-lane bind %s -> %s", bind.Source, bind.Target)
+			return fmt.Errorf("Isolated workspace projection rejects writable cross-lane bind %s -> %s", bind.Source, bind.Target)
 		}
 	}
 	if rootBinds != 1 {
-		return fmt.Errorf("Management workspace projection requires exactly one lane-root bind at /workspaces/dev")
+		return fmt.Errorf("Isolated workspace projection requires exactly one lane-root bind at /workspaces/dev")
 	}
 	return nil
 }

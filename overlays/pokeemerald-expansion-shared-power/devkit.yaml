@@ -12,9 +12,9 @@ runtime:
   core_check: make modern
   notes: Shared Power pokeemerald-expansion workspace; current warm hook is intentionally no-op.
 native:
-  host_root: /home/bayesartre/dev
-  worktree_root: /home/bayesartre/dev/agent-worktrees
-  state_root: /home/bayesartre/dev/.devkit/native-agents
+  host_root: /home/bayesartre/workspace
+  worktree_root: agent-worktrees
+  state_root: .devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   agent_state_prefix: pokeemerald

@@ -108,10 +108,6 @@
           currentSourceRegistrationExecutable ? null,
           currentSourceConsumer ? null,
           tags ? [ ],
-          controllerSourceInventory ? null,
-          controllerGUIInventory ? null,
-          controllerCodexConfigProjections ? null,
-          controllerExecSocket ? null,
         }:
         assert currentSourceConsumer == null || (
           pkgs.lib.isDerivation currentSourceConsumer.devctl
@@ -130,15 +126,11 @@
           env.CGO_ENABLED = "0";
           passthru.withCurrentSourceRegistration = executable: mkDevctl {
             inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
-              controllerSourceInventory controllerGUIInventory
-              controllerCodexConfigProjections controllerExecSocket
               currentSourceConsumer;
             currentSourceRegistrationExecutable = executable;
           };
           passthru.withCurrentSourceConsumer = consumer: mkDevctl {
             inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
-              controllerSourceInventory controllerGUIInventory
-              controllerCodexConfigProjections controllerExecSocket
               currentSourceRegistrationExecutable;
             currentSourceConsumer = consumer;
           };
@@ -152,6 +144,9 @@
             "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=${sqliteExecutable}"
             "-X=devkit/cli/devctl/internal/commands/nativecmd.nativeHomeMoveExecutable=${pkgs.coreutils}/bin/mv"
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.packageRuntimeLauncher=${self.packages.${pkgs.system}.dev-all-runtime-shell}/bin/dev-all-runtime-shell"
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.packageBrokerBinary=${self.packages.${pkgs.system}.postgres-broker}/bin/postgres-broker"
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.packageBubblewrapBinary=${pkgs.bubblewrap}/bin/bwrap"
           ]
           ++ pkgs.lib.optionals (currentSourceRegistrationExecutable != null) [
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceRegistrationExecutable=${currentSourceRegistrationExecutable}"
@@ -160,18 +155,10 @@
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceConsumerRuntimeRoot=${currentSourceConsumer.devctl}"
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceConsumerTargetID=${currentSourceConsumer.targetId}"
           ]
-          ++ pkgs.lib.optionals (controllerSourceInventory != null) [
-            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerSourceInventory=${controllerSourceInventory}"
-          ]
-          ++ pkgs.lib.optionals (controllerGUIInventory != null) [
-            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerGUIInventory=${controllerGUIInventory}"
-          ]
-          ++ pkgs.lib.optionals (controllerCodexConfigProjections != null) [
-            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerCodexConfigProjections=${controllerCodexConfigProjections}"
-          ]
-          ++ pkgs.lib.optionals (controllerExecSocket != null) [
-            "-X=devkit/cli/devctl/internal/runtime/plan.WorkspaceControllerExecSocket=${controllerExecSocket}"
-          ];
+
+
+
+;
           postInstall = ''
             mkdir -p "$out/kit/bin"
             mv "$out/bin/devctl" "$out/kit/bin/devctl"
@@ -326,31 +313,6 @@
               exit 64
             }
             exec '${runtimeTools}/bin/dev-all-runtime-tools' "$@"
-          '';
-        };
-      mkManagementInspectionApp =
-        pkgs:
-        let
-          devctl = mkProductionDevctl pkgs;
-        in
-        pkgs.writeShellApplication {
-          name = "management-inspection";
-          runtimeInputs = with pkgs; [
-            bashInteractive
-            bubblewrap
-            coreutils
-            findutils
-            git
-            gnugrep
-            gnused
-            gnutar
-            jq
-            less
-            nix
-            ripgrep
-          ];
-          text = ''
-            exec ${devctl}/kit/bin/devctl management-inspect "$@"
           '';
         };
     in
@@ -620,7 +582,6 @@
           templateAgent = import ./overlays/_template/runtime.nix runtimeArgs;
           codex = import ./overlays/codex/runtime.nix runtimeArgs;
           devAll = import ./overlays/dev-all/runtime.nix runtimeArgs;
-          devWorkspace = import ./overlays/dev-workspace/runtime.nix runtimeArgs;
           dumbOnionHax = import ./overlays/dumb-onion-hax/runtime.nix runtimeArgs;
           ouroIntegration = import ./overlays/ouro-integration/runtime.nix runtimeArgs;
           ouroborosStaticFrontEnd = import ./overlays/ouroboros-static-front-end/runtime.nix runtimeArgs;
@@ -636,7 +597,6 @@
           ouroboros-dev-agent = codex;
 
           dev-all = devAll;
-          dev-workspace = devWorkspace;
           codex = codex;
           dumb-onion-hax = dumbOnionHax;
           ouro-integration = ouroIntegration;
@@ -709,7 +669,7 @@
           # as Devctl, rather than an unrelated runner-installed version/layout.
           devctl-test-openssh = pkgs.openssh;
           # Full source tests consume the same locked tool suppliers already
-          # declared by portable tests and Management inspection.
+          # declared by portable tests.
           devctl-test-tools = pkgs.buildEnv {
             name = "devkit-devctl-test-tools";
             paths = with pkgs; [ openssh sqlite gnutar jq util-linux ];
@@ -719,7 +679,6 @@
           dev-all-runtime-shell = mkDevAllRuntimeShell {
             inherit pkgs runtimeTools;
           };
-          management-inspection = mkManagementInspectionApp pkgs;
 
           postgres-broker = pkgs.buildGoModule {
             pname = "devkit-postgres-broker";
@@ -730,7 +689,7 @@
             ldflags = [ "-s" "-w" ];
           };
 
-          default = self.packages.${pkgs.system}.postgres-broker;
+          default = self.packages.${pkgs.system}.dev-all-runtime-bundle;
         } // nixpkgs.lib.optionalAttrs (pkgs.system == "x86_64-linux") {
           sbt-rc8-diagnostic-actions = (import ./nix/sbt-rc8-diagnostics { inherit pkgs; }).package;
           sbt-rc8-diagnostic-deps-discovery = (import ./nix/sbt-rc8-diagnostics { inherit pkgs; }).deps-discovery;
@@ -739,17 +698,6 @@
             source = codex-native-tool-witness-source;
             rustOverlaySource = codex-native-tool-witness-rust-overlay;
             officialCodex = mkOfficialCodex pkgs;
-          };
-        }
-      );
-
-      apps = forEachSystem (
-        { pkgs, ... }:
-        {
-          management-inspection = {
-            type = "app";
-            program = "${mkManagementInspectionApp pkgs}/bin/management-inspection";
-            meta.description = "Explicitly refreshed, revision-identified, read-only Management source inspection profile";
           };
         }
       );
@@ -798,7 +746,6 @@
             cliConsequences = true;
             nativeResetConfig = self.packages.${pkgs.system}.native-reset-test-config;
           };
-          management-inspection-cli = mkProductionDevctl pkgs;
           devctl-openssh-executable-authority =
             let
               devctl = mkProductionDevctl pkgs;
@@ -848,309 +795,28 @@
             '';
 
           devctl-overlay-runtime-authority-layout =
-            let
-              devctl = mkProductionDevctl pkgs;
-              controllerFixtureRoot = "/tmp/devkit-overlay-runtime-authority-layout";
-              controllerFixtureSource = "${controllerFixtureRoot}/fleet-inventory.json";
-              controllerFixtureGUI = "${controllerFixtureRoot}/fleet-codex-gui-inventory.json";
-              controllerFixtureConfig = "${controllerFixtureRoot}/codex-config-projections.json";
-              controllerFixtureSocket = "${controllerFixtureRoot}/fleet-controller-exec/control.sock";
-              fixtureDevctl = mkDevctl {
-                inherit pkgs;
-                sshExecutable = "${pkgs.openssh}/bin/ssh";
-                knownHostsFile = githubSSHKnownHosts;
-                sqliteExecutable = "${pkgs.sqlite}/bin/sqlite3";
-                controllerSourceInventory = controllerFixtureSource;
-                controllerGUIInventory = controllerFixtureGUI;
-                controllerCodexConfigProjections = controllerFixtureConfig;
-                controllerExecSocket = controllerFixtureSocket;
-              };
-              broker = self.packages.${pkgs.system}.postgres-broker;
-              runtimeShell = mkDevAllRuntimeShell {
-                inherit pkgs runtimeTools;
-              };
-            in
-            pkgs.runCommand "devkit-devctl-overlay-runtime-authority-layout" {
-              nativeBuildInputs = [ pkgs.coreutils pkgs.gnugrep pkgs.jq pkgs.socat ];
+            let devctl = mkProductionDevctl pkgs;
+            in pkgs.runCommand "devkit-standalone-native-layout" {
+              nativeBuildInputs = [ pkgs.jq ];
             } ''
-              test -x ${devctl}/kit/bin/devctl
-              test -f ${devctl}/flake.nix
-              test -f ${devctl}/flake.lock
-              test -f ${devctl}/nix/dev-all-runtime-bundle.nix
-              test -f ${devctl}/brokers/postgres-broker/main.go
-              test -f ${devctl}/overlays/dev-all/flake.nix
-              test -f ${devctl}/overlays/dev-all/runtime.nix
-              test -f ${devctl}/overlays/dev-all/devkit.yaml
-              test -f ${devctl}/overlays/dev-workspace/runtime.nix
-              test -f ${devctl}/overlays/dev-workspace/devkit.yaml
-              test -f ${devctl}/overlays/ouroboros-terraform/flake.nix
-              test -f ${devctl}/overlays/ouroboros-terraform/devkit.yaml
-              test -f ${devctl}/overlays/pokeemerald/flake.nix
-              test -f ${devctl}/overlays/pokeemerald/runtime.nix
-              test -f ${devctl}/overlays/pokeemerald/devkit.yaml
-              test -f ${devctl}/overlays/pokeemerald-expansion-shared-power/flake.nix
-              test -f ${devctl}/overlays/pokeemerald-expansion-shared-power/runtime.nix
-              test -f ${devctl}/overlays/pokeemerald-expansion-shared-power/devkit.yaml
-              test -r ${devctl}/kit/proxy/allowlist.txt
-              grep -Fx 'ssh.github.com' ${devctl}/kit/proxy/allowlist.txt
-              grep -F 'inputs.devkit.url = "path:../..";' ${devctl}/overlays/dev-all/flake.nix
-              for overlay in dev-all dev-workspace ouroboros-terraform pokeemerald pokeemerald-expansion-shared-power; do
-                grep -Fx '  host_root: /home/bayesartre/dev' ${devctl}/overlays/$overlay/devkit.yaml
-                grep -Fx '  worktree_root: /home/bayesartre/dev/agent-worktrees' ${devctl}/overlays/$overlay/devkit.yaml
-                grep -Fx '  state_root: /home/bayesartre/dev/.devkit/native-agents' ${devctl}/overlays/$overlay/devkit.yaml
-                grep -Fx '  worktree_container_root: /workspaces/dev/agent-worktrees' ${devctl}/overlays/$overlay/devkit.yaml
-                grep -Fx '  state_container_root: /agent-state' ${devctl}/overlays/$overlay/devkit.yaml
-                grep -Fx '  required_isolation_profile: workspace-egress' ${devctl}/overlays/$overlay/devkit.yaml
-              done
-
-              plan="$TMPDIR/installed-plan.json"
-              env -i \
-                HOME="$TMPDIR/home" \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${devctl}/kit/bin/devctl -p dev-all native plan \
-                  --repo ouroboros-ide --index 1 --format json > "$plan"
-              ${pkgs.jq}/bin/jq -e \
-                --arg devctl '${devctl}' \
-                --arg broker '${broker}/bin/postgres-broker' \
-                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
-                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
-                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
-                 .sandbox_state_root == "/agent-state" and
-                 .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
-                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/dev-all-agent1-workspace-egress.sock" and
-                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-ide" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" and
-                 .env.DEVKIT_RUNTIME_BROKER_BINARY == $broker and
-                 any(.binds[]; .source == "/run/current-system/etc/fleet/product-governance.env" and
-                               .target == "/etc/fleet/product-governance.env" and
-                               .mode == "ro" and .required == true) and
-                 any(.binds[]; .source == "/home/bayesartre/dev/.devkit/ouro8-governance-env.sh") and
-                 any(.binds[]; .source == "/home/bayesartre/dev/.devkit/ouro8-governance-repo-env.json") and
-                 any(.binds[]; .source == "/home/bayesartre/dev/.devkit/governance-control-plane" and .mode == "rw") and
-                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
-                 (tostring | contains("/nix/store/.devkit/") | not)' \
-                "$plan"
-              grep -F '    - name: product-governance-envelope' \
-                ${devctl}/overlays/dev-all/devkit.yaml
-              grep -F "        governance_env=/etc/fleet/product-governance.env" \
-                ${devctl}/overlays/dev-all/devkit.yaml
-              grep -F "        docker version --format '{{.Server.APIVersion}}' >/dev/null" \
-                ${devctl}/overlays/dev-all/devkit.yaml
-              allowlist="$(${pkgs.jq}/bin/jq -r '.proxy.allowlist_path' "$plan")"
-              test "$allowlist" = '${devctl}/kit/proxy/allowlist.txt'
-              test -r "$allowlist"
-              grep -Fx 'ssh.github.com' "$allowlist"
-
-              terraform_plan="$TMPDIR/installed-terraform-plan.json"
-              env -i \
-                HOME="$TMPDIR/home" \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${devctl}/kit/bin/devctl -p ouroboros-terraform native plan \
-                  --repo ouroboros-terraform --index 1 --format json > "$terraform_plan"
-              ${pkgs.jq}/bin/jq -e \
-                '.agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/ouroboros-terraform" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform" and
-                 .flake_input_overrides["ouroboros-terraform"] == "path:/workspaces/dev/agent-worktrees/agent1/ouroboros-terraform"' \
-                "$terraform_plan"
-              grep -Fx \
-                '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-terraform.git' \
-                ${devctl}/overlays/ouroboros-terraform/devkit.yaml
-              grep -Fx \
-                "      command: codex --version | grep -q '0.163.0'" \
-                ${devctl}/overlays/ouroboros-terraform/devkit.yaml
-
-              pokeemerald_plan="$TMPDIR/installed-pokeemerald-plan.json"
-              env -i \
-                HOME="$TMPDIR/home" \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${devctl}/kit/bin/devctl -p pokeemerald native plan \
-                  --repo pokeemerald --index 1 --format json > "$pokeemerald_plan"
-              ${pkgs.jq}/bin/jq -e \
-                --arg devctl '${devctl}' \
-                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
-                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
-                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
-                 .sandbox_state_root == "/agent-state" and
-                 .mount_policy_identity == "devkit/workspace-egress/v3" and
-                 .windows_mounts_visible == false and
-                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/pokeemerald-agent1-workspace-egress.sock" and
-                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/pokeemerald" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/pokeemerald" and
-                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/pokeemerald-agent1/home" and
-                 .agent.sandbox_home == "/agent-state/pokeemerald-agent1/home" and
-                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
-                 (tostring | contains("/nix/store/.devkit/") | not)' \
-                "$pokeemerald_plan"
-              grep -Fx \
-                '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald.git' \
-                ${devctl}/overlays/pokeemerald/devkit.yaml
-
-              shared_power_plan="$TMPDIR/installed-pokeemerald-shared-power-plan.json"
-              env -i \
-                HOME="$TMPDIR/home" \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${devctl}/kit/bin/devctl -p pokeemerald-expansion-shared-power native plan \
-                  --repo pokeemerald-expansion-shared-power --index 1 --format json > "$shared_power_plan"
-              ${pkgs.jq}/bin/jq -e \
-                --arg devctl '${devctl}' \
-                '.host_worktree_root == "/home/bayesartre/dev/agent-worktrees" and
-                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
-                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
-                 .sandbox_state_root == "/agent-state" and
-                 .mount_policy_identity == "devkit/workspace-egress/v3" and
-                 .windows_mounts_visible == false and
-                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/pokeemerald-agent1-workspace-egress.sock" and
-                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent1/pokeemerald-expansion-shared-power" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent1/pokeemerald-expansion-shared-power" and
-                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/pokeemerald-agent1/home" and
-                 .agent.sandbox_home == "/agent-state/pokeemerald-agent1/home" and
-                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
-                 (tostring | contains("/nix/store/.devkit/") | not)' \
-                "$shared_power_plan"
-              grep -Fx \
-                '  origin: ssh://git@ssh.github.com:443/Divine-Shadow/pokeemerald-pret.git' \
-                ${devctl}/overlays/pokeemerald-expansion-shared-power/devkit.yaml
-              grep -Fx \
-                '  agent_state_prefix: pokeemerald' \
-                ${devctl}/overlays/pokeemerald-expansion-shared-power/devkit.yaml
-              shared_power_plan_a2="$TMPDIR/installed-pokeemerald-shared-power-a2-plan.json"
-              env -i \
-                HOME="$TMPDIR/home" \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${devctl}/kit/bin/devctl -p pokeemerald-expansion-shared-power native plan \
-                  --repo pokeemerald-expansion-shared-power --index 2 --format json > "$shared_power_plan_a2"
-              ${pkgs.jq}/bin/jq -e \
-                '.agent.host_worktree == "/home/bayesartre/dev/agent-worktrees/agent2/pokeemerald-expansion-shared-power" and
-                 .agent.sandbox_worktree == "/workspaces/dev/agent-worktrees/agent2/pokeemerald-expansion-shared-power" and
-                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/pokeemerald-agent2/home" and
-                 .agent.sandbox_home == "/agent-state/pokeemerald-agent2/home"' \
-                "$shared_power_plan_a2"
-
-              # Exercise the installed ordinary planner with Fleet files
-              # absent and a real incidental legacy listener present, then
-              # absent. Their availability must not select host authority.
-              # Compiled fixture paths keep this check independent of host
-              # configuration; production containment remains unmodified.
-              controller_source='${controllerFixtureSource}'
-              controller_gui='${controllerFixtureGUI}'
-              controller_config='${controllerFixtureConfig}'
-              controller_exec='${controllerFixtureSocket}'
-              ${pkgs.coreutils}/bin/install -d -m 0700 "$(dirname "$controller_exec")"
-              test ! -e "$controller_source"
-              test ! -e "$controller_gui"
-              test ! -e "$controller_config"
-              ${pkgs.socat}/bin/socat \
-                UNIX-LISTEN:"$controller_exec",fork,mode=0600 \
-                EXEC:${pkgs.coreutils}/bin/true &
-              controller_exec_pid=$!
-              trap 'kill "$controller_exec_pid" 2>/dev/null || true' EXIT
-              for _ in $(${pkgs.coreutils}/bin/seq 1 50); do
-                test -S "$controller_exec" && break
-                sleep 0.1
-              done
-              test -S "$controller_exec"
-              workspace_plan="$TMPDIR/installed-dev-workspace-plan.json"
-              ${pkgs.coreutils}/bin/env -i \
-                HOME=/tmp/home \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${fixtureDevctl}/kit/bin/devctl -p dev-workspace native plan \
-                  --repo shadow-throne-management \
-                  --index 2 \
-                  --workspace-root /home/bayesartre/dev/control-plane-worktrees/agent2 \
-                  --worktree-root /home/bayesartre/dev/control-plane-worktrees \
-                  --format json > "$workspace_plan"
-              ${pkgs.jq}/bin/jq -e \
-                --arg devctl '${fixtureDevctl}' \
-                '.host_workspace_root == "/home/bayesartre/dev/control-plane-worktrees/agent2" and
-                 .sandbox_workspace_root == "/workspaces/dev" and
-                 .host_worktree_root == "/home/bayesartre/dev/control-plane-worktrees" and
-                 .host_state_root == "/home/bayesartre/dev/.devkit/native-agents" and
-                 .sandbox_worktree_root == "/workspaces/dev/agent-worktrees" and
-                 .sandbox_state_root == "/agent-state" and
-                 .broker_endpoint == "/home/bayesartre/dev/.devkit/native-broker/broker.sock" and
-                 .proxy.unix_socket == "/home/bayesartre/dev/.devkit/native-egress/dev-workspace-agent2-workspace-egress.sock" and
-                 .proxy.allowlist_path == ($devctl + "/kit/proxy/allowlist.txt") and
-                 .agent.host_worktree == "/home/bayesartre/dev/control-plane-worktrees/agent2/shadow-throne-management" and
-                 .agent.sandbox_worktree == "/workspaces/dev/shadow-throne-management" and
-                 .agent.host_home == "/home/bayesartre/dev/.devkit/native-agents/dev-workspace-agent2/home" and
-                 .agent.sandbox_home == "/agent-state/dev-workspace-agent2/home" and
-                 .mount_policy_identity == "devkit/workspace-egress/v4" and
-                 .windows_mounts_visible == false and
-                 (.controller_profile // "") == "" and
-                 (.controller_manifest // "") == "" and
-                 all(.env | keys[];
-                   . != "FLEET_EXEC_TRANSPORT_HANDLE" and
-                   . != "FLEET_CONTROLLER_OPERATION_HANDLE" and
-                   . != "FLEET_WORK_DB" and
-                   . != "DEVKIT_MANAGEMENT_CONTROLLER_PROFILE") and
-                 any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2" and
-                               .target == "/workspaces/dev" and
-                               .mode == "rw" and .required == true) and
-                 any(.binds[]; .source == "/home/bayesartre/dev/control-plane-worktrees/agent2/.devkit/governance-control-plane" and
-                               .target == "/workspaces/dev/.devkit/governance-control-plane" and
-                               .mode == "rw" and .required == true) and
-                 all(.binds[]; .source != "${controllerFixtureSource}" and
-                               .target != "${controllerFixtureSource}" and
-                               .source != "${controllerFixtureGUI}" and
-                               .target != "${controllerFixtureGUI}" and
-                               .source != "${controllerFixtureConfig}" and
-                               .target != "${controllerFixtureConfig}" and
-                               .source != "${controllerFixtureSocket}" and
-                               .target != "${controllerFixtureSocket}") and
-                 all(.binds[]; .source != "/home/bayesartre/dev" and
-                               .source != "/home/bayesartre/dev/control-plane-worktrees" and
-                               ((.source | startswith("/mnt")) | not) and
-                               ((.target | startswith("/mnt")) | not)) and
-                 all(.binds[]; (.source | contains("codex_tailnet_stations_ed25519") | not) and
-                               (.target | contains("codex_tailnet_stations_ed25519") | not)) and
-                 all(.binds[]; (.mode != "rw") or (.source | startswith("/nix/store") | not)) and
-                 (tostring | contains("/nix/store/.devkit/") | not)' \
-                "$workspace_plan"
-              kill "$controller_exec_pid"
-              wait "$controller_exec_pid" 2>/dev/null || true
-              trap - EXIT
-              # Removing an unrelated listener also leaves the actual scoped
-              # environment unchanged; no approval/config stubs are supplied.
-              rm -f "$controller_exec"
-              workspace_plan_without_fleet="$TMPDIR/installed-dev-workspace-without-fleet-plan.json"
-              env -i \
-                HOME=/tmp/home \
-                DEVKIT_RUNTIME_BROKER_BINARY=${broker}/bin/postgres-broker \
-                DEVKIT_RUNTIME_SHELL_LAUNCHER=${runtimeShell}/bin/dev-all-runtime-shell \
-                DEVKIT_RUNTIME_BWRAP_BINARY=${pkgs.bubblewrap}/bin/bwrap \
-                ${fixtureDevctl}/kit/bin/devctl -p dev-workspace native plan \
-                  --repo shadow-throne-management --index 2 \
-                  --workspace-root /home/bayesartre/dev/control-plane-worktrees/agent2 \
-                  --worktree-root /home/bayesartre/dev/control-plane-worktrees \
-                  --format json > "$workspace_plan_without_fleet"
-              jq -S '{agent, binds, env, controller_profile, controller_manifest, proxy, mount_policy_identity, windows_mounts_visible}' \
-                "$workspace_plan" > "$TMPDIR/with-incidental-listener.json"
-              jq -S '{agent, binds, env, controller_profile, controller_manifest, proxy, mount_policy_identity, windows_mounts_visible}' \
-                "$workspace_plan_without_fleet" > "$TMPDIR/without-incidental-listener.json"
-              cmp "$TMPDIR/with-incidental-listener.json" "$TMPDIR/without-incidental-listener.json"
               mkdir -p "$out"
-              cp "$workspace_plan_without_fleet" "$out/installed-dev-workspace-without-fleet-plan.json"
-              cp "$plan" "$out/installed-plan.json"
-              cp "$pokeemerald_plan" "$out/installed-pokeemerald-plan.json"
-              cp "$shared_power_plan" "$out/installed-pokeemerald-shared-power-plan.json"
-              cp "$shared_power_plan_a2" "$out/installed-pokeemerald-shared-power-a2-plan.json"
-              cp "$workspace_plan" "$out/installed-dev-workspace-plan.json"
-              printf '%s\n' ${devctl} > "$out/devctl-runtime-authority-path"
+              env -i HOME="$TMPDIR/home" \
+                ${devctl}/kit/bin/devctl -p dev-all native plan \
+                  --host-root /tmp/standalone-devkit \
+                  --worktree-root /tmp/standalone-devkit/worktrees \
+                  --state-root /tmp/standalone-devkit/state \
+                  --no-containers --repo ouroboros-ide --index 1 --format json > "$out/plan.json"
+              jq -e '
+                .agent.host_worktree == "/tmp/standalone-devkit/worktrees/agent1/ouroboros-ide" and
+                .windows_mounts_visible == false and
+                .broker_endpoint == "" and
+                (.postgres_docker_socket // "") == "" and
+                all(.binds[]; (.source | contains("/etc/fleet") | not) and
+                               (.source | contains("ouro8-governance") | not) and
+                               (.source | contains("shadow-throne-management") | not) and
+                               (.source | startswith("/mnt") | not) and
+                               (.target | startswith("/mnt") | not)) and
+                all(.env | keys[]; (startswith("FLEET_") | not))' "$out/plan.json"
             '';
 
           runtime-shell-inventory = pkgs.runCommand "devkit-runtime-shell-inventory" {

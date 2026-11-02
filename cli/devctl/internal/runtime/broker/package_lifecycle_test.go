@@ -236,3 +236,24 @@ func TestForeignSocketAndSymlinkAncestryAreUntouched(t *testing.T) {
 		t.Fatal("symlinked destination mutated")
 	}
 }
+
+func TestActualPackageNativeEndpointDoesNotRequireFleetOwner(t *testing.T) {
+	c := packageFixture(t)
+	if packageOwnerManifest != "" {
+		t.Fatal("ordinary package fixture unexpectedly selected a station owner")
+	}
+	binary, err := EnsureEndpointReady(context.Background(), c, false)
+	if err != nil {
+		t.Fatalf("independent Devkit endpoint: %v", err)
+	}
+	if binary != c.Binary {
+		t.Fatalf("broker supplier = %q, want %q", binary, c.Binary)
+	}
+	status, err := Inspect(c)
+	if err != nil || !status.Running || status.State == nil {
+		t.Fatalf("native broker was not admitted: %+v %v", status, err)
+	}
+	if status.State.OwnerService != "" || len(status.State.AllowedImages) != 1 || status.State.AllowedImages[0] != "postgres:latest" {
+		t.Fatalf("independent endpoint changed owner or image policy: %+v", status.State)
+	}
+}

@@ -69,12 +69,12 @@ func TestDevAllSelectedPrepareSourceGeometry(t *testing.T) {
 			if index == 1 {
 				sandbox += "/ouroboros-ide"
 			}
-			want := []string{fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d/ouroboros-ide", index), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/.homes/dev-all-agent%d/ouroboros-ide", index), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/dev-all-agent%d", index), "/workspaces/dev/ouroboros-ide", filepath.Join(sandbox, home)}
+			want := []string{fmt.Sprintf("/home/bayesartre/workspace/agent-worktrees/agent%d/ouroboros-ide", index), fmt.Sprintf("/home/bayesartre/workspace/.devkit/native-agents/.homes/dev-all-agent%d/ouroboros-ide", index), fmt.Sprintf("/home/bayesartre/workspace/.devkit/native-agents/dev-all-agent%d", index), "/workspaces/dev/ouroboros-ide", filepath.Join(sandbox, home)}
 			got := []string{p.Agent.HostWorktree, p.Agent.HostHome, p.Agent.StateRoot, p.Agent.SandboxWorktree, p.Agent.SandboxHome}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("selected geometry=%q want %q", got, want)
 			}
-			if p.Agent.ID.Index != index || acquisition.Index != index || acquisition.Count != 3 || acquisition.WorktreeRoot != "/home/bayesartre/dev/agent-worktrees" || acquisition.Origin != "ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git" || !acquisition.RequireSSHOrigin || acquisition.ReconstructSelected {
+			if p.Agent.ID.Index != index || acquisition.Index != index || acquisition.Count != 3 || acquisition.WorktreeRoot != "/home/bayesartre/workspace/agent-worktrees" || acquisition.Origin != "ssh://git@ssh.github.com:443/Divine-Shadow/ouroboros-ide.git" || !acquisition.RequireSSHOrigin || acquisition.ReconstructSelected {
 				t.Fatalf("wrong selected acquisition: %+v, agent=%+v", acquisition, p.Agent)
 			}
 		})

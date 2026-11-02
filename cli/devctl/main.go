@@ -18,7 +18,6 @@ import (
 	brokercmd "devkit/cli/devctl/internal/commands/brokercmd"
 	hookcmd "devkit/cli/devctl/internal/commands/hooks"
 	hostscmd "devkit/cli/devctl/internal/commands/hosts"
-	managementinspectcmd "devkit/cli/devctl/internal/commands/managementinspect"
 	nativecmd "devkit/cli/devctl/internal/commands/nativecmd"
 	networkcmd "devkit/cli/devctl/internal/commands/network"
 	preflightcmd "devkit/cli/devctl/internal/commands/preflight"
@@ -418,7 +417,7 @@ Commands:
   native prepare --repo REPO [--count N] [--base-branch BRANCH] [--branch-prefix PFX] [--format text|json]
   native prepare --current-worktree --source-only --repo ouroboros-ide [--format json]
   native reset --repo REPO --index N --workspace-root ABSOLUTE_LANE_ROOT --format json
-  native exec --repo REPO [--index N] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--managed-app-server] [--dry-run] [-- COMMAND...]
+  native exec --repo REPO [--index N] [--host-root PATH] [--no-containers] [--flake REF] [--isolation-profile NAME] [--egress-allowlist FILE] [--proxy-socket SOCK] [--dry-run] [-- COMMAND...]
   native readiness --repo REPO [--index N] [--flake REF] [--runtime-only|--repo-readiness] [--repo-check CMD] [--format text|json]
   native readiness --current-worktree --repo ouroboros-ide --repo-check-name NAME [--format text|json]
   native capacity --repo REPO [--count N] [--flake REF] [--runtime-only|--repo-readiness] [--format text|json]
@@ -438,10 +437,6 @@ Commands:
   reset [N]                                  destructively reconstruct the exact owned native prefix
   bootstrap <repo> <count>                   (flake-backed overlays)
   runtime-matrix [--check] [--all] [--repo NAME|--overlay NAME] (repo to runtime pairing report)
-  management-inspect refresh --repo PATH --revision REF [--name NAME] [--state-root PATH]
-  management-inspect status|readback [--name NAME] [--state-root PATH] [--format text|json]
-  management-inspect shell [--name NAME] [--state-root PATH]
-  management-inspect exec [--name NAME] [--state-root PATH] -- COMMAND...
   verify                                     (ssh + codex + worktrees)
   verify-all                                 (run verify for codex and dev-all)
   preflight                                  (host checks: nix, bubblewrap, tmux, ssh keys, ~/.codex, broker Docker)
@@ -587,7 +582,6 @@ func main() {
 	brokercmd.Register(registry)
 	hostscmd.Register(registry)
 	hookcmd.Register(registry)
-	managementinspectcmd.Register(registry)
 	networkcmd.Register(registry)
 	preflightcmd.Register(registry)
 	runtimematrixcmd.Register(registry)

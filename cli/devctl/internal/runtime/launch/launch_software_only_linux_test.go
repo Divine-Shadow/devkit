@@ -16,16 +16,12 @@ func TestPrepareSoftwareOnlyNeverOpensOrChangesOwnedCredentialFixtures(t *testin
 }
 
 func testPrepareSoftwareOnlyCredentialFixture(t *testing.T, nested bool) {
-	storeRoot := withManagementSkillsStoreRoot(t)
-	fixture := writeManagementSkillsFixture(t, storeRoot, "software-only-management-skills", strings.Repeat("a", 40), map[string]string{
-		"fleet-health-hypervisor/SKILL.md": "owned public software fixture\n",
-	})
 	devRoot := filepath.Join(t.TempDir(), "dev")
 	hostHome := filepath.Join(t.TempDir(), "existing-home")
 	if nested {
 		hostHome = filepath.Join(t.TempDir(), "ouroboros-ide", ".devhome-agent1")
 	}
-	p := prepareManagementSkillsFixture(t, fixture, devRoot, hostHome)
+	p := prepareNativeFixture(t, devRoot, hostHome)
 	history := filepath.Join(hostHome, ".codex", "rollouts", "retained-history.fixture")
 	writeTestFile(t, history, "OWNED_RETAINED_HISTORY\n")
 	callerHome := filepath.Join(t.TempDir(), "owned-caller")
@@ -75,15 +71,13 @@ func testPrepareSoftwareOnlyCredentialFixture(t *testing.T, nested bool) {
 	if data, err := os.ReadFile(history); err != nil || string(data) != "OWNED_RETAINED_HISTORY\n" {
 		t.Fatal("retained fixture history changed")
 	}
-	if _, err := os.Stat(filepath.Join(hostHome, ".codex", "management-runtime-skills.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(hostHome, ".sbt")); err != nil {
 		t.Fatalf("public software did not converge: %v", err)
 	}
 }
 
 func TestPrepareSoftwareOnlyRefusesFreshOrSymlinkedHome(t *testing.T) {
-	storeRoot := withManagementSkillsStoreRoot(t)
-	fixture := writeManagementSkillsFixture(t, storeRoot, "software-only-existing-home", strings.Repeat("a", 40), map[string]string{"fleet-health-hypervisor/SKILL.md": "public\n"})
-	p := prepareManagementSkillsFixture(t, fixture, filepath.Join(t.TempDir(), "dev"), filepath.Join(t.TempDir(), "absent-home"))
+	p := prepareNativeFixture(t, filepath.Join(t.TempDir(), "dev"), filepath.Join(t.TempDir(), "absent-home"))
 	if err := PrepareSoftwareOnly(p); err == nil || !strings.Contains(err.Error(), "existing real native home") {
 		t.Fatalf("fresh home accepted: %v", err)
 	}

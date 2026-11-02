@@ -16,9 +16,9 @@ runtime:
 native:
   # This is an admitted package-native overlay.  Immutable package discovery
   # supplies runtime authority only; mutable consumer geometry stays explicit.
-  host_root: /home/bayesartre/dev
-  worktree_root: /home/bayesartre/dev/agent-worktrees
-  state_root: /home/bayesartre/dev/.devkit/native-agents
+  host_root: /home/bayesartre/workspace
+  worktree_root: agent-worktrees
+  state_root: .devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
@@ -101,7 +101,7 @@ readiness:
         def refuse(message):
             raise SystemExit("Terraform profile readiness: " + message)
 
-        manifest = pathlib.Path("/run/current-system/etc/fleet/source/codex-config-projections.json")
+        manifest = pathlib.Path("/etc/devkit/codex-config-projections.json")
         data = json.loads(manifest.read_bytes())
         if data.get("schemaVersion") != "devkit/gui-codex-config-projections/v1":
             refuse("wrong immutable projection schema")

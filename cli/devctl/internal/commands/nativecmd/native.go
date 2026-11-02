@@ -98,42 +98,16 @@ type planArgs struct {
 	repoCheck                  string
 	readinessMode              string
 	readinessModeSet           bool
-	managedAppServer           bool
 	softwareOnly               bool
 	preparationPhase           string
 	command                    []string
 }
 
-const managedAppServerServiceEnv = "DEVKIT_MANAGED_APP_SERVER_SERVICE"
-
-// The managed launcher may omit bubblewrap parent-death coupling only for the
-// exact Nix-owned GUI service.  The typed operation broker is intentionally
-// not that owner: it exits after persisting each receipt.
-const managedAppServerServiceIdentity = "fleet-gui-shadow-throne-management-2.service"
-const managedAdditionalAppServerServiceIdentity = "fleet-gui-shadow-throne-management.service"
-
-func managedAppServerServiceAllowed(service string) bool {
-	return service == managedAppServerServiceIdentity ||
-		service == managedAdditionalAppServerServiceIdentity
-}
-
-func managedAppServerServiceOwned() bool {
-	cgroup, err := os.ReadFile("/proc/self/cgroup")
-	if err != nil {
-		return false
-	}
-	return managedAppServerServiceOwnedWithCgroup(
-		os.Getenv(managedAppServerServiceEnv),
-		os.Getenv("INVOCATION_ID"),
-		string(cgroup),
-	)
-}
-
-func managedAppServerServiceOwnedWithCgroup(service, invocationID, cgroup string) bool {
-	return managedAppServerServiceAllowed(service) &&
-		strings.TrimSpace(invocationID) != "" &&
-		strings.Contains(cgroup, service)
-}
+// Immutable standalone suppliers are linked by the Devkit flake package.
+// Existing composed consumers may still select their immutable suppliers.
+var packageRuntimeLauncher string
+var packageBrokerBinary string
+var packageBubblewrapBinary string
 
 type lifecycleArgs struct {
 	repo                    string
@@ -184,7 +158,6 @@ type topExecArgs struct {
 	agentStateRoot          string
 	worktreeContainerRoot   string
 	agentStateContainerRoot string
-	managedAppServer        bool
 	softwareOnly            bool
 	preparationPhase        string
 	command                 []string
@@ -412,10 +385,7 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 			}
 			parsed.softwareOnly = true
 		case "--managed-app-server":
-			if !allowCommand {
-				return parsed, fmt.Errorf("--managed-app-server is only valid for native exec")
-			}
-			parsed.managedAppServer = true
+			return parsed, fmt.Errorf("managed Fleet app-server launch has been retired; use native exec")
 		case "--timeout":
 			if !allowCommand || ctx.Args[0] != "exec" || i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--timeout requires a duration for native exec")
@@ -464,6 +434,14 @@ func parsePlanArgs(ctx *cmdregistry.Context, allowCommand bool, allowReadinessMo
 				return parsed, fmt.Errorf("--repo-check requires a value")
 			}
 			parsed.repoCheck = ctx.Args[i+1]
+			i++
+		case "--no-containers":
+			parsed.opts.ContainersDisabled = true
+		case "--host-root":
+			if i+1 >= len(ctx.Args) {
+				return parsed, fmt.Errorf("--host-root requires a value")
+			}
+			parsed.opts.HostRoot = ctx.Args[i+1]
 			i++
 		case "--worktree-root":
 			if i+1 >= len(ctx.Args) {
@@ -1049,7 +1027,7 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 			}
 			parsed.softwareOnly = true
 		case "--managed-app-server":
-			parsed.managedAppServer = true
+			return parsed, fmt.Errorf("managed Fleet app-server launch has been retired; use native exec")
 		case "--timeout":
 			if attach || i+1 >= len(ctx.Args) {
 				return parsed, fmt.Errorf("--timeout requires a duration for exec")
@@ -1075,13 +1053,10 @@ func parseTopExecArgs(ctx *cmdregistry.Context, attach bool) (topExecArgs, error
 }
 
 func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) (retErr error) {
-	if parsed.managedAppServer && parsed.executionTimeout > 0 {
-		return fmt.Errorf("--timeout is not valid for a systemd-owned managed app-server")
-	}
-	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, parsed.managedAppServer, ctx.Project, parsed.guiTargetID, command); err != nil {
+	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, false, ctx.Project, parsed.guiTargetID, command); err != nil {
 		return err
 	}
-	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.guiTargetID, ctx.Project, parsed.managedAppServer, command); err != nil {
+	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.guiTargetID, ctx.Project, false, command); err != nil {
 		return err
 	}
 	if err := ensureNativeLifecycleProject(ctx); err != nil {
@@ -1156,23 +1131,12 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 		}
 		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
 	}
-	if parsed.managedAppServer {
-		if !managedAppServerServiceOwned() {
-			return fmt.Errorf("--managed-app-server requires the exact systemd-owned %s cgroup", managedAppServerServiceIdentity)
-		}
-		if len(command) < 2 || !strings.Contains(command[0], "codex") || command[1] != "app-server" {
-			return fmt.Errorf("--managed-app-server permits only codex app-server")
-		}
-	}
 	if !ctx.DryRun {
 		if err := prepareSelectedNativeExec(p, parsed.softwareOnly, parsed.preparationPhase); err != nil {
 			return err
 		}
 	}
 	cmdSpec, err := launch.BuildBubblewrap(p, command)
-	if parsed.managedAppServer {
-		cmdSpec, err = launch.BuildManagedAppServerBubblewrap(p, command)
-	}
 	if err != nil {
 		return err
 	}
@@ -1188,9 +1152,6 @@ func runTopExec(ctx *cmdregistry.Context, parsed topExecArgs, command []string) 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if parsed.managedAppServer {
-		return cmd.Run()
-	}
 	return runNativeCommandWithTimeout(cmd, parsed.executionTimeout)
 }
 
@@ -1361,7 +1322,7 @@ func lifecycleBrokerConfig(ctx *cmdregistry.Context, cfg config.OverlayConfig, p
 		AllowedImages: append([]string{}, cfg.Broker.AllowedImages...),
 		LogLevel:      strings.TrimSpace(cfg.Broker.LogLevel),
 		StateRoot:     brokerStateRoot,
-		Binary:        strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY")),
+		Binary:        firstNonEmpty(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY"), packageBrokerBinary),
 	}
 	if cfg.Broker.AllowPulls != nil {
 		brokerCfg.AllowPulls = *cfg.Broker.AllowPulls
@@ -1395,8 +1356,8 @@ func lifecyclePlanOptions(ctx *cmdregistry.Context, cfg config.OverlayConfig, pa
 		Flake:                 firstNonEmpty(parsed.flake, cfg.Runtime.Flake),
 		FlakeInputOverrides:   config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides),
 		BrokerBinary:          brokerCfg.Binary,
-		RuntimeLauncher:       strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER")),
-		BubblewrapBinary:      strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY")),
+		RuntimeLauncher:       firstNonEmpty(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER"), packageRuntimeLauncher),
+		BubblewrapBinary:      firstNonEmpty(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY"), packageBubblewrapBinary),
 		Launcher:              "bubblewrap",
 		WorkspaceRoot:         strings.TrimSpace(parsed.workspaceRoot),
 		WorktreeRoot:          resolveNativeRoot(hostRoot, firstNonEmpty(parsed.worktreeRoot, cfg.Native.WorktreeRoot)),
@@ -1419,7 +1380,7 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
 		return err
 	}
-	hostRoot := resolveNativeHostRoot(ctx.Paths.Root, cfg)
+	hostRoot := firstNonEmpty(opts.HostRoot, resolveNativeHostRoot(ctx.Paths.Root, cfg))
 	if strings.TrimSpace(opts.HostRoot) == "" {
 		opts.HostRoot = hostRoot
 	}
@@ -1437,13 +1398,13 @@ func applyNativeConfigDefaults(ctx *cmdregistry.Context, cfg config.OverlayConfi
 		opts.FlakeInputOverrides = config.ResolveRuntimeFlakeInputOverrides(flakeInputRoot, cfg.Runtime.FlakeInputOverrides)
 	}
 	if strings.TrimSpace(opts.RuntimeLauncher) == "" {
-		opts.RuntimeLauncher = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER"))
+		opts.RuntimeLauncher = firstNonEmpty(os.Getenv("DEVKIT_RUNTIME_SHELL_LAUNCHER"), packageRuntimeLauncher)
 	}
 	if strings.TrimSpace(opts.BrokerBinary) == "" {
-		opts.BrokerBinary = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY"))
+		opts.BrokerBinary = firstNonEmpty(os.Getenv("DEVKIT_RUNTIME_BROKER_BINARY"), packageBrokerBinary)
 	}
 	if strings.TrimSpace(opts.BubblewrapBinary) == "" {
-		opts.BubblewrapBinary = strings.TrimSpace(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY"))
+		opts.BubblewrapBinary = firstNonEmpty(os.Getenv("DEVKIT_RUNTIME_BWRAP_BINARY"), packageBubblewrapBinary)
 	}
 	if strings.TrimSpace(opts.WorktreeRoot) == "" {
 		opts.WorktreeRoot = resolveNativeRoot(hostRoot, cfg.Native.WorktreeRoot)
@@ -2306,16 +2267,13 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	if err != nil {
 		return err
 	}
-	if parsed.managedAppServer && parsed.executionTimeout > 0 {
-		return fmt.Errorf("--timeout is not valid for a systemd-owned managed app-server")
-	}
 	if parsed.repoCheck != "" {
 		return fmt.Errorf("--repo-check is only valid for native readiness and native capacity")
 	}
-	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, parsed.managedAppServer, ctx.Project, parsed.opts.GUITargetID, parsed.command); err != nil {
+	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, false, ctx.Project, parsed.opts.GUITargetID, parsed.command); err != nil {
 		return err
 	}
-	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.opts.GUITargetID, ctx.Project, parsed.managedAppServer, parsed.command); err != nil {
+	if err := validateSoftwareOnlyNativeAppServer(parsed.softwareOnly, parsed.opts.GUITargetID, ctx.Project, false, parsed.command); err != nil {
 		return err
 	}
 	cfg, _, err := config.ReadAll(ctx.Paths.OverlayPaths, ctx.Project)
@@ -2377,23 +2335,12 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 		}
 		defer func() { retErr = errors.Join(retErr, cleanupPostgres()) }()
 	}
-	if parsed.managedAppServer {
-		if !managedAppServerServiceOwned() {
-			return fmt.Errorf("--managed-app-server requires the exact systemd-owned %s cgroup", managedAppServerServiceIdentity)
-		}
-		if len(parsed.command) < 2 || !strings.Contains(parsed.command[0], "codex") || parsed.command[1] != "app-server" {
-			return fmt.Errorf("--managed-app-server permits only codex app-server")
-		}
-	}
 	if !dryRun {
 		if err := prepareSelectedNativeExec(p, parsed.softwareOnly, parsed.preparationPhase); err != nil {
 			return err
 		}
 	}
 	cmdSpec, err := launch.BuildBubblewrap(p, parsed.command)
-	if parsed.managedAppServer {
-		cmdSpec, err = launch.BuildManagedAppServerBubblewrap(p, parsed.command)
-	}
 	if err != nil {
 		return err
 	}
@@ -2409,9 +2356,6 @@ func handleExec(ctx *cmdregistry.Context) (retErr error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if parsed.managedAppServer {
-		return cmd.Run()
-	}
 	return runNativeCommandWithTimeout(cmd, parsed.executionTimeout)
 }
 

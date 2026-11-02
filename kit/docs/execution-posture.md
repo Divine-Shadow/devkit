@@ -1,27 +1,23 @@
 # Devkit execution posture
 
-Authorized agents have broad control inside their accepted disposable sandbox,
-including local privilege supplied by that environment. Preserve containment of
-worktree-lineage parents, sibling and host noninterference, the existing network
-allowlist and guarded access. Preserve protected conversation history and goals,
-accepted source/results, secrets, customer data and active external transactions.
-Applicable correctness, review, CI and publication obligations remain.
+Authorized agents have broad control inside their accepted disposable sandbox.
+Preserve worktree, sibling and host containment, deny-by-default egress, guarded
+credential/provider access, protected conversation history and goals, accepted
+source/results, secrets, customer data and active external transactions.
+Applicable correctness, independent review, CI and publication obligations remain.
 
-Management controller configuration v9 describes existing routes and mounts.
-Entry no longer reads or mounts a broker-issued identity, checks socket generation
-against that identity, or warms an issuer. The host-operation socket is optional
-for ordinary sandbox work. When present, its exact path, owner, protected mode and
-read-only mount remain checked. Host effects still use the existing guarded adapter
-and target restrictions. Trace/operation IDs serve correlation and idempotency,
-not permission issuance. Instruction authentication is a separate institution.
+Ordinary native execution consumes the locked Devkit package and explicit
+workspace geometry. It does not depend on Management or Fleet repositories,
+controller profiles, identity issuers, callback services or their state.
+Product supplies its own accepted artifact and CI interfaces. Devkit does not
+choose Product revisions or create a competing Product runtime identity.
 
-Older identity-admission plans, cold-issuer repair guidance and tests are superseded
-at this boundary. Preserve the working Local4/Peano path and Local3/MCP. Candidate
-qualification does not require changing them or converging the whole fleet.
+The existing bubblewrap entry retains isolated writable worktrees/homes,
+read-only runtime tools, excluded Windows mounts, proxy-only network access
+and guarded optional container access. Build-only workloads may explicitly
+select --no-containers. Container workloads retain the existing broker image
+policy and lifecycle safeguards. Operation IDs track results and idempotency;
+they are not new permission grants. Instruction authentication stays separate.
 
-Run the ordinary package-owned entry (`devctl -p dev-workspace exec ...`) with the
-candidate's composed configuration and runtime. Unit/integration tests must show
-useful entry without an identity/issuer and preservation of affected protections.
-CLI receiving does not qualify Desktop/app-server behavior by itself.
-
-[Operator runbook](native-operator-runbook.md) · [Agent guidance](../../AGENTS.md)
+[Standalone workflow](standalone-native.md) -
+[Operator runbook](native-operator-runbook.md) - [Agent guidance](../../AGENTS.md)

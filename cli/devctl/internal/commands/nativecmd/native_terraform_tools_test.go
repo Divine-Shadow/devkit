@@ -173,7 +173,7 @@ func TestTerraformToolsTopExecParserPropagation(t *testing.T) {
 	if err := validateTerraformToolsSource(parsed.preparationPhase, ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, parsed.managedAppServer, ctx.Project, parsed.guiTargetID, parsed.command); err != nil {
+	if err := validateTerraformToolsExecSelection(parsed.preparationPhase, parsed.softwareOnly, false, ctx.Project, parsed.guiTargetID, parsed.command); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateTerraformToolsAppServerCommand(terraformToolsPlan(), parsed.command, parsed.command[2]); err != nil {
@@ -361,7 +361,7 @@ func terraformReadinessActualOverlayChecks(t *testing.T) []runtimeCheck {
 
 func (f *terraformReadinessFixture) mapFixedPaths(command string) string {
 	// Exact fixture substitutions only; production exposes no override interface.
-	return strings.NewReplacer("test ! -e /var/run/docker.sock", "test ! -e "+nativeShellQuote(filepath.Join(f.root, "host-docker.sock")), "/run/current-system/sw/bin/ouro-terra-runtime", f.wrapper, "/run/current-system/etc/fleet/source/codex-config-projections.json", f.manifest, "/nix/store/", f.store+"/", `"/nix/store"`, fmt.Sprintf("%q", f.store), "/workspaces/dev", filepath.Dir(f.worktree), "/usr/bin/env", filepath.Join(f.baseBin, "env"), "/bin/sh", filepath.Join(f.baseBin, "sh")).Replace(command)
+	return strings.NewReplacer("test ! -e /var/run/docker.sock", "test ! -e "+nativeShellQuote(filepath.Join(f.root, "host-docker.sock")), "/run/current-system/sw/bin/ouro-terra-runtime", f.wrapper, "/etc/devkit/codex-config-projections.json", f.manifest, "/nix/store/", f.store+"/", `"/nix/store"`, fmt.Sprintf("%q", f.store), "/workspaces/dev", filepath.Dir(f.worktree), "/usr/bin/env", filepath.Join(f.baseBin, "env"), "/bin/sh", filepath.Join(f.baseBin, "sh")).Replace(command)
 }
 
 func TestTerraformReadinessFixturePreservesHostDockerSocketRefusal(t *testing.T) {

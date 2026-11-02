@@ -141,7 +141,12 @@ func TestNativeSlotPhysicalCustodyUsesPersistentHomeProjectionPairs(t *testing.T
 			mapPhysicalView(t, view, selected.sandboxWorktree, worktreeBacking)
 			mapPhysicalView(t, view, selected.sandboxState, stateBacking)
 			if kind == "host-spelling" {
-				view, home = "/", selected.hostHome
+				// Host-spelled paths still resolve through a private process
+				// view; ambient /agent-state belongs to unrelated consumers.
+				home = selected.hostHome
+				mapPhysicalView(t, view, selected.hostHome, selected.hostHome)
+				mapPhysicalView(t, view, selected.hostWorktree, selected.hostWorktree)
+				mapPhysicalView(t, view, selected.stateRoot, selected.stateRoot)
 			}
 			env := map[string]string{"DEVKIT_NATIVE_AGENT": "2", "HOME": home}
 			if kind == "sibling-index" {
@@ -159,7 +164,7 @@ func TestNativeSlotPhysicalCustodyUsesPersistentHomeProjectionPairs(t *testing.T
 					want = []int{152, 151}
 				}
 				if err != nil || !reflect.DeepEqual(plan.pids, want) {
-					t.Fatalf("owned persistent projection: selected=%v error=%v", plan.pids, err)
+					t.Fatalf("owned persistent projection: plan=%+v error=%v", plan, err)
 				}
 			case "foreign-backing":
 				if err != nil || len(plan.pids) != 0 {

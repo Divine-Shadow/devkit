@@ -33,8 +33,7 @@ Principles
   resume eligibility false. V2/v3 and the v2-only finite preparation projection
   remain strict. Query/integrity failures, physical ambiguity, source races and
   missing identity/mapping still refuse. No row edit, fabricated body, automatic
-  import or history pruning follows. See the current Management custody policy
-  and `docs/decision-framework/governance_decisions/20261016_available_gui_reference_v4_custody.md`.
+  import or history pruning follows. See `docs/decision-framework/governance_decisions/20261016_available_gui_reference_v4_custody.md`.
 - Persistent operator workspaces are protected user data, not disposable Product
   leases. Their working files (including uncommitted changes), Codex database,
   and session history must be outside reset-owned roots or explicitly excluded

@@ -31,8 +31,8 @@ const (
 // manifest; native callers cannot replace it with an argument or environment
 // variable. Use Nix's canonical static projection, already supplied read-only
 // by the normal renderer, so an older controller namespace missing the public
-// /etc/fleet alias can still perform the same exact target-bound plan.
-var guiCodexConfigProjectionManifestPath = "/etc/static/fleet/source/codex-config-projections.json"
+// historical host aliases can still perform the same exact target-bound plan.
+var guiCodexConfigProjectionManifestPath = "/etc/devkit/codex-config-projections.json"
 
 // GUITargetConfigProjection is the immutable config identity selected for one
 // GUI target. Geometry is validated while the plan is built and intentionally

@@ -121,9 +121,6 @@ func inStationOwner() bool {
 // The complete requested policy comes from the project source; no caller can
 // select the fixed owner service or its authoritative policy.
 func EnsureEndpointReady(ctx context.Context, requested Config, dryRun bool) (string, error) {
-	if packageOwnerManifest == "" {
-		return "", fmt.Errorf("source-selected station broker owner is required before native endpoint admission")
-	}
 	cfg, err := selectedStationOwner(requested)
 	if err != nil {
 		return "", err

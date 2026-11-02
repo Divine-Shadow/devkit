@@ -70,25 +70,6 @@ func runNativecmdEndpointHelper() int {
 	}
 }
 
-func TestParsePlanArgsRecognizesManagedAppServerOnlyForExec(t *testing.T) {
-	ctx := &cmdregistry.Context{Args: []string{"exec", "--managed-app-server", "--", "codex", "app-server"}}
-	parsed, err := parsePlanArgs(ctx, true, false)
-	if err != nil || !parsed.managedAppServer {
-		t.Fatalf("managed app-server parse = %#v, %v", parsed, err)
-	}
-	if _, err := parsePlanArgs(ctx, false, false); err == nil || !strings.Contains(err.Error(), "only valid for native exec") {
-		t.Fatalf("non-exec accepted managed app-server: %v", err)
-	}
-}
-
-func TestParseTopExecArgsRecognizesManagedAppServerBeforeSeparator(t *testing.T) {
-	ctx := &cmdregistry.Context{Args: []string{"2", "--managed-app-server", "--", "codex", "app-server"}}
-	parsed, err := parseTopExecArgs(ctx, false)
-	if err != nil || !parsed.managedAppServer || !reflect.DeepEqual(parsed.command, []string{"codex", "app-server"}) {
-		t.Fatalf("top exec managed app-server parse = %#v, %v", parsed, err)
-	}
-}
-
 func TestGUITargetIDPropagatesAcrossNativePlanAndExec(t *testing.T) {
 	const targetID = "shadow-throne-management-2"
 	plan, err := parsePlanArgs(&cmdregistry.Context{Args: []string{
@@ -191,38 +172,6 @@ func TestWorkspaceRootTranslationAcrossNativeCommands(t *testing.T) {
 		}
 		if parseErr == nil {
 			t.Fatalf("missing workspace root value was accepted: %#v", args)
-		}
-	}
-}
-
-func TestManagedAppServerRequiresDedicatedGUIServiceIdentity(t *testing.T) {
-	if managedAppServerServiceIdentity != "fleet-gui-shadow-throne-management-2.service" {
-		t.Fatalf("managed app-server service identity = %q", managedAppServerServiceIdentity)
-	}
-	if managedAppServerServiceIdentity == "fleet-controller-operation.service" {
-		t.Fatal("transient operation broker must not be accepted as the durable GUI owner")
-	}
-	if !managedAppServerServiceOwnedWithCgroup(
-		managedAppServerServiceIdentity,
-		"invocation-id",
-		"0::/system.slice/fleet-gui-shadow-throne-management-2.service",
-	) {
-		t.Fatal("exact managed GUI service cgroup was rejected")
-	}
-	if !managedAppServerServiceOwnedWithCgroup(
-		managedAdditionalAppServerServiceIdentity,
-		"invocation-id",
-		"0::/user.slice/user-1000.slice/fleet-gui-shadow-throne-management.service",
-	) {
-		t.Fatal("additional declared managed GUI service cgroup was rejected")
-	}
-	for _, candidate := range []struct{ service, invocation, cgroup string }{
-		{"fleet-controller-operation.service", "invocation-id", "0::/system.slice/fleet-controller-operation.service"},
-		{managedAppServerServiceIdentity, "", "0::/system.slice/fleet-gui-shadow-throne-management-2.service"},
-		{managedAppServerServiceIdentity, "invocation-id", "0::/user.slice/user-1000.slice"},
-	} {
-		if managedAppServerServiceOwnedWithCgroup(candidate.service, candidate.invocation, candidate.cgroup) {
-			t.Fatalf("non-service managed app-server owner accepted: %#v", candidate)
 		}
 	}
 }
@@ -800,7 +749,6 @@ func TestPackagedAdmittedNativeOverlaysDeclareAbsoluteGeometry(t *testing.T) {
 	}
 	wantAdmitted := map[string]bool{
 		"dev-all":                            true,
-		"dev-workspace":                      true,
 		"ouroboros-terraform":                true,
 		"pokeemerald":                        true,
 		"pokeemerald-expansion-shared-power": true,
@@ -832,8 +780,14 @@ func TestPackagedAdmittedNativeOverlaysDeclareAbsoluteGeometry(t *testing.T) {
 			"worktree_container_root": cfg.Native.WorktreeContainerRoot,
 			"state_container_root":    cfg.Native.StateContainerRoot,
 		} {
+			if field == "worktree_root" || field == "state_root" {
+				value = resolveNativeRoot(cfg.Native.HostRoot, value)
+				if !pathWithin(value, cfg.Native.HostRoot) {
+					t.Fatalf("packaged native overlay %s %s escapes host root: %q", name, field, value)
+				}
+			}
 			if !filepath.IsAbs(strings.TrimSpace(value)) {
-				t.Fatalf("packaged native overlay %s %s must be absolute, got %q", name, field, value)
+				t.Fatalf("packaged native overlay %s %s must resolve absolute, got %q", name, field, value)
 			}
 		}
 	}
@@ -844,50 +798,50 @@ func TestPackagedAdmittedNativeOverlaysDeclareAbsoluteGeometry(t *testing.T) {
 	}
 }
 
-func TestRealPackagedDevWorkspaceOverlayKeepsMutableGeometryOutsideRuntimeAuthority(t *testing.T) {
+func TestRealPackagedDevAllOverlayKeepsMutableGeometryOutsideRuntimeAuthority(t *testing.T) {
 	root := devkitSourceRootForNativeTest(t)
-	cfg, _, err := config.ReadAll([]string{filepath.Join(root, "overlays")}, "dev-workspace")
+	cfg, _, err := config.ReadAll([]string{filepath.Join(root, "overlays")}, "dev-all")
 	if err != nil {
-		t.Fatalf("read real dev-workspace overlay: %v", err)
+		t.Fatalf("read real dev-all overlay: %v", err)
 	}
 	packageRoot := "/nix/store/example-devkit-devctl"
 	// Preserve the real parsed production configuration while modeling its
 	// installed package location.
-	cfg.SourceDir = filepath.Join(packageRoot, "overlays", "dev-workspace")
+	cfg.SourceDir = filepath.Join(packageRoot, "overlays", "dev-all")
 	ctx := &cmdregistry.Context{
-		Project: "dev-workspace",
+		Project: "dev-all",
 		Paths: devkitpaths.Paths{
 			Root:                 packageRoot,
 			RuntimeAuthorityRoot: packageRoot,
 		},
 	}
 	if err := validateInstalledPackageNativeGeometry(ctx, cfg); err != nil {
-		t.Fatalf("real packaged dev-workspace geometry rejected: %v", err)
+		t.Fatalf("real packaged dev-all geometry rejected: %v", err)
 	}
 	brokerCfg := lifecycleBrokerConfig(ctx, cfg, lifecycleArgs{})
-	opts := lifecyclePlanOptions(ctx, cfg, lifecycleArgs{}, ".", brokerCfg)
+	opts := lifecyclePlanOptions(ctx, cfg, lifecycleArgs{}, "ouroboros-ide", brokerCfg)
 	p, err := nativeplan.BuildDevAll(opts)
 	if err != nil {
-		t.Fatalf("build real packaged dev-workspace plan: %v", err)
+		t.Fatalf("build real packaged dev-all plan: %v", err)
 	}
-	if p.Agent.HostWorktree != "/home/bayesartre/dev" {
+	if p.Agent.HostWorktree != "/home/bayesartre/workspace/agent-worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("host worktree = %q", p.Agent.HostWorktree)
 	}
-	if p.HostWorktreeRoot != "/home/bayesartre/dev/agent-worktrees" {
+	if p.HostWorktreeRoot != "/home/bayesartre/workspace/agent-worktrees" {
 		t.Fatalf("host worktree root = %q", p.HostWorktreeRoot)
 	}
-	if p.HostStateRoot != "/home/bayesartre/dev/.devkit/native-agents" {
+	if p.HostStateRoot != "/home/bayesartre/workspace/.devkit/native-agents" {
 		t.Fatalf("host state root = %q", p.HostStateRoot)
 	}
-	if p.Agent.SandboxWorktree != "/workspaces/dev" || p.SandboxStateRoot != "/agent-state" {
+	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" || p.SandboxStateRoot != "/agent-state" {
 		t.Fatalf("sandbox geometry = worktree %q state %q", p.Agent.SandboxWorktree, p.SandboxStateRoot)
 	}
-	if p.BrokerEndpoint != "/home/bayesartre/dev/.devkit/native-broker/broker.sock" {
+	if p.BrokerEndpoint != "/home/bayesartre/workspace/.devkit/native-broker/broker.sock" {
 		t.Fatalf("broker endpoint = %q", p.BrokerEndpoint)
 	}
 	for _, bind := range p.Binds {
 		if bind.Mode == "rw" && (bind.Source == "/nix/store" || strings.HasPrefix(bind.Source, "/nix/store/")) {
-			t.Fatalf("real packaged dev-workspace plan exposes writable Nix-store bind: %#v", bind)
+			t.Fatalf("real packaged dev-all plan exposes writable Nix-store bind: %#v", bind)
 		}
 	}
 }
@@ -895,14 +849,14 @@ func TestRealPackagedDevWorkspaceOverlayKeepsMutableGeometryOutsideRuntimeAuthor
 func TestBuildAgentPlanKeepsWorkspaceEgressAuthority(t *testing.T) {
 	root := devkitSourceRootForNativeTest(t)
 	ctx := &cmdregistry.Context{
-		Project: "dev-workspace",
+		Project: "dev-all",
 		Paths: devkitpaths.Paths{
 			Root:                 root,
 			RuntimeAuthorityRoot: root,
 			OverlayPaths:         []string{filepath.Join(root, "overlays")},
 		},
 	}
-	p, err := BuildAgentPlan(ctx, ".", 1)
+	p, err := BuildAgentPlan(ctx, "ouroboros-ide", 1)
 	if err != nil {
 		t.Fatalf("BuildAgentPlan: %v", err)
 	}
@@ -912,7 +866,7 @@ func TestBuildAgentPlanKeepsWorkspaceEgressAuthority(t *testing.T) {
 	if p.RuntimeAuthorityRoot != root {
 		t.Fatalf("runtime authority root = %q, want %q", p.RuntimeAuthorityRoot, root)
 	}
-	if !filepath.IsAbs(p.Proxy.UnixSocket) || !strings.Contains(p.Proxy.UnixSocket, "dev-workspace-agent1-workspace-egress.sock") {
+	if !filepath.IsAbs(p.Proxy.UnixSocket) || !strings.Contains(p.Proxy.UnixSocket, "dev-all-agent1-workspace-egress.sock") {
 		t.Fatalf("managed egress socket = %q", p.Proxy.UnixSocket)
 	}
 }

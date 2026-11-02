@@ -97,20 +97,3 @@ func TestSharedPowerSelectedPrepareRejectsAmbiguousSelectionBeforeEffects(t *tes
 		t.Fatalf("legacy parser changed: %#v, %v", legacy, err)
 	}
 }
-
-func TestSharedPowerAdapterDoesNotInterceptManagementPrepare(t *testing.T) {
-	root := devkitSourceRootForNativeTest(t)
-	worktreeRoot := filepath.Join(t.TempDir(), "control-plane-worktrees")
-	ctx := &cmdregistry.Context{
-		Project: "dev-workspace", DryRun: true,
-		Paths: devkitpaths.Paths{Root: root, OverlayPaths: []string{filepath.Join(root, "overlays")}},
-		Args: []string{"prepare", "--repo", "shadow-throne-management", "--count", "1",
-			"--worktree-root", worktreeRoot, "--workspace-root", filepath.Join(worktreeRoot, "wrong-lane")},
-	}
-	// The existing Management planner owns this error. An overbroad dispatch
-	// to selected Shared Power preparation would reject the project first.
-	err := handlePrepare(ctx)
-	if err == nil || !strings.Contains(err.Error(), "must be the exact selected lane root") {
-		t.Fatalf("Management prepare no longer reaches its existing planner: %v", err)
-	}
-}

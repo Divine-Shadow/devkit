@@ -14,9 +14,9 @@ runtime:
 native:
   # This packaged overlay keeps runtime authority in /nix/store while all
   # mutable checkout, home, and proxy state remains in the declared workspace.
-  host_root: /home/bayesartre/dev
-  worktree_root: /home/bayesartre/dev/agent-worktrees
-  state_root: /home/bayesartre/dev/.devkit/native-agents
+  host_root: /home/bayesartre/workspace
+  worktree_root: agent-worktrees
+  state_root: .devkit/native-agents
   worktree_container_root: /workspaces/dev/agent-worktrees
   state_container_root: /agent-state
   required_isolation_profile: workspace-egress
