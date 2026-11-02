@@ -3,6 +3,7 @@ package nativecmd
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -19,9 +20,81 @@ func freshSelectedFixture(t *testing.T) (nativeplan.Plan, wtx.NativeOptions) {
 	root := t.TempDir()
 	trees := filepath.Join(root, "lanes")
 	lane := filepath.Join(trees, "agent5")
-	p := nativeplan.Plan{Agent: nativeagent.Spec{ID: nativeagent.ID{Project: "dev-all", Repo: "fixture", Index: 5},
-		HostWorktree: filepath.Join(lane, "fixture"), HostHome: filepath.Join(lane, ".devhome-agent5"), StateRoot: filepath.Join(root, "state", "dev-all-agent5")}}
+	state := filepath.Join(root, "state")
+	p := nativeplan.Plan{HostStateRoot: state, Agent: nativeagent.Spec{ID: nativeagent.ID{Project: "dev-all", Repo: "fixture", Index: 5},
+		HostWorktree: filepath.Join(lane, "fixture"), HostHome: filepath.Join(nativeagent.PersistentHomesRoot(state), "dev-all-agent5", "fixture"), StateRoot: filepath.Join(state, "dev-all-agent5")}}
 	return p, wtx.NativeOptions{DevkitRoot: filepath.Join(root, "devkit"), Repo: "fixture", Index: 5, Count: 5, WorktreeRoot: trees}
+}
+
+func TestFreshSelectedPreparationRetainsUsableSQLiteAndHomeIdentity(t *testing.T) {
+	p, opts := freshSelectedFixture(t)
+	if err := os.MkdirAll(filepath.Join(p.Agent.HostHome, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(p.Agent.HostHome, ".codex", "state_5.sqlite")
+	query := func(sql string) string {
+		t.Helper()
+		out, err := exec.Command("sqlite3", database, sql).CombinedOutput()
+		if err != nil {
+			t.Fatalf("SQLite continuity fixture: %v %s", err, out)
+		}
+		return string(out)
+	}
+	query("CREATE TABLE continuity(value TEXT); INSERT INTO continuity VALUES('retained goal');")
+	before, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := claimFreshSelectedPreparation(p, opts, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer claim.close()
+	for _, dir := range []string{p.Agent.HostWorktree, filepath.Join(claim.directories[2].Name(), "fixture.git")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := claim.complete(p); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(database)
+	if err != nil || !os.SameFile(before, after) || query("SELECT value FROM continuity;") != "retained goal\n" {
+		t.Fatal("fresh execution claim lost existing usable data")
+	}
+	query("INSERT INTO continuity VALUES('later update');")
+	if query("SELECT count(*) FROM continuity;") != "2\n" {
+		t.Fatal("retained database cannot accept later updates")
+	}
+	if err := os.Rename(p.Agent.HostHome, p.Agent.HostHome+"-retained"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p.Agent.HostHome, 0700); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := claim.runPhase(func() error { called = true; return nil }); err == nil || called {
+		t.Fatal("retained home replacement was admitted")
+	}
+}
+
+func TestFreshSelectedPreparationRetainsUnownedAppServerEndpoint(t *testing.T) {
+	p, opts := freshSelectedFixture(t)
+	socket := filepath.Join(p.Agent.HostHome, ".codex", "a5-app.sock")
+	if err := os.MkdirAll(filepath.Dir(socket), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(socket, []byte("unclassified endpoint"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if claim, err := claimFreshSelectedPreparation(p, opts, false); err == nil {
+		claim.close()
+		t.Fatal("endpoint admitted without owning lifecycle")
+	}
+	data, err := os.ReadFile(socket)
+	if err != nil || string(data) != "unclassified endpoint" {
+		t.Fatal("unowned endpoint changed")
+	}
 }
 
 func TestFreshSelectedPreparationRefusesEveryOccupiedNamespace(t *testing.T) {

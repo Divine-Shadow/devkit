@@ -488,3 +488,81 @@ func TestNativeWholeResetProcessAppearingDuringSnapshotPreventsDestructiveApply(
 		t.Fatalf("post-history process events = %v, want %v", events, want)
 	}
 }
+
+func TestRetainedNativeContainerHistoryUsesOnlyItsDeclaredHomes(t *testing.T) {
+	sqlite, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 is supplied by the Nix test closure")
+	}
+	restore := sqliteauthority.SetExecutableForTesting(sqlite)
+	t.Cleanup(restore)
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, ".devkit", "native-agents")
+	identities, err := sourceDerivedNativeSlotProcessIdentities(nativeplan.BuildOptions{
+		Paths:    devkitpaths.Paths{Root: filepath.Join(root, "devkit")},
+		HostRoot: root, Project: "dev-all", Repo: "ouroboros-ide",
+		WorktreeRoot: filepath.Join(t.TempDir(), "agent-worktrees"), StateRoot: stateRoot,
+		WorktreeContainerRoot: "/worktrees", StateContainerRoot: "/agent-state",
+	}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := identities[1]
+	if identity.sandboxHome != "/worktrees/agent2/.devhome-agent2" {
+		t.Fatalf("unexpected source home %s", identity.sandboxHome)
+	}
+	codex := filepath.Join(identity.hostHome, ".codex")
+	if err := os.MkdirAll(filepath.Join(codex, "sessions"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(codex, "sessions", "rollout-native.jsonl")
+	payload := []byte("{\"type\":\"session_meta\",\"payload\":{\"id\":\"native-thread\"}}\n")
+	if err := os.WriteFile(rollout, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(codex, "state_5.sqlite")
+	query := "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL); INSERT INTO threads VALUES ('native-thread', '" + identity.sandboxHome + "/.codex/sessions/rollout-native.jsonl', 'vscode', 'private native goal');"
+	if out, err := exec.Command(sqlite, "-batch", database, query).CombinedOutput(); err != nil {
+		t.Fatalf("fixture database: %v %s", err, out)
+	}
+	before, err := os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := captureNativeWholeHistory("dev-all", []nativeSlotProcessIdentity{identity}, stateRoot, false); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(database)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("reference preflight changed retained database: %v", err)
+	}
+	afterObject, err := os.Stat(database)
+	if err != nil || !os.SameFile(object, afterObject) {
+		t.Fatalf("retained database object changed: %v", err)
+	}
+	if got, err := os.ReadFile(rollout); err != nil || string(got) != string(payload) {
+		t.Fatalf("retained rollout changed: %v", err)
+	}
+
+	// The ordinary container did not declare a workspace alias. A same-index
+	// reference in that foreign spelling must still refuse before reset apply.
+	query = "UPDATE threads SET rollout_path='/workspaces/dev/.devhome-agent2/.codex/sessions/rollout-native.jsonl';"
+	if out, err := exec.Command(sqlite, "-batch", database, query).CombinedOutput(); err != nil {
+		t.Fatalf("foreign reference: %v %s", err, out)
+	}
+	before, err = os.ReadFile(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := captureNativeWholeHistory("dev-all", []nativeSlotProcessIdentity{identity}, stateRoot, false); err == nil || !strings.Contains(err.Error(), "escapes the source-derived Codex home") {
+		t.Fatalf("invented workspace alias admitted: %v", err)
+	}
+	after, err = os.ReadFile(database)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("refused preflight changed retained database: %v", err)
+	}
+}

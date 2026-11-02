@@ -30,18 +30,18 @@ func sourceDerivedNativeSlotProcessIdentities(opts nativeplan.BuildOptions, coun
 	for index := 1; index <= count; index++ {
 		slotOpts := opts
 		slotOpts.Index = index
-		plan, err := nativeplan.BuildDevAll(slotOpts)
+		geometry, err := nativeplan.ObserveNativeResetSlotGeometry(slotOpts)
 		if err != nil {
 			return nil, fmt.Errorf("derive source-declared native slot index %d: %w", index, err)
 		}
 		identities = append(identities, nativeSlotProcessIdentity{
 			index:           index,
-			hostWorktree:    plan.Agent.HostWorktree,
-			sandboxWorktree: plan.Agent.SandboxWorktree,
-			hostHome:        plan.Agent.HostHome,
-			sandboxHome:     plan.Agent.SandboxHome,
-			stateRoot:       plan.Agent.StateRoot,
-			sandboxState:    plan.Agent.SandboxStateRoot,
+			hostWorktree:    geometry.HostWorktree,
+			sandboxWorktree: geometry.SandboxWorktree,
+			hostHome:        geometry.HostHome,
+			sandboxHome:     geometry.SandboxHome,
+			stateRoot:       geometry.StateRoot,
+			sandboxState:    geometry.SandboxStateRoot,
 		})
 	}
 	return identities, nil

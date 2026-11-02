@@ -112,17 +112,27 @@ func TestBuildRequiresUniqueGUITargetConfigProjectionByFullGeometry(t *testing.T
 	})
 
 	opts := BuildOptions{
-		Paths:   devkitpaths.Paths{Root: filepath.Join(root, "devkit")},
-		Project: "dev-all",
-		Repo:    "ouroboros-ide",
-		Index:   3,
+		Paths:            devkitpaths.Paths{Root: filepath.Join(root, "devkit")},
+		Project:          "dev-all",
+		Repo:             "ouroboros-ide",
+		Index:            3,
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
 	}
 	base, err := BuildDevAll(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ordinary := base
+	isolatedOpts := opts
+	isolatedOpts.WorkspaceRoot = filepath.Dir(base.Agent.HostWorktree)
+	base, err = BuildDevAll(isolatedOpts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	digest := sha256.Sum256(data)
 	record := guiConfigRecordForPlan(base, "shadow-3", "product-governance", source, hex.EncodeToString(digest[:]))
+	record.SandboxHome = base.Agent.SandboxHome
 	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record})
 	projection, err := loadUniqueGUITargetConfigProjectionForGeometryFrom(manifestPath, storeRoot, guiTargetGeometryForPlan(base))
 	if err != nil {
@@ -138,6 +148,12 @@ func TestBuildRequiresUniqueGUITargetConfigProjectionByFullGeometry(t *testing.T
 	}
 	if p.GUITargetConfig == nil || p.GUITargetConfig.TargetID != "shadow-3" || p.Env[GUITargetIDEnvironment] != "shadow-3" {
 		t.Fatalf("geometry-selected GUI config = %#v env=%q", p.GUITargetConfig, p.Env[GUITargetIDEnvironment])
+	}
+	if p.HostWorkspaceRoot != isolatedOpts.WorkspaceRoot || p.Agent.SandboxHome != base.Agent.SandboxHome || p.Agent.SandboxWorktree != base.Agent.SandboxWorktree {
+		t.Fatalf("GUI-required lifecycle lost isolated consumer geometry: %#v", p.Agent)
+	}
+	if ordinary.HostWorkspaceRoot != "" || ordinary.Agent.SandboxWorktree == p.Agent.SandboxWorktree {
+		t.Fatalf("ordinary non-GUI projection changed: %#v", ordinary.Agent)
 	}
 
 	duplicate := record

@@ -36,13 +36,10 @@ type Paths struct {
 	SandboxHome           string
 }
 
-// PersistentDevAllHome returns the source-owned persistent Codex home for a
-// dev-all worktree. Agent one intentionally retains the legacy repo-local
-// layout. Its history is protected data and must not be "migrated" by silently
-// selecting the sibling agent-root path used by later lanes.
-//
-// Keep this rule in one place: plan construction must use the same geometry as
-// direct native lifecycle helpers and GUI config projection records.
+// PersistentDevAllHome retains the application-visible home spelling and
+// identifies legacy host data. New host storage is selected independently by
+// ResolvePaths, outside the worktree and per-agent execution state. Keeping the
+// sandbox spelling does not require the host data to live under a reset root.
 func PersistentDevAllHome(worktree string, index int) string {
 	if index < 1 {
 		index = 1
@@ -52,6 +49,12 @@ func PersistentDevAllHome(worktree string, index int) string {
 		return filepath.Join(worktree, suffix)
 	}
 	return filepath.Join(filepath.Dir(worktree), suffix)
+}
+
+// PersistentHomesRoot is excluded from both native reset scopes. It holds
+// ordinary application state directly, rather than predecessor archives.
+func PersistentHomesRoot(stateRoot string) string {
+	return filepath.Join(stateRoot, ".homes")
 }
 
 func ResolvePaths(cfg PathConfig) (Paths, error) {
@@ -111,7 +114,10 @@ func ResolvePaths(cfg PathConfig) (Paths, error) {
 	hostHome := filepath.Join(hostAgentStateRoot, "home")
 	sandboxHome := filepath.Join(sandboxAgentStateRoot, "home")
 	if project == "dev-all" && !workspaceRoot {
-		hostHome = PersistentDevAllHome(hostWorktree, index)
+		if filepath.Base(repo) != repo || repo == ".." {
+			return Paths{}, fmt.Errorf("persistent native home requires a repository name, got %q", repo)
+		}
+		hostHome = filepath.Join(PersistentHomesRoot(hostStateRoot), agentName, repo)
 		sandboxHome = PersistentDevAllHome(sandboxWorktree, index)
 	}
 	return Paths{

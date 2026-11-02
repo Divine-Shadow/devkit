@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -175,6 +174,10 @@ func testSelectedResetWithRetainedManifestSuffix(t *testing.T, root, base, workt
 	if err != nil {
 		t.Fatal(err)
 	}
+	selectedObject, err := os.Stat(selectedDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
 	selectedProcess := start(2, selected.HostHome, selected.HostWorktree)
 	assertSelectedIntact := func() {
 		t.Helper()
@@ -253,38 +256,25 @@ func testSelectedResetWithRetainedManifestSuffix(t *testing.T, root, base, workt
 	if err := selectedProcess.Wait(); err == nil {
 		t.Fatal("selected process was not retired")
 	}
-	var historyManifestPath string
-	for _, line := range strings.Split(string(diagnostic), "\n") {
-		if strings.HasPrefix(line, "codex_gui_history_custody ") && strings.Contains(line, " status=captured ") {
-			for _, field := range strings.Fields(line) {
-				if value, ok := strings.CutPrefix(field, "manifest="); ok {
-					historyManifestPath = value
-				}
-			}
-		}
+	if !strings.Contains(string(diagnostic), "codex_gui_history status=retained-in-place agent=2 home="+selected.HostHome) {
+		t.Fatalf("selected reset did not report retained storage: %s", diagnostic)
 	}
-	raw, err := os.ReadFile(historyManifestPath)
+	afterObject, err := os.Stat(selectedDatabase)
+	if err != nil || !os.SameFile(selectedObject, afterObject) {
+		t.Fatalf("selected reset replaced its protected history object: %v", err)
+	}
+	if got, err := os.ReadFile(selectedDatabase); err != nil || !bytes.Equal(got, selectedHistory) {
+		t.Fatalf("actual selected history bytes changed after reconstruction: %v", err)
+	}
+	if got := runNativeFixtureCommand(t, "sqlite3", selectedDatabase, "PRAGMA integrity_check; SELECT goal FROM goals; INSERT INTO goals VALUES ('selected-slot2-later-goal'); SELECT count(*) FROM goals;"); got != "ok\nselected-slot2-goal\n2\n" {
+		t.Fatalf("retained selected goal is not readable and writable: %q", got)
+	}
+	selectedHistoryAfterUpdate, err := os.ReadFile(selectedDatabase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var captured struct {
-		Index int                             `json:"agent_index"`
-		Kind  string                          `json:"reset_kind"`
-		Files []struct{ Path, SHA256 string } `json:"files"`
-	}
-	if err := json.Unmarshal(raw, &captured); err != nil {
-		t.Fatal(err)
-	}
-	if captured.Index != 2 || captured.Kind != "selected-slot-reset" || len(captured.Files) != 1 || captured.Files[0].Path != "goals_1.sqlite" {
-		t.Fatalf("wrong selected custody: %s", raw)
-	}
-	payload := filepath.Join(filepath.Dir(historyManifestPath), "payload", "goals_1.sqlite")
-	got, err := os.ReadFile(payload)
-	if err != nil || !bytes.Equal(got, selectedHistory) || fmt.Sprintf("%x", sha256.Sum256(got)) != captured.Files[0].SHA256 {
-		t.Fatalf("actual selected history lost after reconstruction: %v", err)
-	}
-	if got := runNativeFixtureCommand(t, "sqlite3", payload, "PRAGMA integrity_check; SELECT goal FROM goals;"); got != "ok\nselected-slot2-goal\n" {
-		t.Fatalf("protected goal not readable after reset: %q", got)
+	if strings.Contains(string(diagnostic), "selected-slot2-goal") {
+		t.Fatal("selected reset disclosed private goal content")
 	}
 	if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", selected.HostWorktree, "rev-parse", "HEAD")); got != receipt.Head {
 		t.Fatal("reconstructed actual HEAD differs from receipt")
@@ -302,11 +292,21 @@ func testSelectedResetWithRetainedManifestSuffix(t *testing.T, root, base, workt
 	if err := secondSelected.Wait(); err == nil {
 		t.Fatal("second selected process was not retired")
 	}
+	afterSecond, err := os.Stat(selectedDatabase)
+	if err != nil || !os.SameFile(selectedObject, afterSecond) {
+		t.Fatalf("second selected reset replaced its retained history object: %v", err)
+	}
+	if got, err := os.ReadFile(selectedDatabase); err != nil || !bytes.Equal(got, selectedHistoryAfterUpdate) {
+		t.Fatalf("second selected reset changed usable retained history: %v", err)
+	}
+	if got := runNativeFixtureCommand(t, "sqlite3", selectedDatabase, "PRAGMA integrity_check; SELECT goal FROM goals ORDER BY rowid;"); got != "ok\nselected-slot2-goal\nselected-slot2-later-goal\n" {
+		t.Fatalf("second selected reset lost the later goal update: %q", got)
+	}
 	assertRunning(activeSurplus)
 	assertSurplus()
 	if _, diagnostic, err := run(4); err == nil || !strings.Contains(string(diagnostic), "outside declared capacity 1..3") {
 		t.Fatalf("retained slot4 was reactivated: %v %s", err, diagnostic)
 	}
 	assertSurplus()
-	t.Log("actual package CLI reconstructed slot2 twice with read-only surplus history, retained exact four-slot manifest/state/history, preserved active slot4, and refused selected mismatch, unowned contact, overlapping transactions and out-of-range reactivation")
+	t.Log("actual package CLI reconstructed slot2 twice with read-only surplus history, retained the same usable selected SQLite object and later update plus exact four-slot manifest/state/history, preserved active slot4, and refused selected mismatch, unowned contact, overlapping transactions and out-of-range reactivation")
 }

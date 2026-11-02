@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
@@ -24,10 +25,11 @@ func standardManagedGitFixture(t *testing.T, index int, kind string) nativeplan.
 	p.HostWorkspaceRoot = fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d", index)
 	p.SandboxWorkspaceRoot = "/workspaces/dev"
 	p.Agent.HostWorktree = p.HostWorkspaceRoot + "/ouroboros-ide"
-	p.Agent.HostHome = fmt.Sprintf("%s/.devhome-agent%d", p.HostWorkspaceRoot, index)
+	p.HostStateRoot = "/home/bayesartre/dev/.devkit/native-agents"
+	p.Agent.StateRoot = filepath.Join(p.HostStateRoot, fmt.Sprintf("dev-all-agent%d", index))
+	p.Agent.HostHome = fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/.homes/dev-all-agent%d/ouroboros-ide", index)
 	p.Agent.SandboxHome = fmt.Sprintf("/workspaces/dev/.devhome-agent%d", index)
 	if index == 1 {
-		p.Agent.HostHome = p.Agent.HostWorktree + "/.devhome-agent1"
 		p.Agent.SandboxHome = "/workspaces/dev/ouroboros-ide/.devhome-agent1"
 	}
 	p.Agent.SandboxWorktree = "/workspaces/dev/ouroboros-ide"
@@ -355,6 +357,42 @@ func TestStandardManagedGitPolicyPreservesAllExistingStandardLaneGeometries(t *t
 			p.Agent.HostHome += "/changed"
 			if _, err := managedRuntimeGitSSHCommand(p); err == nil {
 				t.Fatal("changed host home admitted")
+			}
+		})
+	}
+}
+
+func TestStandardManagedGitConsumesIndependentSourceStateRoot(t *testing.T) {
+	p := standardManagedGitFixture(t, 3, "local-wsl-devkit-agent")
+	paths, err := nativeagent.ResolvePaths(nativeagent.PathConfig{
+		DevkitRoot: "/home/bayesartre/dev/devkit", Project: "dev-all", Repo: "ouroboros-ide", Index: 3,
+		WorktreeRoot: "/home/bayesartre/dev/agent-worktrees", StateRoot: filepath.Join(t.TempDir(), "source-state"), DedicatedWorktree: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.HostStateRoot, p.Agent.StateRoot, p.Agent.HostHome = paths.HostStateRoot, paths.HostAgentStateRoot, paths.HostHome
+	if standard, err := standardManagedGitPlan(p); err != nil || !standard {
+		t.Fatalf("source-selected retained storage refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*nativeplan.Plan){
+		"relative-root":     func(q *nativeplan.Plan) { q.HostStateRoot = "relative" },
+		"noncanonical-root": func(q *nativeplan.Plan) { q.HostStateRoot += "/../other" },
+		"sibling-state":     func(q *nativeplan.Plan) { q.Agent.StateRoot = filepath.Join(q.HostStateRoot, "dev-all-agent2") },
+		"foreign-prefix":    func(q *nativeplan.Plan) { q.Agent.StateRoot = filepath.Join(q.HostStateRoot, "other-agent3") },
+		"legacy-worktree-home": func(q *nativeplan.Plan) {
+			q.Agent.HostHome = filepath.Join(filepath.Dir(q.Agent.HostWorktree), ".devhome-agent3")
+		},
+		"legacy-state-home": func(q *nativeplan.Plan) { q.Agent.HostHome = filepath.Join(q.Agent.StateRoot, "home") },
+		"foreign-repository": func(q *nativeplan.Plan) {
+			q.Agent.HostHome = filepath.Join(filepath.Dir(q.Agent.HostHome), "other-repo")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := p
+			mutate(&q)
+			if _, err := standardManagedGitPlan(q); err == nil {
+				t.Fatal("foreign home/state admitted")
 			}
 		})
 	}

@@ -157,20 +157,20 @@ func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 	return resolved
 }
 
-func Build(opts BuildOptions) (Plan, error) {
-	project := strings.TrimSpace(opts.Project)
+func resolvePlanGeometry(opts BuildOptions) (project, repo string, index int, paths agent.Paths, workspaceRoot string, err error) {
+	project = strings.TrimSpace(opts.Project)
 	if project == "" {
 		project = "dev-all"
 	}
-	index := opts.Index
+	index = opts.Index
 	if index < 1 {
 		index = 1
 	}
-	repo := strings.TrimSpace(opts.Repo)
+	repo = strings.TrimSpace(opts.Repo)
 	if repo == "" {
 		repo = defaultRepo(project)
 	}
-	paths, err := agent.ResolvePaths(agent.PathConfig{
+	paths, err = agent.ResolvePaths(agent.PathConfig{
 		DevkitRoot:            opts.Paths.Root,
 		HostRoot:              opts.HostRoot,
 		Project:               project,
@@ -184,7 +184,7 @@ func Build(opts BuildOptions) (Plan, error) {
 		DedicatedWorktree:     true,
 	})
 	if err != nil {
-		return Plan{}, err
+		return
 	}
 	// Fleet's isolated Shared Power lanes use their project-qualified name.
 	// Only the explicit workspace root selects this geometry; historical
@@ -195,25 +195,37 @@ func Build(opts BuildOptions) (Plan, error) {
 	if strings.TrimSpace(opts.WorkspaceRoot) != "" && isTerraformWorkspaceLane(project, repo, index) {
 		paths.HostWorktree = filepath.Join(paths.HostWorktreeRoot, "terraform-ouro-1", repo)
 	}
-	workspaceRoot, err := validateIsolatedWorkspaceRoot(opts.WorkspaceRoot, project, repo, index, paths)
+	workspaceRootInput := opts.WorkspaceRoot
+	if opts.RequireGUIConfig && opts.IsolationProfile == IsolationProfileWorkspaceEgress && project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) && workspaceRootInput == "" {
+		// GUI-required lifecycle observation, reconstruction and manifests use
+		// the same source-derived isolated projection as the actual consumer.
+		// This selects no target and does not alter ordinary non-GUI plans.
+		workspaceRootInput = filepath.Dir(paths.HostWorktree)
+	}
+	workspaceRoot, err = validateIsolatedWorkspaceRoot(workspaceRootInput, project, repo, index, paths)
 	if err != nil {
-		return Plan{}, err
+		return
 	}
 	if workspaceRoot != "" {
 		paths.SandboxWorktree = filepath.Join("/workspaces/dev", filepath.Base(paths.HostWorktree))
-		if sandboxHome, ok := projectSandboxPath(paths.HostHome, workspaceRoot, "/workspaces/dev"); ok {
+		if project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) {
+			paths.SandboxHome = agent.PersistentDevAllHome(paths.SandboxWorktree, index)
+		} else if sandboxHome, ok := projectSandboxPath(paths.HostHome, workspaceRoot, "/workspaces/dev"); ok {
 			paths.SandboxHome = sandboxHome
 		}
 	} else if sandboxWorktree, ok := sandboxPathForHostWorktree(paths); ok {
 		paths.SandboxWorktree = sandboxWorktree
 		if project == "dev-all" && !agent.IsWorkspaceRootRepo(repo) {
 			paths.SandboxHome = agent.PersistentDevAllHome(paths.SandboxWorktree, index)
-			if index == 1 {
-				if resolved, err := filepath.EvalSymlinks(paths.HostWorktree); err == nil {
-					paths.HostHome = agent.PersistentDevAllHome(filepath.Clean(resolved), index)
-				}
-			}
 		}
+	}
+	return
+}
+
+func Build(opts BuildOptions) (Plan, error) {
+	project, repo, index, paths, workspaceRoot, err := resolvePlanGeometry(opts)
+	if err != nil {
+		return Plan{}, err
 	}
 	flake := strings.TrimSpace(opts.Flake)
 	if flake == "" {
@@ -535,27 +547,13 @@ func Build(opts BuildOptions) (Plan, error) {
 		Notes: notes,
 	}
 	p.gitMetadataTrace = gitTrace
-	if opts.GUITargetID != "" && opts.RequireGUIConfig {
-		return Plan{}, fmt.Errorf("GUI target selection cannot combine an explicit target ID with required geometry selection")
+	projectionConfig, err := selectGUITargetConfig(opts, guiTargetGeometryForPlan(p))
+	if err != nil {
+		return Plan{}, err
 	}
-	if opts.GUITargetID != "" {
-		guiTargetID := strings.TrimSpace(opts.GUITargetID)
-		if guiTargetID == "" || guiTargetID != opts.GUITargetID {
-			return Plan{}, fmt.Errorf("GUI target ID must be non-empty and canonical")
-		}
-		projection, err := loadGUITargetConfigProjection(guiTargetID, guiTargetGeometryForPlan(p))
-		if err != nil {
-			return Plan{}, err
-		}
-		p.GUITargetConfig = &projection
-		p.Env[GUITargetIDEnvironment] = projection.TargetID
-	} else if opts.RequireGUIConfig {
-		projection, err := loadUniqueGUITargetConfigProjectionForGeometry(guiTargetGeometryForPlan(p))
-		if err != nil {
-			return Plan{}, err
-		}
-		p.GUITargetConfig = &projection
-		p.Env[GUITargetIDEnvironment] = projection.TargetID
+	p.GUITargetConfig = projectionConfig
+	if projectionConfig != nil {
+		p.Env[GUITargetIDEnvironment] = projectionConfig.TargetID
 	}
 	callbackReturn, err := loadCallbackReturnProjection(p)
 	if err != nil {
@@ -894,7 +892,8 @@ func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot, project, re
 			return fmt.Errorf("Management workspace projection rejects wholesale parent bind %s -> %s", bind.Source, bind.Target)
 		}
 		if bind.Mode == "rw" && pathWithinRoot("/workspaces/dev", cleanTarget) && cleanTarget != "/workspaces/dev" &&
-			!pathWithinRoot(workspaceRoot, bind.Source) && !isPackageOwnedProductGitMetadataBind(project, repo, paths, bind) {
+			!pathWithinRoot(workspaceRoot, bind.Source) && !isPackageOwnedProductGitMetadataBind(project, repo, paths, bind) &&
+			!isPersistentNativeHomeBind(project, repo, paths, bind) {
 			return fmt.Errorf("Management workspace projection rejects writable cross-lane bind %s -> %s", bind.Source, bind.Target)
 		}
 	}
@@ -902,6 +901,17 @@ func validateIsolatedWorkspaceRootBinds(binds []Bind, workspaceRoot, project, re
 		return fmt.Errorf("Management workspace projection requires exactly one lane-root bind at /workspaces/dev")
 	}
 	return nil
+}
+
+func isPersistentNativeHomeBind(project, repo string, paths agent.Paths, bind Bind) bool {
+	if project != "dev-all" || agent.IsWorkspaceRootRepo(repo) || bind.Mode != "rw" || !bind.Required {
+		return false
+	}
+	if filepath.Dir(paths.HostAgentStateRoot) != paths.HostStateRoot {
+		return false
+	}
+	expected := filepath.Join(agent.PersistentHomesRoot(paths.HostStateRoot), filepath.Base(paths.HostAgentStateRoot), repo)
+	return paths.HostHome == expected && bind.Source == expected && bind.Target == paths.SandboxHome
 }
 
 func isPackageOwnedProductGitMetadataBind(project, repo string, paths agent.Paths, bind Bind) bool {

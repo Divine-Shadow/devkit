@@ -51,3 +51,35 @@ func TestGUIConsumerWorkspaceDerivesFixedV4Geometry(t *testing.T) {
 		t.Fatal("missing target accepted")
 	}
 }
+
+func TestGUIConsumerWorkspaceUsesImmutablePersistentHomeProjection(t *testing.T) {
+	manifest := filepath.Join(t.TempDir(), "projection.json")
+	record := guiCodexConfigProjectionRecord{
+		TargetID: "persistent-2", ConfigProfile: "product-governance", Project: "dev-all", Repo: "ouroboros-ide", AgentIndex: 2,
+		WorkspaceRoot: "/host/agent-worktrees/agent2", HostWorktree: "/host/agent-worktrees/agent2/ouroboros-ide",
+		HostHome: "/host/.devkit/native-agents/.homes/dev-all-agent2/ouroboros-ide", SandboxHome: "/workspaces/dev/.devhome-agent2",
+		Kind: "devkit-agent", Source: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config.toml", SourceSHA256: strings.Repeat("b", 64),
+	}
+	writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{record})
+	got, err := resolveGUIConsumerWorkspaceFrom(manifest, "/nix/store", "dev-all", "ouroboros-ide", record.TargetID, 2)
+	if err != nil || got.Home != record.SandboxHome || got.Worktree != "/workspaces/dev/ouroboros-ide" {
+		t.Fatalf("persistent consumer: %#v %v", got, err)
+	}
+	geometry := guiTargetGeometry{Project: record.Project, Repo: record.Repo, AgentIndex: 2, WorkspaceRoot: record.WorkspaceRoot, HostWorktree: record.HostWorktree, HostHome: record.HostHome, SandboxHome: record.SandboxHome}
+	for _, change := range []func(*guiCodexConfigProjectionRecord){
+		func(r *guiCodexConfigProjectionRecord) { r.HostHome = "/other/.homes/dev-all-agent2/ouroboros-ide" },
+		func(r *guiCodexConfigProjectionRecord) { r.SandboxHome = "/workspaces/dev/.devhome-agent3" },
+	} {
+		changed := record
+		change(&changed)
+		writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{changed})
+		if _, err := loadGUITargetConfigProjectionFrom(manifest, "/nix/store", record.TargetID, geometry); err == nil {
+			t.Fatal("actual launch accepted changed persistent home geometry")
+		}
+	}
+	record.SandboxHome = "/workspaces/dev/.devhome-agent3"
+	writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{record})
+	if _, err := resolveGUIConsumerWorkspaceFrom(manifest, "/nix/store", "dev-all", "ouroboros-ide", record.TargetID, 2); err == nil {
+		t.Fatal("logical consumer accepted another agent's home")
+	}
+}

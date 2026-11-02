@@ -1,6 +1,48 @@
 package agent
 
-import "testing"
+import (
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestPersistentHomeProductionAppServerSocketFitsAndBinds(t *testing.T) {
+	production, err := ResolvePaths(PathConfig{DevkitRoot: "/nix/store/fixture-devkit", HostRoot: "/home/bayesartre/dev", Project: "dev-all", Repo: "ouroboros-ide", Index: 1, DedicatedWorktree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionSocket := filepath.Join(production.HostHome, ".codex", "a1-app.sock")
+	if len(productionSocket) > 107 {
+		t.Fatalf("canonical app-server socket exceeds Unix limit: %d bytes", len(productionSocket))
+	}
+	fixture, err := os.MkdirTemp("/tmp", "devkit-home-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(fixture)
+	padding := len(production.HostStateRoot) - len(fixture) - 1
+	if padding < 1 {
+		t.Fatal("socket fixture parent is too long to model production")
+	}
+	paths, err := ResolvePaths(PathConfig{DevkitRoot: "/nix/store/fixture-devkit", HostRoot: "/home/bayesartre/dev", Project: "dev-all", Repo: "ouroboros-ide", Index: 1, DedicatedWorktree: true, StateRoot: filepath.Join(fixture, strings.Repeat("s", padding))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(paths.HostHome, ".codex", "a1-app.sock")
+	if len(socket) != len(productionSocket) || !strings.HasPrefix(socket, fixture+"/") {
+		t.Fatal("socket fixture differs from production length or escaped its private root")
+	}
+	if err := os.MkdirAll(filepath.Dir(socket), 0700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("production-length persistent-home app-server socket cannot bind: %v", err)
+	}
+	defer listener.Close()
+}
 
 func TestPersistentDevAllHomeKeepsAgentOneProtectedLegacyGeometry(t *testing.T) {
 	worktree := "/home/me/dev/agent-worktrees/agent1/ouroboros-ide"
@@ -33,7 +75,7 @@ func TestResolvePathsDedicatedAgentOne(t *testing.T) {
 	if got.SandboxWorktree != "/worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", got.SandboxWorktree)
 	}
-	if got.HostHome != "/home/me/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1" {
+	if got.HostHome != "/home/me/dev/.devkit/native-agents/.homes/dev-all-agent1/ouroboros-ide" {
 		t.Fatalf("host home = %q", got.HostHome)
 	}
 	if got.SandboxHome != "/worktrees/agent1/ouroboros-ide/.devhome-agent1" {
@@ -71,7 +113,7 @@ func TestResolvePathsUsesConfiguredRoots(t *testing.T) {
 	if got.SandboxHome != "/native-worktrees/agent2/.devhome-agent2" {
 		t.Fatalf("sandbox home = %q", got.SandboxHome)
 	}
-	if got.HostHome != "/home/me/dev/native-worktrees/agent2/.devhome-agent2" {
+	if got.HostHome != "/home/me/dev/native-state/.homes/dev-all-agent2/devkit" {
 		t.Fatalf("host home = %q", got.HostHome)
 	}
 }

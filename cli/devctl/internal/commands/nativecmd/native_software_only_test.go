@@ -98,11 +98,13 @@ func TestSoftwareOnlyLocal2AppServerCommandRejectsSiblingGeometry(t *testing.T) 
 // The ID and public execution class come from the selected projection; no
 // hostname/ID parser supplies authority in the implementation.
 func testSoftwareOnlyNativePlan(kind, id, host string, index int) nativeplan.Plan {
-	hostHome, sandboxHome := softwareOnlyNativeHomes(index)
+	hostHome, sandboxHome := softwareOnlyNativeHomes("/home/bayesartre/dev/.devkit/native-agents", index)
 	p := nativeplan.Plan{GUITargetConfig: &nativeplan.GUITargetConfigProjection{TargetID: id, Kind: kind, ExpectedExecutionHost: host}, HostWorkspaceRoot: softwareOnlyNativeHostWorkspace(index), SandboxWorkspaceRoot: softwareOnlySandboxWorkspace, IsolationProfile: "workspace-egress"}
 	p.Agent.ID.Project, p.Agent.ID.Repo, p.Agent.ID.Index = "dev-all", "ouroboros-ide", index
 	p.Agent.HostWorktree, p.Agent.SandboxWorktree = filepath.Join(p.HostWorkspaceRoot, "ouroboros-ide"), filepath.Join(p.SandboxWorkspaceRoot, "ouroboros-ide")
 	p.Agent.HostHome, p.Agent.SandboxHome = hostHome, sandboxHome
+	p.HostStateRoot = "/home/bayesartre/dev/.devkit/native-agents"
+	p.Agent.StateRoot = filepath.Join(p.HostStateRoot, "dev-all-agent"+strconv.Itoa(index))
 	return p
 }
 
@@ -143,6 +145,11 @@ func TestSoftwareOnlyNativeSourceSelectedStandardFleetClass(t *testing.T) {
 				"management-class": func(p *nativeplan.Plan) { p.GUITargetConfig.Kind = "management" },
 				"missing-host":     func(p *nativeplan.Plan) { p.GUITargetConfig.ExpectedExecutionHost = "" },
 				"foreign-home":     func(p *nativeplan.Plan) { p.Agent.HostHome = "/caller/home" },
+				"relative-state":   func(p *nativeplan.Plan) { p.HostStateRoot = "relative" },
+				"sibling-state":    func(p *nativeplan.Plan) { p.Agent.StateRoot += "-sibling" },
+				"legacy-home": func(p *nativeplan.Plan) {
+					p.Agent.HostHome = filepath.Join(p.HostWorkspaceRoot, ".devhome-agent"+strconv.Itoa(p.Agent.ID.Index))
+				},
 				"foreign-profile":  func(p *nativeplan.Plan) { p.Agent.ID.Project = "ouroboros-terraform" },
 				"foreign-worktree": func(p *nativeplan.Plan) { p.Agent.SandboxWorktree = "/workspaces/dev/other" },
 			} {
@@ -157,5 +164,19 @@ func TestSoftwareOnlyNativeSourceSelectedStandardFleetClass(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestSoftwareOnlyNativeUsesIndependentSourceStateRoot(t *testing.T) {
+	p := testSoftwareOnlyNativePlan("local-wsl-devkit-agent", "source-selected", "source-host", 3)
+	p.HostStateRoot = filepath.Join(t.TempDir(), "source-state")
+	p.Agent.StateRoot = filepath.Join(p.HostStateRoot, "dev-all-agent3")
+	p.Agent.HostHome, p.Agent.SandboxHome = softwareOnlyNativeHomes(p.HostStateRoot, 3)
+	if err := validateSoftwareOnlyNativePlanOnHost(p, "source-host"); err != nil {
+		t.Fatal(err)
+	}
+	p.Agent.HostHome = filepath.Join(p.Agent.StateRoot, "home")
+	if err := validateSoftwareOnlyNativePlanOnHost(p, "source-host"); err == nil {
+		t.Fatal("legacy execution home admitted")
 	}
 }

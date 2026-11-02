@@ -121,6 +121,14 @@ func materializeNativeSlotDisposableState(t *testing.T, spec nativeagent.Spec) {
 	}
 }
 
+func requireRetiredNativeSlotHomeRetained(t *testing.T, spec nativeagent.Spec) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(spec.HostHome, "retirement-sentinel"))
+	if err != nil || string(data) != fmt.Sprintf("lane-%d\n", spec.ID.Index) {
+		t.Fatalf("execution retirement changed persistent home: %s %v", spec.HostHome, err)
+	}
+}
+
 func TestNativeSlotManifestShrinkRetiresCleanRealGitSuffixAtomically(t *testing.T) {
 	fixture := newNativeSlotManifestShrinkFixture(t, 5, 3)
 	prepareNativeSlotManifestShrinkGit(t, &fixture)
@@ -171,7 +179,8 @@ func TestNativeSlotManifestShrinkRetiresCleanRealGitSuffixAtomically(t *testing.
 		t.Fatalf("installed manifest = %#v, want expected", got)
 	}
 	for _, spec := range fixture.actual.Agents[3:] {
-		for _, path := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot} {
+		requireRetiredNativeSlotHomeRetained(t, spec)
+		for _, path := range []string{spec.HostWorktree, spec.StateRoot} {
 			if _, err := os.Lstat(path); !os.IsNotExist(err) {
 				t.Fatalf("retired path still exists %s: %v", path, err)
 			}
@@ -287,7 +296,8 @@ func TestNativeSlotManifestShrinkRetiresLegacySurplusWithoutTouchingRetainedCust
 	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 		t.Fatalf("installed manifest = %#v, want expected", got)
 	}
-	for _, path := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+	requireRetiredNativeSlotHomeRetained(t, surplus)
+	for _, path := range []string{surplus.HostWorktree, surplus.StateRoot} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("legacy surplus path still exists %s: %v", path, err)
 		}
@@ -522,7 +532,8 @@ func TestNativeSlotManifestShrinkResumesTypedPostCASCleanup(t *testing.T) {
 	); err != nil {
 		t.Fatalf("typed cleanup recovery: %v", err)
 	}
-	for _, path := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot, transactionPath} {
+	requireRetiredNativeSlotHomeRetained(t, spec)
+	for _, path := range []string{spec.HostWorktree, spec.StateRoot, transactionPath} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("recovery residue remains %s: %v", path, err)
 		}
@@ -572,7 +583,8 @@ func TestNativeSlotManifestShrinkResumesTypedPostCASCleanupForLegacySurplus(t *t
 	); err != nil {
 		t.Fatalf("typed legacy cleanup recovery: %v", err)
 	}
-	for _, path := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot, transactionPath} {
+	requireRetiredNativeSlotHomeRetained(t, spec)
+	for _, path := range []string{spec.HostWorktree, spec.StateRoot, transactionPath} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("legacy recovery residue remains %s: %v", path, err)
 		}
@@ -695,7 +707,8 @@ func TestNativeSlotManifestShrinkPreparedJournalRecoversEveryCrashPrefix(t *test
 			if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 				t.Fatalf("recovered manifest = %#v, want expected", got)
 			}
-			for _, path := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot, transactionPath} {
+			requireRetiredNativeSlotHomeRetained(t, spec)
+			for _, path := range []string{spec.HostWorktree, spec.StateRoot, transactionPath} {
 				if _, err := os.Lstat(path); !os.IsNotExist(err) {
 					t.Fatalf("recovered retirement residue remains %s: %v", path, err)
 				}

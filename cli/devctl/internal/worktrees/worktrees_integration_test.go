@@ -1562,14 +1562,14 @@ func TestNativeSlotResetPreservesSelectedMountedStateRootAndDisposesItsContents(
 	siblingState := filepath.Join(stateRoot, "dev-all-agent2")
 	for _, path := range []string{
 		filepath.Join(selectedWorktree, "src"),
-		filepath.Join(selectedState, "home", ".codex"),
+		filepath.Join(selectedState, "runtime-cache"),
 		siblingState,
 	} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(selectedState, "home", ".codex", "state"), []byte("discard\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(selectedState, "runtime-cache", "state"), []byte("discard\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	siblingSentinel := filepath.Join(siblingState, "preserve")
@@ -1889,15 +1889,32 @@ func TestNativeSlotResetRetainsTypedResidueWhenChildStagingAndRollbackAreDenied(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cleanupPlan.Apply(); err != nil {
-		t.Fatalf("second reset did not reclaim typed rollback residue: %v", err)
+	if err := cleanupPlan.Apply(); err == nil || !strings.Contains(err.Error(), "transaction recovery mapping") {
+		t.Fatalf("fresh reset claimed rollback residue without its mapping: %v", err)
 	}
-	if _, err := os.Lstat(selected); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("selected root survived second reset: %v", err)
+	if got, err := os.ReadFile(filepath.Join(selected, "b")); err != nil || string(got) != "b\n" {
+		t.Fatalf("refused retry changed the unmoved payload: %q %v", got, err)
+	}
+	entries, err := os.ReadDir(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := 0
+	for _, entry := range entries {
+		if nativeResetCanonicalTransactionQuarantineName(entry.Name(), ".devkit-reset-dev-all-agent1-") {
+			got, err := os.ReadFile(filepath.Join(selected, entry.Name(), "000"))
+			if err != nil || string(got) != "a\n" {
+				t.Fatalf("refused retry changed staged rollback payload: %q %v", got, err)
+			}
+			retained++
+		}
+	}
+	if retained != 1 {
+		t.Fatalf("retained typed rollback quarantines = %d, want one", retained)
 	}
 }
 
-func TestNativeSlotResetQuarantineFailureIsReclaimableOnSecondReset(t *testing.T) {
+func TestNativeSlotResetQuarantineFailureRequiresOriginalTransactionForCleanup(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	originalDiscard := nativeResetDiscardTree
 	t.Cleanup(func() {
@@ -1926,7 +1943,11 @@ func TestNativeSlotResetQuarantineFailureIsReclaimableOnSecondReset(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := plan.Apply(); err == nil || !strings.Contains(err.Error(), "discard native reset quarantine") {
+	transaction, err := plan.Stage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(); err == nil || !strings.Contains(err.Error(), "discard native reset quarantine") {
 		t.Fatalf("quarantine failure = %v", err)
 	}
 
@@ -1938,8 +1959,15 @@ func TestNativeSlotResetQuarantineFailureIsReclaimableOnSecondReset(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cleanupPlan.Apply(); err != nil {
-		t.Fatalf("second reset did not reclaim quarantine residue: %v", err)
+	if err := cleanupPlan.Apply(); err == nil || !strings.Contains(err.Error(), "transaction recovery mapping") {
+		t.Fatalf("fresh reset claimed opaque quarantine: %v", err)
+	}
+	recovered, err := ResumeNativeResetTransaction(cleanupPlan, transaction.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.Commit(); err != nil {
+		t.Fatalf("mapped original transaction could not finish cleanup: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(worktreeRoot, "agent1"))
 	if err != nil {
@@ -1952,7 +1980,7 @@ func TestNativeSlotResetQuarantineFailureIsReclaimableOnSecondReset(t *testing.T
 	}
 }
 
-func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *testing.T) {
+func TestNativeWholeResetPreservesUnmappedSelectedTransactionQuarantines(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	originalDiscard := nativeResetDiscardTree
 	originalRename := nativeResetRename
@@ -1987,7 +2015,7 @@ func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *test
 
 	agentRoot := filepath.Join(worktreeRoot, "agent1")
 	selectedWorktree := filepath.Join(agentRoot, "ouroboros-ide")
-	selectedHome := filepath.Join(selectedWorktree, ".devhome-agent1")
+	executionCache := filepath.Join(selectedWorktree, ".execution-cache")
 	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
 	commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, "ouroboros-ide", 1)
 	if err != nil {
@@ -1995,12 +2023,12 @@ func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *test
 	}
 	commonBoundary := filepath.Dir(commonDir)
 	manifestPath := runtimeagent.ManifestPath(stateRoot, "dev-all")
-	for _, path := range []string{selectedHome, selectedState, filepath.Dir(manifestPath)} {
+	for _, path := range []string{executionCache, selectedState, filepath.Dir(manifestPath)} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(selectedHome, "home-sentinel"), []byte("discard\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(executionCache, "execution-sentinel"), []byte("discard\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(selectedState, "state-sentinel"), []byte("discard\n"), 0o600); err != nil {
@@ -2030,7 +2058,11 @@ func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *test
 		}
 		return os.RemoveAll(path)
 	}
-	if err := selectedPlan.Apply(); err == nil || !strings.Contains(err.Error(), "discard native reset quarantine") {
+	selectedTransaction, err := selectedPlan.Stage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := selectedTransaction.Commit(); err == nil || !strings.Contains(err.Error(), "discard native reset quarantine") {
 		t.Fatalf("selected reset cleanup failure = %v", err)
 	}
 	nativeResetRename = os.Rename
@@ -2127,29 +2159,29 @@ func TestNativeWholeResetReclaimsCanonicalSelectedTransactionQuarantines(t *test
 			}
 		}
 	}
-	if err := wholePlan.Apply(); err != nil {
-		t.Fatalf("apply whole reset recovery: %v", err)
+	if err := wholePlan.Apply(); err == nil || !strings.Contains(err.Error(), "transaction recovery mapping") {
+		t.Fatalf("whole reset claimed opaque selected quarantine: %v", err)
 	}
 	for _, path := range []string{
-		selectedWorktree,
-		selectedHome,
-		commonDir,
-		manifestPath,
-		quarantineByBoundary[stateRoot],
-		quarantineByBoundary[commonBoundary],
-		quarantineByBoundary[selectedState],
-		allPrefixResidue,
-		legacyResidue,
+		manifestPath, quarantineByBoundary[stateRoot], quarantineByBoundary[commonBoundary],
+		quarantineByBoundary[selectedState], allPrefixResidue, legacyResidue,
 	} {
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("whole reset residue survived %s: %v", path, err)
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("refused whole reset changed unmapped payload %s: %v", path, err)
 		}
 	}
-	for _, path := range []string{agentRoot, selectedState} {
-		entries, err := os.ReadDir(path)
-		if err != nil || len(entries) != 0 {
-			t.Fatalf("whole reset structural root was not retained empty %s: entries=%v error=%v", path, entries, err)
+	// The original in-memory transaction still owns its actual mapping, even
+	// for the rename-denied selected-state root. No fresh cleanup is inferred.
+	if err := selectedTransaction.Commit(); err != nil {
+		t.Fatalf("original mapped transaction could not complete cleanup: %v", err)
+	}
+	for _, path := range []string{quarantineByBoundary[stateRoot], quarantineByBoundary[commonBoundary], quarantineByBoundary[selectedState]} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("mapped cleanup left quarantine %s: %v", path, err)
 		}
+	}
+	if got, err := os.ReadFile(manifestPath); err != nil || string(got) != "manifest\n" {
+		t.Fatalf("refused whole reset changed active manifest: %q %v", got, err)
 	}
 	for _, path := range lookalikeDirs {
 		if got, err := os.ReadFile(filepath.Join(path, "preserve")); err != nil || string(got) != "lookalike\n" {
@@ -2335,7 +2367,7 @@ func TestNativeSlotResetFallbackRejectsPathSwapBeforeEnteringReusableRoot(t *tes
 	}
 }
 
-func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testing.T) {
+func TestNativeSlotResetDisposesReadOnlyCachesAndPreservesSibling(t *testing.T) {
 	originalMountPoints := nativeResetMountPoints
 	t.Cleanup(func() { nativeResetMountPoints = originalMountPoints })
 	nativeResetMountPoints = func() ([]string, error) { return []string{"/"}, nil }
@@ -2347,25 +2379,20 @@ func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testi
 	selectedWorktree := filepath.Join(agentRoot, "ouroboros-ide")
 	selectedState := filepath.Join(stateRoot, "dev-all-agent1")
 	siblingState := filepath.Join(stateRoot, "dev-all-agent2")
-	legacyAgentQuarantine := filepath.Join(agentRoot, ".devkit-reset-12345")
-	legacyStateQuarantine := filepath.Join(stateRoot, ".devkit-reset-67890")
-	ownedAgentQuarantine := filepath.Join(agentRoot, ".devkit-reset-dev-all-agent1-stale")
 	outside := filepath.Join(root, "outside")
 
 	for _, path := range []string{
-		filepath.Join(selectedWorktree, ".devhome-agent1", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1"),
+		filepath.Join(selectedWorktree, "source"),
+		filepath.Join(selectedState, "execution-cache", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1"),
 		selectedState,
 		siblingState,
-		filepath.Join(legacyAgentQuarantine, "readonly"),
-		filepath.Join(legacyStateQuarantine, "readonly"),
-		filepath.Join(ownedAgentQuarantine, "readonly"),
 		outside,
 	} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	readOnlyCache := filepath.Join(selectedWorktree, ".devhome-agent1", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1")
+	readOnlyCache := filepath.Join(selectedState, "execution-cache", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1")
 	if err := os.WriteFile(filepath.Join(readOnlyCache, "ftoa_test.go"), []byte("disposable cache\n"), 0o400); err != nil {
 		t.Fatal(err)
 	}
@@ -2377,18 +2404,6 @@ func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testi
 		t.Fatal(err)
 	}
 	for _, path := range []string{readOnlyCache, filepath.Dir(readOnlyCache), filepath.Dir(filepath.Dir(readOnlyCache))} {
-		if err := os.Chmod(path, 0o500); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, path := range []string{
-		filepath.Join(legacyAgentQuarantine, "readonly"),
-		filepath.Join(legacyStateQuarantine, "readonly"),
-		filepath.Join(ownedAgentQuarantine, "readonly"),
-	} {
-		if err := os.WriteFile(filepath.Join(path, "payload"), []byte("discard\n"), 0o400); err != nil {
-			t.Fatal(err)
-		}
 		if err := os.Chmod(path, 0o500); err != nil {
 			t.Fatal(err)
 		}
@@ -2415,9 +2430,6 @@ func TestNativeSlotResetDisposesReadOnlyCachesAndOwnedQuarantineResidue(t *testi
 	for _, path := range []string{
 		selectedWorktree,
 		selectedState,
-		legacyAgentQuarantine,
-		legacyStateQuarantine,
-		ownedAgentQuarantine,
 	} {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("reset-owned path survived %s: %v", path, err)

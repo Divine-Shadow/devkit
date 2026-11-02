@@ -1362,7 +1362,7 @@ func TestBuildBubblewrapWorkspaceEgressUsesNarrowBinds(t *testing.T) {
 		"'--bind' '" + hostWorktree + "' '/workspace'",
 		"'--bind' '" + hostWorktree + "' '/workspaces/dev/agent-worktrees/agent3/ouroboros-ide'",
 		"'--bind' '" + commonGitDir + "' '/workspaces/dev/ouroboros-ide/.git'",
-		"'--bind' '" + filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3") + "' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3'",
+		"'--bind' '" + filepath.Join(devRoot, ".devkit", "native-agents", ".homes", "dev-all-agent3", "ouroboros-ide") + "' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3'",
 		"'--ro-bind' '" + devkitRoot + "' '/workspaces/dev/devkit'",
 		"native proxy-bridge --listen 127.0.0.1:18888",
 		"'--setenv' 'COURSIER_CACHE' '/workspaces/dev/agent-worktrees/agent3/.devhome-agent3/.cache/coursier'",
@@ -1560,7 +1560,8 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "known_hosts"), "github.com ssh-ed25519 key")
 	t.Setenv("HOME", hostUserHome)
 
-	hostHome := filepath.Join(tmp, "agent-home")
+	hostStateRoot := filepath.Join(tmp, "state")
+	hostHome := filepath.Join(hostStateRoot, ".homes", "dev-all-agent1", "ouroboros-ide")
 	runtimeRoot := filepath.Join(tmp, "runtime-authority")
 	devctlPath := filepath.Join(runtimeRoot, "kit", "bin", "devctl")
 	writeTestFile(t, devctlPath, "#!/bin/sh\nexit 99\n")
@@ -1570,11 +1571,14 @@ func TestPrepareGitBootstrapUsesPackageOwnedConsumerIdentityAndProxy(t *testing.
 	socketPath := filepath.Join(tmp, "native-egress", "product-a.sock")
 	p := nativeplan.Plan{
 		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		HostStateRoot:        hostStateRoot,
 		RuntimeAuthorityRoot: runtimeRoot,
 		Agent: agent.Spec{
-			ID:          agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
-			HostHome:    hostHome,
-			SandboxHome: "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
+			ID:           agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
+			HostHome:     hostHome,
+			HostWorktree: filepath.Join(tmp, "worktrees", "agent1", "ouroboros-ide"),
+			StateRoot:    filepath.Join(hostStateRoot, "dev-all-agent1"),
+			SandboxHome:  "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1",
 		},
 		Proxy: nativeplan.ProxyConfig{
 			HTTPProxy:  "http://127.0.0.1:18888",
@@ -1738,12 +1742,16 @@ func TestPrepareGitBootstrapRejectsMissingPackageOwnedProxyHelper(t *testing.T) 
 	writeTestFile(t, filepath.Join(hostUserHome, ".ssh", "id_ed25519.pub"), "public")
 	t.Setenv("HOME", hostUserHome)
 
+	hostStateRoot := filepath.Join(tmp, "state")
 	p := nativeplan.Plan{
 		IsolationProfile:     nativeplan.IsolationProfileWorkspaceEgress,
+		HostStateRoot:        hostStateRoot,
 		RuntimeAuthorityRoot: filepath.Join(tmp, "missing-runtime"),
 		Agent: agent.Spec{
-			ID:       agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
-			HostHome: filepath.Join(tmp, "agent-home"),
+			ID:           agent.ID{Project: "dev-all", Index: 1, Repo: "ouroboros-ide"},
+			HostHome:     filepath.Join(hostStateRoot, ".homes", "dev-all-agent1", "ouroboros-ide"),
+			HostWorktree: filepath.Join(tmp, "worktrees", "agent1", "ouroboros-ide"),
+			StateRoot:    filepath.Join(hostStateRoot, "dev-all-agent1"),
 		},
 		Proxy: nativeplan.ProxyConfig{UnixSocket: filepath.Join(tmp, "proxy.sock")},
 	}

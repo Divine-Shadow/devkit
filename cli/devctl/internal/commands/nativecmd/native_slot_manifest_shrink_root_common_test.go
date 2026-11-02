@@ -415,7 +415,8 @@ func TestNativeSlotManifestShrinkHistoricalRootConsumerAlias(t *testing.T) {
 	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 		t.Fatal("historical consumer-alias retirement did not install expected manifest")
 	}
-	for _, retiredPath := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+	requireRetiredNativeSlotHomeRetained(t, surplus)
+	for _, retiredPath := range []string{surplus.HostWorktree, surplus.StateRoot} {
 		if _, err := os.Lstat(retiredPath); !os.IsNotExist(err) {
 			t.Fatalf("historical consumer-alias retired path remains %s: %v", retiredPath, err)
 		}
@@ -1347,7 +1348,8 @@ func TestNativeSlotManifestShrinkRetiresExactHistoricalRootCommonSurplusWithoutT
 	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 		t.Fatal("historical root-common retirement did not install expected manifest")
 	}
-	for _, retiredPath := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+	requireRetiredNativeSlotHomeRetained(t, surplus)
+	for _, retiredPath := range []string{surplus.HostWorktree, surplus.StateRoot} {
 		if _, statErr := os.Lstat(retiredPath); !os.IsNotExist(statErr) {
 			t.Fatalf("retired path remains %s: %v", retiredPath, statErr)
 		}
@@ -1729,7 +1731,8 @@ func TestNativeSlotManifestShrinkHistoricalRootValidatesOriginAheadRemoteAndSyml
 		if got := snapshotHistoricalRootCommonTree(t, rootCheckout); !reflect.DeepEqual(got, rootBefore) {
 			t.Fatal("current remote isolated proof changed root checkout or common Git state")
 		}
-		for _, candidate := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+		requireRetiredNativeSlotHomeRetained(t, surplus)
+		for _, candidate := range []string{surplus.HostWorktree, surplus.StateRoot} {
 			if _, err := os.Lstat(candidate); !os.IsNotExist(err) {
 				t.Fatalf("current remote isolated proof did not retire %s: %v", candidate, err)
 			}
@@ -1836,7 +1839,8 @@ func TestNativeSlotManifestShrinkHistoricalRootUsesOneOperationRemoteProofForWho
 		t.Fatal("multi-suffix operation proof changed root checkout or common Git state")
 	}
 	for _, surplus := range fixture.actual.Agents[3:] {
-		for _, candidate := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+		requireRetiredNativeSlotHomeRetained(t, surplus)
+		for _, candidate := range []string{surplus.HostWorktree, surplus.StateRoot} {
 			if _, err := os.Lstat(candidate); !os.IsNotExist(err) {
 				t.Fatalf("multi-suffix retirement residue remains %s: %v", candidate, err)
 			}
@@ -1965,7 +1969,8 @@ func TestNativeSlotManifestShrinkHistoricalRootUsesFreshProofForAncestryAndSetup
 	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 		t.Fatal("fresh authority proof did not install expected manifest")
 	}
-	for _, candidate := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot} {
+	requireRetiredNativeSlotHomeRetained(t, surplus)
+	for _, candidate := range []string{surplus.HostWorktree, surplus.StateRoot} {
 		if _, err := os.Lstat(candidate); !os.IsNotExist(err) {
 			t.Fatalf("fresh authority retirement residue remains %s: %v", candidate, err)
 		}
@@ -2174,7 +2179,8 @@ func TestNativeSlotManifestShrinkHistoricalRootResumesTypedPostCASCleanup(t *tes
 	); err != nil {
 		t.Fatalf("historical root post-CAS recovery: %v", err)
 	}
-	for _, candidate := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot, transactionPath} {
+	requireRetiredNativeSlotHomeRetained(t, surplus)
+	for _, candidate := range []string{surplus.HostWorktree, surplus.StateRoot, transactionPath} {
 		if _, err := os.Lstat(candidate); !os.IsNotExist(err) {
 			t.Fatalf("historical root recovery residue remains %s: %v", candidate, err)
 		}
@@ -2231,7 +2237,8 @@ func TestNativeSlotManifestShrinkHistoricalRootRecoversPreparedCrashPrefix(t *te
 	if got := readNativeSlotManifestShrinkFixture(t, fixture.path); !reflect.DeepEqual(got, fixture.expected) {
 		t.Fatal("prepared recovery did not complete expected shrink")
 	}
-	for _, candidate := range []string{surplus.HostWorktree, surplus.HostHome, surplus.StateRoot, transactionPath} {
+	requireRetiredNativeSlotHomeRetained(t, surplus)
+	for _, candidate := range []string{surplus.HostWorktree, surplus.StateRoot, transactionPath} {
 		if _, err := os.Lstat(candidate); !os.IsNotExist(err) {
 			t.Fatalf("historical root prepared recovery residue remains %s: %v", candidate, err)
 		}
@@ -2297,7 +2304,8 @@ func TestNativeSlotManifestShrinkHistoricalRootRecoversPartialMultiSuffixCrash(t
 		t.Fatal("partial multi-suffix recovery did not complete expected shrink")
 	}
 	for _, spec := range surplus {
-		for _, candidate := range []string{spec.HostWorktree, spec.HostHome, spec.StateRoot} {
+		requireRetiredNativeSlotHomeRetained(t, spec)
+		for _, candidate := range []string{spec.HostWorktree, spec.StateRoot} {
 			if _, err := os.Lstat(candidate); !os.IsNotExist(err) {
 				t.Fatalf("partial multi-suffix recovery residue remains %s: %v", candidate, err)
 			}

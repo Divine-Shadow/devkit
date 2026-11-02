@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active original-purge persistence source: [Durable native home boundary](execplans/durable-native-home-boundary-20261101.md).
+
 Active bounded scope repair: [Selected-slot manifest scope](execplans/selected-slot-manifest-scope-20261101.md).
 
 Active bounded Source supplier repair: [Registered sibling Source preparation](execplans/registered-sibling-source-preparation-20261031.md).

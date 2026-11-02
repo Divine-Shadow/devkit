@@ -16,6 +16,7 @@ func testSelectedControllerLease(t *testing.T) (nativeplan.Plan, wtx.NativeOptio
 	p, opts := freshSelectedFixture(t)
 	p.Agent.ID.Repo = "ouroboros-ide"
 	p.Agent.HostWorktree = filepath.Join(filepath.Dir(p.Agent.HostWorktree), "ouroboros-ide")
+	p.Agent.HostHome = filepath.Join(filepath.Dir(p.Agent.HostHome), "ouroboros-ide")
 	opts.Repo = "ouroboros-ide"
 	p.GUITargetConfig = &nativeplan.GUITargetConfigProjection{TargetID: "fixture-local-5", Kind: "local-wsl-devkit-agent"}
 	root := filepath.Join(t.TempDir(), "gui-start-locks")

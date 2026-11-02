@@ -60,6 +60,8 @@ func handle(ctx *cmdregistry.Context) error {
 		return handlePrepare(ctx)
 	case "reset":
 		return handleNativeSlotReset(ctx)
+	case "migrate-home":
+		return handleNativeHomeMigration(ctx)
 	case "exec":
 		return handleExec(ctx)
 	case "readiness":

@@ -1186,6 +1186,8 @@ type NativeResetPlan struct {
 	quarantineName       string
 	recoverySources      map[string]string
 	quarantineBoundaries []string
+	legacyHomePatterns   []nativeResetPathPattern
+	quarantineChecks     []nativeResetQuarantineCheck
 }
 
 var (
@@ -1486,10 +1488,20 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 	if err := validateNativeResetPathComponents(stateRoot); err != nil {
 		return nil, err
 	}
+	protectedRoots := append(append([]string(nil), opts.ProtectedRoots...), runtimeagent.PersistentHomesRoot(stateRoot))
 
 	candidates := make([]nativeResetCandidate, 0, count*3+2)
 	commonDirs := make([]string, 0, count+1)
+	legacyHomePatterns := make([]nativeResetPathPattern, 0, count*2)
+	quarantineName := fmt.Sprintf(".devkit-reset-%s-all-", opts.Project)
+	quarantineChecks := []nativeResetQuarantineCheck{
+		{boundary: nativeResetLiteralPath(worktreeRoot), prefix: quarantineName},
+		{boundary: nativeResetLiteralPath(stateRoot), prefix: quarantineName},
+	}
 	for index := 1; index <= count; index++ {
+		agentRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index))
+		selectedState := filepath.Join(stateRoot, fmt.Sprintf("%s-agent%d", opts.Project, index))
+		legacyHomePatterns = append(legacyHomePatterns, nativeResetLegacyHomePatterns(agentRoot, selectedState, repo, index, true)...)
 		commonDir, err := nativeOwnedCommonRepositoryPath(worktreeRoot, repo, index)
 		if err != nil {
 			return nil, err
@@ -1513,6 +1525,17 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 			nativeResetCandidate{path: commonDir, boundary: worktreeRoot},
 		)
 		selectedQuarantineName := fmt.Sprintf(".devkit-reset-%s-agent%d-", opts.Project, index)
+		for _, boundary := range []string{stateRoot, filepath.Dir(commonDir)} {
+			quarantineChecks = append(quarantineChecks, nativeResetQuarantineCheck{
+				boundary: nativeResetLiteralPath(boundary), prefix: selectedQuarantineName, canonicalOnly: true,
+			})
+		}
+		for _, boundary := range []nativeResetPathPattern{nativeResetLiteralPath(agentRoot), nativeResetRepositoryPattern(agentRoot, ""), nativeResetLiteralPath(selectedState)} {
+			quarantineChecks = append(quarantineChecks,
+				nativeResetQuarantineCheck{boundary: boundary, prefix: selectedQuarantineName},
+				nativeResetQuarantineCheck{boundary: boundary, prefix: quarantineName},
+			)
+		}
 		candidates, err = appendNativeResetSelectedQuarantineResidue(
 			candidates,
 			[]string{stateRoot, filepath.Dir(commonDir)},
@@ -1534,7 +1557,6 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 			boundary: stateRoot,
 		},
 	)
-	quarantineName := fmt.Sprintf(".devkit-reset-%s-all-", opts.Project)
 	candidates, err = appendNativeResetQuarantineResidue(
 		candidates,
 		[]string{worktreeRoot, stateRoot},
@@ -1562,17 +1584,23 @@ func PlanNativeReset(opts NativeResetOptions) (*NativeResetPlan, error) {
 		return nil, err
 	}
 	for _, candidate := range candidates {
-		if err := validateNativeResetCandidate(candidate, opts.ProtectedRoots, mountPoints); err != nil {
+		if err := validateNativeResetCandidate(candidate, protectedRoots, mountPoints); err != nil {
 			return nil, err
 		}
 	}
-	return &NativeResetPlan{
-		dryRun:         opts.DryRun,
-		candidates:     candidates,
-		protectedRoots: append([]string(nil), opts.ProtectedRoots...),
-		mountPoints:    append([]string(nil), mountPoints...),
-		quarantineName: quarantineName,
-	}, nil
+	plan := &NativeResetPlan{
+		dryRun:             opts.DryRun,
+		candidates:         candidates,
+		protectedRoots:     protectedRoots,
+		mountPoints:        append([]string(nil), mountPoints...),
+		quarantineName:     quarantineName,
+		legacyHomePatterns: legacyHomePatterns,
+		quarantineChecks:   quarantineChecks,
+	}
+	if err := plan.requireLegacyHomesAbsent(NativeResetTransactionState{}); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // PlanNativeSlotReset validates the complete selected-slot destructive
@@ -1614,6 +1642,7 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 	if err := validateNativeResetPathComponents(stateRoot); err != nil {
 		return nil, err
 	}
+	protectedRoots := append(append([]string(nil), opts.ProtectedRoots...), runtimeagent.PersistentHomesRoot(stateRoot))
 
 	agentRoot := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", opts.Index))
 	worktree := filepath.Join(agentRoot, repo)
@@ -1639,18 +1668,12 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 	}
 	quarantineName := fmt.Sprintf(".devkit-reset-%s-agent%d-", opts.Project, opts.Index)
 	quarantineBoundaries := []string{agentRoot, stateRoot, commonBoundary}
-	// Agent 1's home is inside its worktree. Later slots keep the home beside
-	// the worktree, so select that exact directory without deleting the shared
-	// agent root or any other repository beneath it.
-	if opts.Index > 1 {
-		hostHome := filepath.Join(agentRoot, fmt.Sprintf(".devhome-agent%d", opts.Index))
-		candidates = append(candidates, nativeResetCandidate{
-			path:                      hostHome,
-			boundary:                  agentRoot,
-			reuseRootWhenRenameDenied: true,
-		})
-		recoverySources[hostHome] = agentRoot
+	var quarantineChecks []nativeResetQuarantineCheck
+	for _, boundary := range append(append([]string(nil), quarantineBoundaries...), worktree, selectedState) {
+		quarantineChecks = append(quarantineChecks, nativeResetQuarantineCheck{boundary: nativeResetLiteralPath(boundary), prefix: quarantineName})
 	}
+	// Persistent application homes are outside these disposable roots. Legacy
+	// data must cross the bounded migration boundary before reset can proceed.
 
 	if info, statErr := os.Lstat(commonDir); statErr == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -1696,19 +1719,25 @@ func PlanNativeSlotReset(opts NativeSlotResetOptions) (*NativeResetPlan, error) 
 			}
 		}
 		candidate := candidates[index]
-		if err := validateNativeResetCandidate(candidate, opts.ProtectedRoots, mountPoints); err != nil {
+		if err := validateNativeResetCandidate(candidate, protectedRoots, mountPoints); err != nil {
 			return nil, err
 		}
 	}
-	return &NativeResetPlan{
+	plan := &NativeResetPlan{
 		dryRun:               opts.DryRun,
 		candidates:           candidates,
-		protectedRoots:       append([]string(nil), opts.ProtectedRoots...),
+		protectedRoots:       protectedRoots,
 		mountPoints:          append([]string(nil), mountPoints...),
 		quarantineName:       quarantineName,
 		recoverySources:      recoverySources,
 		quarantineBoundaries: append([]string(nil), quarantineBoundaries...),
-	}, nil
+		legacyHomePatterns:   nativeResetLegacyHomePatterns(agentRoot, selectedState, repo, opts.Index, false),
+		quarantineChecks:     quarantineChecks,
+	}
+	if err := plan.requireLegacyHomesAbsent(NativeResetTransactionState{}); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 func removeNativeResetQuarantine(path string) error {
@@ -1856,6 +1885,9 @@ func (plan *NativeResetPlan) PrepareTransaction() (*NativeResetTransaction, erro
 	if len(plan.recoverySources) == 0 || plan.quarantineName == "" {
 		return nil, fmt.Errorf("durable native reset preparation requires a source-derived selected-slot plan")
 	}
+	if err := plan.validatePersistentData(NativeResetTransactionState{}, true); err != nil {
+		return nil, err
+	}
 	for _, candidate := range plan.candidates {
 		if err := validateNativeResetCandidate(candidate, plan.protectedRoots, plan.mountPoints); err != nil {
 			return nil, fmt.Errorf("revalidate native reset boundary before durable preparation: %w", err)
@@ -1955,6 +1987,9 @@ func (transaction *NativeResetTransaction) StagePrepared() error {
 	if transaction.closed {
 		return fmt.Errorf("native reset transaction is already closed")
 	}
+	if err := transaction.plan.validatePersistentData(transaction.state, true); err != nil {
+		return err
+	}
 	for _, candidate := range transaction.plan.candidates {
 		if err := validateNativeResetCandidate(candidate, transaction.plan.protectedRoots, transaction.plan.mountPoints); err != nil {
 			return fmt.Errorf("revalidate native reset boundary before prepared staging: %w", err)
@@ -1998,7 +2033,7 @@ func (transaction *NativeResetTransaction) StagePrepared() error {
 			return fmt.Errorf("sync prepared native reset directory %s: %w", path, err)
 		}
 	}
-	return nil
+	return transaction.plan.validatePersistentData(transaction.state, false)
 }
 
 func nativeResetPathState(path string) (bool, error) {
@@ -2067,7 +2102,7 @@ func (transaction *NativeResetTransaction) Rollback() error {
 // Missing trees are accepted so cleanup can be resumed idempotently after a
 // partial post-CAS failure.
 func (transaction *NativeResetTransaction) Commit() error {
-	if transaction == nil {
+	if transaction == nil || transaction.plan == nil {
 		return fmt.Errorf("native reset transaction is required")
 	}
 	if transaction.closed {
@@ -2078,8 +2113,14 @@ func (transaction *NativeResetTransaction) Commit() error {
 			return fmt.Errorf("revalidate prepared native reset transaction before commit: %w", err)
 		}
 	}
+	if err := transaction.plan.validatePersistentData(transaction.state, false); err != nil {
+		return fmt.Errorf("protect persistent data before native reset commit: %w", err)
+	}
 	var result error
 	for _, quarantine := range transaction.state.Quarantines {
+		if err := transaction.plan.validatePersistentData(transaction.state, false); err != nil {
+			return errors.Join(result, fmt.Errorf("protect persistent data before native reset cleanup: %w", err))
+		}
 		exists, err := nativeResetPathState(quarantine.Path)
 		if err != nil {
 			result = errors.Join(result, fmt.Errorf("inspect native reset quarantine %s: %w", quarantine.Path, err))
@@ -2135,7 +2176,9 @@ func nativeResetPlanOwnsQuarantine(plan *NativeResetPlan, boundary, path string)
 
 // ResumeNativeResetTransaction validates persisted transaction state against
 // the freshly reconstructed opaque plan. Persisted JSON alone can never grant
-// authority to remove an arbitrary path.
+// authority to remove an arbitrary path. This validates safe restoration;
+// StagePrepared and Commit separately revalidate protected-data absence before
+// permitting a destructive step, so finding protected data never bars rollback.
 func ResumeNativeResetTransaction(
 	plan *NativeResetPlan,
 	state NativeResetTransactionState,
@@ -2330,6 +2373,9 @@ func (plan *NativeResetPlan) Stage() (*NativeResetTransaction, error) {
 			return nil, fmt.Errorf("revalidate native reset boundary before disposal: %w", err)
 		}
 	}
+	if err := plan.validatePersistentData(NativeResetTransactionState{}, true); err != nil {
+		return nil, err
+	}
 	if plan.dryRun {
 		for _, candidate := range plan.candidates {
 			if candidate.preserveRoot {
@@ -2424,6 +2470,9 @@ func (plan *NativeResetPlan) Stage() (*NativeResetTransaction, error) {
 		staged = append(staged, stagedNativeResetPath{source: candidate.path, target: target})
 	}
 	refreshState()
+	if err := plan.validatePersistentData(transaction.state, false); err != nil {
+		return fail(err)
+	}
 	return transaction, nil
 }
 

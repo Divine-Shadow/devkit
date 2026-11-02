@@ -1020,6 +1020,30 @@ func workspaceProjectedCodexRoot(options SnapshotOptions) (string, error) {
 		return "", fmt.Errorf("Codex GUI history projection workspace root must be absolute and canonical")
 	}
 	hostHome := filepath.Clean(strings.TrimSpace(options.HostHome))
+	// A source-selected persistent Product home is independently bound at its
+	// unchanged sandbox home. It has no workspace-relative spelling. Keep the
+	// two explicit roots used by rolloutReferenceMapping; do not invent a third
+	// alias by pretending the persistent host storage is inside the lane.
+	if options.Project == "dev-all" && options.AgentIndex > 0 &&
+		filepath.Clean(options.HostWorktree) == options.HostWorktree &&
+		filepath.Base(options.HostWorktree) == "ouroboros-ide" &&
+		filepath.Dir(options.HostWorktree) == workspaceRoot &&
+		filepath.IsAbs(options.StateRoot) && filepath.Clean(options.StateRoot) == options.StateRoot &&
+		options.HostHome == filepath.Join(options.StateRoot, ".homes", fmt.Sprintf("dev-all-agent%d", options.AgentIndex), "ouroboros-ide") {
+		// Only the two established Product projections are recognized here.
+		// A matching basename under a foreign prefix is not a source binding.
+		homeName := fmt.Sprintf(".devhome-agent%d", options.AgentIndex)
+		isolatedHome := filepath.Join("/workspaces/dev", homeName)
+		prefixWorktree := filepath.Join("/workspaces/dev/agent-worktrees", fmt.Sprintf("agent%d", options.AgentIndex), "ouroboros-ide")
+		prefixHome := filepath.Join(filepath.Dir(prefixWorktree), homeName)
+		if options.AgentIndex == 1 {
+			isolatedHome = filepath.Join("/workspaces/dev/ouroboros-ide", homeName)
+			prefixHome = filepath.Join(prefixWorktree, homeName)
+		}
+		if options.SandboxHome == isolatedHome || options.SandboxHome == prefixHome {
+			return "", nil
+		}
+	}
 	relativeHome, err := filepath.Rel(workspaceRoot, hostHome)
 	if err != nil ||
 		relativeHome == "." ||

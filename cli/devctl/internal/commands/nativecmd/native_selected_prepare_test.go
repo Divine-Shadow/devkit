@@ -64,14 +64,12 @@ func TestDevAllSelectedPrepareSourceGeometry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			host := fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d", index)
 			sandbox := "/workspaces/dev"
 			home := fmt.Sprintf(".devhome-agent%d", index)
 			if index == 1 {
-				host += "/ouroboros-ide"
 				sandbox += "/ouroboros-ide"
 			}
-			want := []string{fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d/ouroboros-ide", index), filepath.Join(host, home), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/dev-all-agent%d", index), "/workspaces/dev/ouroboros-ide", filepath.Join(sandbox, home)}
+			want := []string{fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d/ouroboros-ide", index), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/.homes/dev-all-agent%d/ouroboros-ide", index), fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/dev-all-agent%d", index), "/workspaces/dev/ouroboros-ide", filepath.Join(sandbox, home)}
 			got := []string{p.Agent.HostWorktree, p.Agent.HostHome, p.Agent.StateRoot, p.Agent.SandboxWorktree, p.Agent.SandboxHome}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("selected geometry=%q want %q", got, want)

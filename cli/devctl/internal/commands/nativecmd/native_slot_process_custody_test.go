@@ -112,6 +112,68 @@ func TestNativeSlotPhysicalCustodyAcceptsHistoricalAliasAndSanitizedDescendants(
 	}
 }
 
+func TestNativeSlotPhysicalCustodyUsesPersistentHomeProjectionPairs(t *testing.T) {
+	for _, kind := range []string{"owned", "host-spelling", "foreign-backing", "foreign-worktree", "foreign-home", "sibling-index"} {
+		t.Run(kind, func(t *testing.T) {
+			physicalProcRootFixture(t)
+			makeIdentity := func() nativeSlotProcessIdentity {
+				identity := physicalSlotFixture(t, 2)
+				identity.hostHome = filepath.Join(filepath.Dir(identity.stateRoot), ".homes", "dev-all-agent2", "ouroboros-ide")
+				identity.sandboxWorktree = "/workspaces/dev/ouroboros-ide"
+				identity.sandboxHome = "/workspaces/dev/.devhome-agent2"
+				if err := os.MkdirAll(identity.hostHome, 0700); err != nil {
+					t.Fatal(err)
+				}
+				return identity
+			}
+			selected, other := makeIdentity(), makeIdentity()
+			view, home := t.TempDir(), selected.sandboxHome
+			homeBacking, worktreeBacking, stateBacking := selected.hostHome, selected.hostWorktree, selected.stateRoot
+			switch kind {
+			case "foreign-backing":
+				homeBacking, worktreeBacking, stateBacking = other.hostHome, other.hostWorktree, other.stateRoot
+			case "foreign-worktree":
+				worktreeBacking = other.hostWorktree
+			case "foreign-home":
+				homeBacking = other.hostHome
+			}
+			mapPhysicalView(t, view, selected.sandboxHome, homeBacking)
+			mapPhysicalView(t, view, selected.sandboxWorktree, worktreeBacking)
+			mapPhysicalView(t, view, selected.sandboxState, stateBacking)
+			if kind == "host-spelling" {
+				view, home = "/", selected.hostHome
+			}
+			env := map[string]string{"DEVKIT_NATIVE_AGENT": "2", "HOME": home}
+			if kind == "sibling-index" {
+				env["DEVKIT_NATIVE_AGENT"] = "3"
+			}
+			writePhysicalProc(t, 151, 1, view, env, worktreeBacking)
+			if kind == "owned" {
+				writePhysicalProc(t, 152, 151, view, map[string]string{}, selected.hostHome)
+			}
+			plan, err := planNativeSlotProcesses(selected, true)
+			switch kind {
+			case "owned", "host-spelling":
+				want := []int{151}
+				if kind == "owned" {
+					want = []int{152, 151}
+				}
+				if err != nil || !reflect.DeepEqual(plan.pids, want) {
+					t.Fatalf("owned persistent projection: selected=%v error=%v", plan.pids, err)
+				}
+			case "foreign-backing":
+				if err != nil || len(plan.pids) != 0 {
+					t.Fatalf("foreign namespace selected=%v error=%v", plan.pids, err)
+				}
+			default:
+				if err == nil {
+					t.Fatalf("conflicting persistent projection admitted: %v", plan.pids)
+				}
+			}
+		})
+	}
+}
+
 func TestNativeSlotPhysicalCustodyIgnoresSameSpellingWithDifferentBacking(t *testing.T) {
 	physicalProcRootFixture(t)
 	selected := physicalSlotFixture(t, 1)

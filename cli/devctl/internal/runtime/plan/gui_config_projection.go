@@ -64,6 +64,7 @@ type guiCodexConfigProjectionRecord struct {
 	WorkspaceRoot                 string `json:"workspaceRoot"`
 	HostWorktree                  string `json:"hostWorktree"`
 	HostHome                      string `json:"hostHome"`
+	SandboxHome                   string `json:"sandboxHome,omitempty"`
 	Source                        string `json:"source"`
 	SourceSHA256                  string `json:"sourceSha256"`
 	Kind                          string `json:"kind,omitempty"`
@@ -81,6 +82,7 @@ type guiTargetGeometry struct {
 	WorkspaceRoot string
 	HostWorktree  string
 	HostHome      string
+	SandboxHome   string
 }
 
 func guiTargetGeometryForPlan(p Plan) guiTargetGeometry {
@@ -95,6 +97,7 @@ func guiTargetGeometryForPlan(p Plan) guiTargetGeometry {
 		WorkspaceRoot: workspaceRoot,
 		HostWorktree:  p.Agent.HostWorktree,
 		HostHome:      p.Agent.HostHome,
+		SandboxHome:   p.Agent.SandboxHome,
 	}
 }
 
@@ -240,6 +243,9 @@ func loadGUITargetConfigProjectionFrom(manifestPath, storeRoot, targetID string,
 }
 
 func validateGUITargetConfigProjectionRecord(record guiCodexConfigProjectionRecord, geometry guiTargetGeometry, storeRoot string) error {
+	if record.SandboxHome != "" && record.SandboxHome != geometry.SandboxHome {
+		return fmt.Errorf("GUI Codex config projection targetId %q sandboxHome geometry mismatch", record.TargetID)
+	}
 	for _, field := range []struct {
 		name string
 		got  string

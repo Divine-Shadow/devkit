@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
 
@@ -73,13 +74,19 @@ func standardManagedGitPlan(p nativeplan.Plan) (bool, error) {
 	sandbox := "/workspaces/dev"
 	repo := workspace + "/ouroboros-ide"
 	homeName := fmt.Sprintf(".devhome-agent%d", index)
-	hostHomeRoot, sandboxHomeRoot := workspace, sandbox
+	// The admitted plan owns an independent state root; a canonical worktree
+	// does not imply that physical retained storage lives below the same root.
+	slotState := filepath.Join(p.HostStateRoot, fmt.Sprintf("dev-all-agent%d", index))
+	hostHome := filepath.Join(nativeagent.PersistentHomesRoot(p.HostStateRoot), filepath.Base(slotState), "ouroboros-ide")
+	sandboxHomeRoot := sandbox
 	if index == 1 {
-		hostHomeRoot, sandboxHomeRoot = repo, sandbox+"/ouroboros-ide"
+		sandboxHomeRoot = sandbox + "/ouroboros-ide"
 	}
 	if index < 1 || p.GUITargetConfig.ExpectedExecutionHost == "" ||
+		!filepath.IsAbs(p.HostStateRoot) || filepath.Clean(p.HostStateRoot) != p.HostStateRoot ||
+		p.Agent.StateRoot != slotState ||
 		p.HostWorkspaceRoot != workspace || p.SandboxWorkspaceRoot != sandbox ||
-		p.Agent.HostWorktree != repo || p.Agent.HostHome != hostHomeRoot+"/"+homeName ||
+		p.Agent.HostWorktree != repo || p.Agent.HostHome != hostHome ||
 		p.Agent.SandboxWorktree != sandbox+"/ouroboros-ide" ||
 		p.Agent.SandboxHome != sandboxHomeRoot+"/"+homeName {
 		return false, fmt.Errorf("managed Git SSH policy plan differs from the source-selected standard native geometry")

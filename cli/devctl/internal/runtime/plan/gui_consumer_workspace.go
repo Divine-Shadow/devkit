@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"devkit/cli/devctl/internal/runtime/agent"
 )
 
 // GUIConsumerWorkspace is geometry of the existing consumer, not a launch plan.
@@ -38,7 +40,7 @@ func resolveGUIConsumerWorkspaceFrom(manifestPath, storeRoot, project, repo, tar
 			continue
 		}
 		geometry := guiTargetGeometry{Project: project, Repo: repo, AgentIndex: index,
-			WorkspaceRoot: record.WorkspaceRoot, HostWorktree: record.HostWorktree, HostHome: record.HostHome}
+			WorkspaceRoot: record.WorkspaceRoot, HostWorktree: record.HostWorktree, HostHome: record.HostHome, SandboxHome: record.SandboxHome}
 		// Reuse strict schema/duplicate/source hash and geometry validation.
 		if _, err := loadGUITargetConfigProjectionFrom(manifestPath, storeRoot, targetID, geometry); err != nil {
 			return empty, err
@@ -55,6 +57,19 @@ func resolveGUIConsumerWorkspaceFrom(manifestPath, storeRoot, project, repo, tar
 			return empty, fmt.Errorf("GUI consumer worktree is not the declared v4 projection")
 		}
 		home, ok := projectSandboxPath(record.HostHome, record.WorkspaceRoot, "/workspaces/dev")
+		if record.SandboxHome != "" {
+			// Persistent host storage is outside the disposable workspace. The
+			// immutable producer supplies its logical projection explicitly;
+			// actual launch still compares both homes to its native source plan.
+			expected := agent.PersistentDevAllHome(worktree, index)
+			if record.SandboxHome != expected || !filepath.IsAbs(record.HostHome) || filepath.Clean(record.HostHome) != record.HostHome || record.HostHome == "/" {
+				return empty, fmt.Errorf("GUI consumer persistent home projection is not canonical")
+			}
+			if ok && home != expected {
+				return empty, fmt.Errorf("GUI consumer home projections disagree")
+			}
+			home, ok = record.SandboxHome, true
+		}
 		if !ok {
 			return empty, fmt.Errorf("GUI consumer home is outside its declared projection")
 		}

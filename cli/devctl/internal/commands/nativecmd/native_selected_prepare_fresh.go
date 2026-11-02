@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	wtx "devkit/cli/devctl/internal/worktrees"
 )
@@ -30,19 +31,22 @@ type selectedPreparationReceipt struct {
 }
 
 type freshSelectedClaim struct {
-	dryRun      bool
-	lock        *nativeSlotResetLock
-	directories []*os.File
-	lifecycle   *selectedControllerLifecycleLease
+	dryRun       bool
+	lock         *nativeSlotResetLock
+	directories  []*os.File
+	retainedHome *os.File
+	lifecycle    *selectedControllerLifecycleLease
 }
 
 func freshPreparationPaths(p nativeplan.Plan, opts wtx.NativeOptions) ([]string, error) {
 	lane := filepath.Join(opts.WorktreeRoot, fmt.Sprintf("agent%d", opts.Index))
 	git := filepath.Join(opts.WorktreeRoot, ".devkit", "git", fmt.Sprintf("agent%d", opts.Index))
 	if opts.Index < 1 || p.Agent.ID.Index != opts.Index || p.Agent.ID.Project != "dev-all" ||
-		p.Agent.HostWorktree != filepath.Join(lane, opts.Repo) ||
-		!strings.HasPrefix(p.Agent.HostHome, lane+string(filepath.Separator)) {
+		p.Agent.ID.Repo != opts.Repo || p.Agent.HostWorktree != filepath.Join(lane, opts.Repo) {
 		return nil, fmt.Errorf("fresh selected preparation requires exact source-owned lane geometry")
+	}
+	if err := launch.ValidateNativePersistentHome(p); err != nil {
+		return nil, err
 	}
 	roots := []string{lane, p.Agent.StateRoot, git}
 	for i, root := range roots {
@@ -148,6 +152,18 @@ func claimFreshSelectedPreparationWithLease(p nativeplan.Plan, opts wtx.NativeOp
 		return nil, err
 	}
 	fail := func(err error) (*freshSelectedClaim, error) { claim.close(); return nil, err }
+	home, err := openFreshPreparationDirectory(p.Agent.HostHome, false)
+	if err == nil {
+		claim.retainedHome = home
+	} else if !errors.Is(err, syscall.ENOENT) {
+		return fail(fmt.Errorf("open retained native home: %w", err))
+	}
+	if lifecycle == nil {
+		socket := filepath.Join(p.Agent.HostHome, ".codex", fmt.Sprintf("a%d-app.sock", p.Agent.ID.Index))
+		if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {
+			return fail(fmt.Errorf("fresh preparation requires owning lifecycle disposition for existing or inaccessible app-server endpoint %s", socket))
+		}
+	}
 	if lifecycle != nil {
 		retirement, err := retireSelectedStaging(p, opts, roots, lifecycle)
 		if err != nil {
@@ -195,6 +211,10 @@ func (claim *freshSelectedClaim) close() {
 		_ = dir.Close()
 	}
 	claim.directories = nil
+	if claim.retainedHome != nil {
+		_ = claim.retainedHome.Close()
+		claim.retainedHome = nil
+	}
 	if claim.lock != nil {
 		_ = claim.lock.release()
 		claim.lock = nil
@@ -266,7 +286,11 @@ func (claim *freshSelectedClaim) verifyNamespace() error {
 			return err
 		}
 	}
-	for _, held := range claim.directories {
+	directories := claim.directories
+	if claim.retainedHome != nil {
+		directories = append(append([]*os.File(nil), directories...), claim.retainedHome)
+	}
+	for _, held := range directories {
 		expected, err := held.Stat()
 		if err != nil {
 			return err

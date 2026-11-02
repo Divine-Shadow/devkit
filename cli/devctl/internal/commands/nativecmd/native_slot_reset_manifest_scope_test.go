@@ -2,8 +2,6 @@ package nativecmd
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,13 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"devkit/cli/devctl/internal/codexhistory"
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	"devkit/cli/devctl/internal/sqliteauthority"
 	wtx "devkit/cli/devctl/internal/worktrees"
 )
 
-func TestSelectedNativeSlotManifestPreservesUnrelatedSuffixAndCapturesSelectedHistory(t *testing.T) {
+func TestSelectedNativeSlotManifestPreservesUnrelatedSuffixAndUsableSelectedHistory(t *testing.T) {
 	fixture := newNativeSlotManifestShrinkFixture(t, 4, 3)
 	sqlite, err := exec.LookPath("sqlite3")
 	if err != nil {
@@ -80,57 +77,34 @@ func TestSelectedNativeSlotManifestPreservesUnrelatedSuffixAndCapturesSelectedHi
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := codexhistory.SnapshotOptions{
-		Project: "dev-all", ResetKind: "selected-slot-reset", AgentIndex: 2,
-		HostWorktree: selected.HostWorktree, HostHome: selected.HostHome,
-		SandboxHome: selected.SandboxHome, StateRoot: fixture.opts.StateRoot,
-		WorkspaceRoot: workspace,
+	beforeDatabase, err := os.Stat(database)
+	if err != nil {
+		t.Fatal(err)
 	}
-	var captured codexhistory.Result
+	identity := nativeManifestShrinkIdentity(selected)
 	err = executeNativeSlotDestructiveBoundary(nativeSlotDestructiveBoundary{
 		stopSelected: func() error { return nil },
 		inspectIdle: func() error {
 			_, err := validateSelectedNativeSlotManifest(fixture.path, fixture.expected, fixture.opts)
 			return err
 		},
-		snapshotHistory: func() error { var err error; captured, err = codexhistory.Capture(options); return err },
-		applyPlan:       reset.Apply,
+		snapshotHistory: func() error {
+			return captureNativeSlotHistory("dev-all", "selected-slot-reset", identity, fixture.opts.StateRoot, workspace, false)
+		},
+		applyPlan: reset.Apply,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(selected.HostHome); !os.IsNotExist(err) {
-		t.Fatalf("selected home was not reset: %v", err)
+	afterDatabase, err := os.Stat(database)
+	if err != nil || !os.SameFile(beforeDatabase, afterDatabase) {
+		t.Fatal("selected reset replaced or lost the usable database")
 	}
-	// The public fixed-Product retirement verifier intentionally excludes a
-	// selected reset. Independently inspect the actual durable payload here.
-	manifestBytes, err := os.ReadFile(captured.ManifestPath)
-	if err != nil {
-		t.Fatal(err)
+	if out, err := exec.Command(sqlite, database, "PRAGMA integrity_check; SELECT goal FROM goals; INSERT INTO goals VALUES ('later-goal'); SELECT count(*) FROM goals;").CombinedOutput(); err != nil || string(out) != "ok\nselected-goal-custody\n2\n" {
+		t.Fatalf("selected history cannot be read and updated after reset: %v %s", err, out)
 	}
-	var manifest struct {
-		ResetKind  string                          `json:"reset_kind"`
-		AgentIndex int                             `json:"agent_index"`
-		Files      []struct{ Path, SHA256 string } `json:"files"`
-	}
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if manifest.ResetKind != "selected-slot-reset" || manifest.AgentIndex != 2 || len(manifest.Files) != 1 {
-		t.Fatalf("wrong selected cold bundle: %s", manifestBytes)
-	}
-	for _, file := range manifest.Files {
-		payload := filepath.Join(filepath.Dir(captured.ManifestPath), "payload", file.Path)
-		data, err := os.ReadFile(payload)
-		if err != nil || fmt.Sprintf("%x", sha256.Sum256(data)) != file.SHA256 {
-			t.Fatalf("retained payload digest mismatch: %v", err)
-		}
-		if out, err := exec.Command(sqlite, payload, "PRAGMA integrity_check; SELECT goal FROM goals;").CombinedOutput(); err != nil || string(out) != "ok\nselected-goal-custody\n" {
-			t.Fatalf("protected selected goal did not survive reset: %v %s", err, out)
-		}
-	}
-	if !strings.HasPrefix(captured.ManifestPath, workspace+string(os.PathSeparator)) {
-		t.Fatal("selected custody escaped workspace")
+	if _, err := os.Lstat(filepath.Join(workspace, ".devkit", "codex-gui-history")); !os.IsNotExist(err) {
+		t.Fatal("retained-in-place reset created an unnecessary cold history copy")
 	}
 	after, err := os.ReadFile(fixture.path)
 	if err != nil || !bytes.Equal(before, after) {
@@ -239,5 +213,47 @@ func TestSelectedNativeSlotManifestRefusesUnresolvedShrinkWithoutRecovery(t *tes
 				}
 			})
 		}
+	}
+}
+
+func TestRetainedNativeHistoryRefusesExternalPayloadBeforeResetApply(t *testing.T) {
+	f := newNativeSlotManifestShrinkFixture(t, 4, 3)
+	sqlite, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sqliteauthority.SetExecutableForTesting(sqlite))
+	selected := f.actual.Agents[1]
+	external := filepath.Join(selected.HostWorktree, "external-history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(external), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(external, []byte("protected external history\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(selected.HostHome, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(selected.HostHome, ".codex", "state_5.sqlite")
+	sql := "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, source TEXT, title TEXT); INSERT INTO threads VALUES ('gui','" + strings.ReplaceAll(external, "'", "''") + "','vscode','protected');"
+	if out, err := exec.Command(sqlite, database, sql).CombinedOutput(); err != nil {
+		t.Fatalf("create actual reference: %v %s", err, out)
+	}
+	before, _ := os.ReadFile(database)
+	applied := false
+	err = executeNativeSlotDestructiveBoundary(nativeSlotDestructiveBoundary{
+		stopSelected: func() error { return nil }, inspectIdle: func() error { return nil },
+		snapshotHistory: func() error {
+			return captureNativeSlotHistory("dev-all", "selected-slot-reset", nativeManifestShrinkIdentity(selected), f.opts.StateRoot, filepath.Dir(selected.HostWorktree), false)
+		},
+		applyPlan: func() error { applied = true; return nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "escapes") || applied {
+		t.Fatalf("retained-home branch omitted payload guard: applied=%v err=%v", applied, err)
+	}
+	after, _ := os.ReadFile(database)
+	payload, _ := os.ReadFile(external)
+	if !bytes.Equal(before, after) || string(payload) != "protected external history\n" {
+		t.Fatal("refusal changed protected data")
 	}
 }

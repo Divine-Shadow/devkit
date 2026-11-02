@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	nativeagent "devkit/cli/devctl/internal/runtime/agent"
+	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	wtx "devkit/cli/devctl/internal/worktrees"
 )
@@ -292,6 +293,12 @@ func requireNativeSlotManifestShrinkStagedWithPlannerAndCustody(
 	if planner == nil {
 		return fmt.Errorf("surplus native slot process planner is required")
 	}
+	persistentHome := spec.ID.Project == "dev-all" && !nativeagent.IsWorkspaceRootRepo(spec.ID.Repo)
+	if persistentHome {
+		if err := launch.ValidateNativePersistentHome(nativeplan.Plan{Agent: spec, HostStateRoot: manifest.HostStateRoot}); err != nil {
+			return fmt.Errorf("surplus native slot persistent-home boundary: %w", err)
+		}
+	}
 	identity := nativeManifestShrinkIdentity(spec)
 	inspectProcesses := func() error {
 		plan, err := planner(identity, false)
@@ -312,8 +319,10 @@ func requireNativeSlotManifestShrinkStagedWithPlannerAndCustody(
 	}{
 		{name: "app-server socket", path: filepath.Join(filepath.Clean(spec.HostHome), ".codex", fmt.Sprintf("a%d-app.sock", spec.ID.Index))},
 		{name: "worktree/Git custody", path: spec.HostWorktree},
-		{name: "home", path: spec.HostHome},
 		{name: "state", path: spec.StateRoot},
+	}
+	if !persistentHome {
+		activePaths = append(activePaths, struct{ name, path string }{name: "home", path: spec.HostHome})
 	}
 	for _, candidate := range activePaths {
 		path := filepath.Clean(strings.TrimSpace(candidate.path))

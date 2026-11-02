@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	nativeagent "devkit/cli/devctl/internal/runtime/agent"
 	"devkit/cli/devctl/internal/runtime/launch"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 )
@@ -21,13 +22,10 @@ func softwareOnlyNativeHostWorkspace(index int) string {
 
 const softwareOnlySandboxWorkspace = "/workspaces/dev"
 
-func softwareOnlyNativeHomes(index int) (string, string) {
-	host, sandbox := softwareOnlyNativeHostWorkspace(index), softwareOnlySandboxWorkspace
-	if index == 1 {
-		host, sandbox = filepath.Join(host, "ouroboros-ide"), filepath.Join(sandbox, "ouroboros-ide")
-	}
-	home := ".devhome-agent" + strconv.Itoa(index)
-	return filepath.Join(host, home), filepath.Join(sandbox, home)
+func softwareOnlyNativeHomes(stateRoot string, index int) (string, string) {
+	host := filepath.Join(nativeagent.PersistentHomesRoot(stateRoot), "dev-all-agent"+strconv.Itoa(index), "ouroboros-ide")
+	sandbox := nativeagent.PersistentDevAllHome(filepath.Join(softwareOnlySandboxWorkspace, "ouroboros-ide"), index)
+	return host, sandbox
 }
 
 // This selected-system executable is source-owned authority. Native callers
@@ -134,8 +132,10 @@ func validateSoftwareOnlyNativePlanOnHost(p nativeplan.Plan, hostname string) er
 	}
 	index := p.Agent.ID.Index
 	hostWorkspace := softwareOnlyNativeHostWorkspace(index)
-	hostHome, sandboxHome := softwareOnlyNativeHomes(index)
+	hostHome, sandboxHome := softwareOnlyNativeHomes(p.HostStateRoot, index)
 	if index < 1 || p.Agent.ID.Project != "dev-all" || p.Agent.ID.Repo != "ouroboros-ide" ||
+		!filepath.IsAbs(p.HostStateRoot) || filepath.Clean(p.HostStateRoot) != p.HostStateRoot ||
+		p.Agent.StateRoot != filepath.Join(p.HostStateRoot, "dev-all-agent"+strconv.Itoa(index)) ||
 		p.HostWorkspaceRoot != hostWorkspace || p.SandboxWorkspaceRoot != softwareOnlySandboxWorkspace ||
 		p.Agent.HostWorktree != hostWorkspace+"/ouroboros-ide" || p.Agent.HostHome != hostHome ||
 		p.Agent.SandboxWorktree != softwareOnlySandboxWorkspace+"/ouroboros-ide" || p.Agent.SandboxHome != sandboxHome ||

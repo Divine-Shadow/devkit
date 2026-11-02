@@ -40,11 +40,23 @@ func nativeProcHomeMatchesSlotObserved(procPath, home string, identity nativeSlo
 		observation.capture(identity.hostHome, hostHome)
 		observation.capture(procPath+"/root"+home, observedHome)
 	}
-	relativeWorktree, err := filepath.Rel(identity.hostHome, identity.hostWorktree)
-	if err != nil {
-		return false, fmt.Errorf("derive selected native home/worktree geometry: %w", err)
+	var worktree string
+	switch home {
+	case identity.hostHome:
+		worktree = identity.hostWorktree
+	case identity.sandboxHome:
+		// Host storage and its sandbox bind need not have the same relative
+		// layout. Both paths come from the selected immutable native plan;
+		// inode comparisons below still establish actual physical custody.
+		worktree = identity.sandboxWorktree
+	default:
+		// Retain physical observation of historical relative-layout aliases.
+		relativeWorktree, err := filepath.Rel(identity.hostHome, identity.hostWorktree)
+		if err != nil {
+			return false, fmt.Errorf("derive selected native home/worktree geometry: %w", err)
+		}
+		worktree = filepath.Clean(filepath.Join(home, relativeWorktree))
 	}
-	worktree := filepath.Clean(filepath.Join(home, relativeWorktree))
 	hostWorktree, err := os.Stat(identity.hostWorktree)
 	if observation != nil && errors.Is(err, os.ErrNotExist) {
 		observation.absent = append(observation.absent, identity.hostWorktree)

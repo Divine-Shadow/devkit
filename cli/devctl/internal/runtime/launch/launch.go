@@ -23,6 +23,7 @@ import (
 
 	"devkit/cli/devctl/internal/devkitpaths"
 	"devkit/cli/devctl/internal/gitauthority"
+	"devkit/cli/devctl/internal/runtime/agent"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/sshauthority"
 )
@@ -233,6 +234,12 @@ func prepare(p nativeplan.Plan, softwareOnly, terraformTools bool) error {
 }
 
 func prepareWithLegacyState(p nativeplan.Plan, softwareOnly, terraformTools, allowLegacyState bool) error {
+	if err := ValidateNativePersistentHome(p); err != nil {
+		return err
+	}
+	if p.Agent.ID.Project == "dev-all" && !agent.IsWorkspaceRootRepo(p.Agent.ID.Repo) {
+		allowLegacyState = false
+	}
 	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
 		return err
 	}
@@ -714,6 +721,9 @@ func GitBootstrapSSHCommand(p nativeplan.Plan) (string, error) {
 // configure a Git worktree because native prepare calls it before materializing
 // the linked worktree.
 func PrepareGitBootstrap(p nativeplan.Plan) (string, error) {
+	if err := ValidateNativePersistentHome(p); err != nil {
+		return "", err
+	}
 	sshAuthority, err := resolvePackageSSHAuthority()
 	if err != nil {
 		return "", err

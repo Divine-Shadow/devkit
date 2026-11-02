@@ -38,7 +38,7 @@ func TestBuildDevAllPlan(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent2/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/home/bayesartre/dev/agent-worktrees/agent2/.devhome-agent2" {
+	if p.Agent.HostHome != "/home/bayesartre/dev/.devkit/native-agents/.homes/dev-all-agent2/ouroboros-ide" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
 	}
 	if p.Agent.SandboxHome != "/workspaces/dev/agent-worktrees/agent2/.devhome-agent2" {
@@ -856,7 +856,7 @@ func TestBuildDevAllWorkspaceEgressUsesNarrowBindsAndPerAgentCaches(t *testing.T
 	if !hasBind(p.Binds, hostWorktree, "/workspaces/dev/agent-worktrees/agent3/ouroboros-ide") {
 		t.Fatalf("workspace-egress must preserve canonical worktree path: %#v", p.Binds)
 	}
-	if !hasBind(p.Binds, filepath.Join(devRoot, "agent-worktrees", "agent3", ".devhome-agent3"), "/workspaces/dev/agent-worktrees/agent3/.devhome-agent3") {
+	if !hasBind(p.Binds, filepath.Join(devRoot, ".devkit", "native-agents", ".homes", "dev-all-agent3", "ouroboros-ide"), "/workspaces/dev/agent-worktrees/agent3/.devhome-agent3") {
 		t.Fatalf("workspace-egress must mount exact agent home: %#v", p.Binds)
 	}
 	if !hasBind(p.Binds, devkitRoot, "/workspaces/dev/devkit") {
@@ -1329,7 +1329,7 @@ func TestBuildDevAllDedicatedWorktreeUsesFanoutForAgentOne(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != "/repo/agent-worktrees/agent1/ouroboros-ide/.devhome-agent1" {
+	if p.Agent.HostHome != "/repo/.devkit/native-agents/.homes/dev-all-agent1/ouroboros-ide" {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
 	}
 }
@@ -1368,7 +1368,7 @@ func TestBuildDevAllProjectsSymlinkedWorktreeIntoMountedDevRoot(t *testing.T) {
 	if p.Agent.SandboxWorktree != "/workspaces/dev/ouroboros-ide" {
 		t.Fatalf("sandbox worktree = %q", p.Agent.SandboxWorktree)
 	}
-	if p.Agent.HostHome != filepath.Join(repoRoot, ".devhome-agent1") {
+	if p.Agent.HostHome != filepath.Join(devRoot, ".devkit", "native-agents", ".homes", "dev-all-agent1", "ouroboros-ide") {
 		t.Fatalf("host home = %q", p.Agent.HostHome)
 	}
 	if p.Agent.SandboxHome != "/workspaces/dev/ouroboros-ide/.devhome-agent1" {

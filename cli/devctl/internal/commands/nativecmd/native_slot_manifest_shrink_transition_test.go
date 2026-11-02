@@ -55,7 +55,7 @@ func newNativeSlotManifestShrinkFixture(t *testing.T, actualCount, expectedCount
 		return nil
 	}
 	t.Cleanup(func() { captureNativeManifestShrinkSlotHistory = previousCapture })
-	root, err := os.MkdirTemp("/tmp", "devkit-shrink-")
+	root, err := os.MkdirTemp("/tmp", "ds-")
 	if err != nil {
 		t.Fatal(err)
 	}

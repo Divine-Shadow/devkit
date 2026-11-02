@@ -22,15 +22,12 @@ func TestSelectedSlotResetProducerFeedsManagedGitConsumer(t *testing.T) {
 		var records []map[string]any
 		for index := 1; index <= 3; index++ {
 			workspace := fmt.Sprintf("/home/bayesartre/dev/agent-worktrees/agent%d", index)
-			homeRoot := workspace
-			if index == 1 {
-				homeRoot += "/ouroboros-ide"
-			}
+			home := fmt.Sprintf("/home/bayesartre/dev/.devkit/native-agents/.homes/dev-all-agent%d/ouroboros-ide", index)
 			kind := "local-wsl-devkit-agent"
 			if index == 3 {
 				kind = "devkit-agent"
 			}
-			records = append(records, map[string]any{"targetId": fmt.Sprintf("fixture-%d", index), "configProfile": "product-governance", "project": "dev-all", "repo": "ouroboros-ide", "agentIndex": index, "workspaceRoot": workspace, "hostWorktree": workspace + "/ouroboros-ide", "hostHome": fmt.Sprintf("%s/.devhome-agent%d", homeRoot, index), "kind": kind, "expectedExecutionHost": "fixture-host", "source": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config.toml", "sourceSha256": strings.Repeat("a", 64)})
+			records = append(records, map[string]any{"targetId": fmt.Sprintf("fixture-%d", index), "configProfile": "product-governance", "project": "dev-all", "repo": "ouroboros-ide", "agentIndex": index, "workspaceRoot": workspace, "hostWorktree": workspace + "/ouroboros-ide", "hostHome": home, "kind": kind, "expectedExecutionHost": "fixture-host", "source": "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config.toml", "sourceSha256": strings.Repeat("a", 64)})
 		}
 		data, err := json.Marshal(map[string]any{"schemaVersion": "devkit/gui-codex-config-projections/v1", "projections": records})
 		if err != nil {

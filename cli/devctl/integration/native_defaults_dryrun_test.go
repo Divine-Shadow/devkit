@@ -112,7 +112,7 @@ func buildDevctlForNativeDefaultsWithSSHKnownHostsAndTags(
 	return bin
 }
 
-func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count int, kinds ...string) []byte {
+func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot, stateRoot string, count int, isolated bool, kinds ...string) []byte {
 	t.Helper()
 	source := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
 	if !strings.HasPrefix(source, "/nix/store/") || filepath.Clean(source) != source {
@@ -127,16 +127,21 @@ func writeNativeResetGUIConfigFixture(t *testing.T, worktreeRoot string, count i
 	for index := 1; index <= count; index++ {
 		workspace := filepath.Join(worktreeRoot, fmt.Sprintf("agent%d", index))
 		worktree := filepath.Join(workspace, "ouroboros-ide")
-		home := filepath.Join(workspace, fmt.Sprintf(".devhome-agent%d", index))
+		home := filepath.Join(stateRoot, ".homes", fmt.Sprintf("dev-all-agent%d", index), "ouroboros-ide")
+		sandboxHome := filepath.Join("/workspaces/dev", fmt.Sprintf(".devhome-agent%d", index))
 		if index == 1 {
-			home = filepath.Join(worktree, ".devhome-agent1")
+			sandboxHome = "/workspaces/dev/ouroboros-ide/.devhome-agent1"
 		}
-		records = append(records, map[string]any{
+		record := map[string]any{
 			"targetId": fmt.Sprintf("reset-fixture-%d", index), "configProfile": "reset-fixture",
 			"project": "dev-all", "repo": "ouroboros-ide", "agentIndex": index,
 			"workspaceRoot": workspace, "hostWorktree": worktree, "hostHome": home,
 			"source": source, "sourceSha256": fmt.Sprintf("%x", digest),
-		})
+		}
+		if isolated {
+			record["sandboxHome"] = sandboxHome
+		}
+		records = append(records, record)
 	}
 	if len(kinds) == 1 {
 		for _, record := range records {
@@ -1164,7 +1169,7 @@ func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bootstrapConfig := filepath.Join(isolatedRoot, "agent1", repoName, ".devhome-agent1", ".ssh", "config")
+	bootstrapConfig := filepath.Join(filepath.Dir(root), ".devkit", "native-agents", ".homes", "dev-all-agent1", repoName, ".ssh", "config")
 	if strings.Count(string(sshInvocations), "git-upload-pack") != 1 ||
 		!strings.Contains(string(sshInvocations), "-F "+bootstrapConfig) ||
 		strings.Contains(string(sshInvocations), "/dev/null") {
@@ -1312,6 +1317,29 @@ func testNativeTopLevelRelativeMetadata(t *testing.T, selectedLane bool) {
 			t.Fatalf("native CLI ref write: %v: %s", err, out)
 		}
 		run("git", "-C", worktree, "show-ref", "--verify", "refs/devkit/native-cli-proof")
+		// A third actual entry writes through the stable logical HOME into the
+		// persistent physical object. The host worktree's nested bind scaffold
+		// must not acquire the database or prevent subsequent entry.
+		sqlite, err := exec.LookPath("sqlite3")
+		if err != nil {
+			t.Fatal(err)
+		}
+		probeArgs := append([]string{}, execCmd.Args[1:len(execCmd.Args)-4]...)
+		probeArgs = append(probeArgs, "--", sqlite, "/workspaces/dev/ouroboros-ide/.devhome-agent1/.codex/native-home-proof.sqlite", "CREATE TABLE proof(value TEXT); INSERT INTO proof VALUES ('persistent-object');")
+		probe := exec.Command(bin, probeArgs...)
+		probe.Env = execCmd.Env
+		if out, err := probe.CombinedOutput(); err != nil {
+			t.Fatalf("actual native persistent HOME write: %v %s", err, out)
+		}
+		physicalHome := filepath.Dir(filepath.Dir(bootstrapConfig))
+		if got := strings.TrimSpace(runNativeFixtureCommand(t, sqlite, filepath.Join(physicalHome, ".codex", "native-home-proof.sqlite"), "SELECT value FROM proof;")); got != "persistent-object" {
+			t.Fatalf("runtime HOME did not use persistent physical storage: %q", got)
+		}
+		legacy := filepath.Join(worktree, ".devhome-agent1")
+		if entries, err := os.ReadDir(legacy); err != nil || len(entries) != 0 {
+			t.Fatalf("logical bind scaffold acquired home data: %v %v", entries, err)
+		}
+
 		for path, want := range map[string][]byte{filepath.Join(worktree, ".git"): gitFile, filepath.Join(gitdir, "commondir"): commondir, filepath.Join(gitdir, "gitdir"): reverseGitdir} {
 			got, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(got, want) {
@@ -1370,7 +1398,7 @@ func TestNativeTopLevelExecProxySocketDryRun(t *testing.T) {
 
 func TestDevAllFreshOpenAndResetUseNativeLifecycleDryRun(t *testing.T) {
 	root := nativeDefaultsRoot(t)
-	writeNativeResetGUIConfigFixture(t, filepath.Join(filepath.Dir(root), "agent-worktrees"), 2)
+	writeNativeResetGUIConfigFixture(t, filepath.Join(filepath.Dir(root), "agent-worktrees"), filepath.Join(filepath.Dir(root), ".devkit", "native-agents"), 2, false)
 	bin := buildDevctlForNativeDefaults(t)
 
 	freshOutput, err := runNativeDefaultDryRun(t, bin, root, "fresh-open", "2")
@@ -1427,9 +1455,9 @@ func testDevAllResetThroughPackageSSHAuthority(t *testing.T, standard bool) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = os.RemoveAll(worktreeRoot) })
-		expectedGUIConfig = writeNativeResetGUIConfigFixture(t, worktreeRoot, 3, "local-wsl-devkit-agent")
+		expectedGUIConfig = writeNativeResetGUIConfigFixture(t, worktreeRoot, filepath.Join(base, ".devkit", "native-agents"), 3, true, "local-wsl-devkit-agent")
 	} else {
-		expectedGUIConfig = writeNativeResetGUIConfigFixture(t, worktreeRoot, 3)
+		expectedGUIConfig = writeNativeResetGUIConfigFixture(t, worktreeRoot, filepath.Join(base, ".devkit", "native-agents"), 3, true)
 	}
 	governanceSource := os.Getenv("DEVKIT_TEST_NATIVE_RESET_CODEX_CONFIG_SOURCE")
 	if !strings.HasPrefix(governanceSource, "/nix/store/") || filepath.Clean(governanceSource) != governanceSource {
@@ -1589,6 +1617,7 @@ while [ "$#" -gt 0 ]; do
             */agent-worktrees/agent*/ouroboros-ide) host_worktree="$source" ;;
           esac
           ;;
+        /workspaces/dev/ouroboros-ide/.devhome-agent1|/workspaces/dev/.devhome-agent*|\
 		*/agent-worktrees/agent*/ouroboros-ide/.devhome-agent*|\
 		*/agent-worktrees/agent*/.devhome-agent*) host_home="$source" ;;
       esac
@@ -1668,7 +1697,7 @@ fi
 	if err := os.WriteFile(resolverSource, []byte("nameserver 192.0.2.53\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	staleHome := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide", ".devhome-agent2")
+	staleHome := filepath.Join(worktreeRoot, "agent2", "ouroboros-ide", ".obsolete-execution-data")
 	if err := os.MkdirAll(staleHome, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1718,9 +1747,12 @@ fi
 		}
 	}
 
+	persistentHome := func(index int) string {
+		return filepath.Join(base, ".devkit", "native-agents", ".homes", fmt.Sprintf("dev-all-agent%d", index), "ouroboros-ide")
+	}
 	freshBootstrap := func(t *testing.T) {
 		worktreesRoot := worktreeRoot
-		siblingHome := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
+		siblingHome := persistentHome(2)
 		siblingState := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
 		for _, path := range []string{siblingHome, siblingState} {
 			if err := os.MkdirAll(path, 0o700); err != nil {
@@ -1903,10 +1935,7 @@ fi
 		if out := runNativeFixtureCommand(t, "git", "-C", worktree, "status", "--porcelain=v1"); strings.TrimSpace(out) != "" {
 			t.Fatalf("agent%d reset worktree is dirty: %s", index, out)
 		}
-		hostHome := filepath.Join(filepath.Dir(worktree), fmt.Sprintf(".devhome-agent%d", index))
-		if index == 1 {
-			hostHome = filepath.Join(worktree, ".devhome-agent1")
-		}
+		hostHome := persistentHome(index)
 		actualConfig, err := os.ReadFile(filepath.Join(hostHome, ".codex", "config.toml"))
 		if err != nil || !bytes.Equal(actualConfig, expectedGUIConfig) {
 			t.Fatalf("agent%d reset did not preserve exact immutable GUI config bytes: %v", index, err)
@@ -1917,13 +1946,13 @@ fi
 		}
 	}
 	if _, err := os.Lstat(staleMarker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale package-owned agent home survived destructive reset: %v", err)
+		t.Fatalf("stale disposable computation payload survived reset: %v", err)
 	}
 	sshInvocations, err := os.ReadFile(sshLog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantConfig := filepath.Join(worktreesRoot, "agent1", "ouroboros-ide", ".devhome-agent1", ".ssh", "config")
+	wantConfig := filepath.Join(persistentHome(1), ".ssh", "config")
 	if strings.Count(string(sshInvocations), "git-upload-pack") != 3 ||
 		!strings.Contains(string(sshInvocations), "-F "+wantConfig) {
 		t.Fatalf("reset did not use exactly three lane-owned SSH bootstraps:\n%s", sshInvocations)
@@ -1947,7 +1976,7 @@ fi
 	agent2Worktree := filepath.Join(worktreesRoot, "agent2", "ouroboros-ide")
 	agent1CommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "agent1", "ouroboros-ide.git")
 	agent2CommonDir := filepath.Join(worktreesRoot, ".devkit", "git", "agent2", "ouroboros-ide.git")
-	agent2Home := filepath.Join(worktreesRoot, "agent2", ".devhome-agent2")
+	agent2Home := persistentHome(2)
 	agent2State := filepath.Join(base, ".devkit", "native-agents", "dev-all-agent2")
 	sharedManifest := filepath.Join(base, ".devkit", "native-agents", "manifests", "dev-all.json")
 	manifestBefore, err := os.ReadFile(sharedManifest)
@@ -1994,7 +2023,7 @@ fi
 	}
 	// These fixture processes run in the test's mount view, so HOME must name
 	// their actual selected objects, not an unmounted consumer-side spelling.
-	selectedProcessHome := filepath.Join(agent1Worktree, ".devhome-agent1")
+	selectedProcessHome := persistentHome(1)
 	selectedProcess := exec.Command(
 		"sh", "-c",
 		`env -i "$1" --pid="$$" -f /dev/null & printf '%s\n' "$!"; wait`,
@@ -2061,13 +2090,13 @@ fi
 		t.Fatal(err)
 	}
 	readOnlyModuleCache := filepath.Join(
-		agent1Worktree,
-		".devhome-agent1", "go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1",
+		selectedProcessHome,
+		"go", "pkg", "mod", "github.com", "dustin", "go-humanize@v1.0.1",
 	)
 	if err := os.MkdirAll(readOnlyModuleCache, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(readOnlyModuleCache, "ftoa_test.go"), []byte("disposable readonly module cache\n"), 0o400); err != nil {
+	if err := os.WriteFile(filepath.Join(readOnlyModuleCache, "ftoa_test.go"), []byte("retained readonly module cache\n"), 0o400); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{readOnlyModuleCache, filepath.Dir(readOnlyModuleCache), filepath.Dir(filepath.Dir(readOnlyModuleCache))} {
@@ -2085,6 +2114,10 @@ fi
 	historyDatabase := filepath.Join(selectedProcessHome, ".codex", "goals_1.sqlite")
 	runNativeFixtureCommand(t, "sqlite3", historyDatabase,
 		"CREATE TABLE goals (goal TEXT); INSERT INTO goals VALUES ('protected-history-sentinel');")
+	historyInfoBefore, err := os.Stat(historyDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
 	historyBefore, err := os.ReadFile(historyDatabase)
 	if err != nil {
 		t.Fatal(err)
@@ -2353,7 +2386,7 @@ fi
 		}
 	}
 	// Retire only this test-created ambiguous reference fixture; production has no such
-	// bypass. Continue the existing real successful cold-capture/reset proof.
+	// bypass. Continue the existing real retained-storage/reset proof.
 	if err := os.Remove(missingDatabase); err != nil {
 		t.Fatal(err)
 	}
@@ -2385,55 +2418,25 @@ fi
 	if slotReceipt.Command != "reset" || slotReceipt.Index != 1 || slotReceipt.Status != "ready" || slotReceipt.Head != currentHead || slotReceipt.Capacity.Total != 1 || slotReceipt.Capacity.RuntimeReady != 1 || slotReceipt.Capacity.RepoReady != 1 {
 		t.Fatalf("unexpected selected reset receipt: %+v", slotReceipt)
 	}
-	// The real CLI must commit history before deleting/reconstructing the home.
-	// Bind its printed custody identity to the actual immutable snapshot bytes.
-	var historyManifestPath, printedBundle string
-	for _, line := range strings.Split(string(slotOutput), "\n") {
-		if strings.HasPrefix(line, "codex_gui_history_custody ") && strings.Contains(line, " status=captured ") {
-			for _, field := range strings.Fields(line) {
-				if value, ok := strings.CutPrefix(field, "manifest="); ok {
-					historyManifestPath = value
-				}
-				if value, ok := strings.CutPrefix(field, "bundle_sha256="); ok {
-					printedBundle = value
-				}
-			}
-		}
+	// The CLI reconstructs computation while retaining the original usable
+	// database and payload objects. No cold copy/import is needed for storage
+	// excluded from both reset plans; metadata/refusal checks still ran above.
+	if !strings.Contains(string(slotOutput), "codex_gui_history status=retained-in-place agent=1 ") {
+		t.Fatalf("CLI did not report the actual retained home: %s", slotOutput)
 	}
-	manifestBytes, err := os.ReadFile(historyManifestPath)
-	if err != nil {
-		t.Fatalf("read CLI history manifest: %v", err)
+	historyInfoAfter, err := os.Stat(historyDatabase)
+	if err != nil || !os.SameFile(historyInfoBefore, historyInfoAfter) {
+		t.Fatal("CLI reset replaced retained database")
 	}
-	var historyManifest struct {
-		Schema string `json:"schema_version"`
-		Status string `json:"status"`
-		Kind   string `json:"reset_kind"`
-		Index  int    `json:"agent_index"`
-		Home   string `json:"source_host_home"`
-		Bundle string `json:"bundle_sha256"`
-		Files  []struct {
-			Path   string `json:"path"`
-			SHA256 string `json:"sha256"`
-		} `json:"files"`
+	if after, err := os.ReadFile(historyDatabase); err != nil || !bytes.Equal(after, historyBefore) {
+		t.Fatal("CLI reset changed retained database bytes")
 	}
-	if err := json.Unmarshal(manifestBytes, &historyManifest); err != nil {
-		t.Fatal(err)
+	if got := strings.TrimSpace(runNativeFixtureCommand(t, "sqlite3", historyDatabase, "PRAGMA integrity_check; SELECT goal FROM goals; INSERT INTO goals VALUES ('later-goal'); SELECT count(*) FROM goals;")); got != "ok\nprotected-history-sentinel\n2" {
+		t.Fatalf("retained GUI database is not usable: %q", got)
 	}
-	if historyManifest.Schema != codexhistory.SnapshotSchema || historyManifest.Status != "complete" || historyManifest.Kind != "selected-slot-reset" || historyManifest.Index != 1 || historyManifest.Home != selectedProcessHome || historyManifest.Bundle == "" || historyManifest.Bundle != printedBundle {
-		t.Fatalf("CLI history snapshot identity differs from receipt: %+v", historyManifest)
+	if strings.Contains(string(slotOutput), "protected-history-sentinel") {
+		t.Fatal("history content leaked through CLI diagnostics")
 	}
-	if len(historyManifest.Files) != 1 || historyManifest.Files[0].Path != "goals_1.sqlite" {
-		t.Fatalf("unexpected selected history payload manifest: %+v", historyManifest.Files)
-	}
-	payload := filepath.Join(filepath.Dir(historyManifestPath), "payload", "goals_1.sqlite")
-	capturedHistory, err := os.ReadFile(payload)
-	if err != nil || !bytes.Equal(capturedHistory, historyBefore) || fmt.Sprintf("%x", sha256.Sum256(capturedHistory)) != historyManifest.Files[0].SHA256 {
-		t.Fatalf("CLI reset lost captured history bytes: %v", err)
-	}
-	if strings.Contains(string(slotOutput), "protected-history-sentinel") || strings.Contains(string(manifestBytes), "protected-history-sentinel") {
-		t.Fatal("history content leaked through CLI diagnostics or manifest")
-	}
-	t.Logf("selected reset history: schema=%s bundle_sha256=%s payload_sha256=%s", historyManifest.Schema, historyManifest.Bundle, historyManifest.Files[0].SHA256)
 	if got := strings.TrimSpace(runNativeFixtureCommand(t, "git", "-C", agent1Worktree, "rev-parse", "HEAD")); got != currentHead {
 		t.Fatalf("selected slot HEAD = %s, want declared source %s", got, currentHead)
 	}
@@ -2446,8 +2449,8 @@ fi
 	if _, err := os.Lstat(filepath.Join(agent1Worktree, "dirty-selected")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("selected dirty payload survived: %v", err)
 	}
-	if _, err := os.Lstat(readOnlyModuleCache); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("selected readonly module cache survived: %v", err)
+	if data, err := os.ReadFile(filepath.Join(readOnlyModuleCache, "ftoa_test.go")); err != nil || string(data) != "retained readonly module cache\n" {
+		t.Fatalf("selected retained readonly module cache changed: %v", err)
 	}
 	if err := selectedProcess.Wait(); err == nil {
 		t.Fatal("selected slot process exited successfully instead of being terminated")
@@ -2927,10 +2930,7 @@ func TestInstalledRuntimeEmptyRootReconstructsThreeSlotsWithRealReadiness(t *tes
 						t.Fatalf("agent%d %s metadata is not relative: %q", index, name, value)
 					}
 				}
-				hostHome := filepath.Join(filepath.Dir(worktree), fmt.Sprintf(".devhome-agent%d", index))
-				if index == 1 {
-					hostHome = filepath.Join(worktree, ".devhome-agent1")
-				}
+				hostHome := filepath.Join(root, ".devkit", "native-agents", ".homes", fmt.Sprintf("dev-all-agent%d", index), "ouroboros-ide")
 				if _, err := os.Lstat(filepath.Join(hostHome, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("agent%d ordinary installed runtime trusted hostile DEVKIT_CODEX_CONFIG_SOURCE: %v", index, err)
 				}
@@ -3703,20 +3703,25 @@ native:
 	if _, err := os.Stat(filepath.Join(isolatedRoot, "agent1", "test-repo", ".git")); err != nil {
 		t.Fatalf("installed-chain worktree missing after fetch: %v", err)
 	}
+	// Retained consumer storage is outside its disposable worktree. Inspect
+	// both exact source-declared roots and require the one canonical authority.
+	consumerHome := filepath.Join(base, ".devkit", "native-agents", ".homes", "dev-all-agent1", "test-repo")
 	var installedKnownHosts []string
-	if err := filepath.WalkDir(isolatedRoot, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, searchRoot := range []string{isolatedRoot, consumerHome} {
+		if err := filepath.WalkDir(searchRoot, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !entry.IsDir() && filepath.Base(path) == "known_hosts" && filepath.Base(filepath.Dir(path)) == ".ssh" {
+				installedKnownHosts = append(installedKnownHosts, path)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
 		}
-		if !entry.IsDir() && filepath.Base(path) == "known_hosts" && filepath.Base(filepath.Dir(path)) == ".ssh" {
-			installedKnownHosts = append(installedKnownHosts, path)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
 	}
-	if len(installedKnownHosts) != 1 {
-		t.Fatalf("installed package host-key files = %v, want exactly one consumer authority", installedKnownHosts)
+	if len(installedKnownHosts) != 1 || installedKnownHosts[0] != filepath.Join(consumerHome, ".ssh", "known_hosts") {
+		t.Fatalf("installed package host-key files = %v, want exactly the selected retained consumer authority", installedKnownHosts)
 	}
 	gotKnownHosts, err := os.ReadFile(installedKnownHosts[0])
 	if err != nil {

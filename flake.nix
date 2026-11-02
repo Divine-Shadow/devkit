@@ -151,6 +151,7 @@
             "-X=devkit/cli/devctl/internal/worktrees.packageEnvExecutable=${pkgs.coreutils}/bin/env"
             "-X=devkit/cli/devctl/internal/gitauthority.packageExecutable=${pkgs.git}/bin/git"
             "-X=devkit/cli/devctl/internal/sqliteauthority.packageExecutable=${sqliteExecutable}"
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.nativeHomeMoveExecutable=${pkgs.coreutils}/bin/mv"
           ]
           ++ pkgs.lib.optionals (currentSourceRegistrationExecutable != null) [
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceRegistrationExecutable=${currentSourceRegistrationExecutable}"
