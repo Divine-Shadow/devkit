@@ -2,6 +2,8 @@
 
 Active Source supplier repair: [Ordinary native exec owning lifecycle](execplans/native-exec-owned-lifecycle-20261102.md).
 
+Active bounded Source supplier repair: [Broker observation failures](execplans/native-broker-observation-failure-20261102.md).
+
 Active original-purge persistence source: [Durable native home boundary](execplans/durable-native-home-boundary-20261101.md).
 
 Active bounded scope repair: [Selected-slot manifest scope](execplans/selected-slot-manifest-scope-20261101.md).

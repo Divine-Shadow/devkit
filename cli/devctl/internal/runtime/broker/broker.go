@@ -297,7 +297,12 @@ func inspectLocked(c Config, g *lifecycleGuard) (Status, error) {
 		status.Message = "broker pid file is stale"
 		return status, nil
 	}
-	if status.State == nil || !managedProcess(c, status.State) {
+	matched, observationErr := inspectManagedProcess(c, status.State)
+	if observationErr != nil {
+		status.Message = "broker process identity observation unavailable"
+		return status, fmt.Errorf("inspect broker process identity: %w", observationErr)
+	}
+	if !matched {
 		status.StaleState = true
 		status.BindingError = "broker pid belongs to a different process"
 		status.Message = status.BindingError

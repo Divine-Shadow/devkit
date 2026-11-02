@@ -33,13 +33,20 @@ func processStart(pid int) (uint64, error) {
 	return strconv.ParseUint(fields[19], 10, 64)
 }
 func managedProcess(c Config, state *State) bool {
+	matched, err := inspectManagedProcess(c, state)
+	return err == nil && matched
+}
+
+// Inspection retains failed evidence supply separately from a completed
+// identity comparison. Boolean lifecycle guards still refuse either failure.
+func inspectManagedProcess(c Config, state *State) (bool, error) {
 	if state == nil || state.PID < 1 || state.StartTicks == 0 {
-		return false
+		return false, nil
 	}
 	if c.Owner != nil && !inStationOwner() {
 		return observedStationProcess(c, state)
 	}
-	return directManagedProcess(c, state)
+	return directManagedProcess(c, state), nil
 }
 
 func directManagedProcess(c Config, state *State) bool {

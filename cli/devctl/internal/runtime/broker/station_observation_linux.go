@@ -5,7 +5,9 @@ package broker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +26,8 @@ const stationObservationSchema = "devkit-native-broker-observation/v1"
 const stationObservationLimit = 4096
 const stationObservationDeadline = 5 * time.Second
 
+var errStationObservationUnavailable = errors.New("fixed station broker observation unavailable")
+
 type stationObservationPolicy struct {
 	SchemaVersion string `json:"schemaVersion"`
 	Service       string `json:"service"`
@@ -37,13 +41,17 @@ type stationObservationResult struct {
 	Binary        string `json:"binary"`
 }
 
-type stationObservationBuffer struct{ buffer bytes.Buffer }
+type stationObservationBuffer struct {
+	buffer   bytes.Buffer
+	exceeded bool
+}
 
 func (b *stationObservationBuffer) Len() int      { return b.buffer.Len() }
 func (b *stationObservationBuffer) Bytes() []byte { return b.buffer.Bytes() }
 
 func (b *stationObservationBuffer) Write(p []byte) (int, error) {
 	if len(p) > stationObservationLimit-b.Len() {
+		b.exceeded = true
 		return 0, fmt.Errorf("fixed station observation exceeds its byte bound")
 	}
 	return b.buffer.Write(p)
@@ -77,29 +85,51 @@ func stationObservationCommand(ctx context.Context, owner *StationOwner, state *
 	return command
 }
 
-func observedStationProcess(c Config, state *State) bool {
+func observedStationProcess(c Config, state *State) (bool, error) {
+	var stdout, stderr stationObservationBuffer
+	failure := func(phase string, cause error) (bool, error) {
+		// Preserve the producing stage and bounded-output identity without
+		// disclosing helper diagnostics or treating missing evidence as mismatch.
+		detail := fmt.Errorf("%w: phase=%s stdoutRetainedBytes=%d stdoutSHA256=%x stderrRetainedBytes=%d stderrSHA256=%x",
+			errStationObservationUnavailable, phase, stdout.Len(), sha256.Sum256(stdout.Bytes()), stderr.Len(), sha256.Sum256(stderr.Bytes()))
+		return false, errors.Join(detail, cause)
+	}
 	if c.Owner == nil || c.Owner.Service != StationOwnerService ||
 		c.Owner.SystemdRun == "" || c.Owner.ObservationExecutable == "" {
-		return false
+		return failure("configuration", nil)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), stationObservationDeadline)
 	defer cancel()
 	command := stationObservationCommand(ctx, c.Owner, state)
-	var stdout, stderr stationObservationBuffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	// A successful observation requires actual helper completion. Timeout,
 	// manager/helper failure, malformed output and truncation never fall back.
-	if err := command.Run(); err != nil || ctx.Err() != nil {
-		return false
+	runErr := command.Run()
+	if ctx.Err() != nil {
+		return failure("deadline", ctx.Err())
+	}
+	if stdout.exceeded || stderr.exceeded {
+		return failure("output-limit", runErr)
+	}
+	if runErr != nil {
+		return failure("execution", runErr)
 	}
 	var result stationObservationResult
 	if decodeStationObservation(stdout.Bytes(), &result) != nil {
-		return false
+		return failure("invalid-result", nil)
+	}
+	if result.SchemaVersion != stationObservationSchema {
+		return failure("invalid-schema", nil)
+	}
+	if result.PID < 1 || result.StartTicks == 0 || !filepath.IsAbs(result.Binary) || filepath.Clean(result.Binary) != result.Binary {
+		return failure("invalid-tuple", nil)
 	}
 	wanted, err := filepath.EvalSymlinks(c.Binary)
-	return err == nil && result.SchemaVersion == stationObservationSchema &&
-		result.PID == state.PID && result.StartTicks == state.StartTicks &&
-		result.Binary == filepath.Clean(wanted)
+	if err != nil {
+		return failure("selected-binary", err)
+	}
+	return result.PID == state.PID && result.StartTicks == state.StartTicks &&
+		result.Binary == filepath.Clean(wanted), nil
 }
 
 // ObserveSelectedStationProcess runs in the user manager's host namespace.
