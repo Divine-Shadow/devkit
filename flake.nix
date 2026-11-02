@@ -672,7 +672,7 @@
           # declared by portable tests.
           devctl-test-tools = pkgs.buildEnv {
             name = "devkit-devctl-test-tools";
-            paths = with pkgs; [ openssh sqlite gnutar jq util-linux ];
+            paths = with pkgs; [ openssh sqlite gnutar jq util-linux coreutils ];
             pathsToLink = [ "/bin" ];
           };
           dev-all-runtime-tools = runtimeTools;

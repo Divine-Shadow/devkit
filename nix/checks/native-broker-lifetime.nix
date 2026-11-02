@@ -206,7 +206,7 @@ let
       log_level = ownerPolicy.logLevel;
     };
   });
-  request = action: (pkgs.lib.optionalString cliConsequences "${pkgs.coreutils}/bin/env DEVKIT_ROOT=${stationConfig} ")
+  request = action: "${pkgs.coreutils}/bin/env DEVKIT_ROOT=${stationConfig} "
     + "${selectedDevctl}/kit/bin/devctl -p dev-all broker ${action} --upstream ${upstream}";
   consequenceNames = [
     "TestNativeExecMissingWorktreeRefusesBeforeEndpointEffects"
