@@ -993,6 +993,10 @@ func (rc *requestContext) authorizeContainerCreate(r *http.Request) error {
 		return errForbidden
 	}
 
+	if err := pinNativePostgresBinding(r, body, payload); err != nil {
+		return err
+	}
+
 	log.WithField("image", payload.Image).Debug("allowing container create")
 	return nil
 }
