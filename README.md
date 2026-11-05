@@ -90,3 +90,28 @@ source's store path, geometry, hash and bytes. The portable Nix Go check does
 not replace the source-checkout integration and configuration tests.
 
 Historical migration notes live under `documentation/archive/compose-retirement/`. They are retained for context and are not supported runtime documentation.
+
+## Source-selected native allocation and managed Git
+
+The Environment composition selects the allocation, execution host, worktree and
+retained home/state. The native plan validates and translates that selection,
+including target/config identity, physical/logical geometry, Git and writable
+mount relationships. Managed Git consumes that validated relationship and the
+existing package-owned SSH authority; it must not independently choose an
+allocation by assuming a historical physical parent-directory prefix.
+
+For an independent Product allocation, select the applicable isolated workspace
+constructor and its matching immutable target projection together. Preserve the
+physical worktree, durable home/state and history; a caller argument alone does
+not update the declaration. The fixed target manifest and immutable config are
+reselected before consumption. Caller SSH command/variant, home or known-host
+substitutions remain refused; keys, trust and the current execution connector
+remain owned by their existing suppliers.
+
+Qualification must exercise the actual composition-to-plan-to-consumer join,
+including adverse target/config/home/state/Git/mount cases. A synthetic class
+label is not source admission. A component success also does not initialize a
+parent's cached MCP relationship: the receiving owner must use its supported
+session/connection lifecycle, receive actual governance tools and a real
+child/caller/result, and return that result to the owning parent. Preserve the
+distinction between source review/build, component qualification and receiving.
