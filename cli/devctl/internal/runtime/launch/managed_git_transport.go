@@ -89,7 +89,52 @@ func standardManagedGitPlan(p nativeplan.Plan) (bool, error) {
 		p.Agent.HostWorktree != repo || p.Agent.HostHome != hostHome ||
 		p.Agent.SandboxWorktree != sandbox+"/ouroboros-ide" ||
 		p.Agent.SandboxHome != sandboxHomeRoot+"/"+homeName {
-		return false, fmt.Errorf("managed Git SSH policy plan differs from the source-selected standard native geometry")
+		// Independent native allocations are admitted by the same fixed immutable
+		// GUI projection, not by a caller-selected path or a different SSH class.
+		// Reselect immediately before the bootstrap consumes the plan.
+		if _, err := nativeplan.ReadValidatedGUITargetConfigSource(p); err != nil {
+			return false, fmt.Errorf("managed Git SSH policy plan differs from the source-selected standard native geometry: %w", err)
+		}
+		if err := sourceSelectedManagedGitGeometry(p); err != nil {
+			return false, fmt.Errorf("managed Git SSH policy plan differs from the source-selected standard native geometry: %w", err)
+		}
 	}
 	return true, nil
+}
+
+// Source selection binds the physical workspace and home. These relationships
+// additionally retain the normal lane/state and the two existing constructor
+// projections; source admission does not authorize arbitrary sandbox aliases.
+func sourceSelectedManagedGitGeometry(p nativeplan.Plan) error {
+	index := p.Agent.ID.Index
+	workspace := p.HostWorkspaceRoot
+	if workspace == "" {
+		workspace = filepath.Dir(p.Agent.HostWorktree)
+	}
+	if index < 1 || p.GUITargetConfig == nil || p.GUITargetConfig.ExpectedExecutionHost == "" || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace ||
+		filepath.Base(workspace) != fmt.Sprintf("agent%d", index) ||
+		filepath.Base(filepath.Dir(workspace)) != "agent-worktrees" ||
+		p.Agent.HostWorktree != filepath.Join(workspace, "ouroboros-ide") ||
+		!filepath.IsAbs(p.HostStateRoot) || filepath.Clean(p.HostStateRoot) != p.HostStateRoot {
+		return fmt.Errorf("invalid independent workspace or state root")
+	}
+	slot := fmt.Sprintf("dev-all-agent%d", index)
+	if p.Agent.StateRoot != filepath.Join(p.HostStateRoot, slot) ||
+		p.Agent.HostHome != filepath.Join(nativeagent.PersistentHomesRoot(p.HostStateRoot), slot, "ouroboros-ide") {
+		return fmt.Errorf("independent lane state or persistent home mismatch")
+	}
+	sandboxWorktree := "/workspaces/dev/ouroboros-ide"
+	if p.HostWorkspaceRoot == "" {
+		if p.SandboxWorkspaceRoot != "" {
+			return fmt.Errorf("generic native plan has a foreign workspace projection")
+		}
+		sandboxWorktree = fmt.Sprintf("/workspaces/dev/agent-worktrees/agent%d/ouroboros-ide", index)
+	} else if p.SandboxWorkspaceRoot != "/workspaces/dev" {
+		return fmt.Errorf("GUI native plan has a foreign workspace projection")
+	}
+	if p.Agent.SandboxWorktree != sandboxWorktree ||
+		p.Agent.SandboxHome != nativeagent.PersistentDevAllHome(sandboxWorktree, index) {
+		return fmt.Errorf("independent sandbox worktree or home mismatch")
+	}
+	return nil
 }

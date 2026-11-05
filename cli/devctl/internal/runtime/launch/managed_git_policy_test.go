@@ -397,3 +397,54 @@ func TestStandardManagedGitConsumesIndependentSourceStateRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestIndependentManagedGitGeometryRetainsConstructorRelationships(t *testing.T) {
+	for _, row := range []struct {
+		name, root, state string
+		generic           bool
+	}{
+		{"remote-prepared", "/home/bayesartre/derp-native-infra-20261104", "/home/bayesartre/derp-native-infra-20261104/.runtime", true},
+		{"wr3", "/home/bayesartre/wr3", "/home/bayesartre/wr3/.devkit/native-agents", false},
+		{"local02", "/home/bayesartre/local02-continuation-20261105", "/home/bayesartre/local02-continuation-20261105/.runtime", false},
+		{"local04", "/home/bayesartre/dk4/devkit-local04", "/home/bayesartre/dk4/devkit-local04/.devkit/native-agents", false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			p := standardManagedGitFixture(t, 1, "devkit-agent")
+			p.HostWorkspaceRoot = row.root + "/agent-worktrees/agent1"
+			p.Agent.HostWorktree = p.HostWorkspaceRoot + "/ouroboros-ide"
+			p.HostStateRoot = row.state
+			p.Agent.StateRoot = row.state + "/dev-all-agent1"
+			p.Agent.HostHome = row.state + "/.homes/dev-all-agent1/ouroboros-ide"
+			if row.generic {
+				p.HostWorkspaceRoot, p.SandboxWorkspaceRoot = "", ""
+				p.Agent.SandboxWorktree = "/workspaces/dev/agent-worktrees/agent1/ouroboros-ide"
+				p.Agent.SandboxHome = p.Agent.SandboxWorktree + "/.devhome-agent1"
+			}
+			if err := sourceSelectedManagedGitGeometry(p); err != nil {
+				t.Fatal(err)
+			}
+			// Geometry is not admission: this synthetic fixture has no fixed-
+			// manifest/source identity and must fail the real policy consumer.
+			if _, err := standardManagedGitPlan(p); err == nil {
+				t.Fatal("unadmitted geometry gained managed SSH policy")
+			}
+			for name, mutate := range map[string]func(*nativeplan.Plan){
+				"sibling-state":        func(q *nativeplan.Plan) { q.Agent.StateRoot = row.state + "/dev-all-agent2" },
+				"foreign-home":         func(q *nativeplan.Plan) { q.Agent.HostHome += "/other" },
+				"relative-state":       func(q *nativeplan.Plan) { q.HostStateRoot = "relative" },
+				"noncanonical-state":   func(q *nativeplan.Plan) { q.HostStateRoot += "/../other" },
+				"foreign-sandbox":      func(q *nativeplan.Plan) { q.Agent.SandboxWorktree += "/other" },
+				"foreign-sandbox-home": func(q *nativeplan.Plan) { q.Agent.SandboxHome += "/other" },
+				"foreign-workspace":    func(q *nativeplan.Plan) { q.HostWorkspaceRoot = row.root + "/agent-worktrees/agent2" },
+			} {
+				t.Run(name, func(t *testing.T) {
+					q := p
+					mutate(&q)
+					if err := sourceSelectedManagedGitGeometry(q); err == nil {
+						t.Fatal("foreign relationship admitted")
+					}
+				})
+			}
+		})
+	}
+}

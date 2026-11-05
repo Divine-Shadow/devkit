@@ -459,3 +459,66 @@ func TestCustodyObservationPlanDerivesActualIsolatedProductProjection(t *testing
 		t.Fatal("caller workspace accepted")
 	}
 }
+
+func TestIndependentManagedGitSourceAdmissionReselectsGeometryAndBytes(t *testing.T) {
+	root := t.TempDir()
+	store := filepath.Join(root, "store")
+	if err := os.MkdirAll(store, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("# source-selected immutable role\nmodel = \"gpt-6.1-sol\"\n")
+	source := filepath.Join(store, "role.toml")
+	if err := os.WriteFile(source, data, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	for _, gui := range []bool{false, true} {
+		opts := BuildOptions{Paths: devkitpaths.Paths{Root: "/repo/devkit"}, HostRoot: "/home/bayesartre/independent", StateRoot: "/home/bayesartre/independent/.runtime", Project: "dev-all", Repo: "ouroboros-ide", Index: 1, IsolationProfile: IsolationProfileWorkspaceEgress, EgressAllowlist: "/fixture/source-selected-allowlist.txt"}
+		if gui {
+			opts.WorkspaceRoot = "/home/bayesartre/independent/agent-worktrees/agent1"
+		}
+		p, err := Build(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := guiConfigRecordForPlan(p, "independent-source-role", "product-governance", source, hex.EncodeToString(digest[:]))
+		record.Kind, record.ExpectedExecutionHost = "devkit-agent", "source-selected-host"
+		manifest := filepath.Join(root, "manifest.json")
+		writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{record})
+		selected, err := loadGUITargetConfigProjectionFrom(manifest, store, record.TargetID, guiTargetGeometryForPlan(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.GUITargetConfig = &selected
+		if got, err := readValidatedGUITargetConfigSourceFrom(p, manifest, store); err != nil || string(got) != string(data) {
+			t.Fatalf("source revalidation failed: %q %v", got, err)
+		}
+		q := p
+		q.Agent.HostHome += "/foreign"
+		if _, err := readValidatedGUITargetConfigSourceFrom(q, manifest, store); err == nil {
+			t.Fatal("changed geometry accepted")
+		}
+		changed := record
+		changed.Kind = "other-class"
+		writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{changed})
+		if _, err := readValidatedGUITargetConfigSourceFrom(p, manifest, store); err == nil {
+			t.Fatal("changed projection accepted")
+		}
+		writeGUIConfigManifest(t, manifest, []guiCodexConfigProjectionRecord{record})
+		if err := os.WriteFile(source+".replacement", []byte("changed"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(source+".replacement", source); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readValidatedGUITargetConfigSourceFrom(p, manifest, store); err == nil {
+			t.Fatal("changed source bytes accepted")
+		}
+		if err := os.Remove(source); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(source, data, 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
