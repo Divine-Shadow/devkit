@@ -1365,6 +1365,14 @@ func seedCodexConfigDataForUID(hostHome string, data []byte, expectedUID int) er
 			}
 			return verifyProjectedCodexConfigAt(codexDir, targetName, target, data, expectedUID, &identity)
 		}
+		if matchesCodexManagedProjectTrustTail(existing, data) {
+			if err := current.Close(); err != nil {
+				return fmt.Errorf("close Codex config target %s: %w", target, err)
+			}
+			// Preserve these exact observed settings without chmod or replacement.
+			// Reopening retains the existing no-follow, owner, mode and inode guards.
+			return verifyProjectedCodexConfigAt(codexDir, targetName, target, existing, expectedUID, &identity)
+		}
 		if err := current.Close(); err != nil {
 			return fmt.Errorf("close Codex config target %s: %w", target, err)
 		}
