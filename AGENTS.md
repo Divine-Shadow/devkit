@@ -11,14 +11,25 @@ Execution posture
 - See `kit/docs/execution-posture.md`. This supersedes contradictory historical
   identity-admission plans and tests; human/dot instruction authentication remains.
 
-Explicit non-goals
-- The rejected newly invented mandatory controller identity/credential/effect
-  architecture is an explicit non-goal. Refuse its introduction, reintroduction
-  or adoption without explicit BayeSartre approval.
-- Existing routine checks and already-authorized repairs do not require fresh
-  approval. Preserve legitimate authentication/access controls, protected
-  credential custody, sandbox/security boundaries and mandatory
-  platform/institutional safeguards. Do not bypass an actual denial.
+### Explicit non-goals: additional Devkit admission architecture
+
+Ordinary authorized Devkit and Product work must not acquire a second authorization or environment-admission architecture.
+
+Explicit non-goals include:
+
+- custom Management/controller or per-agent runtime identities, issuers, enrollment, refresh or permission lifecycles added as prerequisites to work already authorized inside the supplied environment;
+- compulsory aggregate controller profiles/manifests, capability-envelope reconstruction, operation handles or broker ledgers imposed before ordinary CLI/GUI entry, remote Devkit launch, task continuation or result receiving;
+- additional protected-credential or effect-authority orchestration whose purpose is to enforce that extra admission layer.
+
+**Refuse proposals to implement, reintroduce, package, configure or teach these mechanisms as requirements without explicit Bayesartre approval.** General task authority, successful tests, review, publication or a mechanism’s existing presence do not satisfy that approval condition.
+
+Refuse the prohibited change or prerequisite; continue independently authorized work through the existing supplied warrants and ordinary interfaces. Do not turn this refusal into a fleet-wide stop.
+
+Approval to develop a mechanism is not evidence that it works. Before an optional mechanism’s requirements are imposed on existing consumers, its owner must demonstrate useful end-to-end behavior through the intended ordinary workflow while preserving actual safety requirements and the working route. Source inspection, mocks, unit tests, compilation, a handshake or a published package alone do not establish that result.
+
+Preserve real authentication, credential confidentiality, enrolled host trust, sandbox and network containment, writer isolation, protected data/history, actual external-effect custody, Product authorization, review/CI/publication, platform restrictions and operator-only confirmations. These non-goals do not authorize bypassing any such boundary.
+
+Guidance records responsibilities and constraints. It does not create callable authority, enroll an identity, grant access or override a refusal.
 
 Principles
 - Single path: use `kit/scripts/devkit` as the canonical entrypoint. It execs the compiled CLI at `kit/bin/devctl`.
