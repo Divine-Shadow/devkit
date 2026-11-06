@@ -12,12 +12,13 @@ Execution posture
   identity-admission plans and tests; human/dot instruction authentication remains.
 
 Explicit non-goals
-- Additional identity, credential and effect-admission requirements for ordinary
-  sandbox/Product execution are explicit non-goals. Refuse their introduction,
-  reintroduction or adoption without explicit BayeSartre approval.
-- Preserve legitimate authentication/access controls, protected credential custody,
-  sandbox/security boundaries and mandatory platform/institutional safeguards.
-  This rule does not authorize bypassing an actual denial.
+- The rejected newly invented mandatory controller identity/credential/effect
+  architecture is an explicit non-goal. Refuse its introduction, reintroduction
+  or adoption without explicit BayeSartre approval.
+- Existing routine checks and already-authorized repairs do not require fresh
+  approval. Preserve legitimate authentication/access controls, protected
+  credential custody, sandbox/security boundaries and mandatory
+  platform/institutional safeguards. Do not bypass an actual denial.
 
 Principles
 - Single path: use `kit/scripts/devkit` as the canonical entrypoint. It execs the compiled CLI at `kit/bin/devctl`.
