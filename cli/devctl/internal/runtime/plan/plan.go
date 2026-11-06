@@ -39,7 +39,6 @@ type ResourceLimits struct {
 }
 
 type Plan struct {
-	Controller             *ControllerProjection `json:"controller_projection,omitempty"`
 	gitMetadataTrace       *gitMetadataBindTrace
 	GitBacklink            *GitBacklinkProjection     `json:"git_backlink,omitempty"`
 	Agent                  agent.Spec                 `json:"agent"`
@@ -138,10 +137,6 @@ func resolveRuntimeAuthorityFlake(flake, runtimeAuthorityRoot string) string {
 }
 
 func resolvePlanGeometry(opts BuildOptions) (project, repo string, index int, paths agent.Paths, workspaceRoot string, err error) {
-	return resolvePlanGeometryWithController(opts, nil)
-}
-
-func resolvePlanGeometryWithController(opts BuildOptions, controller *ControllerProjection) (project, repo string, index int, paths agent.Paths, workspaceRoot string, err error) {
 	project = strings.TrimSpace(opts.Project)
 	if project == "" {
 		project = "dev-all"
@@ -186,11 +181,7 @@ func resolvePlanGeometryWithController(opts BuildOptions, controller *Controller
 		// This selects no target and does not alter ordinary non-GUI plans.
 		workspaceRootInput = filepath.Dir(paths.HostWorktree)
 	}
-	if controller != nil && controller.captured != nil && workspaceRootInput == controller.captured.geometry.WorkspaceRoot && paths.HostWorktree == controller.captured.geometry.HostWorktree {
-		workspaceRoot = workspaceRootInput
-	} else {
-		workspaceRoot, err = validateIsolatedWorkspaceRoot(workspaceRootInput, project, repo, index, paths)
-	}
+	workspaceRoot, err = validateIsolatedWorkspaceRoot(workspaceRootInput, project, repo, index, paths)
 	if err != nil {
 		return
 	}
@@ -211,11 +202,7 @@ func resolvePlanGeometryWithController(opts BuildOptions, controller *Controller
 }
 
 func Build(opts BuildOptions) (Plan, error) {
-	controller, err := selectControllerProjection(opts)
-	if err != nil {
-		return Plan{}, err
-	}
-	project, repo, index, paths, workspaceRoot, err := resolvePlanGeometryWithController(opts, controller)
+	project, repo, index, paths, workspaceRoot, err := resolvePlanGeometry(opts)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -526,9 +513,6 @@ func Build(opts BuildOptions) (Plan, error) {
 	p.GitBacklink = projection
 	if projection != nil {
 		p.Binds = append(p.Binds, Bind{Source: projection.Source, Target: projection.Target, Mode: "ro", Required: true})
-	}
-	if err := applyControllerProjection(&p, controller); err != nil {
-		return Plan{}, err
 	}
 	p.LauncherArgs = launcherArgs(p)
 	return p, nil

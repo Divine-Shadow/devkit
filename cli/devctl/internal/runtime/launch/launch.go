@@ -193,9 +193,6 @@ func prepare(p nativeplan.Plan) error {
 }
 
 func prepareWithLegacyState(p nativeplan.Plan, allowLegacyState bool) error {
-	if err := nativeplan.ValidateControllerProjection(p); err != nil {
-		return err
-	}
 	if err := ValidateNativePersistentHome(p); err != nil {
 		return err
 	}
@@ -1787,9 +1784,6 @@ func BuildManagedAppServerBubblewrap(p nativeplan.Plan, command []string) (Comma
 }
 
 func buildBubblewrap(p nativeplan.Plan, command []string, dieWithParent bool) (Command, error) {
-	if err := nativeplan.ValidateControllerProjection(p); err != nil {
-		return Command{}, err
-	}
 	if err := nativeplan.ValidateGitBacklinkProjection(p); err != nil {
 		return Command{}, err
 	}

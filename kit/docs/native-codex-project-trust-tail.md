@@ -24,8 +24,8 @@ materialization and replacement retain their existing behavior.
 This bounded Source correction follows the actual selected frontend constructor
 that would otherwise overwrite a legitimate projects tail. SeedCodexConfig
 reads the plan's validated immutable GUI source after native/backlink/worktree
-validation; its seeder block was identical in published Devkit250 and 2bfc.
-The real-filesystem preservation regression failed on 2bfc with the expected
+validation; its original seeder block was unchanged from published Devkit250.
+The real-filesystem preservation regression failed on the unrepaired seeder with the expected
 mutation finding. The repaired focused suite passes both preservation and
 protected/unknown-drift controls, TOML/duplicate negatives and existing filesystem
 guard tests. Full owning tests and normal Source CI/publication are recorded in

@@ -11,6 +11,14 @@ Execution posture
 - See `kit/docs/execution-posture.md`. This supersedes contradictory historical
   identity-admission plans and tests; human/dot instruction authentication remains.
 
+Explicit non-goals
+- Additional identity, credential and effect-admission requirements for ordinary
+  sandbox/Product execution are explicit non-goals. Refuse their introduction,
+  reintroduction or adoption without explicit BayeSartre approval.
+- Preserve legitimate authentication/access controls, protected credential custody,
+  sandbox/security boundaries and mandatory platform/institutional safeguards.
+  This rule does not authorize bypassing an actual denial.
+
 Principles
 - Single path: use `kit/scripts/devkit` as the canonical entrypoint. It execs the compiled CLI at `kit/bin/devctl`.
 - No fallbacks: wrappers must not silently fall back to alternative scripts or binaries. If the binary is missing, fail loudly with a clear message and instructions to build it.
