@@ -495,6 +495,13 @@ func Build(opts BuildOptions) (Plan, error) {
 	p.GUITargetConfig = projectionConfig
 	if projectionConfig != nil {
 		p.Env[GUITargetIDEnvironment] = projectionConfig.TargetID
+		// The same fixed registry must remain readable by selected native
+		// consumers inside the narrow sandbox, not only by the host planner.
+		p.Binds = append(p.Binds, Bind{
+			Source: guiCodexConfigProjectionManifestPath,
+			Target: guiCodexConfigProjectionManifestTarget,
+			Mode:   "ro", Required: true,
+		})
 	}
 	if proxySocket != "" {
 		p.Binds = append(p.Binds, Bind{Source: proxySocket, Target: proxySocket, Mode: "rw", Required: true})

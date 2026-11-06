@@ -1,5 +1,7 @@
 # Devkit ExecPlans
 
+Active bounded Source supplier repair: [Selected native GUI registry projection](execplans/native-gui-manifest-bind-20261106.md).
+
 Active Source supplier repair: [Ordinary native exec owning lifecycle](execplans/native-exec-owned-lifecycle-20261102.md).
 
 Active bounded Source supplier repair: [Broker observation failures](execplans/native-broker-observation-failure-20261102.md).

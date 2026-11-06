@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -520,5 +521,82 @@ func TestIndependentManagedGitSourceAdmissionReselectsGeometryAndBytes(t *testin
 		if err := os.WriteFile(source, data, 0o444); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestBuildProjectsSelectedGUITargetManifestReadOnly(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "selected-registry.json")
+	previous := guiCodexConfigProjectionManifestPath
+	guiCodexConfigProjectionManifestPath = manifestPath
+	t.Cleanup(func() { guiCodexConfigProjectionManifestPath = previous })
+	t.Setenv("DEVKIT_CODEX_CONFIG_PROJECTION_MANIFEST", filepath.Join(root, "caller-registry.json"))
+	opts := BuildOptions{
+		Paths:   devkitpaths.Paths{Root: filepath.Join(root, "devkit")},
+		Project: "dev-all", Repo: "ouroboros-ide", Index: 2,
+		WorkspaceRoot:    filepath.Join(root, "agent-worktrees", "agent2"),
+		IsolationProfile: IsolationProfileWorkspaceEgress,
+		EgressAllowlist:  filepath.Join(root, "allowlist.txt"),
+	}
+	ordinary, err := BuildDevAll(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := "/etc/devkit/codex-config-projections.json"
+	for _, bind := range ordinary.Binds {
+		if bind.Target == target {
+			t.Fatalf("ordinary non-GUI plan projected registry: %#v", bind)
+		}
+	}
+	record := guiConfigRecordForPlan(ordinary, "selected-source-2", "product-governance",
+		"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-config.toml", strings.Repeat("a", 64))
+	record.Kind = "devkit-agent"
+	record.SandboxHome = ordinary.Agent.SandboxHome
+	writeGUIConfigManifest(t, manifestPath, []guiCodexConfigProjectionRecord{record})
+	for _, required := range []bool{false, true} {
+		t.Run(fmt.Sprint("geometry-required-", required), func(t *testing.T) {
+			selectedOpts := opts
+			if required {
+				selectedOpts.RequireGUIConfig = true
+			} else {
+				selectedOpts.GUITargetID = record.TargetID
+			}
+			selected, err := BuildDevAll(selectedOpts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if selected.GUITargetConfig == nil || selected.GUITargetConfig.TargetID != record.TargetID {
+				t.Fatalf("selected GUI identity was lost: %#v", selected.GUITargetConfig)
+			}
+			count := 0
+			for _, bind := range selected.Binds {
+				if bind.Target == target {
+					count++
+					if bind.Source != manifestPath || bind.Mode != "ro" || !bind.Required {
+						t.Fatalf("selected registry bind is not exact readonly required source: %#v", bind)
+					}
+				}
+				if bind.Target == "/etc" || bind.Target == "/etc/devkit" {
+					t.Fatalf("selected plan exposed broad registry parent: %#v", bind)
+				}
+			}
+			if count != 1 {
+				t.Fatalf("selected plan omitted exact readonly fixed manifest bind: count=%d", count)
+			}
+			if selected.WindowsMountsVisible || selected.IsolationProfile != ordinary.IsolationProfile ||
+				selected.MountPolicyIdentity != ordinary.MountPolicyIdentity {
+				t.Fatalf("registry projection changed containment: %#v", selected)
+			}
+			found := false
+			for i := 0; i+2 < len(selected.LauncherArgs); i++ {
+				if selected.LauncherArgs[i] == "--ro-bind" &&
+					selected.LauncherArgs[i+1] == manifestPath && selected.LauncherArgs[i+2] == target {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("selected constructor launch arguments lost readonly registry projection")
+			}
+		})
 	}
 }

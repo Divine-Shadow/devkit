@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	guiCodexConfigProjectionSchema    = "devkit/gui-codex-config-projections/v1"
-	guiCodexConfigProjectionStoreRoot = "/nix/store"
+	guiCodexConfigProjectionSchema         = "devkit/gui-codex-config-projections/v1"
+	guiCodexConfigProjectionStoreRoot      = "/nix/store"
+	guiCodexConfigProjectionManifestTarget = "/etc/devkit/codex-config-projections.json"
 	// GUITargetIDEnvironment carries the exact inventory-selected GUI target
 	// identity into the sandbox. Logical cwd, hostname, and agent index are not
 	// sufficient selectors because independent namespaces intentionally reuse
@@ -32,7 +33,7 @@ const (
 // variable. Use Nix's canonical static projection, already supplied read-only
 // by the normal renderer, so an older controller namespace missing the public
 // historical host aliases can still perform the same exact target-bound plan.
-var guiCodexConfigProjectionManifestPath = "/etc/devkit/codex-config-projections.json"
+var guiCodexConfigProjectionManifestPath = guiCodexConfigProjectionManifestTarget
 
 // GUITargetConfigProjection is the immutable config identity selected for one
 // GUI target. Geometry is validated while the plan is built and intentionally

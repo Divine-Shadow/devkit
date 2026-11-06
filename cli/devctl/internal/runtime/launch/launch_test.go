@@ -441,11 +441,23 @@ func TestBuildBubblewrapUsesBrokerAndNoHostDockerSocket(t *testing.T) {
 	}
 	p.GUITargetConfig = &nativeplan.GUITargetConfigProjection{TargetID: "inventory-target"}
 	p.Env[nativeplan.GUITargetIDEnvironment] = "inventory-target"
+	registrySource := filepath.Join(tmp, "selected-registry.json")
+	if err := os.WriteFile(registrySource, []byte("constructor fixture registry"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	registryTarget := "/etc/devkit/codex-config-projections.json"
+	p.Binds = append(p.Binds, nativeplan.Bind{Source: registrySource, Target: registryTarget, Mode: "ro", Required: true})
 	selected, err := BuildBubblewrap(p, []string{"true"})
 	if err != nil {
 		t.Fatalf("GUI launcher rejected matching target identity: %v", err)
 	}
 	selectedJoined := ShellString(selected)
+	if strings.Count(selectedJoined, "'--ro-bind' '"+registrySource+"' '"+registryTarget+"'") != 1 ||
+		strings.Contains(selectedJoined, "'--bind' '"+registrySource+"' '"+registryTarget+"'") ||
+		strings.Contains(selectedJoined, "'--ro-bind' '/etc' '/etc'") ||
+		strings.Contains(selectedJoined, "'--ro-bind' '/etc/devkit' '/etc/devkit'") {
+		t.Fatalf("selected launcher lost narrow readonly registry projection: %s", selectedJoined)
+	}
 	if !strings.Contains(selectedJoined, "'--setenv' 'DEVKIT_GUI_TARGET_ID' 'inventory-target'") ||
 		!strings.Contains(selected.Args[len(selected.Args)-1], "export DEVKIT_GUI_TARGET_ID='inventory-target'") {
 		t.Fatalf("GUI launcher did not carry exact validated target identity:\n%s", selectedJoined)
