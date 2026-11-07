@@ -19,7 +19,8 @@ Explicit non-goals include:
 
 - custom Management/controller or per-agent runtime identities, issuers, enrollment, refresh or permission lifecycles added as prerequisites to work already authorized inside the supplied environment;
 - compulsory aggregate controller profiles/manifests, capability-envelope reconstruction, operation handles or broker ledgers imposed before ordinary CLI/GUI entry, remote Devkit launch, task continuation or result receiving;
-- additional protected-credential or effect-authority orchestration whose purpose is to enforce that extra admission layer.
+- additional protected-credential or effect-authority orchestration whose purpose is to enforce that extra admission layer;
+- compulsory salvage, forensic preservation, old runtime/HOME identity reconstruction or an all-process census before stopping, replacing or continuing an explicitly disposable worker. Its local logs, caches and unaccepted edits may be discarded; original instructions, accepted source/results and durable business state remain in their existing stores.
 
 **Refuse proposals to implement, reintroduce, package, configure or teach these mechanisms as requirements without explicit Bayesartre approval.** General task authority, successful tests, review, publication or a mechanism’s existing presence do not satisfy that approval condition.
 
