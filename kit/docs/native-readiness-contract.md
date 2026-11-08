@@ -123,6 +123,25 @@ default readiness proves broker connectivity but does not create containers.
 
 ## Verification
 
+### Existing registered consumer
+
+An authoritative composition may select
+`devctl.withRegisteredCurrentWorktreeReadiness registrationExecutable` for an
+already constructed consumer. This package selection supplies the immutable
+current-source registration reader and retains the ordinary command:
+`devctl -p dev-all native readiness --current-worktree --repo ouroboros-ide --repo-check-name frontend-warm --format json`.
+It does not construct a sandbox, accept caller-selected roots or registration
+files, or change the GUI package's admission path. The current cwd, HOME,
+CODEX_HOME and actual Git worktree/common metadata must match the owning reader.
+The registered consumer is observed again after the actual immutable repo check;
+a changed or refused binding cannot produce a pass receipt. The existing
+source-only sibling-worktree preparation contract is unchanged.
+
+The selected derivation's executable remains `kit/bin/devctl`. Consumers that
+need a bare `devctl` command must explicitly project that executable through
+their normal source-owned tools/PATH composition. Publishing this capability is
+not evidence that a particular consumer's frontend warm has passed.
+
 The readiness contract is covered by:
 
 - `go test -count=1 ./...`

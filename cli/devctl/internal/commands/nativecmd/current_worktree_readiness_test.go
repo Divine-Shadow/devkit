@@ -1,6 +1,8 @@
 package nativecmd
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,7 +11,118 @@ import (
 
 	"devkit/cli/devctl/internal/config"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/worktrees"
 )
+
+func TestRegisteredReadinessUsesActualCurrentConsumer(t *testing.T) {
+	root := t.TempDir()
+	base, cwd, home := filepath.Join(root, "product"), filepath.Join(root, "product-review"), filepath.Join(root, "role-home")
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		command := exec.Command("git", args...)
+		command.Dir = dir
+		out, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git(root, "init", base)
+	git(base, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "fixture")
+	git(base, "worktree", "add", "--detach", cwd, "HEAD")
+	if err := os.Mkdir(home, 0700); err != nil {
+		t.Fatal(err)
+	}
+	binding := worktrees.SourceRegistrationBinding{
+		SchemaVersion: "devkit/current-source-registration/v1", WorkspaceID: "product-review",
+		Worktree: cwd, BaseWorktree: base, Home: home, CodexHome: filepath.Join(home, ".codex"),
+		TargetID: "product-worker-2", AgentIndex: 1, RegistrationSHA256: strings.Repeat("a", 64),
+		GitDirectory:    git(cwd, "rev-parse", "--path-format=absolute", "--git-dir"),
+		CommonDirectory: git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+	}
+	env := map[string]string{"HOME": home, "CODEX_HOME": binding.CodexHome}
+	getenv := func(key string) string { return env[key] }
+	lookup := func(_ context.Context, actual string) (worktrees.SourceRegistrationBinding, error) {
+		if actual != cwd {
+			t.Fatalf("lookup received a substitute root: %s", actual)
+		}
+		return binding, nil
+	}
+	observed, err := observeRegisteredReadinessConsumer(cwd, getenv, lookup)
+	if err != nil || observed != binding {
+		t.Fatalf("registered disposable sibling: %#v %v", observed, err)
+	}
+	t.Run("selected-materialized-helper-home", func(t *testing.T) {
+		original := binding.CodexHome
+		defer func() { binding.CodexHome, env["CODEX_HOME"] = original, original }()
+		binding.CodexHome = filepath.Join(root, "selected-private-helper-home")
+		env["CODEX_HOME"] = binding.CodexHome
+		if _, err := observeRegisteredReadinessConsumer(cwd, getenv, lookup); err != nil {
+			t.Fatalf("owning selected helper home refused: %v", err)
+		}
+		env["CODEX_HOME"] = original
+		if _, err := observeRegisteredReadinessConsumer(cwd, getenv, lookup); err == nil {
+			t.Fatal("different actual helper home accepted")
+		}
+	})
+	t.Run("real-command-and-fresh-result", func(t *testing.T) {
+		status, code, out, _, err := runRegisteredRepoCheck(cwd, repoCheck{Name: "fixture", Command: "printf actual-check; touch warm-ran"}, false, binding, getenv, lookup)
+		if err != nil || status != "pass" || code != 0 || out != "actual-check" {
+			t.Fatalf("real command result: %s %d %q %v", status, code, out, err)
+		}
+		if _, err := os.Stat(filepath.Join(cwd, "warm-ran")); err != nil {
+			t.Fatal("check was not actually executed", err)
+		}
+		status, code, _, _, err = runRegisteredRepoCheck(cwd, repoCheck{Name: "fixture", Command: "exit 7"}, false, binding, getenv, lookup)
+		if err != nil || status != "fail" || code != 7 {
+			t.Fatalf("command failure lost: %s %d %v", status, code, err)
+		}
+		changed := binding
+		changed.RegistrationSHA256 = strings.Repeat("b", 64)
+		status, _, _, _, err = runRegisteredRepoCheck(cwd, repoCheck{Name: "fixture", Command: "printf checked"}, false, binding, getenv, func(context.Context, string) (worktrees.SourceRegistrationBinding, error) { return changed, nil })
+		if err == nil || status == "pass" {
+			t.Fatal("changed registration produced a pass result")
+		}
+	})
+	// This is readiness in the already admitted consumer, not an expansion of
+	// the GUI/source-only sibling constructor. The primary is also a valid cwd.
+	primary := binding
+	primary.Worktree, primary.GitDirectory = base, filepath.Join(base, ".git")
+	if _, err := observeRegisteredReadinessConsumer(base, getenv, func(context.Context, string) (worktrees.SourceRegistrationBinding, error) { return primary, nil }); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(){
+		"cwd":              func() { binding.Worktree = base },
+		"home":             func() { binding.Home = root },
+		"codex-home":       func() { binding.CodexHome = root },
+		"schema":           func() { binding.SchemaVersion = "foreign" },
+		"git-directory":    func() { binding.GitDirectory = primary.GitDirectory },
+		"common-directory": func() { binding.CommonDirectory = root },
+	} {
+		t.Run(name, func(t *testing.T) {
+			original := binding
+			defer func() { binding = original }()
+			change()
+			if _, err := observeRegisteredReadinessConsumer(cwd, getenv, lookup); err == nil {
+				t.Fatal("mismatched consumer accepted")
+			}
+		})
+	}
+	t.Run("reader-refusal", func(t *testing.T) {
+		_, err := observeRegisteredReadinessConsumer(cwd, getenv, func(context.Context, string) (worktrees.SourceRegistrationBinding, error) {
+			return binding, errors.New("owning reader refused")
+		})
+		if err == nil || !strings.Contains(err.Error(), "owning reader refused") {
+			t.Fatalf("reader refusal lost: %v", err)
+		}
+	})
+	t.Run("ambient-root-override", func(t *testing.T) {
+		t.Setenv("GIT_DIR", primary.GitDirectory)
+		if _, err := observeRegisteredReadinessConsumer(cwd, getenv, lookup); err == nil {
+			t.Fatal("ambient Git override accepted")
+		}
+	})
+}
 
 func TestCurrentWorktreeReadinessSelectsOnlyNamedImmutableCheck(t *testing.T) {
 	cfg := config.OverlayConfig{}

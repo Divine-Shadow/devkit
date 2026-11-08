@@ -107,8 +107,10 @@
           sqliteExecutable,
           currentSourceRegistrationExecutable ? null,
           currentSourceConsumer ? null,
+          registeredCurrentWorktreeReadiness ? false,
           tags ? [ ],
         }:
+        assert !registeredCurrentWorktreeReadiness || currentSourceRegistrationExecutable != null;
         assert currentSourceConsumer == null || (
           pkgs.lib.isDerivation currentSourceConsumer.devctl
           && currentSourceConsumer.devctl.pname == "devkit-devctl"
@@ -126,12 +128,18 @@
           env.CGO_ENABLED = "0";
           passthru.withCurrentSourceRegistration = executable: mkDevctl {
             inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
+              currentSourceConsumer registeredCurrentWorktreeReadiness;
+            currentSourceRegistrationExecutable = executable;
+          };
+          passthru.withRegisteredCurrentWorktreeReadiness = executable: mkDevctl {
+            inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
               currentSourceConsumer;
             currentSourceRegistrationExecutable = executable;
+            registeredCurrentWorktreeReadiness = true;
           };
           passthru.withCurrentSourceConsumer = consumer: mkDevctl {
             inherit pkgs sshExecutable knownHostsFile sqliteExecutable tags
-              currentSourceRegistrationExecutable;
+              currentSourceRegistrationExecutable registeredCurrentWorktreeReadiness;
             currentSourceConsumer = consumer;
           };
           ldflags = [
@@ -150,6 +158,9 @@
           ]
           ++ pkgs.lib.optionals (currentSourceRegistrationExecutable != null) [
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceRegistrationExecutable=${currentSourceRegistrationExecutable}"
+          ]
+          ++ pkgs.lib.optionals registeredCurrentWorktreeReadiness [
+            "-X=devkit/cli/devctl/internal/commands/nativecmd.registeredCurrentWorktreeReadiness=registered"
           ]
           ++ pkgs.lib.optionals (currentSourceConsumer != null) [
             "-X=devkit/cli/devctl/internal/commands/nativecmd.currentSourceConsumerRuntimeRoot=${currentSourceConsumer.devctl}"

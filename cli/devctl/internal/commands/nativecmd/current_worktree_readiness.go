@@ -2,6 +2,7 @@ package nativecmd
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,7 +17,12 @@ import (
 	"devkit/cli/devctl/internal/cmdregistry"
 	"devkit/cli/devctl/internal/config"
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
+	"devkit/cli/devctl/internal/worktrees"
 )
+
+// Selected only by the immutable package composition. The ordinary GUI package
+// retains its existing route; a failed GUI observation never selects another one.
+var registeredCurrentWorktreeReadiness = ""
 
 type currentWorktreeReadinessArgs struct {
 	repo, name, format string
@@ -25,7 +31,7 @@ type currentWorktreeReadinessArgs struct {
 func parseCurrentWorktreeReadinessArgs(args []string) (currentWorktreeReadinessArgs, error) {
 	var parsed currentWorktreeReadinessArgs
 	flags := flag.NewFlagSet("native readiness --current-worktree", flag.ContinueOnError)
-	current := flags.Bool("current-worktree", false, "use this accepted GUI worktree without constructing a boundary")
+	current := flags.Bool("current-worktree", false, "use this accepted consumer worktree without constructing a boundary")
 	flags.StringVar(&parsed.repo, "repo", "", "declared repository")
 	flags.StringVar(&parsed.name, "repo-check-name", "", "one immutable overlay repo check")
 	flags.StringVar(&parsed.format, "format", "json", "json or text")
@@ -71,6 +77,14 @@ func validateCurrentGUIReadinessEnvironment(getenv func(string) string, consumer
 }
 
 func validateCurrentGUIWorktree(base, cwd string) error {
+	rel, err := filepath.Rel(base, cwd)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("current worktree is outside the declared GUI consumer")
+	}
+	return validateCurrentGitWorktree(base, cwd)
+}
+
+func validateCurrentGitWorktree(base, cwd string) error {
 	// Both probes must discover the repository from their directory. Preserve
 	// transport/security configuration, but refuse ambient repository selectors.
 	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
@@ -80,10 +94,6 @@ func validateCurrentGUIWorktree(base, cwd string) error {
 	}
 	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
 		return fmt.Errorf("current worktree is not canonical")
-	}
-	rel, err := filepath.Rel(base, cwd)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("current worktree is outside the declared GUI consumer")
 	}
 	resolved, err := filepath.EvalSymlinks(cwd)
 	if err != nil || resolved != cwd {
@@ -99,14 +109,40 @@ func validateCurrentGUIWorktree(base, cwd string) error {
 	registeredCommand.Dir = base
 	registered, err := registeredCommand.Output()
 	if err != nil {
-		return fmt.Errorf("read declared lane Git worktrees: %w", err)
+		return fmt.Errorf("read registered consumer Git worktrees: %w", err)
 	}
 	for _, field := range strings.Split(string(registered), "\x00") {
 		if field == "worktree "+cwd {
 			return nil
 		}
 	}
-	return fmt.Errorf("current worktree is not registered in the declared GUI lane")
+	return fmt.Errorf("current worktree is not registered in the declared consumer")
+}
+
+// The package-bound producer owns registration validity. Observe this process's
+// actual consumer and Git metadata against that projection, not a caller root or
+// a replacement registration file. Source-preparation sibling rules are separate.
+func observeRegisteredReadinessConsumer(cwd string, getenv func(string) string, lookup func(context.Context, string) (worktrees.SourceRegistrationBinding, error)) (worktrees.SourceRegistrationBinding, error) {
+	binding, err := lookup(context.Background(), cwd)
+	if err != nil {
+		return binding, err
+	}
+	if binding.SchemaVersion != "devkit/current-source-registration/v1" || binding.Worktree != cwd ||
+		binding.Home != getenv("HOME") || binding.CodexHome != getenv("CODEX_HOME") {
+		return binding, fmt.Errorf("registered readiness consumer differs from the actual cwd or home")
+	}
+	if err := validateCurrentGitWorktree(binding.BaseWorktree, cwd); err != nil {
+		return binding, err
+	}
+	for option, expected := range map[string]string{"--git-dir": binding.GitDirectory, "--git-common-dir": binding.CommonDirectory} {
+		command := exec.Command("git", "rev-parse", "--path-format=absolute", option)
+		command.Dir = cwd
+		observed, err := command.Output()
+		if err != nil || strings.TrimSpace(string(observed)) != expected {
+			return binding, fmt.Errorf("registered readiness Git metadata differs from its owning binding")
+		}
+	}
+	return binding, nil
 }
 
 func executeCurrentRepoCheck(cwd string, check repoCheck) (int, string, string) {
@@ -137,6 +173,18 @@ func runCurrentRepoCheck(cwd string, check repoCheck, dryRun bool) (string, int,
 	return "pass", code, out, stderr
 }
 
+func runRegisteredRepoCheck(cwd string, check repoCheck, dryRun bool, registered worktrees.SourceRegistrationBinding, getenv func(string) string, lookup func(context.Context, string) (worktrees.SourceRegistrationBinding, error)) (string, int, string, string, error) {
+	status, code, stdout, stderr := runCurrentRepoCheck(cwd, check, dryRun)
+	current, err := observeRegisteredReadinessConsumer(cwd, getenv, lookup)
+	if err != nil {
+		return "", code, stdout, stderr, err
+	}
+	if current != registered {
+		return "", code, stdout, stderr, fmt.Errorf("registered readiness consumer changed during the repo check")
+	}
+	return status, code, stdout, stderr, nil
+}
+
 func handleCurrentWorktreeReadiness(ctx *cmdregistry.Context) error {
 	parsed, err := parseCurrentWorktreeReadinessArgs(ctx.Args[1:])
 	if err != nil {
@@ -158,22 +206,37 @@ func handleCurrentWorktreeReadiness(ctx *cmdregistry.Context) error {
 	if err != nil {
 		return err
 	}
-	index, err := strconv.Atoi(os.Getenv("DEVKIT_NATIVE_AGENT"))
-	if err != nil || strconv.Itoa(index) != os.Getenv("DEVKIT_NATIVE_AGENT") {
-		return fmt.Errorf("current-worktree readiness requires the inherited GUI agent index")
-	}
-	consumer, err := nativeplan.ResolveGUIConsumerWorkspace(ctx.Project, parsed.repo, os.Getenv(nativeplan.GUITargetIDEnvironment), index)
-	if err != nil {
-		return err
-	}
-	if err := validateCurrentGUIReadinessEnvironment(os.Getenv, consumer); err != nil {
-		return err
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	if err := validateCurrentGUIWorktree(consumer.Worktree, cwd); err != nil {
+	var consumer any
+	var registered worktrees.SourceRegistrationBinding
+	if registeredCurrentWorktreeReadiness == "registered" {
+		registered, err = observeRegisteredReadinessConsumer(cwd, os.Getenv, lookupCurrentSourceRegistration)
+		consumer = registered
+	} else if registeredCurrentWorktreeReadiness != "" {
+		return fmt.Errorf("unknown package-selected current-worktree readiness consumer")
+	} else {
+		index, parseErr := strconv.Atoi(os.Getenv("DEVKIT_NATIVE_AGENT"))
+		err = parseErr
+		if err != nil || strconv.Itoa(index) != os.Getenv("DEVKIT_NATIVE_AGENT") {
+			return fmt.Errorf("current-worktree readiness requires the inherited GUI agent index")
+		}
+		guiConsumer, resolveErr := nativeplan.ResolveGUIConsumerWorkspace(ctx.Project, parsed.repo, os.Getenv(nativeplan.GUITargetIDEnvironment), index)
+		err = resolveErr
+		if err != nil {
+			return err
+		}
+		if err := validateCurrentGUIReadinessEnvironment(os.Getenv, guiConsumer); err != nil {
+			return err
+		}
+		if err := validateCurrentGUIWorktree(guiConsumer.Worktree, cwd); err != nil {
+			return err
+		}
+		consumer = guiConsumer
+	}
+	if err != nil {
 		return err
 	}
 	profile, err := os.ReadFile(filepath.Join(dir, "devkit.yaml"))
@@ -181,7 +244,16 @@ func handleCurrentWorktreeReadiness(ctx *cmdregistry.Context) error {
 		return err
 	}
 	commandSHA, profileSHA := sha256.Sum256([]byte(check.Command)), sha256.Sum256(profile)
-	status, exitCode, stdout, stderr := runCurrentRepoCheck(cwd, check, ctx.DryRun)
+	var status, stdout, stderr string
+	var exitCode int
+	if registeredCurrentWorktreeReadiness == "registered" {
+		status, exitCode, stdout, stderr, err = runRegisteredRepoCheck(cwd, check, ctx.DryRun, registered, os.Getenv, lookupCurrentSourceRegistration)
+		if err != nil {
+			return err
+		}
+	} else {
+		status, exitCode, stdout, stderr = runCurrentRepoCheck(cwd, check, ctx.DryRun)
+	}
 	report := map[string]any{"scope": "current-worktree-repo-check", "status": status, "check": check.Name,
 		"cwd": cwd, "consumer": consumer, "runtimeAuthorityRoot": authority,
 		"profileSha256": hex.EncodeToString(profileSHA[:]), "commandSha256": hex.EncodeToString(commandSHA[:]),
