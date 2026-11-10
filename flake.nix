@@ -651,6 +651,34 @@
             officialCodex = mkOfficialCodex pkgs;
           };
           devctl = mkProductionDevctl pkgs;
+          fleet-mode = pkgs.runCommand "devkit-fleet-mode" {
+            nativeBuildInputs = [ pkgs.go ];
+          } ''
+            cp -R ${./cli/devctl} source
+            chmod -R u+w source
+            cd source
+            export HOME="$TMPDIR" GOCACHE="$TMPDIR/go-cache"
+            export CGO_ENABLED=0 GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+            mkdir -p "$out/bin"
+            go build -trimpath -ldflags '-s -w -X=devkit/cli/devctl/internal/fleetmode.packageSSHExecutable=${pkgs.openssh}/bin/ssh' \
+              -o "$out/bin/fleet-mode" ./cmd/fleet-mode
+          '';
+          # The Arcade stop path runs on Windows even when its Linux guest is
+          # unreachable. This stdlib-only helper shares the controller's source.
+          fleet-mode-windows = pkgs.runCommand "devkit-fleet-mode-windows" {
+            nativeBuildInputs = [ pkgs.go ];
+          } ''
+            cp -R ${./cli/devctl} source
+            chmod -R u+w source
+            cd source
+            export HOME="$TMPDIR" GOCACHE="$TMPDIR/go-cache"
+            export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
+            export GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local
+            mkdir -p "$out/bin"
+            go build -trimpath -ldflags '-s -w' -o "$out/bin/fleet-mode.exe" ./cmd/fleet-mode
+            mkdir -p "$out/share/fleet-mode"
+            cp ${./kit/fleet-mode/skill/SKILL.md} "$out/share/fleet-mode/SKILL.md"
+          '';
           # Reuse the production fixed-output dependency recipe. Bind its
           # vendor payload to the exact module declarations of this source.
           devctl-ci-dependencies = pkgs.runCommand "devkit-devctl-ci-dependencies" { } ''
@@ -728,6 +756,8 @@
             inherit pkgs runtimeTools;
           };
           devctl-go-tests = mkDevctlGoTests pkgs;
+          fleet-mode = self.packages.${pkgs.system}.fleet-mode;
+          fleet-mode-windows = self.packages.${pkgs.system}.fleet-mode-windows;
           fixed-slot-history-provider =
             let provider = self.packages.${pkgs.system}.codex-gui-history-custody;
             in pkgs.runCommand "devkit-fixed-slot-history-provider-authority" {
