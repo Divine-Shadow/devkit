@@ -54,12 +54,14 @@ readiness:
       command: test -n "$(git config --worktree --get core.sshCommand)" && GIT_CONFIG_NOSYSTEM=1 git ls-remote --heads origin >/dev/null
     - name: frontend-warm
       command: |
+        set -e
         if [ -f frontend/package.json ]; then
           npm --prefix frontend ci --include=dev --ignore-scripts
           ln -sf "$(command -v purs)" frontend/node_modules/.bin/purs
           npm --prefix frontend rebuild better-sqlite3 --build-from-source
           test -x frontend/node_modules/.bin/tsc
           npm --prefix frontend ls @playwright/test global-agent --depth=0 >/dev/null
+          (cd frontend/purescript && GLOBAL_AGENT_HTTP_PROXY="${HTTPS_PROXY:-}" NODE_OPTIONS='-r global-agent/bootstrap' ../node_modules/.bin/spago install)
         fi
     - name: frontend-playwright-browser
       command: |

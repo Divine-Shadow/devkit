@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +14,99 @@ import (
 	nativeplan "devkit/cli/devctl/internal/runtime/plan"
 	"devkit/cli/devctl/internal/worktrees"
 )
+
+func TestFrontendWarmPreparesSpagoBeforeReadiness(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("test source location unavailable")
+	}
+	cfg, _, err := config.ReadAll([]string{filepath.Join(filepath.Dir(file), "../../../../..", "overlays")}, "dev-all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err := currentWorktreeRepoCheck(cfg, "frontend-warm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, failure := range []string{"", "ci", "rebuild", "ls", "spago"} {
+		t.Run("failure="+failure, func(t *testing.T) {
+			root := t.TempDir()
+			bin, home := filepath.Join(root, "bin"), filepath.Join(root, "home")
+			for _, dir := range []string{bin, home, filepath.Join(root, "frontend", "purescript")} {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write := func(path, contents string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(contents), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(filepath.Join(root, "frontend", "package.json"), "{}")
+			write(filepath.Join(bin, "purs"), "#!/bin/sh\nexit 0\n")
+			// Finite fake acquirers replace network/package work only. Execute the
+			// real parsed owner recipe and observe its preparation order/context.
+			write(filepath.Join(bin, "npm"), `#!/bin/sh
+set -e
+printf 'npm:%s\n' "$3" >> "$FIXTURE_LOG"
+test "$FIXTURE_FAILURE" != "$3" || exit 17
+if test "$3" = ci; then
+  mkdir -p frontend/node_modules/.bin
+  printf '#!/bin/sh\nexit 0\n' > frontend/node_modules/.bin/tsc
+  chmod +x frontend/node_modules/.bin/tsc
+  cp "$FIXTURE_SPAGO" frontend/node_modules/.bin/spago
+fi
+`)
+			spago := filepath.Join(root, "fake-spago")
+			write(spago, `#!/bin/sh
+printf 'spago:%s\n' "$*" >> "$FIXTURE_LOG"
+printf '%s\n' "$PWD" "$HOME" "$HTTPS_PROXY" "$GLOBAL_AGENT_HTTP_PROXY" "$NODE_OPTIONS" > "$FIXTURE_CONTEXT"
+test "$FIXTURE_FAILURE" != spago || exit 23
+`)
+			log, observed := filepath.Join(root, "order"), filepath.Join(root, "context")
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("HOME", home)
+			t.Setenv("HTTPS_PROXY", "http://10.207.1.1:3128")
+			t.Setenv("FIXTURE_LOG", log)
+			t.Setenv("FIXTURE_CONTEXT", observed)
+			t.Setenv("FIXTURE_SPAGO", spago)
+			t.Setenv("FIXTURE_FAILURE", failure)
+			code, _, stderr := executeCurrentRepoCheck(root, check)
+			if failure == "" {
+				if code != 0 {
+					t.Fatalf("prepared recipe: exit=%d stderr=%s", code, stderr)
+				}
+				context, err := os.ReadFile(observed)
+				want := strings.Join([]string{filepath.Join(root, "frontend", "purescript"), home, "http://10.207.1.1:3128", "http://10.207.1.1:3128", "-r global-agent/bootstrap", ""}, "\n")
+				if err != nil || string(context) != want {
+					t.Fatalf("Spago consumer context=%q want=%q err=%v", context, want, err)
+				}
+			} else if code == 0 {
+				t.Fatal("failed acquisition reported readiness")
+			}
+			order, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			steps := []string{"npm:ci", "npm:rebuild", "npm:ls", "spago:install"}
+			end := len(steps)
+			for i, name := range []string{"ci", "rebuild", "ls", "spago"} {
+				if failure == name {
+					end = i + 1
+				}
+			}
+			if want := strings.Join(steps[:end], "\n") + "\n"; string(order) != want {
+				t.Fatalf("preparation order=%q want=%q", order, want)
+			}
+			if failure != "" && failure != "spago" {
+				if _, err := os.Stat(observed); !os.IsNotExist(err) {
+					t.Fatalf("Spago ran after failed predecessor: %v", err)
+				}
+			}
+		})
+	}
+}
 
 func TestRegisteredReadinessUsesActualCurrentConsumer(t *testing.T) {
 	root := t.TempDir()
