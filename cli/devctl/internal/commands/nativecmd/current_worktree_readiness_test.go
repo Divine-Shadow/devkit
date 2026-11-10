@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -16,11 +15,8 @@ import (
 )
 
 func TestFrontendWarmPreparesSpagoBeforeReadiness(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("test source location unavailable")
-	}
-	cfg, _, err := config.ReadAll([]string{filepath.Join(filepath.Dir(file), "../../../../..", "overlays")}, "dev-all")
+	root := devkitSourceRootForNativeTest(t)
+	cfg, _, err := config.ReadAll([]string{filepath.Join(root, "overlays")}, "dev-all")
 	if err != nil {
 		t.Fatal(err)
 	}

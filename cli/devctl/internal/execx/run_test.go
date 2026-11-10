@@ -15,13 +15,23 @@ import (
 )
 
 func TestRunManagedAllowsActiveCommandBeyondIdleWindow(t *testing.T) {
+	const idleTimeout = 2 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Leave room for subprocess scheduling and pipe-copy delays under CI load,
+	// while keeping the command active longer than one complete idle window.
+	started := time.Now()
 	result := RunManaged(
-		context.Background(),
-		ManagedPolicy{IdleTimeout: 120 * time.Millisecond, TerminationGrace: 100 * time.Millisecond},
-		"sh", "-c", `for value in 1 2 3 4; do printf 'progress-%s\n' "$value"; sleep 0.08; done`,
+		ctx,
+		ManagedPolicy{IdleTimeout: idleTimeout, TerminationGrace: 100 * time.Millisecond},
+		"sh", "-c", `for value in 1 2 3 4 5 6; do printf 'progress-%s\n' "$value"; sleep 0.5; done`,
 	)
 	if result.Code != 0 || result.Err != nil {
 		t.Fatalf("active managed command = %#v, want success", result)
+	}
+	if elapsed := time.Since(started); elapsed <= idleTimeout {
+		t.Fatalf("active command finished after %s, want longer than idle window %s", elapsed, idleTimeout)
 	}
 }
 
