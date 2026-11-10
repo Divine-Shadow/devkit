@@ -30,6 +30,14 @@ actual HCS owner is WSL. It observes both WSL compute-system absence and absence
 of vmmemWSL before reporting WSL off. It does not stop vmcompute or unrelated VMs.
 Restart inhibition requires the WSL service to be disabled and stopped.
 
+For a stuck pending stop, the agent retains the dedicated service's process
+handle while it is still running, before requesting shutdown. Only after actual
+WSL absence may it terminate that same process, with matching disabled service,
+configured image, creation identity and final SCM checks. This remedy gets at
+most 15 seconds of the agent's remaining budget and still requires real stopped
+and disabled readbacks. Shared services, changed identities and a pending PID
+without that earlier retained reference are refused.
+
 The controller dispatches all four calls concurrently with a 170-second shared
 budget and a three-second local SSH cleanup allowance. The agent has a 160-second
 budget; keepalive handling gets at most 20 seconds. Mode recording runs separately

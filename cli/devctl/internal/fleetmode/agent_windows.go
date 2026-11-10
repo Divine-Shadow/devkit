@@ -18,8 +18,6 @@ import (
 
 // Only WSL's own service is changed. vmcompute and unrelated Hyper-V VMs are
 // outside this command. Startup mode is retained before the first inhibition.
-const serviceDisabled = 4
-const serviceStopped = 1
 
 var advapi = syscall.NewLazyDLL("advapi32.dll")
 var openSCManager = advapi.NewProc("OpenSCManagerW")
@@ -70,19 +68,39 @@ func withWSLService(access uint32, f func(uintptr) error) error {
 }
 
 func readService(h uintptr) (uint32, uint32, error) {
+	snapshot, err := readWSLServiceSnapshot(h)
+	return snapshot.StartType, snapshot.State, err
+}
+
+func readWSLServiceSnapshot(h uintptr) (wslServiceSnapshot, error) {
 	buffer := make([]byte, 8192)
 	var needed uint32
 	ok, _, err := queryServiceConfig.Call(h, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), uintptr(unsafe.Pointer(&needed)))
 	if ok == 0 {
-		return 0, 0, fmt.Errorf("query WSLService configuration: %w", err)
+		return wslServiceSnapshot{}, fmt.Errorf("query WSLService configuration: %w", err)
 	}
 	config := (*serviceConfig)(unsafe.Pointer(&buffer[0]))
 	var status serviceStatus
 	ok, _, err = queryServiceStatus.Call(h, 0, uintptr(unsafe.Pointer(&status)), unsafe.Sizeof(status), uintptr(unsafe.Pointer(&needed)))
 	if ok == 0 {
-		return 0, 0, fmt.Errorf("query WSLService status: %w", err)
+		return wslServiceSnapshot{}, fmt.Errorf("query WSLService status: %w", err)
 	}
-	return config.StartType, status.CurrentState, nil
+	base := uintptr(unsafe.Pointer(&buffer[0]))
+	address := uintptr(unsafe.Pointer(config.BinaryPath))
+	if address < base || address-base >= uintptr(len(buffer)) || (address-base)%2 != 0 {
+		return wslServiceSnapshot{}, errors.New("WSLService configuration has an invalid image pointer")
+	}
+	units := unsafe.Slice(config.BinaryPath, (len(buffer)-int(address-base))/2)
+	for index, unit := range units {
+		if unit == 0 {
+			return wslServiceSnapshot{
+				StartType: config.StartType, ConfigType: config.ServiceType,
+				StatusType: status.ServiceType, State: status.CurrentState, PID: status.ProcessID,
+				ImageCommand: syscall.UTF16ToString(units[:index]),
+			}, nil
+		}
+	}
+	return wslServiceSnapshot{}, errors.New("WSLService configured image is not terminated")
 }
 
 func (o *windowsOps) disableService(ctx context.Context) error {
@@ -239,9 +257,15 @@ func stopWSLService(ctx context.Context) error {
 }
 
 func (o *windowsOps) ForceWSLOff(ctx context.Context) ([]Stage, bool) {
+	retainedAt := time.Now()
+	held, captureErr := captureWSLServiceProcess(ctx, o)
+	if held != nil {
+		defer held.process.Close()
+	}
+	captureStage := stage("retain-running-wsl-service-process", retainedAt, captureErr)
 	started := time.Now()
 	_, err := command(ctx, 35*time.Second, systemExe("wsl.exe"), "--shutdown", "--force")
-	stages := []Stage{stage("wsl-shutdown-force", started, err)}
+	stages := []Stage{captureStage, stage("wsl-shutdown-force", started, err)}
 	started = time.Now()
 	stopCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	err = stopWSLService(stopCtx)
@@ -264,6 +288,9 @@ func (o *windowsOps) ForceWSLOff(ctx context.Context) ([]Stage, bool) {
 	for {
 		off, err := o.ObserveOff(ctx)
 		if err == nil && off {
+			finishedAt := time.Now()
+			err := finishPendingWSLService(ctx, o, held)
+			stages = append(stages, stage("finish-pending-wsl-service", finishedAt, err))
 			return stages, true
 		}
 		select {
