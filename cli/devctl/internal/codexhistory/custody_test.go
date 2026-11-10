@@ -1,7 +1,9 @@
 package codexhistory
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -102,38 +104,74 @@ func createStateDatabase(t *testing.T, fixture captureFixture, rollout string) s
 
 func holdWALSidecars(t *testing.T, executable, database string) {
 	t.Helper()
-	command := exec.Command(executable, "-batch", database)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
+	command := exec.CommandContext(ctx, executable, "-batch", database)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var output bytes.Buffer
-	command.Stdout = &output
 	command.Stderr = &output
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(stdin, "PRAGMA journal_mode=WAL; BEGIN IMMEDIATE; UPDATE threads SET source = source; COMMIT;\n"); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		walInfo, walErr := os.Stat(database + "-wal")
-		shmInfo, shmErr := os.Stat(database + "-shm")
-		if walErr == nil && shmErr == nil && walInfo.Mode().IsRegular() && shmInfo.Mode().IsRegular() {
-			break
-		}
-		if time.Now().After(deadline) {
+	waited := false
+	var waitErr error
+	wait := func() error {
+		if !waited {
 			_ = stdin.Close()
-			_ = command.Wait()
-			t.Fatalf("sqlite3 did not retain WAL/SHM sidecars: %s", output.String())
+			waitErr = command.Wait()
+			waited = true
 		}
-		time.Sleep(20 * time.Millisecond)
+		return waitErr
 	}
 	t.Cleanup(func() {
-		_ = stdin.Close()
-		_ = command.Wait()
+		if err := wait(); err != nil && !t.Failed() {
+			t.Errorf("sqlite3 WAL fixture did not exit cleanly: %v: %s", err, output.String())
+		}
 	})
+
+	const readyMarker = "devkit-wal-fixture-ready"
+	ready := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if scanner.Text() == readyMarker {
+				ready <- nil
+				return
+			}
+		}
+		ready <- fmt.Errorf("sqlite3 output ended before transaction acknowledgement: %v", scanner.Err())
+	}()
+	if _, err := io.WriteString(stdin, "PRAGMA journal_mode=WAL; BEGIN IMMEDIATE; UPDATE threads SET source = source; COMMIT;\nSELECT '"+readyMarker+"';\n"); err != nil {
+		cancel()
+		_ = wait()
+		t.Fatal(err)
+	}
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case err := <-ready:
+		if err != nil {
+			cancel()
+			_ = wait()
+			t.Fatalf("sqlite3 WAL fixture readiness failed: %v: %s", err, output.String())
+		}
+	case <-timer.C:
+		cancel()
+		_ = wait()
+		t.Fatalf("sqlite3 WAL fixture did not acknowledge transaction completion within 30s: %s", output.String())
+	}
+	walInfo, walErr := os.Stat(database + "-wal")
+	shmInfo, shmErr := os.Stat(database + "-shm")
+	if walErr != nil || shmErr != nil || !walInfo.Mode().IsRegular() || !shmInfo.Mode().IsRegular() {
+		t.Fatalf("sqlite3 acknowledged transaction without regular WAL/SHM sidecars: wal=%v shm=%v", walErr, shmErr)
+	}
 }
 
 func readManifest(t *testing.T, path string) snapshotManifest {
