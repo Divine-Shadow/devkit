@@ -1,14 +1,14 @@
-# Codex 0.163 production package
+# Codex 0.167.1 production package
 
 `packages.${system}.codex` is the shared Devkit/WSL package. Devkit's runtime
 shell selects this same output. WSL consumers should use the output directly,
 rather than rebuilding an independent prebuilt-package derivation.
 
 The non-flake `codex-source` input pins upstream commit
-`83086188ae0614bd882818ff1aa23f3194962012` (`rust-v0.163.0`).
-`web-search-json.patch` is the accepted three-file change from local source commit
+`0a94398fa60c4fac0e7659e4213a0a36e613dd46` (`rust-v0.167.1`).
+`web-search-json.patch` ports the accepted three-file change from local source commit
 `b3e1e01cd3304f4247fa79dc33a2032436131d43`; its SHA256 is
-`bf6f08b425c94590c559494b6569c0b5542f6734b79773fb85ae370aa330aace`.
+`b791ac32d6e2a5cc0b649ee29a2ecbaf018a127ec5b492a2c3d7bd03139887a2`.
 It removes the redundant flattened web-search `id`, preserving the canonical
 outer item identity. Raw serialized start/completion regression checks cover
 that identity and duplicate-key rejection. The strict governance parser is
@@ -18,13 +18,13 @@ the canonical item ID.
 
 The upstream `codex-rs/default.nix` remains the source builder. Its override uses
 Rust 1.95.0, builds only `codex-cli`, and explicitly replaces its computed
-`cargoDeps`. This local Cargo.lock normalizes exactly 160 workspace package
-version labels from 0.0.0 to 0.163.0 without changing dependency revisions.
-Its SHA256 is `cae541406f7ec43a418e126be2bcd5de00b243e7bbf6382570028727d99c1069`.
+`cargoDeps`. This local Cargo.lock normalizes exactly 171 workspace package
+version labels from 0.0.0 to 0.167.1 without changing dependency revisions.
+Its SHA256 is `9efc26116852723f76540da85d9e4537979014f166c39494bef61e49a9cc0883`.
 Git source hashes are fixed; the changed crossterm and rust-sdk trees were
 prefetched at the exact Cargo.lock revisions with submodules enabled.
 
-The complete official 0.163 bundle supplies code-mode-host, ripgrep, bubblewrap,
+The complete official 0.167.1 bundle supplies code-mode-host, ripgrep, bubblewrap,
 and voice resources. Only `bin/codex` is replaced by the patched source build.
 The package checks its version and helper/resource layout during assembly.
 `share/codex-source/source.json` binds the source revision, accepted patch,
@@ -32,7 +32,17 @@ normalized lock, Rust version, target, and official resource bundle; the sibling
 `binary.sha256` records the actual executable digest. This is independent of the
 older `codex-native-tool-witness` diagnostic package.
 
-Qualification before source acceptance includes the full changed Codex crate
-(155 tests passed) and full upstream `just fmt` (exit 0). An actual Nix component
-build is also required. These checks do not establish WSL closure, runtime
-adoption, or Product business acceptance. Those remain with their owning gates.
+Qualification required before source acceptance: the complete changed `codex-exec`
+crate tests (including raw JSONL identity regression), upstream Rust formatting,
+and an actual Nix package build. The port and hashes have only static/prefetch
+qualification until those commands execute. Normal Devkit full CI/publication
+then precede Environment receiving and real shared-server governed-child use.
+No WSL closure, runtime adoption or Product acceptance is claimed by this source.
+
+MXC's unchanged generated-binding check uses its own upstream workspace lock.
+The Nix vendor overlay supplies the exact `src/Cargo.lock` from pinned MXC
+`b21120168d70befe12356411423266bfef168446` beside its crate, after checking that
+its Windows version equals the actual Codex lock's MXC dependency and the
+normalized MXC manifest requirement. This avoids selecting an unrelated Windows
+version from the shared vendor-parent lock. The Codex dependency graph and MXC
+binding guard remain unchanged; the original dependency source is immutable.

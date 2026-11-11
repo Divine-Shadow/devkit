@@ -37,17 +37,17 @@
     "codex-source": {
       "flake": false,
       "locked": {
-        "lastModified": 1792090627,
-        "narHash": "sha256-Fa9dfiGJy+uqSF4A0EM6AQQhhjQdu+jfhKzqXid9PNA=",
+        "lastModified": 1794333745,
         "owner": "openai",
         "repo": "codex",
-        "rev": "83086188ae0614bd882818ff1aa23f3194962012",
-        "type": "github"
+        "rev": "0a94398fa60c4fac0e7659e4213a0a36e613dd46",
+        "type": "github",
+        "narHash": "sha256-S63Qd9OGCACz1EK/IzH6LGsZxMovk0UBkOKtv/jnQ+I="
       },
       "original": {
         "owner": "openai",
         "repo": "codex",
-        "rev": "83086188ae0614bd882818ff1aa23f3194962012",
+        "rev": "0a94398fa60c4fac0e7659e4213a0a36e613dd46",
         "type": "github"
       }
     },

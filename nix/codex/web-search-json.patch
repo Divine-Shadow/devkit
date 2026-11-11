@@ -1,9 +1,8 @@
 diff --git a/codex-rs/exec/src/event_processor_with_jsonl_output.rs b/codex-rs/exec/src/event_processor_with_jsonl_output.rs
-index 73e0c9d911..9df92df38a 100644
 --- a/codex-rs/exec/src/event_processor_with_jsonl_output.rs
 +++ b/codex-rs/exec/src/event_processor_with_jsonl_output.rs
-@@ -303,7 +303,6 @@ impl EventProcessorWithJsonOutput {
-             ThreadItem::WebSearch(item) => Some(ExecThreadItem {
+@@ -303,7 +303,6 @@
+             ThreadItemPayload::WebSearch(item) => Some(ExecThreadItem {
                  id: make_id(),
                  details: ThreadItemDetails::WebSearch(WebSearchItem {
 -                    id: item.id,
@@ -11,10 +10,9 @@ index 73e0c9d911..9df92df38a 100644
                      action: match item.action {
                          Some(ApiWebSearchAction::Search { query, queries }) => {
 diff --git a/codex-rs/exec/src/exec_events.rs b/codex-rs/exec/src/exec_events.rs
-index 06565c097b..3f4fe03a1d 100644
 --- a/codex-rs/exec/src/exec_events.rs
 +++ b/codex-rs/exec/src/exec_events.rs
-@@ -296,7 +296,6 @@ pub struct McpToolCallItem {
+@@ -296,7 +296,6 @@
  /// A web search request.
  #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
  pub struct WebSearchItem {
@@ -23,10 +21,9 @@ index 06565c097b..3f4fe03a1d 100644
      pub action: WebSearchAction,
      /// Structured results returned by web search, when available.
 diff --git a/codex-rs/exec/tests/event_processor_with_json_output.rs b/codex-rs/exec/tests/event_processor_with_json_output.rs
-index c1cc894749..e955df705d 100644
 --- a/codex-rs/exec/tests/event_processor_with_json_output.rs
 +++ b/codex-rs/exec/tests/event_processor_with_json_output.rs
-@@ -395,7 +395,6 @@ fn web_search_completion_preserves_query_and_action() {
+@@ -403,7 +403,6 @@
                  item: ExecThreadItem {
                      id: "item_0".to_string(),
                      details: ThreadItemDetails::WebSearch(WebSearchItem {
@@ -34,7 +31,7 @@ index c1cc894749..e955df705d 100644
                          query: "rust async await".to_string(),
                          action: WebSearchAction::Search {
                              query: Some("rust async await".to_string()),
-@@ -450,7 +449,7 @@ fn web_search_page_actions_and_results_survive_json_output() {
+@@ -459,7 +458,7 @@
              ));
  
              let mut expected_item = json!({
@@ -43,8 +40,8 @@ index c1cc894749..e955df705d 100644
                  "type": "web_search",
                  "query": url,
                  "action": expected_action,
-@@ -500,6 +499,38 @@ fn web_search_start_and_completion_reuse_item_id() {
-         },
+@@ -511,6 +510,38 @@
+         ),
      ));
  
 +    // Exercise the raw JSONL serializer: serializing into a Value would hide
@@ -82,7 +79,7 @@ index c1cc894749..e955df705d 100644
      assert_eq!(
          started,
          CollectedThreadEvents {
-@@ -507,7 +538,6 @@ fn web_search_start_and_completion_reuse_item_id() {
+@@ -518,7 +549,6 @@
                  item: ExecThreadItem {
                      id: "item_0".to_string(),
                      details: ThreadItemDetails::WebSearch(WebSearchItem {
@@ -90,7 +87,7 @@ index c1cc894749..e955df705d 100644
                          query: String::new(),
                          action: WebSearchAction::Other,
                          results: None,
-@@ -524,7 +554,6 @@ fn web_search_start_and_completion_reuse_item_id() {
+@@ -535,7 +565,6 @@
                  item: ExecThreadItem {
                      id: "item_0".to_string(),
                      details: ThreadItemDetails::WebSearch(WebSearchItem {

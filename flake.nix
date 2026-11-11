@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     codex-source = {
-      url = "github:openai/codex/83086188ae0614bd882818ff1aa23f3194962012";
+      url = "github:openai/codex/0a94398fa60c4fac0e7659e4213a0a36e613dd46";
       flake = false;
     };
     codex-native-tool-witness-source = {
@@ -49,7 +49,7 @@
           hashicorpArch = "amd64";
           goArch = "amd64";
           codexAsset = "codex-package-x86_64-unknown-linux-musl";
-          codexHash = "sha256-WCZGxr8FYesN5UD3/IW5EhsAkagmvG6Wgwt/FyISIYI=";
+          codexHash = "sha256-qUXfPfg+hJ3Xt0eH4n+KRZwZRrDjr+Pcju+KjRhF/U8=";
           dockerHash = "sha256-T3mLPuHgFA6rW/MLDtxOhPTNtTJVpCncO7rpUkhF1kA=";
           goHash = "sha256-unnUUmECV1GWJzQWI5zKQYplHgScKwmfMVnbhee63n0=";
           terraformHash = "sha256-GG4BRfXl8uuXy9eFvHjyG65O8VEZNJ9q1PpTW4OxDfg=";
@@ -60,14 +60,14 @@
           hashicorpArch = "arm64";
           goArch = "arm64";
           codexAsset = "codex-package-aarch64-unknown-linux-musl";
-          codexHash = "sha256-nY7PLRnT4YSHeYOQLWyF3kiziI3LcsOCqKDJdYRZJ/s=";
+          codexHash = "sha256-7z4UQ6d5XVlvFgGlM9ciWhAwSI1gyWWvHwYQq5WIkDE=";
           dockerHash = "sha256-5rU3Jac3Y6s/mIxz+HcurtQpdUwaV521/xHyGZD9GBc=";
           goHash = "sha256-qOF3w1TS5KG2ECCso1YuJ+o+j4JH7KMXDj+h4ML553E=";
           terraformHash = "sha256-+FhoeYg0VYI59hSINIhACPJyJUj4QDTJsPYpNLLXPrs=";
           packerHash = "sha256-3SltdD3UWTMEMHWDz/UpC7qbho/CsLYFtkVm+BQcpyg=";
         };
       };
-      codexVersion = "0.163.0";
+      codexVersion = "0.167.1";
       codexReleaseTag = "rust-v${codexVersion}";
       mkOfficialCodex =
         pkgs:
